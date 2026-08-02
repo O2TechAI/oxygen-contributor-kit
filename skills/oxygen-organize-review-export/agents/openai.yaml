@@ -1,0 +1,4 @@
+interface:
+  display_name: "Oxygen Project Timeline"
+  short_description: "Classify mixed trajectories into a main-project timeline"
+  default_prompt: "Use $oxygen-organize-review-export to separate these trajectories by project and open the primary-project timeline."

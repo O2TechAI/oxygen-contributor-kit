@@ -1,0 +1,4 @@
+interface:
+  display_name: "Oxygen Ingest Project History"
+  short_description: "Collect repo chats, Claude exports, and meetings"
+  default_prompt: "Use $oxygen-ingest-project-history to collect my project history into Oxygen format."

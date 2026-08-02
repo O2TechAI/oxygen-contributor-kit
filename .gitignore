@@ -1,0 +1,13 @@
+work/
+outputs/
+*.zip
+viewer/node_modules/
+viewer/.wrangler/
+viewer/.vinext/
+viewer/dist/
+viewer/.dev.vars
+viewer/.oxygen-local.json
+tools/ingest/out/
+tools/ingest/webapp-data/
+tools/ingest/.venv-audio/
+__pycache__/
