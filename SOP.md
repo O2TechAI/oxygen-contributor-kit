@@ -2,143 +2,204 @@
 
 ## Goal
 
-Collect the contributor's project-related trajectories, memories, and meetings; separate mixed
-project work; identify the primary project; let the contributor review everything locally; and
-finish with one downloadable ZIP. Nothing is uploaded automatically.
+Collect only the contributor's in-scope project history, separate mixed-project content, build a
+concise chronological account of the primary project, prepare a best-effort privacy-reviewed
+candidate, recover confirmed working preferences, show the local review surface, and finish with
+one downloadable ZIP. Nothing is uploaded automatically.
 
 ## Completion criteria
 
-The workflow is not complete until both conditions are true:
+The workflow is complete only when all of the following are true:
 
-1. The contributor has been shown the local review frontend whenever a browser-visible frontend
-   is available.
-2. The contributor can download one final `oxygen-contribution.zip` containing the reviewed
-   contribution package.
+1. The contributor has been shown the local Viewer whenever a browser-visible frontend is
+   available. The exact localhost URL is also provided, and no password is required.
+2. The contributor has seen the collection counts, project classification, redaction summary,
+   preference questions, exclusions, and unresolved warnings.
+3. The contributor can download one verified `oxygen-contribution.zip`.
+4. `publication_approved` remains `false` unless the contributor separately and explicitly
+   approves publication.
 
-## 1. Confirm scope
+## 1. Establish the local boundary
 
-- Resolve the repository or input path.
-- Confirm the data belongs to the contributor.
-- Do not inspect users outside the requested local account.
-- Never read or package credential files, private keys, tokens, cookies, or hidden model reasoning.
-- Keep `publication_approved=false` unless the contributor explicitly approves publication.
+- Resolve the repository or input path and confirm it belongs to the contributor.
+- Inspect only accounts and paths in the contributor-approved scope.
+- Never read or package credential files, private keys, tokens, cookies, browser profiles,
+  system/developer prompts, or hidden model reasoning.
+- Use only the contributor's configured model/API access. Do not require a bundled Oxygen key.
+- Keep raw inputs, working files, redaction cases, and review metadata local.
+- Download, ZIP creation, review, and publication are separate actions. None implies another.
 
 ## 2. Collect
 
-Select one or more input paths:
+Read and follow `skills/oxygen-ingest-project-history/SKILL.md`. Choose the applicable input:
 
 ```bash
-# Local repo-related Claude Code and Codex history, including allowed memory files.
-python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/repo-run
+# Repository-related Codex and Claude Code history, including allowed memory.
+python3 tools/ingest/collect_repo_trajectories.py /path/to/repo \
+  --out work/repo-run
 
-# claude.ai export ZIP, JSON, or directory.
-python3 tools/ingest/import_anthropic_export.py export.zip --out work/claude-run
+# claude.ai export ZIP, JSON, file, or directory.
+python3 tools/ingest/import_anthropic_export.py export.zip \
+  --out work/claude-run
 
-# Meeting transcript or audio. Audio remains local.
-python3 tools/ingest/import_meeting.py meeting.m4a --out work/meeting-run \
-  --language en --no-publish
+# Meeting notes/transcript or local audio. Audio remains local.
+python3 tools/ingest/import_meeting.py meeting.m4a \
+  --out work/meeting-run --language en --no-publish
 ```
 
-Do not use `--publish`. Collection stops before staging, upload, or publication.
+Do not pass `--publish` and do not stage, upload, or submit the result.
 
-## 3. Check ingest results
+Check `work/<run>/index.json` and, when present, `work/<run>/meeting.json`. Report exact source,
+trajectory, meeting-record, warning, and failure counts. A newly cloned repository may correctly
+have zero matching historical sessions. Confirm that credentials, caches, databases, unrelated
+users, and unrelated repositories were excluded.
 
-- For repo or Claude export, read `work/<run>/index.json`.
-- For meetings, read `work/<run>/meeting.json`.
-- Report trajectory/record counts, warnings, and failures.
-- A newly cloned repo may correctly have zero matching historical sessions.
-- Confirm credentials, caches, databases, and unrelated users were not collected.
+## 3. Organize by project
 
-## 4. Organize projects and build the timeline
+Read and follow `skills/oxygen-organize-review-export/SKILL.md`.
 
-Follow `skills/oxygen-organize-review-export/SKILL.md` before launching the Viewer:
+- Classify events by the project being discussed, not by event type or tool name.
+- A conversation may contain several projects; split and label its events accordingly.
+- Reconcile aliases for the same project across trajectories and meetings.
+- Select the primary project from sustained contributor intent and substantive work.
+- Create `work/<run>/project-map.json` while preserving source event IDs and timestamps.
+- Build one combined chronological timeline per project across all matching trajectories. Never
+  create one timeline per trajectory.
+- Distill the primary-project timeline to 10-40 meaningful milestones. Use the agent to rewrite
+  each milestone as a short, one-idea description while retaining the original timestamp and
+  evidence IDs.
 
-- classify each event by project rather than by event/tool type;
-- reconcile project aliases across conversations;
-- identify the primary project from sustained user intent and substantive work;
-- create `work/<run>/project-map.json`;
-- use AI to turn primary-project events into short, one-idea timeline descriptions;
-- preserve source event IDs and timestamps so every summary can open its original evidence.
+Report how many source records and events were assigned to each project, what was excluded, and
+which classification decisions remain uncertain.
 
-Then run:
+## 4. Prepare privacy review
+
+Read `skills/oxygen-history-redaction/SKILL.md`, including its policy and format references,
+before judging content. Its mandatory notice is:
+
+> Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review is
+> required before release.
+
+Use the local CPU-only redaction workflow to prepare a private case. Do not send source text to a
+remote redaction service. Non-conversational agent actions, tool calls, shell commands, outputs,
+artifacts, and source metadata become safe action labels in the release candidate.
+
+Important boundaries:
+
+- Keep the raw organized run unchanged and local. Redaction acts on a normalized candidate; an
+  undo means rebuilding from the retained local source, not publishing raw content.
+- Report exact automatic-redaction totals and per-category counts, including an explicit zero.
+- Do not expose removed text in summaries, logs, or `preference-probes.json`.
+- Semantic findings require review; never silently bulk-waive them.
+- The redaction skill's `finalize` command creates a local release archive only. It is not the
+  final Oxygen contribution ZIP and must not be treated as publication.
+- If dependencies are unavailable or a fail-closed check fails, report the blocker and do not
+  claim the release candidate is safe.
+
+## 5. Elicit confirmed preferences
+
+Read and follow
+`skills/oxygen-elicit-contributor-preferences/SKILL.md` after project organization and after unsafe
+content has been excluded from the review copy.
+
+1. Work on the primary-project events unless the contributor asks to include other projects.
+2. Report the exact automatic-removal counts from the privacy pass.
+3. For judgement-call content such as named-person criticism, ask one bulk question per category:
+   remove, keep, or inspect. Default to keep when unanswered.
+4. Find friction signals such as repeated corrections, long exchanges, late rejection, decision
+   reversal, explicit rules, or sustained meeting disagreement.
+5. Merge duplicate signals and produce at most 12 probes by default, with a hard limit of 20.
+   Report how many qualifying moments were set aside.
+6. For each probe, provide a self-contained recap of at most three sentences and two or three
+   mutually exclusive, evidence-grounded choices, plus “Something else” and “Nothing worth
+   recording here.”
+7. Present all probes as one batch. Do not interrupt the contributor once per event.
+8. Write `work/<run>/preference-probes.json` and validate it:
 
 ```bash
-python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run>
+python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py \
+  work/<run>
 ```
 
-## 5. Make the frontend visible
+Only explicit answers become checklist preferences. Unanswered and skipped probes produce no
+preference. Every confirmed preference retains its source evidence IDs. A preference answer is
+not publication approval.
 
-Showing the frontend is required, not an optional follow-up.
+The current Viewer does not implement probe-answer controls. Present the batch through the coding
+agent and write answers to `preference-probes.json`. If a compatible frontend is added later, it
+must show the recorded answer, target document, and an undo immediately.
 
-As soon as the Viewer is healthy:
+## 6. Launch and show the Viewer
 
-1. Proactively open it in the contributor's visible browser when the environment supports browser
-   opening. Do not wait for the contributor to ask to see it.
-2. Always print and send the exact local URL, even when automatic opening succeeds.
-3. If the current environment exposes a visible frontend or in-app browser, reuse that visible
-   surface and navigate it to the Viewer.
-4. If automatic opening is unavailable, clearly provide a clickable URL and say that no password
-   is required.
-5. Keep the Viewer process alive during review. Do not start it briefly and exit.
+Start the local review server:
 
-The frontend must show:
-
-- organization progress while work is running;
-- the selected primary project and related project groups;
-- one chronological timeline per project, merged across every matching trajectory, with short
-  AI descriptions (never one timeline per trajectory), distilled to 10–40 key milestones;
-- a source-event view for checking the complete original content;
-- a visible action for downloading the final ZIP when it is ready.
-
-## 6. Review and finalize
-
-- Ask the contributor to inspect the project classification and primary-project timeline.
-- Compare concise timeline summaries with the read-only source events.
-- If removal or redaction is needed, revise the ingest/project-map files and relaunch the Viewer.
-- Do not treat automated organization or redaction as publication approval.
-
-## 7. Produce one downloadable ZIP
-
-Create:
-
-```text
-work/<run>/oxygen-contribution.zip
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  work/<run>
 ```
 
-The ZIP should contain only the reviewed package:
+As soon as it is healthy:
+
+1. Proactively open it in the contributor's visible browser when supported.
+2. Always print and send the exact localhost URL, even when automatic opening succeeds.
+3. Reuse an available in-app browser or visible frontend surface.
+4. If opening is unavailable, provide a clickable URL and state that no password is required.
+5. Keep the process alive until review/download finishes or the contributor asks to stop.
+
+The Viewer must show organization progress, project groups, the primary project, one combined
+timeline per project, 10-40 concise primary-project milestones, source-event evidence, and visible
+HTML/ZIP download actions. Do not describe unsupported annotation controls as available.
+
+## 7. Review and build the ZIP
+
+Ask the contributor to inspect:
+
+- included sources and project assignments;
+- primary-project milestones against source evidence;
+- automatic-redaction counts and semantic review decisions;
+- bulk judgement-call decisions;
+- confirmed preference answers and skipped/unanswered probes;
+- exclusions and unresolved warnings.
+
+Create `work/<run>/oxygen-contribution.zip`. The reviewed package should contain:
 
 ```text
 oxygen-contribution/
 ├── manifest.json
-├── data/                  # selected trajectories, memories, and meetings
-├── project-map.json       # project labels, primary project, and timeline summaries
+├── data/                         # reviewed trajectories, memory, and meetings
+├── project-map.json              # project labels and project timelines
+├── preference-probes.json        # questions and explicit answers, when generated
+├── privacy/                      # safe aggregate notice/summary, no private review ledger
 └── review/
     └── oxygen-local-viewer.html
 ```
 
 Requirements:
 
-- Include a manifest with counts, warnings, source types, creation time, and
+- The manifest records exact counts, warnings, source types, creation time, exclusions, and
   `publication_approved`.
-- Include the reviewed source-format data, not credentials or local runtime state.
-- Exclude `.env*`, auth/credential files, tokens, cookies, private keys, `node_modules`, caches,
-  `.wrangler`, SQLite/D1 files, logs, and temporary model output.
-- Open or inspect the ZIP after creation and verify its member list.
-- Verify the packaged HTML opens locally and states that nothing was uploaded.
-- Make the ZIP directly downloadable by the contributor. Prefer the Viewer's visible download
-  action; if it is unavailable, provide a clickable local file/download link immediately.
-- Do not finish by reporting only a filesystem path that the contributor cannot download.
+- Package only reviewed release data. Never package raw inputs, `automatic/`, private redaction
+  indexes/findings/masks/waivers, reviewer identities, local runtime state, or original secrets.
+- Exclude `.env*`, auth files, tokens, cookies, private keys, browser profiles, `node_modules`,
+  caches, `.wrangler`, databases, logs, model scratch output, and local virtual environments.
+- Inspect the ZIP member list after creation and reject unexpected absolute paths, `..` entries,
+  symlinks, or excluded files.
+- Open the packaged HTML locally and verify that it states nothing was uploaded.
+- Make the ZIP directly downloadable through the Viewer's visible action. If that action is not
+  available, provide an immediately usable clickable local file/download link.
+- Do not finish with only a filesystem path the contributor cannot access.
 
 ## 8. Handoff and stop
 
 Tell the contributor:
 
-- the exact Viewer URL;
-- what inputs and projects were included;
-- the primary project and timeline-event count;
-- what was excluded or remains uncertain;
-- the exact ZIP filename and a clickable download action/link;
-- whether `publication_approved` is `false` or explicitly approved.
+- the exact Viewer URL and that it has no password;
+- included inputs, project groups, primary project, and milestone count;
+- exact privacy-removal counts and any unresolved privacy review;
+- probe count, confirmed preference count, and set-aside count;
+- exclusions and uncertainties;
+- the exact ZIP filename and clickable download action/link;
+- the value of `publication_approved`.
 
-Keep the server alive until the contributor finishes downloading or asks to stop. Then stop it
-with `Ctrl+C`. Do not upload, stage, publish, or submit automatically.
+Stop after local handoff. Never upload, stage, publish, submit, commit, or push unless the
+contributor separately asks for that action.
