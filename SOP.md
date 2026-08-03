@@ -80,9 +80,46 @@ before judging content. Its mandatory notice is:
 > Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review is
 > required before release.
 
-Use the local CPU-only redaction workflow to prepare a private case. Do not send source text to a
-remote redaction service. Non-conversational agent actions, tool calls, shell commands, outputs,
-artifacts, and source metadata become safe action labels in the release candidate.
+Non-conversational agent actions, tool calls, shell commands, outputs, artifacts, and source
+metadata become safe action labels in the release candidate. Two backends can produce the case:
+
+Do not send source text to a third-party redaction or PII-scrubbing service. The contributor's own
+configured model access is not a third-party service in this sense and is permitted under §1.
+
+**Local CPU backend.** `skills/oxygen-history-redaction` with Presidio and spaCy. Nothing leaves
+the machine. Its recall on non-English entities is weak — the bundled model is English-only, so
+Chinese personal and place names are largely missed. Prefer it when no model access is configured,
+or when the material is not the contributor's to disclose.
+
+**Model backend.** `tools/llm_redact` sends the conversational turns to the contributor's own
+configured model. Code, tool calls, tool output, and artifacts are stripped first and never sent.
+It substantially outperforms the local backend on mixed-language material.
+
+Use a mid-tier model or better. The smallest tier of a model family is a false economy here: in
+comparison runs it returned a materially higher rate of offsets that did not exist, reported
+coverage counts it had not actually reviewed, and missed findings in the highest-severity
+categories that a larger model caught. Validate whichever you choose — the checks below exist
+because a redaction pass that fails quietly looks exactly like one that succeeded.
+
+Whichever backend runs, validate its output before applying it. A model can return an offset that
+does not exist, a category outside the allowlist, or a coverage count it did not actually review;
+`tools/llm_redact/merge_and_apply.py` and `verify_coverage.py` reject each of those rather than
+letting them reach the release candidate. Report the rejection count alongside the hit count — a
+pass with zero rejections and a pass whose failures were dropped silently look identical otherwise.
+`verify_coverage.py` exits non-zero on a mismatch and is meant to gate the pipeline, not to be read
+by eye; run it against the probe pass too.
+
+Two failures found the hard way, both of which look like success:
+
+- **Run the model pass on the prepared case, never on the raw run.** Conversational turns can be a
+  low single-digit percentage of the bytes a run would ship — the rest is artifact content the
+  viewer's importer inlines from disk. A pass over the raw run reports a healthy hit count while
+  never looking at almost anything that ships. Run `tools/llm_redact/audit_coverage.py` against
+  your own run and read the reviewed/never-reviewed split before trusting a result.
+- **A filter that matches nothing must fail, not pass.** These tools once globbed `traj-*.json`
+  while the prepared case names files `trajectory-000001.json`; the coverage gate matched zero
+  files and printed `0 trajectories checked, 0 mismatched`, exit 0. Every helper here now exits
+  non-zero on an empty input set.
 
 Important boundaries:
 
@@ -125,9 +162,19 @@ Only explicit answers become checklist preferences. Unanswered and skipped probe
 preference. Every confirmed preference retains its source evidence IDs. A preference answer is
 not publication approval.
 
-The current Viewer does not implement probe-answer controls. Present the batch through the coding
-agent and write answers to `preference-probes.json`. If a compatible frontend is added later, it
-must show the recorded answer, target document, and an undo immediately.
+The Viewer implements probe-answer controls in its `Preferences` tab. Generate the batch, push it
+with `tools/llm_redact/push_probes.py`, and let the contributor answer in the browser:
+
+```bash
+python3 tools/llm_redact/push_probes.py \
+  --probes work/<run>-probes --dialogue work/<run>-dialogue --limit 12
+```
+
+Each probe shows its recap, its offered options, `Nothing worth recording here`, a free-text
+`Something else`, and its source evidence IDs. Every recorded answer displays what was stored and
+offers `clear`, which returns the probe to unanswered rather than recording a refusal. A probe with
+no answer produces no preference. Answers live in the `probes` table and are exported with the run;
+`preference-probes.json` remains the interchange format for anything outside the Viewer.
 
 ## 6. Launch and show the Viewer
 
@@ -149,6 +196,21 @@ As soon as it is healthy:
 The Viewer must show organization progress, project groups, the primary project, one combined
 timeline per project, 10-40 concise primary-project milestones, source-event evidence, and visible
 HTML/ZIP download actions. Do not describe unsupported annotation controls as available.
+
+Two further tabs are available once their passes have run:
+
+- `Redaction review` lists **every** event that would ship, not only the changed ones, so the tab
+  is a release preview rather than a diff. Events with a hit show the original beside the release
+  version; the rest show the single text that would be published. Each span carries its category,
+  the reason it was marked, and controls to change the category or delete the decision. Deleting is
+  a soft delete: the span stops applying but the record stays auditable.
+- `Preferences` presents the probe batch and records answers (§5).
+
+Both tabs report `running` with live progress while their pass is in flight, so an empty result is
+never mistaken for a finished one. Redactions are stored as offsets and applied at render time —
+`items.content` holds the untouched original, which is what makes a decision reversible. Because of
+that, a Viewer serving a run is serving unredacted text over its API; never expose it beyond
+localhost without an authenticating proxy in front.
 
 ## 7. Review and build the ZIP
 
