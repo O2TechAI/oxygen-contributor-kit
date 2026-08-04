@@ -1,0 +1,4 @@
+interface:
+  display_name: "Oxygen Preference Probes"
+  short_description: "Recover your transferable preferences in ~10 questions"
+  default_prompt: "Use $oxygen-elicit-contributor-preferences to find the moments in this run where my preferences surfaced, and ask me about them."

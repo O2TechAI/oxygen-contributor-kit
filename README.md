@@ -1,57 +1,86 @@
 # Oxygen Contributor Kit
 
-Clone this repository and ask your coding agent:
+This repository lets a contributor use their own coding agent to collect local project history,
+organize it into project timelines, review privacy-sensitive material, recover useful working
+preferences, inspect the result in a local Viewer, and download one ZIP. The kit does not upload
+or publish data.
 
-> Use the Oxygen contributor skills to collect the history for this repository, organize it, and open the local review viewer. Do not upload anything.
+After cloning, ask the agent:
 
-The agent should then read [AGENTS.md](AGENTS.md) and [SOP.md](SOP.md). The normal flow is:
+> Follow the Oxygen contributor SOP for this repository. Collect only my in-scope local history,
+> organize it by project, prepare the privacy review, ask me the preference questions as one
+> batch, open the local Viewer as soon as it is available, and finish with a downloadable ZIP.
+> Do not upload or publish anything.
+
+The agent must read [AGENTS.md](AGENTS.md) and [SOP.md](SOP.md) before acting.
+
+## What the workflow produces
 
 ```text
-repo / Claude export / meeting
-              ↓
-Oxygen v0.2 ingest output
-              ↓
-project-level organization across trajectories
-              ↓
-English review viewer
-              ↓
-self-contained HTML preview + final ZIP
+repo / Claude export / meeting transcript or audio
+                         |
+                         v
+              normalized local run
+                         |
+                         v
+       project classification + 10-40 milestones
+                         |
+                         v
+          privacy review + preference probes
+                         |
+                         v
+        local Viewer + downloadable contribution ZIP
 ```
 
-Nothing is uploaded by this kit. Collection outputs are unapproved until the original
-contributor reviews them.
+The final package remains `publication_approved=false` unless the contributor explicitly
+approves publication. Producing or downloading a ZIP is not publication approval.
 
 ## Requirements
 
 - Python 3.11+
-- Node.js 22+
-- npm
-- Codex and/or Claude Code local session directories for repo collection
-- Optional: `ffmpeg`/audio dependencies and the user's own Hugging Face token for diarization
+- Node.js 22+ and npm
+- Local Codex and/or Claude Code history for repository collection
+- Optional meeting-audio dependencies and the contributor's own credentials for transcription
+  or diarization; credentials must never enter the collected data
+- Optional local Presidio/spaCy CPU environment for the release-redaction pass
 
-## Skills
+## Included skills
 
-- [`oxygen-ingest-project-history`](skills/oxygen-ingest-project-history/SKILL.md):
-  collect repo-related Codex/Claude sessions and memory, import Claude exports, or process meetings.
-- [`oxygen-organize-review-export`](skills/oxygen-organize-review-export/SKILL.md):
-  load an ingest output, show progress, review the project timeline, and export HTML plus a final ZIP.
+Run the skills in this order:
+
+1. [`oxygen-ingest-project-history`](skills/oxygen-ingest-project-history/SKILL.md) collects
+   repository-related Codex/Claude sessions and allowed memory, imports Claude exports, and
+   processes meeting text or audio.
+2. [`oxygen-organize-review-export`](skills/oxygen-organize-review-export/SKILL.md) labels mixed
+   conversations by project, selects the primary project, builds one combined timeline per
+   project, launches the Viewer, and packages the reviewed run.
+3. [`release-redactor`](skills/oxygen-history-redaction/SKILL.md) creates a local, normalized,
+   best-effort release candidate and requires human privacy review. It does not guarantee
+   anonymity.
+4. [`oxygen-elicit-contributor-preferences`](skills/oxygen-elicit-contributor-preferences/SKILL.md)
+   finds a small set of high-signal moments, asks evidence-grounded questions, and writes
+   `preference-probes.json` without inventing preferences.
 
 ## Human quick start
 
+Collection and organization can be started manually:
+
 ```bash
-# 1. Collect conversations related to a repository.
 python3 tools/ingest/collect_repo_trajectories.py /path/to/repo \
   --out work/my-project
 
-# 2. Open the local organizer and import that output.
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
   work/my-project
 ```
 
-The second command prints the local URL. Keep the process running while reviewing. The
-localhost-only Viewer does not require a password. It proactively opens the browser; if that is
-unavailable, the agent must give you the URL. Use **Download ZIP** to get the normalized data,
-project map, and an HTML viewer that opens directly from disk.
+The second command prints a localhost URL, opens it when the environment supports browser
+opening, and must remain running during review. No password is required.
 
-The ingest skill in this kit is the portable customer version of the original Oxygen ingest
-workflow. Its implementation remains under `tools/ingest/`.
+The current Viewer displays organization progress, project timelines, source records, and HTML
+and ZIP downloads. Preference probes are presented by the coding agent as one batch and stored in
+`work/<run>/preference-probes.json`; do not claim that the current Viewer contains a probe-answer
+UI. If a later compatible Viewer exposes those controls, answers must remain reversible and show
+immediate feedback.
+
+For the complete operational sequence, privacy gates, package contents, and handoff rules, follow
+[SOP.md](SOP.md).

@@ -1,0 +1,254 @@
+{
+  "version": "0.7.0",
+  "notice": "Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review is required before release.",
+  "pii": {
+    "backend": "spacy",
+    "language": "en",
+    "model": "en_core_web_lg",
+    "score_threshold": 0.35,
+    "merge_gap": 2,
+    "chunk_chars": 100000,
+    "custom_recognizer_files": [
+      "assets/presidio-filesystem-paths.json"
+    ],
+    "ignored_entities": [
+      "DATE_TIME",
+      "NRP",
+      "ORGANIZATION"
+    ],
+    "entity_categories": {
+      "PERSON": "direct-identifier",
+      "EMAIL_ADDRESS": "direct-identifier",
+      "PHONE_NUMBER": "direct-identifier",
+      "US_SSN": "direct-identifier",
+      "US_ITIN": "direct-identifier",
+      "US_PASSPORT": "direct-identifier",
+      "US_DRIVER_LICENSE": "direct-identifier",
+      "UK_NHS": "direct-identifier",
+      "MEDICAL_LICENSE": "direct-identifier",
+      "LOCATION": "location",
+      "ORGANIZATION": "private-entity",
+      "NRP": "pii",
+      "DATE_TIME": "internal-timeline",
+      "IP_ADDRESS": "infrastructure",
+      "URL": "linkage",
+      "CREDIT_CARD": "financial-identifier",
+      "IBAN_CODE": "financial-identifier",
+      "US_BANK_NUMBER": "financial-identifier",
+      "CRYPTO": "financial-identifier",
+      "FILE_SYSTEM_PATH": "filesystem-path"
+    }
+  },
+  "semantic": {
+    "expand_to": "sentence",
+    "merge_gap": 24
+  },
+  "trajectory_schema": {
+    "conversation_event_type": "message",
+    "non_conversation_event_type": "action_label",
+    "action_types": [
+      "system",
+      "tool_call",
+      "tool_result",
+      "artifact",
+      "version_control",
+      "agent_event",
+      "user_event",
+      "other"
+    ]
+  },
+  "mask_categories": [
+    "agent-code",
+    "commercial-strategy",
+    "credential",
+    "direct-identifier",
+    "executable-code",
+    "financial-identifier",
+    "filesystem-path",
+    "full-turn",
+    "identifiable-third-party",
+    "infrastructure",
+    "intent-exposure",
+    "internal-metric",
+    "internal-timeline",
+    "linkage",
+    "location",
+    "mosaic-reidentification",
+    "private-entity",
+    "private-personal",
+    "pii",
+    "sensitive",
+    "speaker",
+    "source-markup",
+    "third-party"
+  ],
+  "rules": [
+    {
+      "id": "private-key",
+      "category": "credential",
+      "severity": "critical",
+      "flags": "ims",
+      "pattern": "-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----.*?-----END(?: [A-Z0-9]+)? PRIVATE KEY-----"
+    },
+    {
+      "id": "api-key-content",
+      "category": "credential",
+      "severity": "critical",
+      "flags": "i",
+      "preserve_synthetic_placeholders": true,
+      "replacement_group": "secret",
+      "pattern": "(?<![A-Za-z0-9_])[\\\"']?(?:[A-Za-z][A-Za-z0-9_-]{0,48}[-_])?api[-_ ]?key[\\\"']?[ \\t]*[:=][ \\t]*(?P<secret>\\\"(?=[^\\\"\\r\\n]*[A-Za-z0-9])[^\\\"\\r\\n]+\\\"|'(?=[^'\\r\\n]*[A-Za-z0-9])[^'\\r\\n]+'|[^\\s,;&\\\"']+)"
+    },
+    {
+      "id": "authorization-secret",
+      "category": "credential",
+      "severity": "critical",
+      "flags": "i",
+      "preserve_synthetic_placeholders": true,
+      "pattern": "\\b(?:authorization[ \\t]*:[ \\t]*(?:bearer|basic)[ \\t]+|(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|password|passwd|secret)[ \\t]*[=:][ \\t]*)[^\\s,;&\\\"']{6,}"
+    },
+    {
+      "id": "vendor-token",
+      "category": "credential",
+      "severity": "critical",
+      "flags": "",
+      "pattern": "(?<![A-Za-z0-9_-])(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{16,}|npm_[A-Za-z0-9]{20,}|pypi-[A-Za-z0-9_-]{32,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35})(?![A-Za-z0-9_-])"
+    },
+    {
+      "id": "credential-uri",
+      "category": "credential",
+      "severity": "critical",
+      "flags": "i",
+      "preserve_synthetic_placeholders": true,
+      "pattern": "\\b(?:postgres(?:ql)?|mysql|mongodb(?:\\+srv)?|redis|amqp)://[^:/\\s<>\\\"']+:[^@/\\s<>\\\"']+@[^\\s<>\\\"']+"
+    },
+    {
+      "id": "jwt",
+      "category": "credential",
+      "severity": "critical",
+      "flags": "",
+      "pattern": "(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])"
+    },
+    {
+      "id": "email",
+      "category": "direct-identifier",
+      "severity": "high",
+      "flags": "i",
+      "pattern": "(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\\.)+[A-Za-z]{2,}(?![A-Za-z0-9-])"
+    },
+    {
+      "id": "phone",
+      "category": "direct-identifier",
+      "severity": "high",
+      "flags": "",
+      "pattern": "(?<!\\d)(?:(?:\\+?86[- ]?)?1[3-9]\\d{9}|(?:\\+?1[- .]?)?(?:\\(?\\d{3}\\)?[- .]?)\\d{3}[- .]?\\d{4})(?!\\d)"
+    },
+    {
+      "id": "ipv4",
+      "category": "infrastructure",
+      "severity": "high",
+      "flags": "",
+      "pattern": "(?<!\\d)(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)(?!\\d)"
+    },
+    {
+      "id": "url",
+      "category": "linkage",
+      "severity": "high",
+      "flags": "i",
+      "pattern": "\\bhttps?://[^\\s<>\\\"']+"
+    },
+    {
+      "id": "ssh-remote",
+      "category": "infrastructure",
+      "severity": "high",
+      "flags": "i",
+      "pattern": "\\b(?:git|ssh)@[A-Za-z0-9._-]+:[^\\s<>\\\"']+"
+    },
+    {
+      "id": "internal-host",
+      "category": "infrastructure",
+      "severity": "high",
+      "flags": "i",
+      "pattern": "\\b(?:localhost|[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.(?:internal|local|lan))(?::\\d{2,5})?\\b"
+    },
+    {
+      "id": "absolute-path",
+      "category": "infrastructure",
+      "severity": "high",
+      "flags": "",
+      "pattern": "(?<![A-Za-z0-9_.-])(?:/(?:home|Users|srv|etc|var|opt|root|mnt|tmp)/[^\\s\\\"'<>]*|[A-Za-z]:\\\\(?:Users|Windows|Program Files)\\\\[^\\r\\n\\\"'<>]*)"
+    },
+    {
+      "id": "social-handle",
+      "category": "direct-identifier",
+      "severity": "medium",
+      "flags": "",
+      "pattern": "(?<![A-Za-z0-9._%+-])@[A-Za-z0-9_][A-Za-z0-9_.-]{2,31}\\b"
+    },
+    {
+      "id": "uuid",
+      "category": "linkage",
+      "severity": "medium",
+      "flags": "i",
+      "pattern": "\\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\b"
+    }
+  ],
+  "review_signals": [
+    {
+      "id": "self-denigration",
+      "category": "private-personal",
+      "severity": "high",
+      "flags": "i",
+      "pattern": "其实|说实话|我不懂|我不会|很菜|随便做|糊弄|草台班子|第一版很简单|不太专业|not qualified|I (?:do not|don't) (?:understand|know)|rushed (?:it|this)|sloppy"
+    },
+    {
+      "id": "intent-exposure",
+      "category": "intent-exposure",
+      "severity": "high",
+      "flags": "i",
+      "pattern": "抓住.{0,16}注意力|注意力.{0,16}价值|先占位|补齐.{0,16}策略|推给别人|制造.{0,12}(?:声量|话题)|attention.{0,20}(?:value|capture)|occupy.{0,12}position|optics|clickbait"
+    },
+    {
+      "id": "commercial-strategy",
+      "category": "commercial-strategy",
+      "severity": "high",
+      "flags": "i",
+      "pattern": "融资|营收|获客|客户数量|traction|硬指标|软指标|内部定位|商业模式|品牌与获客|杠杆|窗口期|(?:内部|未公开|保密).{0,8}路线图|发布日期|fundrais|revenue|customer count|internal positioning|(?:internal|private|unreleased|confidential).{0,20}roadmap|launch window"
+    },
+    {
+      "id": "third-party-view",
+      "category": "identifiable-third-party",
+      "severity": "high",
+      "flags": "i",
+      "pattern": "引用.{0,16}(?:观点|博客|推文|断言)|根据.{0,24}(?:说法|博客|文章|断言)|不靠谱|很水|很差|某位研究者|某人说|according to.{0,40}(?:researcher|blog|post|thread)|unreliable|incompetent"
+    },
+    {
+      "id": "private-personal",
+      "category": "private-personal",
+      "severity": "high",
+      "flags": "i",
+      "pattern": "身体|生病|诊断|医院|伴侣|男朋友|女朋友|丈夫|妻子|离婚|家庭住址|工资|薪资|心理|抑郁|焦虑|health|diagnos|hospital|partner|spouse|divorc|salary|mental health"
+    },
+    {
+      "id": "mosaic-identity",
+      "category": "mosaic-reidentification",
+      "severity": "medium",
+      "flags": "i",
+      "pattern": "主持人|创始人|联合创始人|负责人|来自.{0,16}(?:公司|学校|基金)|客户|未经同意|participant|founder|co-founder|head of|works at|customer"
+    },
+    {
+      "id": "exact-timeline",
+      "category": "internal-timeline",
+      "severity": "medium",
+      "flags": "",
+      "pattern": "(?i)(?:internal|private|confidential|unreleased|内部|未公开|保密).{0,24}\\b20\\d{2}[-/.年](?:0?[1-9]|1[0-2])(?:[-/.月](?:0?[1-9]|[12]\\d|3[01])日?)?\\b"
+    },
+    {
+      "id": "quantified-metric",
+      "category": "internal-metric",
+      "severity": "medium",
+      "flags": "i",
+      "pattern": "(?:客户|用户|营收|收入|转化|增长|traction|customer|user|revenue|conversion|growth).{0,24}(?:\\d[\\d,.]*|百分之|%)"
+    }
+  ]
+}

@@ -136,9 +136,13 @@ def extract(session: Path, system: str, out_root: Path, home: Path, user: str) -
 
 def copy_memory(src: Path, dest_root: Path, base_label: str, collected: list[dict]) -> None:
     """Copy one memory file/dir, skipping anything credential-shaped."""
-    if not src.exists():
+    try:
+        if not src.exists():
+            return
+        targets = [src] if src.is_file() else sorted(p for p in src.rglob("*") if p.is_file())
+    except PermissionError:
+        collected.append({"source": str(src), "skipped": "permission denied"})
         return
-    targets = [src] if src.is_file() else sorted(p for p in src.rglob("*") if p.is_file())
     for target in targets:
         if is_sensitive_name(target):
             collected.append({"source": str(target), "skipped": "sensitive filename"})
@@ -146,7 +150,11 @@ def copy_memory(src: Path, dest_root: Path, base_label: str, collected: list[dic
         rel = target.name if src.is_file() else str(target.relative_to(src))
         dest = dest_root / base_label / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(target, dest)
+        try:
+            shutil.copy2(target, dest)
+        except PermissionError:
+            collected.append({"source": str(target), "skipped": "permission denied"})
+            continue
         collected.append(
             {"source": str(target), "copied_to": str(dest), "sha256": sha256_file(target)}
         )

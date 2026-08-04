@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { OrganizationProgress } from "./organization-progress";
+import { RedactionCompare, segments, type Redaction, type RedactionJob } from "./redaction-compare";
+import { ProbePanel, type Probe, type BulkDecision, type ProbeRun } from "./probe-panel";
 import { selectProjectTimeline } from "../lib/timeline";
 
 type Status = { status:string; stage:string; completed:number; total:number; percent:number; documentCount:number; warnings:string[] };
@@ -18,10 +20,80 @@ export function InlineWorkspace() {
   const [docs,setDocs] = useState<Doc[]>([]);
   const [selected,setSelected] = useState("");
   const [detail,setDetail] = useState<Detail|null>(null);
-  const [view,setView] = useState<"timeline"|"source">("timeline");
+  const [view,setView] = useState<"timeline"|"redaction"|"probes">("timeline");
   const [railWidth,setRailWidth] = useState(330);
   const [railHeight,setRailHeight] = useState(280);
   const [error,setError] = useState("");
+  const [redactions,setRedactions] = useState<Redaction[]>([]);
+  const [redactionJob,setRedactionJob] = useState<RedactionJob>(null);
+  const [redactionBusy,setRedactionBusy] = useState("");
+
+  const loadRedactions = useCallback(async () => {
+    const response = await fetch("/api/redactions", { cache:"no-store" });
+    if (!response.ok) return;
+    const payload = await response.json() as { redactions: Redaction[]; job: RedactionJob };
+    setRedactions(payload.redactions || []);
+    setRedactionJob(payload.job);
+  }, []);
+
+  // Poll only while a pass is in flight, so the tab can say "还在跑" instead of
+  // showing an empty comparison that looks like "nothing was found".
+  useEffect(() => {
+    loadRedactions();
+    if (redactionJob && redactionJob.status === "running") {
+      const timer = setInterval(loadRedactions, 4000);
+      return () => clearInterval(timer);
+    }
+  }, [loadRedactions, redactionJob?.status]);
+
+  async function updateRedaction(id: string, patch: { category?: string; status?: string }) {
+    setRedactionBusy(id);
+    await fetch(`/api/redactions/${id}`, {
+      method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    await loadRedactions();
+    setRedactionBusy("");
+  }
+
+  async function deleteRedaction(id: string) {
+    setRedactionBusy(id);
+    await fetch(`/api/redactions/${id}`, { method: "DELETE" });
+    await loadRedactions();
+    setRedactionBusy("");
+  }
+
+  const [probes,setProbes] = useState<Probe[]>([]);
+  const [bulkDecisions,setBulkDecisions] = useState<BulkDecision[]>([]);
+  const [probeRun,setProbeRun] = useState<ProbeRun>(null);
+  const [probeBusy,setProbeBusy] = useState("");
+
+  const loadProbes = useCallback(async () => {
+    const response = await fetch("/api/probes", { cache:"no-store" });
+    if (!response.ok) return;
+    const payload = await response.json() as { probes: Probe[]; bulkDecisions: BulkDecision[]; run: ProbeRun };
+    setProbes(payload.probes || []);
+    setBulkDecisions(payload.bulkDecisions || []);
+    setProbeRun(payload.run);
+  }, []);
+
+  useEffect(() => {
+    loadProbes();
+    if (probeRun && probeRun.status === "running") {
+      const timer = setInterval(loadProbes, 4000);
+      return () => clearInterval(timer);
+    }
+  }, [loadProbes, probeRun?.status]);
+
+  async function answerProbe(id: string, patch: { choice?: string; text?: string; clear?: boolean; bulk?: boolean }) {
+    setProbeBusy(id);
+    await fetch(`/api/probes/${id}`, {
+      method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    await loadProbes();
+    setProbeBusy("");
+  }
 
   const loadDocs = useCallback(async () => {
     const response = await fetch("/api/documents", { cache:"no-store" });
@@ -99,7 +171,7 @@ export function InlineWorkspace() {
         <div className="railHead"><b>Project timelines</b><span>{projectNames.length} total</span></div>
         <div className="docList">{projectNames.map((project) => <button className={`docCard overview ${selected===`project:${project}`?"active":""}`} key={project} onClick={() => { setSelected(`project:${project}`); setView("timeline"); }}>
           <span className="docTitle">{project}</span><span className="kind">PROJECT</span><small>{projectCount(project).toLocaleString()} events · combined timeline</small>
-        </button>)}<div className="railHead evidence"><b>Source records</b><span>{docs.length}</span></div>{docs.map((doc) => <button className={`docCard ${selected===doc.id?"active":""}`} key={doc.id} onClick={() => { setSelected(doc.id); setView("source"); }}>
+        </button>)}<div className="railHead evidence"><b>Source records</b><span>{docs.length}</span></div>{docs.map((doc) => <button className={`docCard ${selected===doc.id?"active":""}`} key={doc.id} onClick={() => { setSelected(doc.id); setView("redaction"); }}>
           <span className="docTitle">{doc.title}</span><span className="kind">{doc.kind}</span><small>{doc.item_count} events · {doc.source_system || "local"}</small>
         </button>)}</div>
       </aside>
@@ -107,22 +179,52 @@ export function InlineWorkspace() {
       <section className="canvas">
         {!ready ? <div className="empty">No organized records found.</div> : <>
           <div className="canvasHead">
-            <div className="eyebrow">{isProject ? `${selectedProject === primaryProject ? "Primary project" : "Project"} · combined timeline` : `Source record · ${detail?.document.kind}`}</div>
             <h1>{summary.primary_project || detail?.document.title}</h1>
-            <p>{summary.project_summary || "A local timeline assembled from the collected record."}</p>
-            <div className="headMeta">{isProject ? <><span>{docs.length} source trajectories</span><span>{projectCount(selectedProject).toLocaleString()} project events</span><span>{highlights.length} timeline events</span></> : <>{detail?.document.source_user && <span>Author: {detail.document.source_user}</span>}<span>Source: {detail?.document.source_system || "unknown"}</span><span>{detail?.document.item_count} events</span><span>Started {fmt(detail?.document.source_timestamp)}</span></>}</div>
           </div>
           <nav className="toolbar" aria-label="Record view">
             <button className={view==="timeline"?"active":""} onClick={() => setView("timeline")}>Timeline</button>
-            <button disabled={isProject} className={view==="source"?"active":""} onClick={() => setView("source")}>{isProject ? "Open an event for source" : "Source events"}</button>
+            <button className={view==="redaction"?"active":""} onClick={() => setView("redaction")}>
+              Release preview{redactionJob?.status === "running" ? " · running" : redactions.length ? ` · ${redactions.length} redacted` : ""}
+            </button>
+            <button className={view==="probes"?"active":""} onClick={() => setView("probes")}>
+              Preferences{probeRun?.status === "running" ? " · running" : probes.length ? ` · ${probes.filter((p) => p.answered_at).length}/${probes.length}` : ""}
+            </button>
           </nav>
           <div className="stream">
             {view === "timeline" ? <>
               <div className="projectStrip">{(summary.projects || []).map((project) => <div className={`projectCard ${project.primary?"primary":""}`} key={project.name}><small>{project.primary?"MAIN PROJECT":"RELATED PROJECT"}</small><b>{project.name}</b><span>{project.event_count} events</span></div>)}</div>
               <div className="timeline">{highlights.map((event,index) => <article className="timelineEvent" key={event.id}>
-                <div className="timelineMarker">{index+1}</div><div className="timelineBody"><time>{fmt(event.timestamp)}</time><span className="projectTag">{event.project}</span><h2>{event.summary || "Project event"}</h2><p>{event.content}</p><button onClick={() => { if(event.documentId) setSelected(event.documentId); setView("source"); }}>Open source event →</button></div>
+                <div className="timelineMarker">{index+1}</div><div className="timelineBody"><time>{fmt(event.timestamp)}</time><span className="projectTag">{event.project}</span><h2>{event.summary || "Project event"}</h2><p>{event.content}</p><button onClick={() => { if(event.documentId) setSelected(event.documentId); setView("redaction"); }}>Open source event →</button></div>
               </article>)}</div>
-            </> : <div className="sourceList">{(detail?.items || []).map((item) => <article className="sourceEvent" key={item.id}><div><b>#{item.sequence}</b><span>{fmt(item.timestamp)}</span><span>{item.event_type || "record"}</span><span>{item.organization_category}</span></div><pre>{item.content}</pre></article>)}</div>}
+            </> : view === "redaction" ? <RedactionCompare
+              job={redactionJob}
+              redactions={redactions}
+              detail={detail}
+              isProject={isProject}
+              busyId={redactionBusy}
+              onUpdate={updateRedaction}
+              onDelete={deleteRedaction}
+            /> : view === "probes" ? <ProbePanel
+              run={probeRun}
+              probes={probes}
+              bulkDecisions={bulkDecisions}
+              busyId={probeBusy}
+              onAnswer={answerProbe}
+            /> : <div className="sourceList">
+              <p className="redactionNotice">
+                Showing the release version. Redacted spans are replaced here — open
+                <b> Redaction review</b> to see the original beside it and change a decision.
+                {(() => { const n = (detail?.items || []).filter((i) => i.event_type === "action_label").length;
+                  return n ? ` ${n} non-conversational event(s) ship as bare action labels and are not listed.` : ""; })()}
+              </p>
+              {(detail?.items || []).filter((item) => item.event_type !== "action_label").map((item) => {
+                const spans = redactions.filter((span) => span.item_id === item.id);
+                return <article className="sourceEvent" key={item.id}>
+                  <div><b>#{item.sequence}</b><span>{fmt(item.timestamp)}</span><span>{item.event_type || "record"}</span><span>{item.organization_category}</span>{spans.length ? <span>{spans.length} redacted</span> : null}</div>
+                  <pre>{spans.length ? segments(item.content, spans, true) : item.content}</pre>
+                </article>;
+              })}
+            </div>}
           </div>
         </>}
       </section>

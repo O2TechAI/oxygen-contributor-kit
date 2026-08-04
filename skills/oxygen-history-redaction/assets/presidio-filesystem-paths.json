@@ -1,0 +1,42 @@
+{
+  "version": "1",
+  "recognizers": [
+    {
+      "name": "FileSystemPathRecognizer",
+      "supported_entity": "FILE_SYSTEM_PATH",
+      "supported_language": "en",
+      "patterns": [
+        {
+          "name": "posix-absolute-path",
+          "regex": "(?<![:/A-Za-z0-9._-])/(?:[A-Za-z0-9._~@%+=,-]+/)*[A-Za-z0-9._~@%+=,-]+",
+          "score": 0.95
+        },
+        {
+          "name": "explicit-relative-path",
+          "regex": "(?<![A-Za-z0-9._-])(?:\\.\\.?|~)/(?:[A-Za-z0-9._~@%+=,-]+/)*[A-Za-z0-9._~@%+=,-]+",
+          "score": 0.95
+        },
+        {
+          "name": "windows-absolute-or-unc-path",
+          "regex": "(?i)(?<![A-Za-z0-9])(?:[A-Z]:\\\\|\\\\\\\\[A-Za-z0-9._-]+\\\\[A-Za-z0-9.$_-]+\\\\)(?:[^\\\\\\r\\n<>:\"|?*]+\\\\)*[^\\\\\\r\\n<>:\"|?*]+",
+          "score": 0.95
+        },
+        {
+          "name": "repository-relative-path",
+          "regex": "(?<![A-Za-z0-9._/-])(?:(?:src|lib|app|apps|packages|test|tests|doc|docs|script|scripts|config|configs|asset|assets|artifact|artifacts|data|example|examples|include|cmd|internal|pkg|public|private|\\.agents|\\.codex)/)(?:[A-Za-z0-9._~@%+=,-]+/)*[A-Za-z0-9._~@%+=,-]+",
+          "score": 0.9
+        },
+        {
+          "name": "relative-file-path",
+          "regex": "(?i)(?<![A-Za-z0-9._/-])(?:[A-Za-z0-9._-]+/){0,8}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.(?:py|pyi|js|mjs|cjs|ts|tsx|jsx|json|jsonl|yaml|yml|toml|md|txt|csv|tsv|sql|sh|bash|zsh|fish|go|rs|java|kt|rb|php|c|cc|cpp|h|hpp|diff|patch|log|lock|ini|cfg|conf|env)(?![A-Za-z0-9._-])",
+          "score": 0.9
+        },
+        {
+          "name": "sensitive-dotfile-path",
+          "regex": "(?i)(?<![A-Za-z0-9._-])\\.(?:env(?:\\.[A-Za-z0-9_-]+)?|npmrc|pypirc|netrc|git-credentials|ssh/(?:config|known_hosts))(?![A-Za-z0-9._-])",
+          "score": 0.95
+        }
+      ]
+    }
+  ]
+}
