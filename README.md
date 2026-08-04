@@ -12,7 +12,11 @@
 [![Python](https://img.shields.io/badge/PYTHON-3.11+-3776ab?style=for-the-badge&logo=python&logoColor=white)](#requirements)
 [![Node](https://img.shields.io/badge/NODE-22+-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](#requirements)
 [![Redaction](https://img.shields.io/badge/REDACTION-CPU_or_MODEL-f59e0b?style=for-the-badge)](#redaction-two-backends)
-[![Anonymity](https://img.shields.io/badge/ANONYMITY-NO_GUARANTEE-991b1b?style=for-the-badge)](#what-this-does-not-promise)
+
+<p>
+  <strong>Contributors: Estelle Zhang · Zihan Wang · Yuxiang Lin · Andrew Zhou</strong>
+</p>
+
 
 <!-- Hero image: drop the file at docs/hero.png and uncomment the line below.
 <img src="docs/hero.png" alt="Oxygen Contributor Kit pipeline: collect, organize, redact, review, package" width="900">
