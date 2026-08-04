@@ -14,7 +14,11 @@
 [![Redaction](https://img.shields.io/badge/REDACTION-CPU_or_MODEL-f59e0b?style=for-the-badge)](#redaction-two-backends)
 
 <p>
-  <strong>Contributors: Estelle Zhang · Zihan Wang · Yuxiang Lin · Andrew Zhou</strong>
+  <strong>Contributors: Estelle Zhang · Zihan Wang · Yuxiang Lin · Andrew Zhou · Zidi Xiong</strong>
+</p>
+
+<p>
+  <a href="mailto:estelle.zhang@o2tech.ai">Be the contributor</a>
 </p>
 
 
