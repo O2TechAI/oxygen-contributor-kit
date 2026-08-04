@@ -14,7 +14,7 @@
 [![Redaction](https://img.shields.io/badge/REDACTION-CPU_or_MODEL-f59e0b?style=for-the-badge)](#redaction-two-backends)
 
 <p>
-  <strong>Contributors: Estelle Zhang · Zihan Wang · Yuxiang Lin · Andrew Zhou · Henry Sun · Zidi Xiong</strong>
+  <strong>Contributors: Estelle Zhang · Zihan Wang · Yuxiang Lin · Andrew Zhou · Henry Sun · Zidi Xiong · Manling Li </strong>
 </p>
 
 <p>
