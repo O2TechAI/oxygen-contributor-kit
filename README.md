@@ -18,7 +18,7 @@
 </p>
 
 <p>
-  <a href="mailto:estelle.zhang@o2tech.ai">Be the contributor</a>
+  <a href="mailto:estelle.zhang@o2tech.ai">Become a contributor</a>
 </p>
 
 
