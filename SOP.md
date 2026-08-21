@@ -74,26 +74,29 @@ which classification decisions remain uncertain.
 
 ## 4. Prepare privacy review
 
-Read `skills/oxygen-history-redaction/SKILL.md`, including its policy and format references,
-before judging content. Its mandatory notice is:
+Use the contributor's configured AI model for redaction. The mandatory notice is:
 
 > Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review is
 > required before release.
 
-Non-conversational agent actions, tool calls, shell commands, outputs, artifacts, and source
-metadata become safe action labels in the release candidate. Two backends can produce the case:
+First create the AI review boundary from the organized raw run:
+
+```bash
+python3 tools/llm_redact/prepare_ai_review_run.py \
+  --run work/<run> --out work/<run>-review
+```
+
+This preserves conversational text and stable evidence IDs, but every non-conversational agent
+action, tool call, shell command, output, artifact, and source metadata becomes a fixed action
+label. Run all subsequent model, probe, Viewer, and package steps on `work/<run>-review`, never on
+the raw ingest directory.
 
 Do not send source text to a third-party redaction or PII-scrubbing service. The contributor's own
 configured model access is not a third-party service in this sense and is permitted under §1.
 
-**Local CPU backend.** `skills/oxygen-history-redaction` with Presidio and spaCy. Nothing leaves
-the machine. Its recall on non-English entities is weak — the bundled model is English-only, so
-Chinese personal and place names are largely missed. Prefer it when no model access is configured,
-or when the material is not the contributor's to disclose.
-
-**Model backend.** `tools/llm_redact` sends the conversational turns to the contributor's own
-configured model. Code, tool calls, tool output, and artifacts are stripped first and never sent.
-It substantially outperforms the local backend on mixed-language material.
+`tools/llm_redact` sends only the prepared conversational turns to the contributor's own
+configured model. Code, tool calls, tool output, source paths, and artifacts have already been
+replaced by fixed labels and are never sent.
 
 Use a mid-tier model or better. The smallest tier of a model family is a false economy here: in
 comparison runs it returned a materially higher rate of offsets that did not exist, reported
@@ -101,8 +104,8 @@ coverage counts it had not actually reviewed, and missed findings in the highest
 categories that a larger model caught. Validate whichever you choose — the checks below exist
 because a redaction pass that fails quietly looks exactly like one that succeeded.
 
-Whichever backend runs, validate its output before applying it. A model can return an offset that
-does not exist, a category outside the allowlist, or a coverage count it did not actually review;
+A model can return an offset that does not exist, a category outside the allowlist, or a coverage
+count it did not actually review;
 `tools/llm_redact/merge_and_apply.py` and `verify_coverage.py` reject each of those rather than
 letting them reach the release candidate. Report the rejection count alongside the hit count — a
 pass with zero rejections and a pass whose failures were dropped silently look identical otherwise.
@@ -111,26 +114,26 @@ by eye; run it against the probe pass too.
 
 Two failures found the hard way, both of which look like success:
 
-- **Run the model pass on the prepared case, never on the raw run.** Conversational turns can be a
+- **Run the model pass on the prepared review run, never on the raw run.** Conversational turns can be a
   low single-digit percentage of the bytes a run would ship — the rest is artifact content the
-  viewer's importer inlines from disk. A pass over the raw run reports a healthy hit count while
-  never looking at almost anything that ships. Run `tools/llm_redact/audit_coverage.py` against
-  your own run and read the reviewed/never-reviewed split before trusting a result.
-- **A filter that matches nothing must fail, not pass.** These tools once globbed `traj-*.json`
-  while the prepared case names files `trajectory-000001.json`; the coverage gate matched zero
-  files and printed `0 trajectories checked, 0 mismatched`, exit 0. Every helper here now exits
-  non-zero on an empty input set.
+  low single-digit percentage of the raw bytes. A pass over the raw run reports a healthy hit
+  count while never reviewing tool or artifact content. The prepared review run ensures those
+  events can ship only as bare labels. Run `tools/llm_redact/audit_coverage.py` against it.
+- **A filter that matches nothing must fail, not pass.** A coverage gate over an empty bundle can
+  otherwise print `0 trajectories checked, 0 mismatched` and look successful. Every helper must
+  exit non-zero on an empty input set.
 
 Important boundaries:
 
-- Keep the raw organized run unchanged and local. Redaction acts on a normalized candidate; an
-  undo means rebuilding from the retained local source, not publishing raw content.
+- Keep the raw organized run unchanged and local. Redaction acts on the prepared review run; an
+  undo means rebuilding from retained local source, not publishing raw content.
 - Report exact automatic-redaction totals and per-category counts, including an explicit zero.
 - Do not expose removed text in summaries, logs, or `preference-probes.json`.
 - Semantic findings require review; never silently bulk-waive them.
-- The redaction skill's `finalize` command creates a local release archive only. It is not the
-  final Oxygen contribution ZIP and must not be treated as publication.
-- If dependencies are unavailable or a fail-closed check fails, report the blocker and do not
+- The Viewer stores accepted findings as editable offsets. Soft-deleted spans do not enter the
+  ZIP; every active span does.
+- ZIP export must remain blocked while the AI pass is missing, running, or has rejected spans.
+- If model access is unavailable or a fail-closed check fails, report the blocker and do not
   claim the release candidate is safe.
 
 ## 5. Elicit confirmed preferences
@@ -151,11 +154,11 @@ content has been excluded from the review copy.
    mutually exclusive, evidence-grounded choices, plus “Something else” and “Nothing worth
    recording here.”
 7. Present all probes as one batch. Do not interrupt the contributor once per event.
-8. Write `work/<run>/preference-probes.json` and validate it:
+8. Write `work/<run>-review/preference-probes.json` and validate it:
 
 ```bash
 python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py \
-  work/<run>
+  work/<run>-review
 ```
 
 Only explicit answers become checklist preferences. Unanswered and skipped probes produce no
@@ -167,7 +170,8 @@ with `tools/llm_redact/push_probes.py`, and let the contributor answer in the br
 
 ```bash
 python3 tools/llm_redact/push_probes.py \
-  --probes work/<run>-probes --dialogue work/<run>-dialogue --limit 12
+  --probes work/<run>-probes --dialogue work/<run>-dialogue \
+  --summary work/<run>-review/preference-probes.json --limit 12
 ```
 
 Each probe shows its recap, its offered options, `Nothing worth recording here`, a free-text
@@ -182,8 +186,25 @@ Start the local review server:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
-  work/<run>
+  work/<run>-review
 ```
+
+On Linux/WSL the launcher validates Node/npm, repairs missing or cross-OS `node_modules` with
+lockfile-preserving `npm ci`, binds directly to `127.0.0.1`, and creates fresh launch-owned D1
+state. Do not move or delete `.wrangler`; the official launcher never reuses it. To select a
+non-default port, pass `--port <number>`. If the port is occupied, startup fails immediately
+without killing the owning process.
+
+After the server is healthy, push the validated AI spans from another terminal:
+
+```bash
+python3 tools/llm_redact/push_redactions.py \
+  --redacted work/<run>-redaction/redacted
+```
+
+The push command automatically reads the adjacent `report.json`. It refuses incomplete worker
+coverage and carries the validator's rejected count into the Viewer, where any nonzero count blocks
+ZIP creation until the findings are corrected and the pass is rerun.
 
 As soon as it is healthy:
 
@@ -218,12 +239,12 @@ Ask the contributor to inspect:
 
 - included sources and project assignments;
 - primary-project milestones against source evidence;
-- automatic-redaction counts and semantic review decisions;
+- AI-redaction counts, rejected-span count, and semantic review decisions;
 - bulk judgement-call decisions;
 - confirmed preference answers and skipped/unanswered probes;
 - exclusions and unresolved warnings.
 
-Create `work/<run>/oxygen-contribution.zip`. The reviewed package should contain:
+Download `oxygen-contribution.zip` from the Viewer. The reviewed package should contain:
 
 ```text
 oxygen-contribution/
@@ -240,8 +261,10 @@ Requirements:
 
 - The manifest records exact counts, warnings, source types, creation time, exclusions, and
   `publication_approved`.
-- Package only reviewed release data. Never package raw inputs, `automatic/`, private redaction
-  indexes/findings/masks/waivers, reviewer identities, local runtime state, or original secrets.
+- Package only AI-reviewed release data with all active spans applied. Never package raw inputs,
+  original event envelopes, private findings, reviewer identities, local runtime state, or
+  original secrets.
+- Block ZIP generation if the AI pass is absent, incomplete, or reports any rejected span.
 - Exclude `.env*`, auth files, tokens, cookies, private keys, browser profiles, `node_modules`,
   caches, `.wrangler`, databases, logs, model scratch output, and local virtual environments.
 - Inspect the ZIP member list after creation and reject unexpected absolute paths, `..` entries,

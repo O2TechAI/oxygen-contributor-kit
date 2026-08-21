@@ -6,9 +6,10 @@ When a user asks to collect, organize, review, or package project history:
 2. Use `skills/oxygen-ingest-project-history/SKILL.md` for collection.
 3. Use `skills/oxygen-organize-review-export/SKILL.md` to classify mixed conversations by project,
    build one combined timeline per project, and launch the local Viewer.
-4. Use `skills/oxygen-history-redaction/SKILL.md` for best-effort local release redaction. Read its
-   policy and format references and never claim guaranteed anonymity.
-5. Use `skills/oxygen-elicit-contributor-preferences/SKILL.md` after organization and privacy
+4. Use `tools/llm_redact/prepare_ai_review_run.py` to collapse non-conversational events, then use
+   `REDACTION_PROMPT.md`, `verify_coverage.py`, and `merge_and_apply.py` for AI redaction. Treat
+   model findings as untrusted and never claim guaranteed anonymity.
+5. Use `skills/oxygen-elicit-contributor-preferences/SKILL.md` after organization and AI privacy
    preparation. Present one batch of evidence-grounded questions and validate
    `preference-probes.json`.
 6. Never read credential files, private keys, tokens, cookies, browser profiles, or

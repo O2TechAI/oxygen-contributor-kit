@@ -184,7 +184,9 @@ export function InlineWorkspace() {
           <nav className="toolbar" aria-label="Record view">
             <button className={view==="timeline"?"active":""} onClick={() => setView("timeline")}>Timeline</button>
             <button className={view==="redaction"?"active":""} onClick={() => setView("redaction")}>
-              Release preview{redactionJob?.status === "running" ? " · running" : redactions.length ? ` · ${redactions.length} redacted` : ""}
+              Release preview{redactionJob?.status === "running" ? " · running"
+                : redactionJob && redactionJob.status !== "complete" ? ` · ${redactionJob.status}`
+                : redactions.length ? ` · ${redactions.length} redacted` : ""}
             </button>
             <button className={view==="probes"?"active":""} onClick={() => setView("probes")}>
               Preferences{probeRun?.status === "running" ? " · running" : probes.length ? ` · ${probes.filter((p) => p.answered_at).length}/${probes.length}` : ""}

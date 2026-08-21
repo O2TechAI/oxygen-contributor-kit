@@ -16,8 +16,8 @@ final review is required before release. Do not claim a transcript is safe.
 | category | mark when the span contains |
 |---|---|
 | `credential` | API keys, tokens, passwords, private keys, connection strings, session cookies, anything that would authenticate someone |
-| `private-personal` | real names of people, personal contact details, health/family/employment details, anything about an identifiable individual's private life; criticism or evaluation of a named person |
-| `sensitive` | commercially or legally sensitive material — unannounced plans, contract terms, legal exposure, security weaknesses |
+| `private-personal` | real names/handles, personal contact details, health/family/employment details, self-denigration or other statements likely to harm the contributor, and identifiable third-party opinions, allegations, criticism, or evaluation |
+| `sensitive` | private organizations, customers, repositories, projects and codenames; commercially or legally sensitive material; concealed motives or attention tactics that should not be attributed publicly; security weaknesses and unpublished/private implementation context |
 | `internal-metric` | non-public numbers: revenue, headcount, usage volumes, model scores, cost figures, internal KPIs |
 | `internal-timeline` | non-public dates and schedules — launch dates, deadlines, internal milestones |
 | `mosaic-reidentification` | individually mild details that combine to identify a specific person, team, customer, or org (rare role + rare location + rare project) |
@@ -32,29 +32,30 @@ about technical approaches, and anything already public. Over-redaction destroys
 the value of the contribution — mark what is genuinely unpublishable, not
 everything that looks specific.
 
-Filesystem paths and URLs are handled by a separate deterministic pass. Do not
-mark them unless the path or URL *itself* leaks something from the table above
-(for example a real person's name inside a home-directory path).
+You are the only privacy detector; there is no separate CPU, regex, path, URL, or
+deterministic PII pass after you. Mark direct identifiers (including email,
+phone, location and social handles), internal hosts/IPs, opaque account/session
+identifiers, absolute/UNC/home/workspace paths, sensitive dotfiles,
+repository-specific relative paths, and private or credential-bearing URLs.
+An obviously synthetic generic path such as `/tmp/example` or a public project
+documentation URL may remain only when it cannot identify the contributor,
+their machine, a private repository, or private infrastructure.
 
-## The text has already been through one pass
+Private entities and implementation context require contextual judgment even
+when no person's name appears. Mask private company/team/customer names,
+unannounced repository or project names, codenames, private dates, and unique
+combinations of role, employer, customer, location and timeline. When the
+sensitive inference survives outside a narrow phrase, cover the complete
+sentence, clause, paragraph, or turn.
 
-A deterministic pass ran before you and left `<redacted category="..."/>` tags where it removed
-something. Those tags are part of the text you are given and part of its offsets.
-
-- Never mark a span that starts or ends inside a tag. A span may fully contain one, but must not
-  cut through it.
-- Never mark a tag on its own — the content is already gone.
-- Treat a tag as evidence that the surrounding sentence was sensitive. If the rest of that sentence
-  still identifies what was removed, mark the sentence.
-
-That pass recognises English entities, filesystem paths, URLs, and IPs. It does not recognise
-Chinese names, Chinese organisations, or anything that needs judgement. Those are your job.
+The AI-review run has already replaced non-conversational events with fixed labels such as
+`[tool call]` and `[tool result]`; those labels need no findings. Conversational text is otherwise
+unaltered and contains no pre-existing redaction tags. Review every turn in full.
 
 ## Language
 
-The transcripts are mixed Chinese and English. Chinese personal names, company
-names, and place names are in scope and are the main reason this pass exists —
-the deterministic pass that runs alongside you only recognises English entities.
+The transcripts are mixed Chinese and English. Chinese personal names, company names, place names,
+and context-dependent identifiers require the same care as their English equivalents.
 
 ## Output contract
 

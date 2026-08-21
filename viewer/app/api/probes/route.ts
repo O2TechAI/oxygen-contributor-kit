@@ -1,4 +1,5 @@
 import { getD1 } from "../../../db";
+import { canonicalizeAutoRemoved } from "../../../lib/auto-removed.mjs";
 
 const SIGNALS = new Set([
   "repeated_correction",
@@ -59,6 +60,15 @@ export async function POST(request: Request) {
     replaceAll?: boolean;
   };
   const now = new Date().toISOString();
+  let autoRemoved: ReturnType<typeof canonicalizeAutoRemoved> | undefined;
+  if (body.run) {
+    try {
+      autoRemoved = canonicalizeAutoRemoved(body.run.autoRemoved);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "invalid aggregate";
+      return Response.json({ error: `invalid auto_removed: ${detail}` }, { status: 400 });
+    }
+  }
 
   if (body.replaceAll) {
     // Answers belong to the probe set that produced them, so a regenerated set
@@ -124,7 +134,7 @@ export async function POST(request: Request) {
     ).bind(
       crypto.randomUUID(), body.run.status, body.run.stage, body.run.model || null,
       kept.length, body.run.setAside ?? setAside,
-      JSON.stringify(body.run.autoRemoved || {}), now, now,
+      JSON.stringify(autoRemoved), now, now,
       body.run.status === "complete" ? now : null,
     ).run();
   }

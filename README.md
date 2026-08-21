@@ -2,16 +2,16 @@
 
 # Oxygen Contributor Kit
 
-*Turn your own agent history into a reviewable, redacted, publishable contribution — without it ever leaving your machine.*
+*Turn your own agent history into an AI-redacted, locally reviewed contribution without automatic upload or publication.*
 
 [![SOP](https://img.shields.io/badge/SOP-READ_FIRST-2563eb?style=for-the-badge)](SOP.md)
 [![Agent contract](https://img.shields.io/badge/AGENT-CONTRACT-1f2937?style=for-the-badge)](AGENTS.md)
-[![Skills](https://img.shields.io/badge/SKILLS-4-7c3aed?style=for-the-badge)](#included-skills)
-[![Upload](https://img.shields.io/badge/UPLOAD-NEVER_AUTOMATIC-dc2626?style=for-the-badge)](#nothing-leaves-your-machine)
+[![Skills](https://img.shields.io/badge/SKILLS-3-7c3aed?style=for-the-badge)](#included-skills)
+[![Upload](https://img.shields.io/badge/UPLOAD-NEVER_AUTOMATIC-dc2626?style=for-the-badge)](#local-boundary)
 
 [![Python](https://img.shields.io/badge/PYTHON-3.11+-3776ab?style=for-the-badge&logo=python&logoColor=white)](#requirements)
 [![Node](https://img.shields.io/badge/NODE-22+-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](#requirements)
-[![Redaction](https://img.shields.io/badge/REDACTION-CPU_or_MODEL-f59e0b?style=for-the-badge)](#redaction-two-backends)
+[![Redaction](https://img.shields.io/badge/REDACTION-AI_REVIEW-f59e0b?style=for-the-badge)](#ai-redaction)
 
 <p>
   <strong>Contributors: Estelle Zhang · Zihan Wang · Yuxiang Lin · Andrew Zhou · Henry Sun · Zidi Xiong · Manling Li </strong>
@@ -58,7 +58,7 @@ The agent reads [AGENTS.md](AGENTS.md) and [SOP.md](SOP.md) before it touches an
         ③  PREPARE      every non-conversational event becomes a bare action label
                       │              (code, commands, paths, artifacts: gone)
                       ▼
-        ④  REDACT       CPU backend and/or your own model, then validated
+        ④  REDACT       your configured AI model, then fail-closed validation
                       │
                       ▼
         ⑤  REVIEW       local Viewer: release preview · edit · delete · answer probes
@@ -72,10 +72,10 @@ question. Each is a separate, explicit act.
 
 ---
 
-## Nothing leaves your machine
+## Local boundary
 
 - The Viewer binds to localhost. No password, because nothing else should be able to reach it.
-- Raw inputs, working files, redaction cases, and review metadata stay local.
+- Raw inputs, working files, model findings, and review metadata stay local.
 - Credential-shaped files are skipped at collection time, not filtered out later.
 - The model backend sends **only conversational turns**, and only to the model you have already
   configured. Code, tool calls, tool output, and artifacts are stripped before that point and are
@@ -83,16 +83,17 @@ question. Each is a separate, explicit act.
 
 ---
 
-## Redaction: two backends
+## AI redaction
 
-| | Local CPU | Your own model |
-|---|---|---|
-| Engine | Presidio + spaCy | the model your agent already uses |
-| Leaves the machine | nothing | conversational turns only |
-| Strong at | emails, IPs, paths, English entities | judgement, context, non-English names |
-| Weak at | anything needing judgement; non-English names | consistency, without validation |
+Redaction uses the model already configured for the contributor's coding agent. Before model
+review, `prepare_ai_review_run.py` converts every tool call, tool result, command, path, artifact,
+and other non-conversational event into a fixed action label. Only conversational turns enter the
+model review set.
 
-Run either, or both. The pass that matters is the one after it.
+The model produces offset-based findings, never a replacement copy of the run. The toolkit treats
+those findings as untrusted, validates them, and stores accepted spans in the local Viewer. The
+downloadable ZIP is built only after a completed pass with zero rejected spans, and it applies the
+currently active Viewer decisions while excluding raw event envelopes.
 
 ### Model output is treated as untrusted
 
@@ -135,10 +136,12 @@ proxy in front.
 - Python 3.11+
 - Node.js 22+ and npm
 - Local Codex and/or Claude Code history, for repository collection
-- Optional: Presidio/spaCy CPU environment for the local redaction backend
-  (`skills/oxygen-history-redaction/scripts/install_cpu_dependencies.py`)
 - Optional: meeting-audio dependencies and your own transcription credentials — which must never
   enter the collected data
+
+On Linux/WSL, the official Viewer launcher verifies the configured Node/npm pair against the
+exact `viewer/package.json` engine. If dependencies are absent or were created by a different
+operating system, it rebuilds them reproducibly with `npm ci` and leaves the lockfile unchanged.
 
 ---
 
@@ -152,9 +155,7 @@ Run in this order:
 2. **[`oxygen-organize-review-export`](skills/oxygen-organize-review-export/SKILL.md)** — labels
    mixed conversations by project, selects the primary project, builds one combined timeline per
    project, launches the Viewer, packages the reviewed run.
-3. **[`release-redactor`](skills/oxygen-history-redaction/SKILL.md)** — normalizes a run into a
-   release candidate and requires human privacy review.
-4. **[`oxygen-elicit-contributor-preferences`](skills/oxygen-elicit-contributor-preferences/SKILL.md)**
+3. **[`oxygen-elicit-contributor-preferences`](skills/oxygen-elicit-contributor-preferences/SKILL.md)**
    — finds high-signal friction moments and asks evidence-grounded questions, without inventing
    preferences.
 
@@ -169,18 +170,39 @@ audits) and [`tools/ingest/`](tools/ingest/) (collection and import).
 # 1. collect
 python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/my-project
 
-# 2. reduce non-conversational events to action labels
-.venv/bin/python skills/oxygen-history-redaction/scripts/redact_release.py \
-  prepare work/my-project --case-dir work/my-case
+# 2. after the agent creates project-map.json, build the AI review boundary
+python3 tools/llm_redact/prepare_ai_review_run.py \
+  --run work/my-project --out work/my-review
 
 # 3. see what a redaction pass would actually be reviewing
-python3 tools/llm_redact/audit_coverage.py work/my-project
+python3 tools/llm_redact/audit_coverage.py work/my-review
 
-# 4. review locally
-python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-project
+# 4. extract only conversational turns for the configured model
+python3 tools/llm_redact/extract_dialogue.py work/my-review --out work/my-dialogue
+
+# 5. after the model writes one findings JSON per bundle, validate and merge
+python3 tools/llm_redact/verify_coverage.py \
+  --dialogue work/my-dialogue --findings work/my-findings
+python3 tools/llm_redact/merge_and_apply.py \
+  --dialogue work/my-dialogue --findings work/my-findings --out work/my-redaction
+
+# 6. review locally; keep this process running
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-review
+
+# 7. in another terminal, push validated spans into the Viewer
+python3 tools/llm_redact/push_redactions.py \
+  --redacted work/my-redaction/redacted
 ```
 
-Step 4 prints a localhost URL and must keep running during review.
+Step 6 prints a localhost URL and must keep running during review. Download ZIP remains blocked
+until the AI pass is complete, every bundle has worker output, and every rejected span has been
+resolved. `push_redactions.py` reads `work/my-redaction/report.json` automatically and refuses to
+mark the pass complete when coverage is missing.
+
+Each official launch uses a fresh process-owned D1 runtime and binds Vinext directly to the
+requested IPv4 loopback port. Existing `viewer/.wrangler` data is never reused or deleted. Use
+`--port <number>` for an isolated non-default port; an occupied port fails immediately with a
+clear diagnostic and no unrelated process is stopped.
 
 ---
 

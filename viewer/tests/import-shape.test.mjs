@@ -12,15 +12,15 @@ test("viewer uses local D1 with only organization tables", async () => {
 });
 test("minimal UI exposes progress, timeline, source and downloads", async () => {
   const ui=await read("../app/workspace.tsx"),progress=await read("../app/organization-progress.tsx");
-  for(const label of ["Project timelines","Source records","Timeline","Source events","Download HTML","Download ZIP","Local only"])assert.match(ui,new RegExp(label));
+  for(const label of ["Project timelines","Source records","Timeline","Open source event","Download HTML","Download ZIP","Local only"])assert.match(ui,new RegExp(label));
   assert.match(ui,/payload\.documents/);
   assert.match(progress,/role="progressbar"/);assert.match(progress,/Nothing is uploaded/);
   assert.doesNotMatch(ui,/password|annotation|checklist|rewrite|Edit /i);
 });
 test("final package is explicitly unapproved and excludes runtime database", async () => {
   const route=await read("../app/api/package/route.ts");
-  for(const name of ["manifest.json","data/documents.json","data/events.json","project-map.json","review/oxygen-local-viewer.html"])assert.match(route,new RegExp(name.replace(/[/.]/g,"\\$&")));
-  assert.match(route,/publication_approved:false/);assert.match(route,/oxygen-contribution\.zip/);assert.doesNotMatch(route,/\.sqlite|\.wrangler/);
+  for(const name of ["manifest.json","data/documents.json","data/events.json","project-map.json","privacy/redaction-summary.json","review/oxygen-local-viewer.html"])assert.match(route,new RegExp(name.replace(/[/.]/g,"\\$&")));
+  assert.match(route,/publication_approved: false/);assert.match(route,/oxygen-contribution\.zip/);assert.doesNotMatch(route,/\.sqlite|\.wrangler/);
 });
 test("removed features and login routes stay deleted", async () => {
   for(const path of ["../app/login/page.tsx","../lib/auth.ts","../app/api/annotations/route.ts","../app/api/checklists/route.ts","../app/api/rewrite/[id]/route.ts"]){await assert.rejects(access(new URL(path,import.meta.url)));}

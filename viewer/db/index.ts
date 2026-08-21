@@ -43,6 +43,7 @@ const statements = [
     id TEXT PRIMARY KEY, status TEXT NOT NULL, stage TEXT NOT NULL,
     model TEXT, completed INTEGER NOT NULL DEFAULT 0,
     total INTEGER NOT NULL DEFAULT 0, rejected INTEGER NOT NULL DEFAULT 0,
+    source_digest TEXT,
     started_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
   )`,
   // Preference probes: one question per friction moment. `answer` stays NULL
@@ -78,6 +79,11 @@ export async function getD1() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
   if (!initialized) {
     await env.DB.batch(statements.map((sql) => env.DB.prepare(sql)));
+    const columns = await env.DB.prepare("PRAGMA table_info(redaction_jobs)")
+      .all<{ name: string }>();
+    if (!columns.results.some((column: { name: string }) => column.name === "source_digest")) {
+      await env.DB.prepare("ALTER TABLE redaction_jobs ADD COLUMN source_digest TEXT").run();
+    }
     initialized = true;
   }
   return env.DB;

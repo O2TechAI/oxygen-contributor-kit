@@ -63,6 +63,11 @@ The launcher validates the run, starts the password-free localhost Viewer, impor
 map and source records into SQLite/D1, builds the timeline, and proactively opens the browser.
 Keep it running while the user reviews.
 
+On Linux/WSL it also verifies Node/npm and the platform-specific dependency installation,
+rebuilding incompatible modules with `npm ci`. Every launch receives fresh process-owned D1
+state and binds directly to the requested IPv4 loopback port; never move `.wrangler` or add a
+manual socat bridge. Use `--port <number>` when a specific isolated port is required.
+
 ## Browser handoff is required
 
 After the Viewer becomes ready:
@@ -87,8 +92,10 @@ Do not use `--no-browser` except for automated tests or headless environments.
 
 Use **Download ZIP** to create `oxygen-contribution.zip`, then inspect its member list. It must
 contain `manifest.json`, normalized documents and events, `project-map.json`, and the offline
-HTML review file. The local SQLite/D1 database is temporary runtime state and must not enter the
-ZIP. Preserve `publication_approved=false`.
+HTML review file. The exporter must apply every active AI-redaction span, omit original event
+envelopes, include a safe aggregate redaction summary, and block when the model pass is incomplete
+or has rejected spans. The local SQLite/D1 database is temporary runtime state and must not enter
+the ZIP. Preserve `publication_approved=false`.
 
 Read [references/data-contract.md](references/data-contract.md) when the ingest directory is
 unrecognized or a new source format needs adapting.

@@ -55,6 +55,12 @@ Write UTF-8 JSON at `<run>/preference-probes.json`.
 
 ## Field rules
 
+- `auto_removed` contains exactly `total`, `reversible`, and `categories`; each category contains
+  exactly `kind` and `count`. Unknown fields are invalid and must never be forwarded or packaged.
+- `total` and every `count` are non-negative integers, `reversible` is a boolean, and `categories`
+  is an array with no duplicate `kind` entries.
+- `kind` is one of `credential`, `private-personal`, `sensitive`, `internal-metric`,
+  `internal-timeline`, `mosaic-reidentification`, `user_path`, or `third_party_contact`.
 - `auto_removed.total` must equal the sum of `categories[].count`. Contributors act on this
   number; an inconsistent one is a bug, not a rounding difference.
 - `auto_removed` never contains removed content, only counts by kind.
