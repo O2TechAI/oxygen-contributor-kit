@@ -21,10 +21,11 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import re
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from oxygen_common import (
     VENDOR_DIR,
@@ -59,12 +60,42 @@ def session_cwds(path: Path, system: str) -> set[str]:
     return cwds
 
 
+WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def canonical_location(value: str | Path) -> tuple[str, str, tuple[str, ...]]:
+    text = str(value)
+    if WINDOWS_ABSOLUTE.match(text):
+        path = PureWindowsPath(text)
+        parts = list(path.parts[1:])
+        normalized: list[str] = []
+        for part in parts:
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if normalized:
+                    normalized.pop()
+                continue
+            normalized.append(part.casefold())
+        return "windows", path.drive.rstrip(":").casefold(), tuple(normalized)
+    resolved = Path(value).expanduser().resolve()
+    parts = resolved.parts
+    if len(parts) >= 3 and parts[1] == "mnt" and re.fullmatch(r"[A-Za-z]", parts[2]):
+        return "windows", parts[2].casefold(), tuple(part.casefold() for part in parts[3:])
+    return "posix", "", tuple(parts)
+
+
 def is_inside(cwd: str, repo: Path) -> bool:
     try:
-        resolved = Path(cwd).resolve()
+        cwd_kind, cwd_root, cwd_parts = canonical_location(cwd)
+        repo_kind, repo_root, repo_parts = canonical_location(repo)
     except OSError:
         return False
-    return resolved == repo or repo in resolved.parents
+    return (
+        cwd_kind == repo_kind
+        and cwd_root == repo_root
+        and cwd_parts[:len(repo_parts)] == repo_parts
+    )
 
 
 def find_claude_sessions(home: Path, repo: Path) -> tuple[list[Path], list[Path]]:

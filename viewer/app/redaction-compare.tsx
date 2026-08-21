@@ -42,23 +42,27 @@ const fmt = (value?: string) => value
 /** Split one event into safe text and redacted spans, in offset order. */
 export function segments(content: string, spans: Redaction[], masked: boolean): ReactNode[] {
   const ordered = [...spans].sort((a, b) => a.start_offset - b.start_offset);
+  // Python workers and SQLite length() use Unicode code-point offsets. JS
+  // String.slice() uses UTF-16 code units, so split first to keep spans aligned
+  // when emoji or other astral characters appear before a redaction.
+  const points = Array.from(content);
   const out: ReactNode[] = [];
   let cursor = 0;
   ordered.forEach((span) => {
     if (span.start_offset > cursor) {
-      out.push(<span key={`safe-${cursor}`}>{content.slice(cursor, span.start_offset)}</span>);
+      out.push(<span key={`safe-${cursor}`}>{points.slice(cursor, span.start_offset).join("")}</span>);
     }
     out.push(masked
       ? <span key={`tag-${span.id}`} className="redactedReplacement">
           &lt;redacted · {span.category}&gt;
         </span>
       : <mark key={`hit-${span.id}`} className="redactionHit">
-          {content.slice(span.start_offset, span.end_offset)}
+          {points.slice(span.start_offset, span.end_offset).join("")}
         </mark>);
     cursor = Math.max(cursor, span.end_offset);
   });
-  if (cursor < content.length) {
-    out.push(<span key={`safe-${cursor}`}>{content.slice(cursor)}</span>);
+  if (cursor < points.length) {
+    out.push(<span key={`safe-${cursor}`}>{points.slice(cursor).join("")}</span>);
   }
   return out;
 }
@@ -110,6 +114,18 @@ export function RedactionCompare(props: {
     </div>;
   }
 
+  if (job && (job.status !== "complete" || job.rejected > 0
+      || job.completed !== job.total)) {
+    return <div className="redactionPanel">
+      <h2>Redaction pass is not releasable</h2>
+      <p className="redactionNotice">
+        Status: {job.status} · stage: {job.stage} · {job.completed}/{job.total} accepted ·
+        {" "}{job.rejected} rejected. ZIP export is blocked until a complete,
+        source-current pass with zero rejected spans is reviewed.
+      </p>
+    </div>;
+  }
+
   const notice = <p className="redactionNotice">
     Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review
     is required before release. Every event that would ship is listed below — left column is the
@@ -154,23 +170,17 @@ export function RedactionCompare(props: {
     byItem.set(span.item_id, [...(byItem.get(span.item_id) || []), span]);
   });
 
-  // Action labels carry no content by design — 7k rows of "[artifact]" bury the
-  // turns a reviewer actually has to read. They stay in the package; they just
-  // do not each get a row.
-  const items = allItems.filter((item) => item.event_type !== "action_label");
-  const hidden = allItems.length - items.length;
+  // Fixed action labels are short, safe release information. Pagination keeps
+  // large runs bounded while still letting the contributor inspect every row.
+  const items = allItems;
   const redactedCount = items.filter((item) => byItem.has(item.id)).length;
   const spanCount = items.reduce((total, item) => total + (byItem.get(item.id)?.length || 0), 0);
   const visible = items.slice(0, limit);
 
   return <div className="redactionPanel">
     <h2>
-      Release preview · {items.length} conversational event(s) · {spanCount} span(s) across {redactedCount} event(s)
+      Release preview · {items.length} event(s) · {spanCount} span(s) across {redactedCount} event(s)
     </h2>
-    {hidden > 0 && <p className="redactionMuted">
-      {hidden} non-conversational event(s) are in the package as bare action labels and are not
-      listed here — they carry no text, no command, no path, and no artifact content.
-    </p>}
     {notice}
     {visible.map((item) => {
       const spans = byItem.get(item.id) || [];

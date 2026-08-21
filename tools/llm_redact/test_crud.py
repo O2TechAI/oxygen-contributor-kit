@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """End-to-end check that a reviewer can edit and delete a redaction decision."""
+import argparse
 import json
 import urllib.error
 import urllib.request
 
-BASE = "http://127.0.0.1:3210"
+DEFAULT_BASE = "http://127.0.0.1:3210"
 
 
-def call(path, method="GET", body=None):
+def call(base_url, path, method="GET", body=None):
     """Return (payload, status). A 4xx is a result here, not a crash -- the
     rejection path is one of the behaviours under test."""
     request = urllib.request.Request(
-        BASE + path,
+        base_url + path,
         data=json.dumps(body).encode() if body is not None else None,
         headers={"content-type": "application/json"},
         method=method,
@@ -23,38 +24,63 @@ def call(path, method="GET", body=None):
         return json.loads(error.read().decode() or "{}"), error.code
 
 
-def active_count():
-    return len(call("/api/redactions")[0]["redactions"])
+def active_count(base_url):
+    return len(call(base_url, "/api/redactions")[0]["redactions"])
 
 
-before = active_count()
-target = call("/api/redactions")[0]["redactions"][0]
-print(f"起始 active={before}  样本={target['id'][:8]}  类别={target['category']}")
+def build_parser():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-url", default=DEFAULT_BASE)
+    return parser
 
-new_category = "sensitive" if target["category"] != "sensitive" else "credential"
-patched, _ = call(f"/api/redactions/{target['id']}", "PATCH", {"category": new_category})
-print(f"PATCH 改类别 -> {patched['category']}  (期望 {new_category})  "
-      f"created_by={patched['created_by']}")
 
-call(f"/api/redactions/{target['id']}", "DELETE")
-after_delete = active_count()
-print(f"DELETE 软删 -> active={after_delete}  (期望 {before - 1})")
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    base_url = args.base_url.rstrip("/")
+    before = active_count(base_url)
+    target = call(base_url, "/api/redactions")[0]["redactions"][0]
+    print(f"起始 active={before}  样本={target['id'][:8]}  类别={target['category']}")
 
-call(f"/api/redactions/{target['id']}", "PATCH", {"status": "active"})
-restored = active_count()
-print(f"PATCH 恢复 -> active={restored}  (期望 {before})")
+    new_category = "sensitive" if target["category"] != "sensitive" else "credential"
+    patched, _ = call(
+        base_url, f"/api/redactions/{target['id']}", "PATCH", {"category": new_category}
+    )
+    print(f"PATCH 改类别 -> {patched['category']}  (期望 {new_category})  "
+          f"created_by={patched['created_by']}")
 
-call(f"/api/redactions/{target['id']}", "PATCH", {"category": target["category"]})
+    call(base_url, f"/api/redactions/{target['id']}", "DELETE")
+    after_delete = active_count(base_url)
+    print(f"DELETE 软删 -> active={after_delete}  (期望 {before - 1})")
 
-bad, bad_status = call(f"/api/redactions/{target['id']}", "PATCH",
-                       {"category": "not-a-category"})
-print(f"非法类别被拒: HTTP {bad_status} · {bad.get('error')}")
+    call(base_url, f"/api/redactions/{target['id']}", "PATCH", {"status": "active"})
+    restored = active_count(base_url)
+    print(f"PATCH 恢复 -> active={restored}  (期望 {before})")
 
-missing, missing_status = call("/api/redactions/does-not-exist", "DELETE")
-print(f"删除不存在的记录: HTTP {missing_status} · {missing.get('error')}")
+    call(base_url, f"/api/redactions/{target['id']}", "PATCH", {"category": target["category"]})
 
-print("PASS" if (patched["category"] == new_category
-                 and after_delete == before - 1
-                 and restored == before
-                 and bad_status == 400
-                 and missing_status == 404) else "FAIL")
+    bad, bad_status = call(
+        base_url,
+        f"/api/redactions/{target['id']}",
+        "PATCH",
+        {"category": "not-a-category"},
+    )
+    print(f"非法类别被拒: HTTP {bad_status} · {bad.get('error')}")
+
+    missing, missing_status = call(
+        base_url, "/api/redactions/does-not-exist", "DELETE"
+    )
+    print(f"删除不存在的记录: HTTP {missing_status} · {missing.get('error')}")
+
+    passed = (
+        patched["category"] == new_category
+        and after_delete == before - 1
+        and restored == before
+        and bad_status == 400
+        and missing_status == 404
+    )
+    print("PASS" if passed else "FAIL")
+    return 0 if passed else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

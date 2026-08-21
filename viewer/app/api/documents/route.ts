@@ -34,8 +34,9 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid import payload" }, { status: 400 });
   }
   const now = new Date().toISOString();
-  await db.prepare(
-    `INSERT INTO documents
+  await db.batch([
+    db.prepare(
+      `INSERT INTO documents
       (id,kind,title,source_user,source_system,source_timestamp,item_count,metadata_json,
        original_envelope_json,imported_at,updated_at,organization_status,formatted_summary_json)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending','{}')
@@ -45,15 +46,21 @@ export async function POST(request: Request) {
        item_count=excluded.item_count,metadata_json=excluded.metadata_json,
        original_envelope_json=excluded.original_envelope_json,updated_at=excluded.updated_at,
        organization_status='pending',formatted_summary_json='{}'`
-  ).bind(
-    document.id, document.kind, document.title, document.sourceUser || null,
-    document.sourceSystem || null, document.sourceTimestamp || null,
-    document.itemCount ?? body.items.length, JSON.stringify(document.metadata || {}),
-    JSON.stringify(document.envelope || {}), now, now,
-  ).run();
-  // Any import invalidates the previous organization summary, including labels
-  // supplied by a newly generated project map.
-  await db.prepare("DELETE FROM organization_jobs").run();
+    ).bind(
+      document.id, document.kind, document.title, document.sourceUser || null,
+      document.sourceSystem || null, document.sourceTimestamp || null,
+      document.itemCount ?? body.items.length, JSON.stringify(document.metadata || {}),
+      JSON.stringify(document.envelope || {}), now, now,
+    ),
+    // Any import invalidates both derived organization state and the source
+    // identity captured by a prior redaction pass before item writes begin.
+    db.prepare("DELETE FROM organization_jobs"),
+    db.prepare(
+      `UPDATE redaction_jobs
+          SET status='stale',stage='source_changed',completed_at=NULL,updated_at=?
+        WHERE status!='stale'`
+    ).bind(now),
+  ]);
 
   for (let start = 0; start < body.items.length; start += 75) {
     await db.batch(body.items.slice(start, start + 75).map((item) => db.prepare(

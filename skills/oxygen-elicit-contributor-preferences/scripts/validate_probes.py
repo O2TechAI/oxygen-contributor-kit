@@ -29,6 +29,77 @@ GENERIC = {
 
 MAX_PROBES = 20
 MAX_RECAP_SENTENCES = 3
+AUTO_REMOVED_FIELDS = {"total", "reversible", "categories"}
+AUTO_REMOVED_CATEGORY_FIELDS = {"kind", "count"}
+AUTO_REMOVED_KINDS = {
+    "credential",
+    "private-personal",
+    "sensitive",
+    "internal-metric",
+    "internal-timeline",
+    "mosaic-reidentification",
+    "user_path",
+    "third_party_contact",
+}
+
+
+def validate_auto_removed(value: object) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(value, dict):
+        return ["auto_removed must be an object"]
+
+    unknown = set(value) - AUTO_REMOVED_FIELDS
+    missing = AUTO_REMOVED_FIELDS - set(value)
+    if unknown:
+        errors.append("auto_removed has unknown fields")
+    if missing:
+        errors.append(f"auto_removed is missing fields: {', '.join(sorted(missing))}")
+
+    total = value.get("total")
+    if type(total) is not int or total < 0:
+        errors.append("auto_removed.total must be a non-negative integer")
+    if not isinstance(value.get("reversible"), bool):
+        errors.append("auto_removed.reversible must be a boolean")
+
+    categories = value.get("categories")
+    if not isinstance(categories, list):
+        errors.append("auto_removed.categories must be an array")
+        return errors
+
+    summed = 0
+    seen_kinds: set[str] = set()
+    counts_valid = True
+    for index, category in enumerate(categories):
+        label = f"auto_removed.categories[{index}]"
+        if not isinstance(category, dict):
+            errors.append(f"{label} must be an object")
+            counts_valid = False
+            continue
+        category_unknown = set(category) - AUTO_REMOVED_CATEGORY_FIELDS
+        category_missing = AUTO_REMOVED_CATEGORY_FIELDS - set(category)
+        if category_unknown:
+            errors.append(f"{label} has unknown fields")
+        if category_missing:
+            errors.append(f"{label} is missing fields: {', '.join(sorted(category_missing))}")
+
+        kind = category.get("kind")
+        if not isinstance(kind, str) or kind not in AUTO_REMOVED_KINDS:
+            errors.append(f"{label}.kind is not an allowed aggregate category")
+        elif kind in seen_kinds:
+            errors.append(f"{label}.kind duplicates {kind!r}")
+        else:
+            seen_kinds.add(kind)
+
+        count = category.get("count")
+        if type(count) is not int or count < 0:
+            errors.append(f"{label}.count must be a non-negative integer")
+            counts_valid = False
+        else:
+            summed += count
+
+    if type(total) is int and total >= 0 and counts_valid and total != summed:
+        errors.append(f"auto_removed.total {total} != sum of categories {summed}")
+    return errors
 
 
 def collect_event_ids(run: Path) -> set[str]:
@@ -71,17 +142,13 @@ def validate(run: Path) -> list[str]:
     except json.JSONDecodeError as exc:
         return [f"{path.name} is not valid JSON: {exc}"]
 
+    if not isinstance(data, dict):
+        return [f"{path.name} must contain a JSON object"]
+
     if data.get("schema_version") != "1":
         errors.append("schema_version must be \"1\"")
 
-    removed = data.get("auto_removed") or {}
-    categories = removed.get("categories") or []
-    total = removed.get("total")
-    summed = sum(c.get("count", 0) for c in categories)
-    if total is None:
-        errors.append("auto_removed.total is required (use 0 when nothing was removed)")
-    elif total != summed:
-        errors.append(f"auto_removed.total {total} != sum of categories {summed}")
+    errors.extend(validate_auto_removed(data.get("auto_removed")))
 
     for decision in data.get("bulk_decisions") or []:
         did = decision.get("id", "<no id>")

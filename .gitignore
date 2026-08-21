@@ -1,9 +1,7 @@
 work/
 outputs/
 *.zip
-
-# Local Python env for the CPU redaction backend (Presidio + spaCy, ~800MB).
-.venv/
+.codex
 
 # Review artefacts that contain unredacted source text. These are generated
 # into the served directory, so an ignore rule is the only thing standing
@@ -33,4 +31,4 @@ tools/ingest/out/
 tools/ingest/webapp-data/
 tools/ingest/.venv-audio/
 __pycache__/
-
+.venv/

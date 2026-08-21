@@ -16,4 +16,6 @@ milestones. Drag the divider to resize the project/source panel horizontally on 
 vertically on narrow screens.
 
 SQLite/D1 is temporary local runtime state. **Download HTML** exports a read-only snapshot;
-**Download ZIP** exports the final normalized package. Neither action uploads data.
+**Download ZIP** applies every active AI-redaction span and exports the normalized package without
+raw event envelopes. ZIP export is blocked until the AI pass completes with zero rejected spans.
+Neither action uploads data.

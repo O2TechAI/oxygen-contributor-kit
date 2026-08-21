@@ -99,7 +99,7 @@ def main() -> int:
         raise SystemExit(f"no dialogue bundles found in {args.dialogue}")
     for src in sources:
         traj = src.stem
-        bundle = json.loads(src.read_text())
+        bundle = json.loads(src.read_text(encoding="utf-8"))
         turns_by_id = {t["event_id"]: t for t in bundle["turns"]}
 
         result_path = args.findings / f"{traj}.json"
@@ -108,7 +108,7 @@ def main() -> int:
             findings = []
         else:
             try:
-                findings = json.loads(result_path.read_text()).get("findings", [])
+                findings = json.loads(result_path.read_text(encoding="utf-8")).get("findings", [])
             except json.JSONDecodeError:
                 rejects.append({"trajectory": traj, "reason": "worker returned invalid JSON"})
                 findings = []
@@ -125,7 +125,7 @@ def main() -> int:
                 applied += 1
 
         (redacted_dir / f"{traj}.json").write_text(
-            json.dumps(bundle, ensure_ascii=False, indent=1))
+            json.dumps(bundle, ensure_ascii=False, indent=1), encoding="utf-8")
         per_traj.append({"trajectory": traj, "turns": len(bundle["turns"]),
                          "applied": applied})
 
@@ -136,7 +136,7 @@ def main() -> int:
               "missing_worker_output": missing,
               "per_trajectory": per_traj}
     (args.out / "report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=1))
+        json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps({k: report[k] for k in
                       ("categories", "total_applied", "rejected",
                        "missing_worker_output")}, ensure_ascii=False))
