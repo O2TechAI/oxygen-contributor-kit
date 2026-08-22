@@ -104,7 +104,7 @@ This wording may localize or adapt, but the reader must always understand what i
 
 ## Inline AI insight
 
-Place the insight within Story near the relevant passage. Use a restrained margin/left-border annotation, not a large nested card.
+Place the Chapter's single reviewable insight within Story near the relevant passage. Import validation must fail closed on zero or multiple insights; do not build a multi-insight fallback UI. Use a restrained margin/left-border annotation, not a large nested card.
 
 Show:
 

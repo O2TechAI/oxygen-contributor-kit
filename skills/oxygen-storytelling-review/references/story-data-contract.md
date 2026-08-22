@@ -32,7 +32,7 @@ Use stable identities for:
 
 Do not use rendered English text as the sole identity. Stable IDs are required for language switching, revision provenance, navigation restoration, and exact evidence linkage.
 
-IDs must be nonempty bounded primitive strings and unique within their Chapter and semantic collection. Reject duplicate participant, insight, Privacy-candidate, annotation, or evidence-reference IDs rather than allowing keyed maps/decision records to collapse distinct objects into one review action. Validate uniqueness using the same exact string representation used by decision/provenance maps so mixed values such as numeric `1` and string `"1"` cannot pass validation and later coerce to one key. Paired English/Chinese presentations use the same ordered semantic IDs.
+IDs must be nonempty bounded primitive strings and unique within their Chapter and semantic collection. A Chapter key is always a primitive stable string; reject numeric or otherwise coercible substitutes. Reject duplicate participant, insight, Privacy-candidate, annotation, or evidence-reference IDs rather than allowing keyed maps/decision records to collapse distinct objects into one review action. Validate uniqueness using the same exact string representation used by decision/provenance maps so mixed values such as numeric `1` and string `"1"` cannot pass validation and later coerce to one key. Encode composite Privacy-decision identity injectively as a tuple (for example `JSON.stringify([chapterKey, candidateId])`), never by delimiter concatenation. Paired English/Chinese presentations use the same ordered semantic IDs.
 
 ## Recommended Story envelope
 
@@ -107,7 +107,7 @@ type LanguagePresentation = {
   overview: string;
   people: StoryPerson[];
   story: StoryChapterCopy;
-  insights: StoryInsight[];
+  insights: [StoryInsight];
   privacy: { summary: string; candidates: PrivacyCandidate[] };
 };
 
@@ -134,6 +134,8 @@ type ChapterStory = {
   semanticAnchors: string[];
 };
 ```
+
+Every imported Chapter has exactly one reviewable AI insight in each language presentation, with the same stable insight ID. Reject zero or multiple reviewable insights rather than rendering only the first. A final release projection may contain zero insights only when the human explicitly chose not to preserve the one reviewed insight; release sanitization rejects any projection containing more than one.
 
 Internal compatibility fields such as a privacy recommendation or former suggested-release copy may exist in legacy data. They are not approved visible UI and must not drive the human decision panel.
 
@@ -179,7 +181,7 @@ For each Chapter:
 4. Write short Timeline Before/After states and select only evidence-backed high-signal chips; keep long explanation out of the card.
 5. Reconstruct a coherent article that preserves causal order and uncertainty.
 6. Record what was retained, what routine material was compressed, and what sensitive material remains unavailable.
-7. Generate an AI insight/lesson explicitly typed as interpretation.
+7. Generate exactly one AI insight/lesson explicitly typed as interpretation.
 8. Generate People only when supported.
 9. Generate contextual Privacy candidates only from permitted reviewed information.
 10. Generate natural Chinese with the same facts, transition semantics, scan chips, and technical anchors.
@@ -203,7 +205,7 @@ Fail closed when any of these conditions is false:
 - milestone kind/state is allowed;
 - primary evidence matches the annotation anchor where that representation is used;
 - all unique primary/supporting evidence resolves to exactly one reviewed item;
-- AI insight starts as an AI proposal;
+- exactly one paired AI insight starts as an AI proposal; zero or multiple reviewable insights fail closed;
 - release draft is the default Story view;
 - bilingual key sets and semantic block structures align;
 - every declared required technical/semantic anchor appears in reader-facing fields of both presentations (or resolves through an explicit bilingual alignment map); a merely nonempty anchor list is not validation;

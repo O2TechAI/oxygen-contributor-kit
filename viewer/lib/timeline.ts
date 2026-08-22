@@ -366,7 +366,7 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
     && nonEmptyStrings(story.importantDetails) && story.decisionOutcome
     && (story.uncertainty === undefined || story.uncertainty === null
       || (typeof story.uncertainty === "string" && Boolean(story.uncertainty.trim())))
-    && Array.isArray(highlights) && highlights.length > 0
+    && Array.isArray(highlights) && highlights.length === 1
     && highlights.every((item) => validStableId(item.id)
       && typeof item.title === "string" && Boolean(item.title.trim())
       && typeof item.noticed === "string" && Boolean(item.noticed.trim())
@@ -454,7 +454,7 @@ export function parseStoryAnnotation(summary?: string): StoryAnnotation | Legacy
   if (!summary || !prefix) return null;
   try {
     const value = JSON.parse(summary.slice(prefix.length)) as Partial<StoryAnnotation> | Partial<LegacyStoryAnnotation>;
-    if (!value.key || !value.phase || !value.title || !value.before || !value.after || !value.kind || !KINDS.has(value.kind)) return null;
+    if (!validStableId(value.key) || !value.phase || !value.title || !value.before || !value.after || !value.kind || !KINDS.has(value.kind)) return null;
     if (value.schema === "oxygen.story-milestone/1") {
       return value.narrative ? value as LegacyStoryAnnotation : null;
     }

@@ -70,7 +70,7 @@ function localeProjection(
   language: StoryLanguage,
 ): ReleaseLocale | null {
   const presentation = milestone.story.reviewPresentation?.[language];
-  if (!presentation) return null;
+  if (!presentation || presentation.highlights.length !== 1) return null;
   const insightReviews = state.insightReviews;
   return {
     phase: blockCopy(presentation.phase, "phase", language, state),
@@ -144,7 +144,7 @@ function sanitizeLocale(value: unknown): ReleaseLocale | null {
     || !stringArray(input.story.reconstruction) || !stringArray(input.story.importantDetails)
     || !boundedString(input.story.decisionOutcome)
     || (input.story.uncertainty !== undefined && !boundedString(input.story.uncertainty))) return null;
-  if (!Array.isArray(input.insights) || input.insights.length > 100 || !input.insights.every((insight) => (
+  if (!Array.isArray(input.insights) || input.insights.length > 1 || !input.insights.every((insight) => (
     requiredString(insight?.id, 200) && requiredString(insight?.title)
     && requiredString(insight?.noticed) && requiredString(insight?.lesson)
   ))) return null;

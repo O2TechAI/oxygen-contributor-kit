@@ -10,7 +10,7 @@ import {
   type ChapterReviewState,
   type PrivacyDecision,
 } from "./story-chapter-editor";
-import { emptyChapterReview } from "../lib/story-review";
+import { emptyChapterReview, privacyDecisionKey } from "../lib/story-review";
 import { milestoneKindLabel, selectProjectTimeline, type EvidenceReference, type StoryLanguage } from "../lib/timeline";
 import { buildReviewedStoryRelease } from "../lib/story-release";
 import { phaseGroupIdentity, restoreChapterContext, type ChapterRestoreContext } from "../lib/story-navigation";
@@ -207,7 +207,6 @@ export function InlineWorkspace() {
   const milestoneNumber = new Map(highlights.map((event,index) => [event.story.key,index+1]));
   const activeStoryIndex = highlights.findIndex((event) => event.story.key === activeStoryKey);
   const activeMilestone = activeStoryIndex >= 0 ? highlights[activeStoryIndex] : null;
-  const privacyKey = (storyKey:string,candidateId:string) => `${storyKey}:${candidateId}`;
   const reviewedInsights = highlights.filter((event) => Object.keys(chapterReviews[event.story.key]?.insightReviews || {}).length > 0).length;
   const phaseSectionRef = (index:number,node:HTMLElement|null) => {
     if(node) phaseSectionRefs.current.set(index,node);
@@ -230,7 +229,7 @@ export function InlineWorkspace() {
     stream.scrollTo({top,behavior:"smooth"});
   };
   const activePrivacyReview = activeMilestone?.story.reviewPresentation?.[language].privacy.candidates.reduce<Record<string,PrivacyDecision>>((current,candidate) => {
-    const decision=privacyDecisions[privacyKey(activeMilestone.story.key,candidate.id)];
+    const decision=privacyDecisions[privacyDecisionKey(activeMilestone.story.key,candidate.id)];
     if(decision) current[candidate.id]=decision;
     return current;
   },{}) || {};
@@ -277,7 +276,7 @@ export function InlineWorkspace() {
   };
   const updatePrivacyDecision = (storyKey:string,candidateId:string,decision?:PrivacyDecision) => setPrivacyDecisions((current) => {
     const next={...current};
-    const key=privacyKey(storyKey,candidateId);
+    const key=privacyDecisionKey(storyKey,candidateId);
     if(decision) next[key]=decision;
     else delete next[key];
     return next;

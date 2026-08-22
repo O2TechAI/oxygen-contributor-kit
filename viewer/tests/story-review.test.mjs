@@ -6,11 +6,13 @@ import {
   applyChapterReview,
   canMarkChapterReady,
   cancelStoryAnnotation,
+  chapterReviewSummary,
   createStoryAnnotation,
   emptyChapterReview,
   hasStoryAnnotationConflict,
   markChapterReady,
   privacyReviewState,
+  privacyDecisionKey,
   returnChapterToReview,
   reviseHighlight,
   storyAnnotationSegments,
@@ -69,6 +71,47 @@ test("privacy review advances one candidate at a time and zero candidates are co
   });
   assert.equal(applyChapterReview(emptyChapterReview(), context(duplicateIds, { metric: "redact" })).blockedReason, "privacy");
   assert.equal(applyChapterReview(emptyChapterReview(), context([privacyCandidate()], { metric: "invalid" })).blockedReason, "privacy");
+});
+
+test("Chapter-local Privacy decision keys are injective across delimiter-shaped identities", () => {
+  const first = privacyDecisionKey("chapter:alpha", "candidate");
+  const second = privacyDecisionKey("chapter", "alpha:candidate");
+  assert.notEqual(first, second);
+  assert.deepEqual(JSON.parse(first), ["chapter:alpha", "candidate"]);
+  assert.deepEqual(JSON.parse(second), ["chapter", "alpha:candidate"]);
+});
+
+test("review summary reserves unsupported-Add guidance for actual needs-evidence additions", () => {
+  const staleOnly = {
+    ...emptyChapterReview(),
+    staleTranslations: [{ subject: "story:scene", language: "zh", count: 1 }],
+  };
+  assert.deepEqual(chapterReviewSummary(staleOnly), {
+    delete: 0, revise: 0, add: 0, pendingAnnotations: 0, needsEvidenceAdd: 0, pendingInsights: 0, unresolved: 1,
+  });
+
+  const unsupportedAdd = createStoryAnnotation({
+    blockId: "scene", type: "add", sourceLanguage: "en", baseRevision: 1,
+    selection: { start: 0, end: 3, text: "The" }, instruction: "Unsupported fact",
+  });
+  const addSummary = chapterReviewSummary({
+    ...emptyChapterReview(),
+    annotations: [{ ...unsupportedAdd, resolution: "needs_evidence" }],
+  });
+  assert.equal(addSummary.needsEvidenceAdd, 1);
+  assert.equal(addSummary.pendingInsights, 0);
+
+  const insightOnly = chapterReviewSummary({
+    ...emptyChapterReview(),
+    insightReviews: {
+      lesson: {
+        status: "overridden", text: "Review this", resolution: "pending",
+        localized: {}, pendingLanguages: ["en"],
+      },
+    },
+  });
+  assert.equal(insightOnly.needsEvidenceAdd, 0);
+  assert.equal(insightOnly.pendingInsights, 1);
 });
 
 test("unresolved Chapter evidence blocks Apply and release-ready confirmation", () => {

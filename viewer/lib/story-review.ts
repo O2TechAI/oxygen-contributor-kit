@@ -197,15 +197,21 @@ export function storyAnnotationSegments(
 
 export function chapterReviewSummary(state: ChapterReviewState) {
   const active = state.annotations.filter((annotation) => annotation.resolution !== "cancelled");
+  const pendingAnnotations = active.filter((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence");
   const pendingInsights = Object.values(state.insightReviews).filter((review) => review.resolution === "pending").length;
   return {
     delete: active.filter((annotation) => annotation.type === "delete").length,
     revise: active.filter((annotation) => annotation.type === "revise").length,
     add: active.filter((annotation) => annotation.type === "add").length,
-    unresolved: active.filter((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence").length
-      + pendingInsights + state.staleTranslations.length,
+    pendingAnnotations: pendingAnnotations.length,
+    needsEvidenceAdd: pendingAnnotations.filter((annotation) => annotation.type === "add" && annotation.resolution === "needs_evidence").length,
+    pendingInsights,
+    unresolved: pendingAnnotations.length + pendingInsights + state.staleTranslations.length,
   };
 }
+
+/** An injective, serialization-stable identity for a Chapter-local Privacy decision. */
+export const privacyDecisionKey = (storyKey: string, candidateId: string) => JSON.stringify([storyKey, candidateId]);
 
 const evidenceKey = (evidence: EvidenceReference) => JSON.stringify([evidence.documentId, evidence.eventId]);
 const oppositeLanguage = (language: StoryLanguage): StoryLanguage => language === "en" ? "zh" : "en";

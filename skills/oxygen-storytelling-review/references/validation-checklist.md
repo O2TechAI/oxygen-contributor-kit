@@ -8,9 +8,11 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Manifest counts match data and `publication_approved=false`.
 - [ ] Story data source hash matches the reviewed artifact.
 - [ ] No raw history, private ledger, removed text/value, source envelope, credential material, or forbidden sibling implementation was opened.
-- [ ] Chapter keys are unique/chronological and the last is honest current state.
+- [ ] Chapter keys are bounded primitive strings, unique/chronological, and the last is honest current state; numeric/string coercion cannot collapse two Chapters.
 - [ ] Every primary/supporting evidence ID is unique and resolves to exactly one actual reviewed item before Apply/All set.
 - [ ] Participant, insight, Privacy-candidate, and annotation IDs are bounded primitive strings and unique within each Chapter and paired language presentation; numeric/string coercion cannot collapse two identities.
+- [ ] Privacy decisions use an injective Chapter/candidate tuple identity rather than delimiter concatenation; delimiter-shaped IDs cannot collide.
+- [ ] Import accepts exactly one paired reviewable insight per Chapter, the release projection never emits multiple insights, and server sanitization rejects multiple insights.
 - [ ] No identity/evidence/fact was fabricated.
 - [ ] Project-specific copy/excerpts do not appear in reusable generic source/Skill.
 - [ ] No unavailable Privacy candidate contains anything beyond its unavailable discriminator (no excerpt, language, removed value, or raw field).
@@ -52,7 +54,7 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Roles/descriptions are compact and evidence-supported.
 - [ ] Local/release identity distinction is clear; no fabricated name.
 - [ ] Story is a structured article with clear causal progression and uncertainty.
-- [ ] AI insight and reusable lesson appear inside Story and are labeled as interpretation.
+- [ ] The single reviewable AI insight and reusable lesson appear inside Story and are labeled as interpretation; no multi-insight fallback UI exists.
 - [ ] Accept/remove/direct edit/human-directed revise work without a full chat UI.
 
 ## Text annotations

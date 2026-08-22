@@ -106,10 +106,35 @@ test("server sanitizer reconstructs the reviewed Story from an explicit allowlis
   divergent.chapters[0].zh.people[0].releaseLabel = "B";
   assert.equal(sanitizeReviewedStoryRelease(divergent), null);
 
+  const multipleInsights = structuredClone(release);
+  for (const language of ["en", "zh"]) {
+    multipleInsights.chapters[0][language].insights.push({
+      ...multipleInsights.chapters[0][language].insights[0],
+      id: "second-lesson",
+      title: language === "zh" ? "另一条洞察" : "Another insight",
+    });
+  }
+  assert.equal(sanitizeReviewedStoryRelease(multipleInsights), null);
+
   const entry = reviewedStoryPackageEntry(untrusted);
   assert.equal(entry.name, "story/reviewed-project-story.json");
   assert.deepEqual(JSON.parse(entry.data), sanitized);
   assert.doesNotMatch(entry.data, /must-not-ship|localIdentityState|localReview|privateEvidence/);
+});
+
+test("release projection fails closed when source data contains multiple reviewable insights", () => {
+  const context = reviewContext("keep");
+  let review = applyChapterReview(emptyChapterReview(), context).state;
+  review = markChapterReady(review, context);
+  const multipleInsightMilestone = structuredClone(milestone);
+  for (const language of ["en", "zh"]) {
+    multipleInsightMilestone.story.reviewPresentation[language].highlights.push({
+      ...multipleInsightMilestone.story.reviewPresentation[language].highlights[0],
+      id: "second-lesson",
+      title: language === "zh" ? "另一条洞察" : "Another insight",
+    });
+  }
+  assert.deepEqual(buildReviewedStoryRelease([multipleInsightMilestone], { chapter: review }).chapters, []);
 });
 
 test("HTML export serializes only the server-sanitized reviewed Story", async () => {

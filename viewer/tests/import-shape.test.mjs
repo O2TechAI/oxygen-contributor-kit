@@ -53,6 +53,13 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(progress,/role="progressbar"/);assert.match(progress,/Nothing is uploaded/);
   assert.doesNotMatch(ui+episode,/password|checklist/i);
 });
+test("Chapter completion renders unsupported-Add copy only for a needs-evidence Add", async () => {
+  const episode=await read("../app/story-chapter-editor.tsx");
+  assert.match(episode,/summary\.needsEvidenceAdd > 0 && <p className="completionBlocker">\{labels\.addBlocked\}/);
+  assert.match(episode,/summary\.pendingInsights > 0 \? labels\.insightBlocked/);
+  assert.match(episode,/chapterReview\.staleTranslations\.length > 0 \? labels\.translationBlocked/);
+  assert.doesNotMatch(episode,/summary\.unresolved[^\n]*labels\.addBlocked/);
+});
 test("final package is explicitly unapproved and excludes runtime database", async () => {
   const route=await read("../app/api/package/route.ts");
   for(const name of ["manifest.json","data/documents.json","data/events.json","project-map.json","privacy/redaction-summary.json","review/oxygen-local-viewer.html"])assert.match(route,new RegExp(name.replace(/[/.]/g,"\\$&")));

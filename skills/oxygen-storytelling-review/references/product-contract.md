@@ -145,7 +145,7 @@ Real/local identity may be used only when supported and permitted for local revi
 
 Render Story as one coherent article with short paragraphs, meaningful subheadings, bullets where scanning improves, and explicit uncertainty where supported. Internal fields such as scene, reconstruction, retained details, outcome, and significance help generate the article but must not appear as a dashboard of schema labels.
 
-Structured AI Highlights remain in the data but live inside Story at the relevant narrative point. A restrained inline insight includes:
+Exactly one structured, reviewable AI Highlight remains in each Chapter's data and lives inside Story at the relevant narrative point. Reject a Chapter with zero or multiple reviewable insights rather than silently rendering only the first. A restrained inline insight includes:
 
 - a label such as AI insight or Turning point;
 - explicit `AI interpretation · not historical fact` status;

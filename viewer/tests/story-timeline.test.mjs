@@ -161,6 +161,9 @@ test("fallback selection suppresses routine activity and deduplicates summaries"
 test("malformed annotations fail closed and kind labels stay human-readable", () => {
   assert.equal(parseStoryAnnotation(`${STORY_PREFIX}{not json`), null);
   assert.equal(parseStoryAnnotation(story({ key:"valid", kind:"root_cause" }))?.key, "valid");
+  const numericChapterKey = JSON.parse(story({ key:"1" }).slice(STORY_PREFIX.length));
+  numericChapterKey.key = 1;
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(numericChapterKey)), null);
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify({ schema:"oxygen.story-highlight/2", key:"incomplete" })), null);
   assert.equal(parseStoryAnnotation(LEGACY_STORY_PREFIX + JSON.stringify({
     schema:"oxygen.story-milestone/1", key:"legacy", phase:"Earlier", kind:"decision",
@@ -227,6 +230,16 @@ test("review schema rejects duplicate semantic IDs and hidden unavailable-origin
     });
   }
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(duplicateHighlights)), null);
+
+  const multipleHighlights = JSON.parse(story({ key:"multiple-highlights" }).slice(STORY_PREFIX.length));
+  for (const language of ["en", "zh"]) {
+    multipleHighlights.reviewPresentation[language].highlights.push({
+      ...multipleHighlights.reviewPresentation[language].highlights[0],
+      id: "second-lesson",
+      title: language === "zh" ? "另一条洞察" : "Another insight",
+    });
+  }
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(multipleHighlights)), null);
 
   const duplicatePrivacy = JSON.parse(story({ key:"duplicate-privacy" }).slice(STORY_PREFIX.length));
   for (const language of ["en", "zh"]) {
