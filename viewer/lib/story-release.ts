@@ -1,5 +1,5 @@
 import type { ChapterReviewState } from "./story-review.ts";
-import { applyAnnotationsToBlock } from "./story-review.ts";
+import { applyAnnotationsToBlock, validateChapterReviewLedger } from "./story-review.ts";
 import {
   LEGACY_STORY_PREFIX,
   STORY_PREFIX,
@@ -25,6 +25,21 @@ type ReleaseLocale = {
   };
   insights: ReleaseInsight[];
 };
+
+function sourceBlocks(milestone: TimelineMilestone) {
+  return (["en", "zh"] as const).reduce<Record<StoryLanguage, Record<string, string>>>((result, language) => {
+    const presentation = milestone.story.reviewPresentation?.[language];
+    if (!presentation) return result;
+    result[language] = {
+      scene: presentation.story.scene,
+      ...Object.fromEntries(presentation.story.reconstruction.map((copy, index) => [`reconstruction-${index}`, copy])),
+      ...Object.fromEntries(presentation.story.importantDetails.map((copy, index) => [`detail-${index}`, copy])),
+      outcome: presentation.story.decisionOutcome,
+      ...(presentation.story.uncertainty ? { uncertainty: presentation.story.uncertainty } : {}),
+    };
+    return result;
+  }, { en: {}, zh: {} });
+}
 
 export type ReviewedReleaseChapter = {
   key: string;
@@ -99,7 +114,9 @@ export function buildReviewedStoryRelease(
 ): ReviewedStoryRelease {
   const chapters = milestones.flatMap((milestone) => {
     const state = reviews[milestone.story.key];
-    if (!state || state.stage !== "human_confirmed" || !state.evidenceVerified || state.staleTranslations.length) return [];
+    if (!state || state.stage !== "human_confirmed" || !state.evidenceVerified || state.staleTranslations.length
+      || state.annotations.some((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence")
+      || !validateChapterReviewLedger(state, sourceBlocks(milestone))) return [];
     const en = localeProjection(milestone, state, "en");
     const zh = localeProjection(milestone, state, "zh");
     if (!en || !zh) return [];

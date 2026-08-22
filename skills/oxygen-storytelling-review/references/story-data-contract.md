@@ -32,7 +32,7 @@ Use stable identities for:
 
 Do not use rendered English text as the sole identity. Stable IDs are required for language switching, revision provenance, navigation restoration, and exact evidence linkage.
 
-IDs must also be unique within their Chapter and semantic collection. Reject duplicate participant, insight, Privacy-candidate, annotation, or evidence-reference IDs rather than allowing keyed maps/decision records to collapse distinct objects into one review action. Paired English/Chinese presentations use the same ordered semantic IDs.
+IDs must be nonempty bounded primitive strings and unique within their Chapter and semantic collection. Reject duplicate participant, insight, Privacy-candidate, annotation, or evidence-reference IDs rather than allowing keyed maps/decision records to collapse distinct objects into one review action. Validate uniqueness using the same exact string representation used by decision/provenance maps so mixed values such as numeric `1` and string `"1"` cannot pass validation and later coerce to one key. Paired English/Chinese presentations use the same ordered semantic IDs.
 
 ## Recommended Story envelope
 
@@ -206,7 +206,7 @@ Fail closed when any of these conditions is false:
 - AI insight starts as an AI proposal;
 - release draft is the default Story view;
 - bilingual key sets and semantic block structures align;
-- required technical/semantic anchors appear in both presentations;
+- every declared required technical/semantic anchor appears in reader-facing fields of both presentations (or resolves through an explicit bilingual alignment map); a merely nonempty anchor list is not validation;
 - available Privacy original has an excerpt and source language;
 - unavailable Privacy original contains only its unavailable discriminator and no excerpt, source language, removed value, raw field, or compatibility payload;
 - the last Chapter is current state.

@@ -55,7 +55,7 @@ type ChapterReviewState = {
 ```
 
 The annotation identity is semantic block + exact source-language selection + revision context, not English text alone.
-Annotation IDs are unique within the Chapter. Pending ranges in the same block, language, and base revision must not overlap; reject a conflicting annotation instead of allowing one revision record to claim that both were applied.
+Annotation IDs are nonempty primitive strings and globally unique within the Chapter across every resolution, including pending, applied, needs-evidence, and cancelled. Pending ranges in the same block, language, and base revision must not overlap; reject a conflicting annotation instead of allowing one revision record to claim that both were applied.
 
 ## Exact-range invariant
 
@@ -124,8 +124,9 @@ It must:
 
 - require complete required Privacy decisions;
 - require every unique Chapter evidence reference to resolve to exactly one actual reviewed item;
+- replay the complete stored annotation ledger from immutable revision-1 Story blocks and validate every applied/cancelled/needs-evidence record, ID, base/applied revision, exact quote, and revision-history link before any mutation;
 - validate every pending annotation against the current block, language, revision, offsets, and exact selected quote before applying any annotation;
-- reject an overlapping, stale, mismatched, duplicated-ID, or otherwise invalid pending batch atomically without incrementing the revision or marking any annotation applied;
+- reject an overlapping, stale, mismatched, duplicated-ID, malformed non-pending record, or otherwise invalid collection atomically without incrementing the revision or marking any annotation applied;
 - increment the revision;
 - apply Delete, Revise, and evidence-supported Add in revision order;
 - preserve unaffected useful detail, failures, disagreement, uncertainty, and causal relationships;
@@ -144,6 +145,8 @@ It must not:
 - change publication approval.
 
 Apply annotation groups in ascending revision order; within one revision, process spans from later offsets to earlier offsets so earlier edits do not invalidate later positions.
+
+Final release projection must run the same full-ledger replay validation. It must omit/fail closed on malformed applied provenance rather than silently skipping an invalid range while claiming the instruction was applied.
 
 When an insight edit creates paired-language review debt, a later status-only action such as Accept must preserve that pending-language provenance. Status changes cannot erase bilingual debt without reviewing/applying the paired representation.
 
@@ -219,4 +222,5 @@ Test at minimum:
 12. unresolved/missing/ambiguous evidence blocks Apply and confirmation;
 13. a real evidence ID with unsupported Add wording remains `needs_evidence`;
 14. overlapping or stale annotation batches fail atomically without a new revision;
+15. duplicate IDs across cancelled/pending states and malformed pre-applied records fail atomically and cannot enable All set or release projection;
 15. localized insight edit followed by Accept still creates paired-language review debt.

@@ -61,6 +61,7 @@ const reviewContext = (privacyDecision) => ({
   chapterEvidence: [evidence],
   evidenceResolved: true,
   supportedAddIds: [],
+  sourceBlocks: { en: {}, zh: {} },
   reviewedBlocks: { en: {}, zh: {} },
 });
 
@@ -134,6 +135,22 @@ test("release projection excludes a manually confirmed Chapter without verified 
   const unverified = { ...emptyChapterReview(), stage: "human_confirmed" };
   assert.equal(unverified.evidenceVerified, false);
   assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: unverified }).chapters, []);
+});
+
+test("release projection excludes human-confirmed state with malformed applied provenance", () => {
+  const malformed = {
+    ...emptyChapterReview(),
+    stage: "human_confirmed",
+    revision: 2,
+    evidenceVerified: true,
+    annotations: [{
+      id: "bad", blockId: "scene", type: "delete", sourceLanguage: "en",
+      selection: { start: 0, end: 3, text: "not" },
+      resolution: "applied", baseRevision: 1, appliedRevision: 2,
+    }],
+    revisionHistory: [{ revision: 2, annotationIds: ["bad"], insightIds: [], privacyDecisions: {} }],
+  };
+  assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: malformed }).chapters, []);
 });
 
 test("package organization summaries strip Story review metadata before serialization", () => {

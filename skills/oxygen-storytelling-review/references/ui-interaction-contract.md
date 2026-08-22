@@ -171,7 +171,7 @@ Place a collapsed `View local evidence →` after primary Chapter content. When 
 
 Opening Evidence records Chapter key, language, Story scroll position, evidence origin, and project. Reuse the existing Release preview and focus the exact reviewed event.
 
-Evidence view provides a prominent `← Back to chapter` that restores the originating Chapter, language, and useful Story context. This is separate from Chapter → Project Story Back.
+Evidence view provides a prominent `← Back to chapter` that restores the originating Chapter, language, and useful Story context. Reopen the local-Evidence disclosure and return focus to the exact primary/supporting control that launched Evidence; use a safe fallback only when that control no longer exists. This is separate from Chapter → Project Story Back.
 
 ## Review completion
 

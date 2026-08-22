@@ -10,7 +10,7 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] No raw history, private ledger, removed text/value, source envelope, credential material, or forbidden sibling implementation was opened.
 - [ ] Chapter keys are unique/chronological and the last is honest current state.
 - [ ] Every primary/supporting evidence ID is unique and resolves to exactly one actual reviewed item before Apply/All set.
-- [ ] Participant, insight, Privacy-candidate, and annotation IDs are unique within each Chapter and paired language presentation.
+- [ ] Participant, insight, Privacy-candidate, and annotation IDs are bounded primitive strings and unique within each Chapter and paired language presentation; numeric/string coercion cannot collapse two identities.
 - [ ] No identity/evidence/fact was fabricated.
 - [ ] Project-specific copy/excerpts do not appear in reusable generic source/Skill.
 - [ ] No unavailable Privacy candidate contains anything beyond its unavailable discriminator (no excerpt, language, removed value, or raw field).
@@ -64,6 +64,7 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Pending quote equals `source.slice(start,end)`.
 - [ ] Two non-overlapping annotations in one paragraph render independently.
 - [ ] Overlapping same-revision ranges and duplicate annotation IDs are rejected before they enter/apply; adversarial batches fail atomically without revision provenance.
+- [ ] The complete ledger is replayed from immutable source blocks: malformed applied/cancelled records and duplicate IDs across resolutions block Apply, All set, and release projection without changing the revision.
 - [ ] Cancelling one removes only that range.
 - [ ] Stale/mismatched/cross-language literal ranges fail closed.
 - [ ] Cross-block/cross-paragraph selection is rejected when not safely supported.
@@ -117,7 +118,7 @@ Also verify:
 - [ ] Chapter → primary evidence focuses exact source event.
 - [ ] Chapter → supporting evidence focuses exact source event.
 - [ ] Evidence shows prominent Back to chapter.
-- [ ] Back restores originating Chapter, language, and useful Story scroll/origin context.
+- [ ] Back restores originating Chapter, language, useful Story scroll, an open local-Evidence disclosure, and focus on the exact primary/supporting origin control.
 - [ ] Evidence remains original-language and is labeled local-only/not exported.
 
 ## Bilingual
@@ -127,7 +128,7 @@ Also verify:
 - [ ] Chinese changes Timeline Story labels and full Chapter presentation.
 - [ ] Chinese localizes inline insight title/observation/lesson, participant identity explanations, status/annotation copy, and review blockers; nontechnical English placeholder sentences do not remain.
 - [ ] Switching back restores equivalent English.
-- [ ] Shared semantic anchors/technical identifiers remain stable.
+- [ ] Every declared shared semantic anchor/technical identifier is present in reader-facing EN and 中文 copy (or has an explicit alignment); missing and one-language-only anchors fail closed.
 - [ ] Annotation/Privacy/revision/All set state survives language switching.
 - [ ] One lifecycle/confirmation history drives both languages.
 - [ ] Evidence content remains source-language.

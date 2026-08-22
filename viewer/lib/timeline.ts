@@ -272,6 +272,10 @@ const ROUTINE_TERMS = [
 
 const clean = (value?: string) => String(value || "").replace(/\s+/g, " ").trim();
 
+const validStableId = (value: unknown): value is string => typeof value === "string"
+  && value.trim().length > 0
+  && value.length <= 300;
+
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9\p{L}]+/gu, " ").trim();
 }
@@ -309,13 +313,16 @@ function validPrivacyCandidate(value: unknown): value is StoryPrivacyCandidate {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<StoryPrivacyCandidate>;
   if (!onlyKeys(value, ["id", "title", "explanation", "recommendation", "releaseTargets", "original", "whyFlagged", "suggestedRelease"])
-    || !candidate.id || !candidate.title || !candidate.explanation
+    || !validStableId(candidate.id)
+    || typeof candidate.title !== "string" || !candidate.title.trim()
+    || typeof candidate.explanation !== "string" || !candidate.explanation.trim()
     || !candidate.recommendation || !["keep", "redact"].includes(candidate.recommendation)
     || !Array.isArray(candidate.releaseTargets)
     || !candidate.releaseTargets.every((target) => typeof target === "string" && releaseTargetPattern.test(target))
     || !uniqueValues(candidate.releaseTargets)
     || !candidate.original || typeof candidate.original !== "object"
-    || !candidate.whyFlagged) return false;
+    || typeof candidate.whyFlagged !== "string" || !candidate.whyFlagged.trim()
+    || (candidate.suggestedRelease !== undefined && typeof candidate.suggestedRelease !== "string")) return false;
   if (candidate.original.availability === "unavailable") {
     return onlyKeys(candidate.original, ["availability"]);
   }
@@ -349,7 +356,10 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
     copy.phase && copy.title && copy.timelineSummary && copy.before && copy.after && copy.overview
     && Array.isArray(copy.timelineChips) && copy.timelineChips.every((chip) => typeof chip === "string" && chip.trim())
     && Array.isArray(people) && people.every((person) => (
-      person.id && person.releaseLabel && person.role && person.description
+      validStableId(person.id)
+      && typeof person.releaseLabel === "string" && Boolean(person.releaseLabel.trim())
+      && typeof person.role === "string" && Boolean(person.role.trim())
+      && typeof person.description === "string" && Boolean(person.description.trim())
       && ["not_identified", "local_only"].includes(person.localIdentityState)
     ))
     && story?.scene && nonEmptyStrings(story.reconstruction)
@@ -357,7 +367,10 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
     && (story.uncertainty === undefined || story.uncertainty === null
       || (typeof story.uncertainty === "string" && Boolean(story.uncertainty.trim())))
     && Array.isArray(highlights) && highlights.length > 0
-    && highlights.every((item) => item.id && item.title && item.noticed && item.lesson)
+    && highlights.every((item) => validStableId(item.id)
+      && typeof item.title === "string" && Boolean(item.title.trim())
+      && typeof item.noticed === "string" && Boolean(item.noticed.trim())
+      && typeof item.lesson === "string" && Boolean(item.lesson.trim()))
     && privacy?.summary && Array.isArray(privacy.candidates)
     && privacy.candidates.every(validPrivacyCandidate)
     && uniqueValues(people.map((person) => person.id))
@@ -366,17 +379,37 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
   );
 }
 
+function readerFacingPresentationText(value: StoryLanguagePresentation) {
+  return [
+    value.phase, value.title, value.timelineSummary, value.before, value.after,
+    ...value.timelineChips, value.overview,
+    ...value.people.flatMap((person) => [person.releaseLabel, person.role, person.description]),
+    value.story.scene, ...value.story.reconstruction, ...value.story.importantDetails,
+    value.story.decisionOutcome, value.story.uncertainty || "",
+    ...value.highlights.flatMap((highlight) => [highlight.title, highlight.noticed, highlight.lesson]),
+    value.privacy.summary,
+    ...value.privacy.candidates.flatMap((candidate) => [
+      candidate.title, candidate.explanation, candidate.whyFlagged, candidate.suggestedRelease || "",
+    ]),
+  ].join("\n");
+}
+
 function validReviewPresentation(value: unknown): value is EpisodeReviewPresentation {
   if (!value || typeof value !== "object") return false;
   const presentation = value as Partial<EpisodeReviewPresentation>;
   if (!validReviewLanguage(presentation.en)
       || !validReviewLanguage(presentation.zh)
-      || !nonEmptyStrings(presentation.semanticAnchors)) return false;
+      || !nonEmptyStrings(presentation.semanticAnchors)
+      || !uniqueValues(presentation.semanticAnchors)
+      || presentation.semanticAnchors.some((anchor) => anchor.length > 500)) return false;
   const en = presentation.en;
   const zh = presentation.zh;
+  const enText = readerFacingPresentationText(en);
+  const zhText = readerFacingPresentationText(zh);
   const enBlocks = semanticBlockIds(en);
   const zhBlocks = semanticBlockIds(zh);
-  return sameOrderedValues(en.people.map((person) => person.id), zh.people.map((person) => person.id))
+  return presentation.semanticAnchors.every((anchor) => enText.includes(anchor) && zhText.includes(anchor))
+    && sameOrderedValues(en.people.map((person) => person.id), zh.people.map((person) => person.id))
     && sameOrderedValues(en.people.map((person) => person.releaseLabel), zh.people.map((person) => person.releaseLabel))
     && sameOrderedValues(en.people.map((person) => person.localIdentityState), zh.people.map((person) => person.localIdentityState))
     && sameOrderedValues(en.highlights.map((highlight) => highlight.id), zh.highlights.map((highlight) => highlight.id))

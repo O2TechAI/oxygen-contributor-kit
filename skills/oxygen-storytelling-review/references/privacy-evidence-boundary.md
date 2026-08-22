@@ -65,7 +65,7 @@ Chapter → Evidence must record:
 - project;
 - current presentation language.
 
-Evidence → Chapter Back restores that context. Do not make the reviewer rediscover the Chapter through the rail.
+Evidence → Chapter Back restores that context, reopens the disclosure if needed, and focuses the exact originating evidence control rather than a generic disclosure summary. Do not make the reviewer rediscover the Chapter through the rail.
 
 ## Privacy candidate model
 

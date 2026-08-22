@@ -7,6 +7,7 @@ import type {
   StoryLanguage,
   TimelineMilestone,
 } from "../lib/timeline";
+import { restoreEvidenceOrigin } from "../lib/story-navigation";
 import {
   addStoryAnnotation,
   applyAnnotationsToBlock,
@@ -154,9 +155,7 @@ export function StoryChapterEditor(props: {
     const frame = requestAnimationFrame(() => {
       if (scrollRef.current && initialScrollTop) scrollRef.current.scrollTo({ top: initialScrollTop });
       const origin = focusOriginId ? document.getElementById(focusOriginId) : null;
-      const disclosure = origin?.closest("details");
-      const focusTarget = disclosure && !disclosure.open ? disclosure.querySelector<HTMLElement>("summary") : origin;
-      (focusTarget || backRef.current)?.focus({ preventScroll: true });
+      restoreEvidenceOrigin(origin, backRef.current);
       onContextRestored?.();
     });
     return () => cancelAnimationFrame(frame);
@@ -166,7 +165,7 @@ export function StoryChapterEditor(props: {
   const privacyState = privacyReviewState(candidates, privacyDecisions);
   const summary = chapterReviewSummary(chapterReview);
   const evidence = story.evidence ? [story.evidence.primary, ...story.evidence.supporting] : [];
-  const reviewedBlocks = (["en", "zh"] as const).reduce<Record<StoryLanguage, Record<string, string>>>((result, locale) => {
+  const sourceBlocks = (["en", "zh"] as const).reduce<Record<StoryLanguage, Record<string, string>>>((result, locale) => {
     const copy = story.reviewPresentation?.[locale];
     if (!copy) return result;
     const blocks = {
@@ -176,7 +175,11 @@ export function StoryChapterEditor(props: {
       outcome: copy.story.decisionOutcome,
       ...(copy.story.uncertainty ? { uncertainty: copy.story.uncertainty } : {}),
     };
-    result[locale] = Object.fromEntries(Object.entries(blocks).map(([blockId, source]) => [
+    result[locale] = blocks;
+    return result;
+  }, { en: {}, zh: {} });
+  const reviewedBlocks = (["en", "zh"] as const).reduce<Record<StoryLanguage, Record<string, string>>>((result, locale) => {
+    result[locale] = Object.fromEntries(Object.entries(sourceBlocks[locale]).map(([blockId, source]) => [
       blockId,
       chapterReview.redactedBlocks.includes(blockId)
         ? ""
@@ -190,6 +193,7 @@ export function StoryChapterEditor(props: {
     chapterEvidence: evidence,
     evidenceResolved: chapterReview.evidenceVerified,
     supportedAddIds: [],
+    sourceBlocks,
     reviewedBlocks,
   };
   const annotationsByBlock = useMemo(() => chapterReview.annotations.reduce<Record<string, StoryReviewAnnotation[]>>((result, annotation) => {

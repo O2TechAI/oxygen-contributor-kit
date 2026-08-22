@@ -18,13 +18,17 @@ import {
 } from "../lib/story-review.ts";
 
 const evidence = { documentId: "doc", eventId: "event" };
-const context = (privacyCandidates = [], privacyDecisions = {}, chapterEvidence = [evidence], overrides = {}) => ({
-  privacyCandidates, privacyDecisions, chapterEvidence,
-  evidenceResolved: overrides.evidenceResolved ?? true,
-  supportedAddIds: overrides.supportedAddIds || [],
-  reviewedBlocks: overrides.reviewedBlocks || { en: {}, zh: {} },
-});
-const blocks = (en = {}, zh = {}) => ({ reviewedBlocks: { en, zh } });
+const context = (privacyCandidates = [], privacyDecisions = {}, chapterEvidence = [evidence], overrides = {}) => {
+  const reviewedBlocks = overrides.reviewedBlocks || { en: {}, zh: {} };
+  return {
+    privacyCandidates, privacyDecisions, chapterEvidence,
+    evidenceResolved: overrides.evidenceResolved ?? true,
+    supportedAddIds: overrides.supportedAddIds || [],
+    sourceBlocks: overrides.sourceBlocks || reviewedBlocks,
+    reviewedBlocks,
+  };
+};
+const blocks = (en = {}, zh = {}) => ({ sourceBlocks: { en, zh }, reviewedBlocks: { en, zh } });
 const privacyCandidate = (releaseTargets = ["scene"]) => ({
   id: "metric", title: "Metric", explanation: "Internal", recommendation: "redact",
   releaseTargets, original: { availability: "unavailable" }, whyFlagged: "Internal",
@@ -129,15 +133,22 @@ test("iterative bilingual review produces two revisions before explicit human co
   assert.equal(state.stage, "reviewing");
   assert.equal(canMarkChapterReady(state, context()), false);
 
-  state = applyChapterReview(state, context([], {}, [evidence], blocks({ scene: "The changed." }, { scene: zhRevised }))).state;
+  state = applyChapterReview(state, context([], {}, [evidence], {
+    ...blocks({ scene: "The changed." }, { scene: zhRevised }),
+    sourceBlocks: { en: { scene: enSource }, zh: { scene: zhSource } },
+  })).state;
   assert.equal(state.revision, 3);
   assert.equal(state.revisionHistory.length, 2);
   assert.deepEqual(state.revisionHistory.map((record) => record.revision), [2, 3]);
   assert.equal(applyAnnotationsToBlock(enSource, "scene", "en", state.annotations), "The remained provisional.");
   assert.equal(applyAnnotationsToBlock(zhSource, "scene", "zh", state.annotations), "这份仍处于假设阶段。");
-  assert.equal(canMarkChapterReady(state, context()), true);
+  const finalContext = context([], {}, [evidence], {
+    sourceBlocks: { en: { scene: enSource }, zh: { scene: zhSource } },
+    reviewedBlocks: { en: { scene: "The remained provisional." }, zh: { scene: "这份仍处于假设阶段。" } },
+  });
+  assert.equal(canMarkChapterReady(state, finalContext), true);
 
-  state = markChapterReady(state, context());
+  state = markChapterReady(state, finalContext);
   assert.equal(state.stage, "human_confirmed");
   assert.equal(state.publicationApproved, false);
   assert.equal(addStoryAnnotation(state, enCorrection), state);
@@ -186,7 +197,11 @@ test("unsupported Add blocks confirmation while reviewed-evidence Add can apply"
   });
   state = applyChapterReview(
     addStoryAnnotation(state, paired),
-    context([], {}, [evidence], { ...blocks({ outcome: "Decision The holdout evidence remained visible. followed." }, { outcome: zhSource }), supportedAddIds: [paired.id] }),
+    context([], {}, [evidence], {
+      ...blocks({ outcome: "Decision The holdout evidence remained visible. followed." }, { outcome: zhSource }),
+      sourceBlocks: { en: { outcome: enSource }, zh: { outcome: zhSource } },
+      supportedAddIds: [paired.id],
+    }),
   ).state;
   assert.equal(state.staleTranslations.length, 0);
   assert.equal(applyAnnotationsToBlock(zhSource, "outcome", "zh", state.annotations), "决定 留存 holdout 证据。随后形成。");
@@ -357,6 +372,46 @@ test("overlapping or stale ranges are rejected atomically before revision proven
     missingInstruction,
     context([], {}, [evidence], blocks({ scene: source }, { scene: "uvwxyz" })),
   ).blockedReason, "annotations");
+});
+
+test("the complete annotation ledger rejects malformed applied records and mixed-resolution ID collisions", () => {
+  const sourceBlocks = { en: { scene: "abc" }, zh: { scene: "甲乙丙" } };
+  const malformedApplied = {
+    ...emptyChapterReview(),
+    stage: "revision_ready",
+    revision: 2,
+    evidenceVerified: true,
+    annotations: [{
+      id: "bad", blockId: "scene", type: "delete", sourceLanguage: "en",
+      selection: { start: 0, end: 2, text: "WR" },
+      resolution: "applied", baseRevision: 1, appliedRevision: 2,
+    }],
+    revisionHistory: [{ revision: 2, annotationIds: ["bad"], insightIds: [], privacyDecisions: {} }],
+  };
+  const malformedContext = context([], {}, [evidence], { sourceBlocks, reviewedBlocks: sourceBlocks });
+  const malformedResult = applyChapterReview(malformedApplied, malformedContext);
+  assert.equal(malformedResult.blockedReason, "annotations");
+  assert.equal(malformedResult.state, malformedApplied);
+  assert.equal(malformedResult.state.revision, 2);
+  assert.equal(canMarkChapterReady(malformedApplied, malformedContext), false);
+
+  const pending = createStoryAnnotation({
+    blockId: "scene", type: "delete", sourceLanguage: "en", baseRevision: 1,
+    selection: { start: 0, end: 1, text: "a" },
+  });
+  const collision = {
+    ...emptyChapterReview(),
+    annotations: [{ ...pending, resolution: "cancelled" }, pending],
+  };
+  const collisionResult = applyChapterReview(collision, malformedContext);
+  assert.equal(collisionResult.blockedReason, "annotations");
+  assert.equal(collisionResult.state, collision);
+
+  const bogusResolution = {
+    ...emptyChapterReview(),
+    annotations: [{ ...pending, id: "bogus", resolution: "silently_skipped" }],
+  };
+  assert.equal(applyChapterReview(bogusResolution, malformedContext).blockedReason, "annotations");
 });
 
 test("range styling rejects stale, mismatched, cross-language, and cross-block offsets", () => {

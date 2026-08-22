@@ -92,7 +92,7 @@ const story = (value) => STORY_PREFIX + JSON.stringify({
   reviewPresentation: {
     en: languagePresentation("en", value.key),
     zh: languagePresentation("zh", value.key),
-    semanticAnchors: ["evidence", "decision"],
+    semanticAnchors: [value.key],
   },
 });
 
@@ -234,11 +234,29 @@ test("review schema rejects duplicate semantic IDs and hidden unavailable-origin
   }
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(duplicatePrivacy)), null);
 
+  const coercingPrivacy = JSON.parse(story({ key:"coercing-privacy" }).slice(STORY_PREFIX.length));
+  for (const language of ["en", "zh"]) {
+    coercingPrivacy.reviewPresentation[language].privacy.candidates[0].id = 1;
+    coercingPrivacy.reviewPresentation[language].privacy.candidates[1].id = "1";
+  }
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(coercingPrivacy)), null);
+
   const hiddenUnavailable = JSON.parse(story({ key:"hidden-unavailable" }).slice(STORY_PREFIX.length));
   for (const language of ["en", "zh"]) {
     hiddenUnavailable.reviewPresentation[language].privacy.candidates[0].original.removedValue = "must not survive";
   }
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(hiddenUnavailable)), null);
+});
+
+test("review schema requires every declared semantic anchor in both language presentations", () => {
+  const missingBoth = JSON.parse(story({ key:"missing-anchor" }).slice(STORY_PREFIX.length));
+  missingBoth.reviewPresentation.semanticAnchors = ["ABSENT_TECHNICAL_ANCHOR"];
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(missingBoth)), null);
+
+  const missingChinese = JSON.parse(story({ key:"one-language-anchor" }).slice(STORY_PREFIX.length));
+  missingChinese.reviewPresentation.en.overview += " EN_ONLY_TECHNICAL_ANCHOR";
+  missingChinese.reviewPresentation.semanticAnchors = ["EN_ONLY_TECHNICAL_ANCHOR"];
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(missingChinese)), null);
 });
 
 test("Story schema rejects duplicate or malformed evidence references", () => {

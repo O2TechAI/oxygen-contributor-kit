@@ -60,7 +60,7 @@ Use stable shared keys and validate:
 - matching evidence-backed chip facts, with natural localized wording around preserved technical anchors;
 - matching participant/insight/privacy IDs;
 - matching reconstruction and important-detail semantic block counts, or an explicit alignment map;
-- presence of selected technical/semantic anchors in both language presentations;
+- presence of every declared selected technical/semantic anchor in reader-facing fields of both language presentations, or an explicit bilingual alignment for a non-literal semantic anchor; reject absent and one-locale-only anchors;
 - one shared evidence set;
 - unavailable Privacy candidates have no excerpt in either language;
 - available excerpts have one original source-language value, not separate translated originals.

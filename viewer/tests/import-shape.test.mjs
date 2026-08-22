@@ -46,7 +46,7 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(episode,/supportingEvidence/);assert.match(episode,/staleTranslations/);
   assert.match(episode,/fetch\("\/api\/evidence"/);assert.match(episode,/supportedAddIds/);assert.match(episode,/evidenceResolved/);assert.match(episode,/hasStoryAnnotationConflict/);
   assert.match(evidenceReview,/reviewStoryEvidence/);assert.match(evidenceReview,/SELECT id FROM items WHERE document_id=\?/);assert.match(evidenceReview,/SELECT id,content FROM items WHERE document_id=\? AND id=\?/);assert.doesNotMatch(evidenceReview,/SELECT id,content FROM items WHERE document_id=\? ORDER BY|original_json/);
-  assert.match(episode,/disclosure && !disclosure\.open/);assert.match(episode,/querySelector<HTMLElement>\("summary"\)/);
+  assert.match(episode,/restoreEvidenceOrigin\(origin, backRef\.current\)/);
   assert.match(evidence,/resolveEvidenceTarget/);assert.match(evidence,/target\?\.focus\(\{ preventScroll: true \}\)/);assert.match(evidence,/reference was not approximated/);
   assert.doesNotMatch(episode,/reviewPath|versionDistinction|Read release episode|Judge AI insight|data-episode-section="highlights"/);
   assert.match(ui,/payload\.documents/);
