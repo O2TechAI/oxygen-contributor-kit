@@ -21,6 +21,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+TOOLS_ROOT = Path(__file__).resolve().parents[2]
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+from oxygen_utf8 import configure_utf8_stdio
+
 
 SCHEMA_VERSION = "0.2"
 DEFAULT_SESSION_ROOT = Path.home() / ".codex" / "sessions"
@@ -765,6 +771,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    configure_utf8_stdio()
     args = parse_args(argv)
     try:
         session_path = args.session or latest_session(args.session_root)

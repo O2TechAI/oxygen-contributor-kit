@@ -59,14 +59,23 @@ From the `contributor-kit` root run:
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run>
 ```
 
+Native Windows PowerShell uses the same launcher and an arbitrary free port:
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  "work\<run>" --port 3298
+```
+
 The launcher validates the run, starts the password-free localhost Viewer, imports the project
 map and source records into SQLite/D1, builds the timeline, and proactively opens the browser.
 Keep it running while the user reviews.
 
-On Linux/WSL it also verifies Node/npm and the platform-specific dependency installation,
-rebuilding incompatible modules with `npm ci`. Every launch receives fresh process-owned D1
-state and binds directly to the requested IPv4 loopback port; never move `.wrangler` or add a
-manual socat bridge. Use `--port <number>` when a specific isolated port is required.
+On native Windows and Linux/WSL it also verifies Node/npm and the platform-specific dependency
+installation, rebuilding incompatible modules with `npm ci`. Windows resolution uses the real
+`npm.cmd` command and rejects POSIX-only shims. Every launch receives fresh process-owned D1 state
+and binds directly to the exact requested `127.0.0.1` port; never move `.wrangler` or add a manual
+socat bridge. Use `--port <number>` when a specific isolated port is required. An occupied port
+fails without killing its owner or choosing a fallback port.
 
 ## Browser handoff is required
 

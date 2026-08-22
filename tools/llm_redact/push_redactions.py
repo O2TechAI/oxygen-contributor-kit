@@ -9,18 +9,25 @@ restart inside every trajectory.
 import argparse
 import json
 import pathlib
+import sys
 import urllib.request
+
+TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+from oxygen_utf8 import configure_utf8_stdio
 
 
 def post(base_url: str, path: str, body: dict) -> dict:
     request = urllib.request.Request(
         f"{base_url}{path}",
-        data=json.dumps(body).encode(),
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={"content-type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=60) as response:
-        return json.loads(response.read().decode() or "{}")
+        return json.loads(response.read().decode("utf-8") or "{}")
 
 
 def load_report(report_path: pathlib.Path) -> dict:
@@ -43,6 +50,7 @@ def load_report(report_path: pathlib.Path) -> dict:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--redacted", type=pathlib.Path, required=True)
     parser.add_argument("--base-url", default="http://127.0.0.1:3210")

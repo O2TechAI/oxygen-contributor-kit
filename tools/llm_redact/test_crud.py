@@ -2,8 +2,16 @@
 """End-to-end check that a reviewer can edit and delete a redaction decision."""
 import argparse
 import json
+import pathlib
+import sys
 import urllib.error
 import urllib.request
+
+TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+from oxygen_utf8 import configure_utf8_stdio
 
 DEFAULT_BASE = "http://127.0.0.1:3210"
 
@@ -13,15 +21,15 @@ def call(base_url, path, method="GET", body=None):
     rejection path is one of the behaviours under test."""
     request = urllib.request.Request(
         base_url + path,
-        data=json.dumps(body).encode() if body is not None else None,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None,
         headers={"content-type": "application/json"},
         method=method,
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            return json.loads(response.read().decode() or "{}"), response.status
+            return json.loads(response.read().decode("utf-8") or "{}"), response.status
     except urllib.error.HTTPError as error:
-        return json.loads(error.read().decode() or "{}"), error.code
+        return json.loads(error.read().decode("utf-8") or "{}"), error.code
 
 
 def active_count(base_url):
@@ -35,6 +43,7 @@ def build_parser():
 
 
 def main(argv=None):
+    configure_utf8_stdio()
     args = build_parser().parse_args(argv)
     base_url = args.base_url.rstrip("/")
     before = active_count(base_url)

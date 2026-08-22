@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "vendor"))
 import extract_codex_trajectory as vendor_common  # noqa: E402  (secret masking, hashing)
 
 from oxygen_common import (  # noqa: E402
+    configure_utf8_stdio,
     fail,
     progress,
     run_stamp,
@@ -326,6 +327,7 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
 
 
 def main(argv=None) -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="export zip, conversations.json, or folder")
     parser.add_argument("--out", type=Path, help="output dir (default tools/out/claudeai-<ts>)")

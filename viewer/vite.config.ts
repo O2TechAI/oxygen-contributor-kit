@@ -43,11 +43,21 @@ export default defineConfig(async () => {
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import("@cloudflare/vite-plugin");
   const viewerStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
+  const viewerHost = process.env.OXYGEN_VIEWER_HOST ?? "127.0.0.1";
+  const configuredPort = Number(process.env.OXYGEN_VIEWER_PORT);
+  const viewerPort = Number.isInteger(configuredPort) && configuredPort > 0
+    ? configuredPort
+    : undefined;
 
   return {
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      host: viewerHost,
+      strictPort: true,
+      ...(viewerPort ? { port: viewerPort } : {}),
+      ...(isCodexSeatbeltSandbox
+        ? { watch: { useFsEvents: false, usePolling: true } }
+        : {}),
+    },
     plugins: [
       vinext(),
       sites(),

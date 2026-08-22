@@ -10,5 +10,9 @@ test("official runtime can isolate state and run concurrent ports", () => {
   );
   assert.match(config, /persistState:\s*\{ path: viewerStateDir \}/);
   assert.match(config, /inspectorPort:\s*false/);
+  assert.match(config, /host:\s*viewerHost/);
+  assert.match(config, /strictPort:\s*true/);
   assert.equal(packageJson.scripts.dev, "vinext dev");
+  assert.equal(packageJson.scripts.build, "vinext build");
+  assert.equal(packageJson.scripts.start, "vinext start");
 });

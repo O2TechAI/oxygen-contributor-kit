@@ -9,7 +9,14 @@ aside rather than silently discarded.
 import argparse
 import json
 import pathlib
+import sys
 import urllib.request
+
+TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+from oxygen_utf8 import configure_utf8_stdio
 
 SIGNALS = {
     "repeated_correction", "long_exchange", "late_rejection",
@@ -79,13 +86,14 @@ def canonical_auto_removed(value: object) -> dict:
 
 def post(base_url: str, path: str, body: dict) -> dict:
     request = urllib.request.Request(
-        f"{base_url}{path}", data=json.dumps(body).encode(),
+        f"{base_url}{path}", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={"content-type": "application/json"}, method="POST")
     with urllib.request.urlopen(request, timeout=60) as response:
-        return json.loads(response.read().decode() or "{}")
+        return json.loads(response.read().decode("utf-8") or "{}")
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probes", type=pathlib.Path, required=True)
     parser.add_argument("--dialogue", type=pathlib.Path, required=True)
@@ -103,7 +111,7 @@ def main() -> int:
     for path in args.dialogue.glob("*.json"):
         if path.name == "index.json":
             continue
-        bundle = json.loads(path.read_text())
+        bundle = json.loads(path.read_text(encoding="utf-8"))
         known_events[bundle["trajectory"]] = {t["event_id"] for t in bundle["turns"]}
         document_kinds[bundle["trajectory"]] = bundle.get("document_kind", "trajectory")
     if not known_events:
@@ -116,7 +124,7 @@ def main() -> int:
     collected, dropped = [], []
     for path in probe_files:
         try:
-            bundle = json.loads(path.read_text())
+            bundle = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             dropped.append({"trajectory": path.stem, "reason": "invalid JSON"})
             continue

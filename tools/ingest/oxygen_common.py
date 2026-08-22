@@ -13,6 +13,12 @@ import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
+TOOLS_ROOT = Path(__file__).resolve().parents[1]
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+from oxygen_utf8 import configure_utf8_stdio, text_subprocess_options
+
 TOOLS_DIR = Path(__file__).resolve().parent
 VENDOR_DIR = TOOLS_DIR / "vendor"
 
@@ -89,24 +95,3 @@ def publish_to_staging(src: Path, name: str) -> str | None:
         handle.write(f"- [{utc_now()}] {getpass.getuser()} staged `{dest.name}` "
                      f"(from {src}) — pending Inline import, unredacted, do not publish\n")
     return str(dest)
-
-
-def read_first_jsonl_records(path: Path, limit: int = 50) -> list[dict]:
-    records: list[dict] = []
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            for index, line in enumerate(handle):
-                if index >= limit:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(record, dict):
-                    records.append(record)
-    except OSError:
-        pass
-    return records

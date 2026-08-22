@@ -1,0 +1,61 @@
+name: Native platform tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+
+      - name: Compile Python
+        run: python -m compileall -q tools skills
+
+      - name: Test ingest
+        run: python -m unittest discover -s tools/ingest/tests -v
+
+      - name: Test redaction
+        run: python -m unittest discover -s tools/llm_redact/tests -v
+
+      - name: Test preferences
+        run: python -m unittest discover -s skills/oxygen-elicit-contributor-preferences/tests -v
+
+      - name: Test launcher
+        run: python -m unittest discover -s skills/oxygen-organize-review-export/tests -v
+
+      - name: Install Viewer dependencies
+        working-directory: viewer
+        run: npm ci --no-audit --no-fund
+
+      - name: Test Viewer
+        working-directory: viewer
+        run: npm test
+
+      - name: Build Viewer
+        working-directory: viewer
+        run: npm run build
+
+      - name: Verify lockfile unchanged
+        run: git diff --exit-code -- viewer/package-lock.json
