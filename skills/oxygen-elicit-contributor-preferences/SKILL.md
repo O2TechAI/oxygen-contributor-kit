@@ -147,6 +147,13 @@ Validate before handing off:
 python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py work/<run>
 ```
 
+Native Windows PowerShell equivalent:
+
+```powershell
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
+  "work\<run>"
+```
+
 Each confirmed preference becomes a checklist entry attached to its source document, carrying the
 evidence event IDs so the contributor can always reopen the original moment.
 

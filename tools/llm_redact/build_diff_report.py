@@ -9,6 +9,13 @@ import argparse
 import html
 import json
 import pathlib
+import sys
+
+TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+from oxygen_utf8 import configure_utf8_stdio
 
 CSS = """
 :root{--bg:#faf9f7;--fg:#1a1a1a;--mut:#6b6b6b;--line:#e3e0da;--hit:#ffe08a;--tag:#0a7d4b}
@@ -58,6 +65,7 @@ def show_tagged(text: str) -> str:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--redacted", type=pathlib.Path, required=True)
     parser.add_argument("--out", type=pathlib.Path, required=True)
@@ -65,7 +73,7 @@ def main() -> int:
 
     blocks, total_spans, total_turns = [], 0, 0
     for path in sorted(args.redacted.glob("traj-*.json")):
-        bundle = json.loads(path.read_text())
+        bundle = json.loads(path.read_text(encoding="utf-8"))
         changed = [t for t in bundle["turns"] if t.get("redactions")]
         if not changed:
             continue

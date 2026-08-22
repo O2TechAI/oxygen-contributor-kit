@@ -10,6 +10,13 @@ import argparse
 import json
 import pathlib
 import re
+import sys
+
+TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+from oxygen_utf8 import configure_utf8_stdio
 
 
 SYSTEM_ACCOUNTS = {"ubuntu", "root", "admin", "lost+found", "shared", "user"}
@@ -40,6 +47,7 @@ def load_names(roster: pathlib.Path | None, home: pathlib.Path | None) -> list:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--redacted", type=pathlib.Path, required=True)
     parser.add_argument("--roster", type=pathlib.Path,
@@ -58,7 +66,7 @@ def main() -> int:
 
     bundles = [p for p in sorted(args.redacted.glob("*.json")) if p.name != "index.json"]
     for path in bundles:
-        bundle = json.loads(path.read_text())
+        bundle = json.loads(path.read_text(encoding="utf-8"))
         for turn in bundle["turns"]:
             text = turn["text"]
             lowered = text.lower()

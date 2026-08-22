@@ -105,7 +105,7 @@ def validate_auto_removed(value: object) -> list[str]:
 def collect_event_ids(run: Path) -> set[str]:
     ids: set[str] = set()
     for events in (run / "trajectories").glob("*/events.jsonl"):
-        with events.open(encoding="utf-8", errors="replace") as handle:
+        with events.open(encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
                 if not line:

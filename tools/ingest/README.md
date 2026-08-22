@@ -36,6 +36,23 @@ python3 import_meeting.py meeting.m4a --language zh --hf-token $HF_TOKEN
 python3 webapp.py     # → http://127.0.0.1:8899
 ```
 
+Windows PowerShell 使用同一套 UTF-8 工具链，无需 `python -X utf8`、`chcp` 或 WSL：
+
+```powershell
+python .\collect_repo_trajectories.py `
+  "D:\Coding Projects\my-project" --out "out\repo-run"
+python .\import_anthropic_export.py `
+  "D:\Downloads\export.zip" --out "out\claude-run"
+python .\import_meeting.py "D:\Meetings\meeting.txt" `
+  --out "out\meeting-run" --title "项目会议" --no-publish
+python .\webapp.py  # → http://127.0.0.1:8899
+```
+
+Codex 会话默认来自用户全局目录 `Path.home() / ".codex" / "sessions"`，Windows 通常是
+`C:\Users\<user>\.codex\sessions`。仓库内 `.codex` 是被忽略的 fixture/runtime
+目录，不是默认会话存储。只有 recorded cwd 等于目标仓库或位于其子目录的会话才纳入；
+父目录、兄弟仓库和仅在正文提到仓库的会话都会排除，因此新 worktree 得到零条结果可能是正常的。
+
 ## 说话人分离(diarization)
 
 按团队决定,音频**只在本机 CPU 处理,不出服务器**。转写用 faster-whisper(已装,无需 token)。说话人分离用 pyannote 3.1,模型是 gated:
@@ -47,6 +64,22 @@ python3 import_meeting.py xx.m4a --hf-token hf_xxx
 ```
 
 没有 token 时管线不会失败:输出单说话人转写稿并在 `transcript.json.warnings` 里明确标注。
+
+Windows 的可选音频解释器路径是 `.venv-audio\Scripts\python.exe`。音频依赖必须安装在
+这个项目本地环境中，不要全局安装；文本会议导入不需要音频包。临时 token 用完后立即清理：
+
+```powershell
+$AudioPython = ".\.venv-audio\Scripts\python.exe"
+& $AudioPython -c "import faster_whisper"  # 只检查可用性
+$env:HF_TOKEN = "<current-user-token>"
+try {
+  python .\import_meeting.py "D:\Meetings\meeting.m4a" `
+    --out "out\meeting-run" --language zh --no-publish
+}
+finally {
+  Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue
+}
+```
 
 ## 格式对接
 

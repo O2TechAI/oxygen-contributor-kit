@@ -9,6 +9,13 @@ sub-agent in a single request.
 import argparse
 import json
 import pathlib
+import sys
+
+TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+from oxygen_utf8 import configure_utf8_stdio
 
 KEEP_EVENT_TYPE = "message"
 
@@ -16,7 +23,7 @@ KEEP_EVENT_TYPE = "message"
 def extract_one(traj_dir: pathlib.Path) -> dict:
     turns = []
     events_path = traj_dir / "events.jsonl"
-    with events_path.open(encoding="utf-8", errors="replace") as fh:
+    with events_path.open(encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -68,6 +75,7 @@ def extract_meeting(path: pathlib.Path) -> dict | None:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", type=pathlib.Path)
     parser.add_argument("--out", type=pathlib.Path, required=True)

@@ -23,12 +23,46 @@ python3 tools/ingest/import_meeting.py meeting.txt --out work/meeting-run \
   --title "Project meeting" --no-publish
 ```
 
+On native Windows PowerShell:
+
+```powershell
+python .\tools\ingest\collect_repo_trajectories.py `
+  "D:\Coding Projects\my-project" --out "work\repo-run"
+python .\tools\ingest\import_anthropic_export.py `
+  "D:\Downloads\export.zip" --out "work\claude-run"
+python .\tools\ingest\import_meeting.py `
+  "D:\Meetings\meeting.txt" --out "work\meeting-run" `
+  --title "Project meeting" --no-publish
+```
+
+Codex discovery defaults to the contributor's global
+`Path.home() / ".codex" / "sessions"` (`C:\Users\<user>\.codex\sessions` on
+Windows). Do not substitute the repository-local `.codex`; that is ignored toolkit
+fixture/runtime space. Match only exact/child recorded cwd values. Parent, sibling, and
+message-body-only references remain out of scope, so a valid global-store scan can return zero.
+
 For audio, use local transcription. Only accept a Hugging Face token supplied by the current
 user and pass it at runtime; never store it:
 
 ```bash
 HF_TOKEN="<current-user-token>" python3 tools/ingest/import_meeting.py meeting.m4a \
   --out work/meeting-run --language en --no-publish
+```
+
+Windows audio remains optional and project-local. The importer recognizes
+`tools\ingest\.venv-audio\Scripts\python.exe`; do not install its packages globally:
+
+```powershell
+$AudioPython = ".\tools\ingest\.venv-audio\Scripts\python.exe"
+& $AudioPython -c "import faster_whisper"  # availability check only
+$env:HF_TOKEN = "<current-user-token>"
+try {
+  python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.m4a" `
+    --out "work\meeting-run" --language en --no-publish
+}
+finally {
+  Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue
+}
 ```
 
 Do not use `--publish`. Do not copy outputs to staging or any network location.

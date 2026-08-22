@@ -19,13 +19,14 @@ Everything starts as review_status=pending / publication_approved=false.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass, field
 import getpass
 import json
 import re
 import shutil
 import subprocess
 import sys
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from oxygen_common import (
     VENDOR_DIR,
@@ -33,63 +34,139 @@ from oxygen_common import (
     is_sensitive_name,
     progress,
     run_stamp,
-    read_first_jsonl_records,
     safe_slug,
     sha256_file,
+    configure_utf8_stdio,
+    text_subprocess_options,
     utc_now,
     write_json,
 )
 
 
-def session_cwds(path: Path, system: str) -> set[str]:
-    cwds: set[str] = set()
-    for record in read_first_jsonl_records(path, limit=80):
-        if system == "claude":
-            cwd = record.get("cwd")
-            if isinstance(cwd, str):
-                cwds.add(cwd)
-        else:  # codex rollout: session_meta / turn_context carry cwd
-            payload = record.get("payload")
-            if isinstance(payload, dict):
-                cwd = payload.get("cwd")
-                if isinstance(cwd, str):
-                    cwds.add(cwd)
-            cwd = record.get("cwd")
-            if isinstance(cwd, str):
-                cwds.add(cwd)
-    return cwds
+SESSION_SCAN_MAX_RECORDS = 2048
+SESSION_SCAN_MAX_BYTES = 4 * 1024 * 1024
+CODEX_CWD_RECORD_TYPES = {"session_meta", "turn_context"}
+
+
+@dataclass
+class SessionCwdScan:
+    cwds: set[str] = field(default_factory=set)
+    records_scanned: int = 0
+    bytes_scanned: int = 0
+    malformed_records: int = 0
+    bound_reached: bool = False
+
+
+def _structured_cwds(record: dict, system: str) -> list[str]:
+    """Return only cwd fields from structured metadata/context positions."""
+    values: list[str] = []
+    record_type = record.get("type")
+    if system == "codex":
+        if record_type not in CODEX_CWD_RECORD_TYPES:
+            return values
+        payload = record.get("payload")
+        if isinstance(payload, dict) and isinstance(payload.get("cwd"), str):
+            values.append(payload["cwd"])
+    cwd = record.get("cwd")
+    if isinstance(cwd, str) and (system == "claude" or record_type in CODEX_CWD_RECORD_TYPES):
+        values.append(cwd)
+    return values
+
+
+def session_cwds(
+    path: Path,
+    system: str,
+    repo: Path | None = None,
+    *,
+    max_records: int = SESSION_SCAN_MAX_RECORDS,
+    max_bytes: int = SESSION_SCAN_MAX_BYTES,
+) -> SessionCwdScan:
+    """Bounded scan for structured cwd metadata, never repository mentions in bodies."""
+    result = SessionCwdScan()
+    try:
+        with path.open("rb") as handle:
+            while result.records_scanned < max_records and result.bytes_scanned < max_bytes:
+                remaining = max_bytes - result.bytes_scanned
+                raw = handle.readline(remaining)
+                if not raw:
+                    break
+                result.bytes_scanned += len(raw)
+                if not raw.endswith(b"\n") and result.bytes_scanned >= max_bytes:
+                    try:
+                        has_unread_bytes = path.stat().st_size > handle.tell()
+                    except OSError:
+                        has_unread_bytes = True
+                    if has_unread_bytes:
+                        result.bound_reached = True
+                        break
+                result.records_scanned += 1
+                if b'"cwd"' not in raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    result.malformed_records += 1
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                for cwd in _structured_cwds(record, system):
+                    result.cwds.add(cwd)
+                    if repo is not None and is_inside(cwd, repo):
+                        return result
+            reached_limit = (
+                result.records_scanned >= max_records or result.bytes_scanned >= max_bytes
+            )
+            if reached_limit and not result.bound_reached:
+                try:
+                    result.bound_reached = path.stat().st_size > handle.tell()
+                except OSError:
+                    result.bound_reached = True
+    except OSError:
+        pass
+    return result
 
 
 WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
+def _lexical_parts(parts, *, fold_case: bool = False) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for part in parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if normalized:
+                normalized.pop()
+            continue
+        normalized.append(part.casefold() if fold_case else part)
+    return tuple(normalized)
+
+
 def canonical_location(value: str | Path) -> tuple[str, str, tuple[str, ...]]:
     text = str(value)
+    if not text or "\0" in text:
+        raise ValueError("cwd must be a nonempty absolute path")
     if WINDOWS_ABSOLUTE.match(text):
         path = PureWindowsPath(text)
-        parts = list(path.parts[1:])
-        normalized: list[str] = []
-        for part in parts:
-            if part in {"", "."}:
-                continue
-            if part == "..":
-                if normalized:
-                    normalized.pop()
-                continue
-            normalized.append(part.casefold())
-        return "windows", path.drive.rstrip(":").casefold(), tuple(normalized)
-    resolved = Path(value).expanduser().resolve()
-    parts = resolved.parts
-    if len(parts) >= 3 and parts[1] == "mnt" and re.fullmatch(r"[A-Za-z]", parts[2]):
-        return "windows", parts[2].casefold(), tuple(part.casefold() for part in parts[3:])
-    return "posix", "", tuple(parts)
+        return (
+            "windows",
+            path.drive.rstrip(":").casefold(),
+            _lexical_parts(path.parts[1:], fold_case=True),
+        )
+    if not text.startswith("/") or text.startswith("//"):
+        raise ValueError("cwd must be an explicit drive-absolute or POSIX-absolute path")
+    path = PurePosixPath(text)
+    parts = _lexical_parts(path.parts[1:])
+    if len(parts) >= 2 and parts[0] == "mnt" and re.fullmatch(r"[A-Za-z]", parts[1]):
+        return "windows", parts[1].casefold(), tuple(part.casefold() for part in parts[2:])
+    return "posix", "", ("/", *parts)
 
 
 def is_inside(cwd: str, repo: Path) -> bool:
     try:
         cwd_kind, cwd_root, cwd_parts = canonical_location(cwd)
         repo_kind, repo_root, repo_parts = canonical_location(repo)
-    except OSError:
+    except (OSError, ValueError):
         return False
     return (
         cwd_kind == repo_kind
@@ -98,7 +175,97 @@ def is_inside(cwd: str, repo: Path) -> bool:
     )
 
 
-def find_claude_sessions(home: Path, repo: Path) -> tuple[list[Path], list[Path]]:
+def cwd_relation(cwd: str, repo: Path) -> str:
+    """Classify a structured cwd without weakening exact/child eligibility."""
+    try:
+        cwd_kind, cwd_root, cwd_parts = canonical_location(cwd)
+        repo_kind, repo_root, repo_parts = canonical_location(repo)
+    except (OSError, ValueError):
+        return "missing_unparseable"
+    if cwd_kind != repo_kind or cwd_root != repo_root:
+        return "unrelated"
+    if cwd_parts == repo_parts:
+        return "exact"
+    if cwd_parts[:len(repo_parts)] == repo_parts:
+        return "child"
+    if repo_parts[:len(cwd_parts)] == cwd_parts:
+        return "parent"
+    if repo_parts and cwd_parts[:len(repo_parts) - 1] == repo_parts[:-1]:
+        return "sibling"
+    return "unrelated"
+
+
+@dataclass
+class DiscoveryStats:
+    system: str
+    root: Path
+    files_scanned: int = 0
+    matched: int = 0
+    exact: int = 0
+    child: int = 0
+    parent: int = 0
+    sibling: int = 0
+    unrelated: int = 0
+    missing_unparseable: int = 0
+    limit_reached_without_cwd: int = 0
+    malformed_records: int = 0
+
+    def add(self, scan: SessionCwdScan, repo: Path) -> None:
+        self.files_scanned += 1
+        self.malformed_records += scan.malformed_records
+        if not scan.cwds:
+            self.missing_unparseable += 1
+            if scan.bound_reached:
+                self.limit_reached_without_cwd += 1
+            return
+        relations = {cwd_relation(cwd, repo) for cwd in scan.cwds}
+        relation = next(
+            name for name in ("exact", "child", "parent", "sibling", "unrelated",
+                              "missing_unparseable") if name in relations
+        )
+        setattr(self, relation, getattr(self, relation) + 1)
+        if relation in {"exact", "child"}:
+            self.matched += 1
+
+    def as_dict(self) -> dict:
+        return {
+            "system": self.system,
+            "root": str(self.root),
+            "files_scanned": self.files_scanned,
+            "matched": self.matched,
+            "cwd_scope": {
+                "exact": self.exact,
+                "child": self.child,
+                "parent": self.parent,
+                "sibling": self.sibling,
+                "unrelated": self.unrelated,
+                "missing_unparseable": self.missing_unparseable,
+            },
+            "limit_reached_without_cwd": self.limit_reached_without_cwd,
+            "malformed_records": self.malformed_records,
+            "scan_limits": {
+                "records_per_session": SESSION_SCAN_MAX_RECORDS,
+                "bytes_per_session": SESSION_SCAN_MAX_BYTES,
+            },
+        }
+
+
+def report_discovery(stats: DiscoveryStats) -> None:
+    scope = stats.as_dict()["cwd_scope"]
+    progress(
+        None,
+        "scan",
+        f"{stats.system} store {stats.root}: scanned={stats.files_scanned}, "
+        f"exact={scope['exact']}, child={scope['child']}, parent={scope['parent']}, "
+        f"sibling={scope['sibling']}, unrelated={scope['unrelated']}, "
+        f"missing/unparseable={scope['missing_unparseable']}, "
+        f"limit-without-cwd={stats.limit_reached_without_cwd}",
+    )
+
+
+def find_claude_sessions(
+    home: Path, repo: Path, diagnostics: DiscoveryStats | None = None
+) -> tuple[list[Path], list[Path]]:
     """Return (matching session jsonl files, matching project dirs)."""
     projects_root = home / ".claude" / "projects"
     sessions: list[Path] = []
@@ -110,8 +277,10 @@ def find_claude_sessions(home: Path, repo: Path) -> tuple[list[Path], list[Path]
             continue
         matched_dir = False
         for jsonl in sorted(project_dir.rglob("*.jsonl")):
-            cwds = session_cwds(jsonl, "claude")
-            if any(is_inside(cwd, repo) for cwd in cwds):
+            scan = session_cwds(jsonl, "claude", repo)
+            if diagnostics is not None:
+                diagnostics.add(scan, repo)
+            if any(is_inside(cwd, repo) for cwd in scan.cwds):
                 sessions.append(jsonl)
                 matched_dir = True
         if matched_dir:
@@ -119,14 +288,21 @@ def find_claude_sessions(home: Path, repo: Path) -> tuple[list[Path], list[Path]
     return sessions, project_dirs
 
 
-def find_codex_sessions(home: Path, repo: Path) -> list[Path]:
-    sessions_root = home / ".codex" / "sessions"
+def find_codex_sessions(
+    home: Path,
+    repo: Path,
+    session_root: Path | None = None,
+    diagnostics: DiscoveryStats | None = None,
+) -> list[Path]:
+    sessions_root = session_root or home / ".codex" / "sessions"
     sessions: list[Path] = []
     if not sessions_root.is_dir():
         return sessions
     for jsonl in sorted(sessions_root.rglob("*.jsonl")):
-        cwds = session_cwds(jsonl, "codex")
-        if any(is_inside(cwd, repo) for cwd in cwds):
+        scan = session_cwds(jsonl, "codex", repo)
+        if diagnostics is not None:
+            diagnostics.add(scan, repo)
+        if any(is_inside(cwd, repo) for cwd in scan.cwds):
             sessions.append(jsonl)
     return sessions
 
@@ -152,7 +328,9 @@ def extract(session: Path, system: str, out_root: Path, home: Path, user: str) -
         user,
         "--overwrite",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(VENDOR_DIR))
+    result = subprocess.run(
+        cmd, capture_output=True, cwd=str(VENDOR_DIR), **text_subprocess_options()
+    )
     entry = {
         "trajectory_id": trajectory_id,
         "system": system,
@@ -192,10 +370,16 @@ def copy_memory(src: Path, dest_root: Path, base_label: str, collected: list[dic
 
 
 def main(argv=None) -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", type=Path, help="repo the trajectories should relate to")
     parser.add_argument("--out", type=Path, help="output dir (default tools/out/repo-<name>-<ts>)")
     parser.add_argument("--home", type=Path, default=Path.home())
+    parser.add_argument(
+        "--codex-session-root",
+        type=Path,
+        help="explicit Codex session root (default: <home>/.codex/sessions)",
+    )
     parser.add_argument("--user", default=getpass.getuser())
     parser.add_argument(
         "--agents", default="claude,codex", help="comma list among: claude,codex"
@@ -215,15 +399,27 @@ def main(argv=None) -> int:
     )
     out.mkdir(parents=True, exist_ok=True)
     home = args.home.expanduser().resolve()
+    codex_root = (
+        args.codex_session_root.expanduser().resolve()
+        if args.codex_session_root
+        else home / ".codex" / "sessions"
+    )
 
     progress(2, "scan", f"scanning sessions related to {repo}")
     claude_sessions: list[Path] = []
     claude_project_dirs: list[Path] = []
     codex_sessions: list[Path] = []
+    discovery: dict[str, DiscoveryStats] = {}
     if "claude" in agents:
-        claude_sessions, claude_project_dirs = find_claude_sessions(home, repo)
+        claude_stats = DiscoveryStats("claude", home / ".claude" / "projects")
+        discovery["claude"] = claude_stats
+        claude_sessions, claude_project_dirs = find_claude_sessions(home, repo, claude_stats)
+        report_discovery(claude_stats)
     if "codex" in agents:
-        codex_sessions = find_codex_sessions(home, repo)
+        codex_stats = DiscoveryStats("codex", codex_root)
+        discovery["codex"] = codex_stats
+        codex_sessions = find_codex_sessions(home, repo, codex_root, codex_stats)
+        report_discovery(codex_stats)
     total = len(claude_sessions) + len(codex_sessions)
     progress(10, "scan", f"{len(claude_sessions)} claude + {len(codex_sessions)} codex sessions match")
 
@@ -266,6 +462,7 @@ def main(argv=None) -> int:
         "publication_approved": False,
         "trajectories": trajectories,
         "memory": memory,
+        "session_discovery": {name: stats.as_dict() for name, stats in discovery.items()},
     }
     write_json(out / "index.json", index)
     if args.publish:

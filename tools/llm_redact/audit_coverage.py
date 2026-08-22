@@ -9,11 +9,19 @@ import argparse
 import collections
 import json
 import pathlib
+import sys
+
+TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+from oxygen_utf8 import configure_utf8_stdio
 
 CONVERSATIONAL = {"message", "user", "assistant", "agent"}
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", type=pathlib.Path)
     args = parser.parse_args()
@@ -22,7 +30,7 @@ def main() -> int:
     counts = collections.Counter()
     for events_path in sorted((args.run / "trajectories").glob("*/events.jsonl")):
         trajectory_dir = events_path.parent
-        for line in events_path.read_text(errors="ignore").splitlines():
+        for line in events_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             event = json.loads(line)
@@ -38,7 +46,9 @@ def main() -> int:
                     candidate.relative_to(trajectory_dir.resolve())
                     data = candidate.read_bytes()
                     if b"\0" not in data:
-                        text = data.decode("utf-8", errors="replace")
+                        text = data.decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise SystemExit(f"artifact is not valid UTF-8 text: {candidate}: {error}") from error
                 except (OSError, ValueError):
                     pass
             if not text:

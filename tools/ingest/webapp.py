@@ -26,6 +26,8 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from oxygen_common import configure_utf8_stdio, text_subprocess_options
+
 TOOLS_DIR = Path(__file__).resolve().parent
 DATA_DIR = TOOLS_DIR / "webapp-data"
 UPLOAD_DIR = DATA_DIR / "uploads"
@@ -89,8 +91,13 @@ def start_job(job_type: str, params: dict) -> dict:
             job.update(status="failed", detail=f"missing param {error}")
             return
         try:
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                       text=True, cwd=str(TOOLS_DIR))
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=str(TOOLS_DIR),
+                **text_subprocess_options(),
+            )
         except OSError as error:
             job.update(status="failed", detail=str(error))
             return
@@ -297,7 +304,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         if path == "/login":
-            form = urllib.parse.parse_qs(self.read_body().decode("utf-8", "replace"))
+            form = urllib.parse.parse_qs(self.read_body().decode("utf-8"))
             if form.get("password", [""])[0] == PASSWORD:
                 token = secrets.token_urlsafe(24)
                 SESSIONS.add(token)
@@ -342,7 +349,7 @@ class Handler(BaseHTTPRequestHandler):
         match = re.search(r"boundary=([^;]+)", content_type)
         if not match:
             raise ValueError("expected multipart/form-data")
-        boundary = ("--" + match.group(1).strip('"')).encode()
+        boundary = ("--" + match.group(1).strip('"')).encode("utf-8")
         body = self.read_body()
         for part in body.split(boundary):
             if b"filename=" not in part:
@@ -354,11 +361,12 @@ class Handler(BaseHTTPRequestHandler):
             content = content.rsplit(b"\r\n", 1)[0]
             if not content:
                 raise ValueError("空文件")
-            return name_match.group(1).decode("utf-8", "replace"), content
+            return name_match.group(1).decode("utf-8"), content
         raise ValueError("没有找到上传文件")
 
 
 def main() -> int:
+    configure_utf8_stdio()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"Oxygen Ingest on http://{HOST}:{PORT}  (password: {PASSWORD_FILE})", flush=True)
     server.serve_forever()

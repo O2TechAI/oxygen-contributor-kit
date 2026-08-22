@@ -26,8 +26,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from oxygen_common import (fail, progress, publish_to_staging, run_stamp, safe_slug,
-                           utc_now, write_json)
+from oxygen_common import (configure_utf8_stdio, fail, progress, publish_to_staging, run_stamp,
+                           safe_slug, text_subprocess_options, utc_now, write_json)
 
 AUDIO_SUFFIXES = {".m4a", ".wav", ".mp3", ".flac", ".ogg", ".aac", ".mp4"}
 TIMESTAMPED_RE = re.compile(r"^(\d{1,3}:\d{2})Speaker\s+([A-Z])\s*(.*)$")
@@ -36,15 +36,24 @@ SPEAKER_RE = re.compile(r"^(?:\[(\d{1,3}:\d{2}(?::\d{2})?)\]\s*)?([^\s:：]{1,24
 
 def run_asr(audio: Path, out: Path, model: str, language: str | None, hf_token: str | None) -> Path:
     tools_dir = Path(__file__).resolve().parent
-    venv_python = tools_dir / ".venv-audio" / "bin" / "python"
-    python = str(venv_python) if venv_python.exists() else sys.executable
+    candidates = (
+        tools_dir / ".venv-audio" / "Scripts" / "python.exe",
+        tools_dir / ".venv-audio" / "bin" / "python",
+    )
+    venv_python = next((candidate for candidate in candidates if candidate.is_file()), None)
+    python = str(venv_python) if venv_python else sys.executable
     cmd = [python, str(tools_dir / "transcribe_diarize.py"), str(audio), "--out", str(out / "asr"),
            "--model", model]
     if language:
         cmd += ["--language", language]
     if hf_token:
         cmd += ["--hf-token", hf_token]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        **text_subprocess_options(),
+    )
     for line in process.stdout:  # forward ASR progress (rescaled to 0-70%)
         line = line.rstrip()
         if line.startswith("PROGRESS "):
@@ -109,6 +118,7 @@ def parse_lines(text: str) -> tuple[list[dict], str]:
 
 
 def main(argv=None) -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="txt/md transcript or m4a/wav/mp3 audio")
     parser.add_argument("--out", type=Path)
@@ -139,7 +149,7 @@ def main(argv=None) -> int:
         text_path = source
 
     progress(75, "parse", f"parsing {text_path.name}")
-    records, detected = parse_lines(text_path.read_text(encoding="utf-8", errors="replace"))
+    records, detected = parse_lines(text_path.read_text(encoding="utf-8"))
     if not records:
         raise fail("no content found in transcript")
     speakers = sorted({r["speaker"] for r in records if r["speaker"]})

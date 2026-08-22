@@ -26,7 +26,7 @@ import os
 import sys
 from pathlib import Path
 
-from oxygen_common import fail, progress, run_stamp, safe_slug, utc_now, write_json
+from oxygen_common import configure_utf8_stdio, fail, progress, run_stamp, safe_slug, utc_now, write_json
 
 
 def format_ts(seconds: float) -> str:
@@ -82,6 +82,7 @@ def speaker_for(start: float, end: float, turns) -> str | None:
 
 
 def main(argv=None) -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("audio", type=Path)
     parser.add_argument("--out", type=Path, help="output dir (default tools/out/asr-<name>-<ts>)")

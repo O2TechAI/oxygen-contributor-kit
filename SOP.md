@@ -47,6 +47,46 @@ python3 tools/ingest/import_meeting.py meeting.m4a \
   --out work/meeting-run --language en --no-publish
 ```
 
+Native Windows PowerShell equivalents are:
+
+```powershell
+python .\tools\ingest\collect_repo_trajectories.py `
+  "D:\Coding Projects\my-project" --out "work\repo-run"
+
+python .\tools\ingest\import_anthropic_export.py `
+  "D:\Downloads\export.zip" --out "work\claude-run"
+
+python .\tools\ingest\import_meeting.py `
+  "D:\Meetings\meeting.txt" --out "work\meeting-run" --no-publish
+```
+
+Codex collection searches the user-global `Path.home() / ".codex" / "sessions"` by default:
+normally `C:\Users\<user>\.codex\sessions` on Windows and `~/.codex/sessions` on
+Linux/WSL. Repository-local `.codex` directories are ignored toolkit fixture/runtime space, not
+default Codex session storage. Include only sessions whose recorded cwd is exactly the target
+repository or a child. Exclude parent, sibling, and body-mention-only sessions. A zero-match result
+can therefore mean that the global store was searched successfully but contains no cwd-scoped
+history for this worktree path.
+
+Optional Windows audio dependencies belong in
+`tools\ingest\.venv-audio\Scripts\python.exe`; text meeting import does not require them. When a
+user supplies a Hugging Face token for optional local audio, scope it to the current process and
+remove it afterwards:
+
+```powershell
+$AudioPython = ".\tools\ingest\.venv-audio\Scripts\python.exe"
+& $AudioPython -c "import faster_whisper"  # availability check only
+
+$env:HF_TOKEN = "<current-user-token>"
+try {
+  python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.m4a" `
+    --out "work\meeting-run" --language en --no-publish
+}
+finally {
+  Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue
+}
+```
+
 Do not pass `--publish` and do not stage, upload, or submit the result.
 
 Check `work/<run>/index.json` and, when present, `work/<run>/meeting.json`. Report exact source,
@@ -189,17 +229,60 @@ python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
   work/<run>-review
 ```
 
-On Linux/WSL the launcher validates Node/npm, repairs missing or cross-OS `node_modules` with
-lockfile-preserving `npm ci`, binds directly to `127.0.0.1`, and creates fresh launch-owned D1
-state. Do not move or delete `.wrangler`; the official launcher never reuses it. To select a
-non-default port, pass `--port <number>`. If the port is occupied, startup fails immediately
-without killing the owning process.
+On native Windows and Linux/WSL the launcher validates Node/npm, resolves the platform-native npm
+command, repairs missing or cross-OS `node_modules` with lockfile-preserving `npm ci`, binds
+directly to `127.0.0.1`, and creates fresh launch-owned D1 state. Do not move or delete
+`.wrangler`; the official launcher never reuses it. To select a non-default port, pass
+`--port <number>`. If the port is occupied, startup fails immediately without killing the owning
+process.
 
 After the server is healthy, push the validated AI spans from another terminal:
 
 ```bash
 python3 tools/llm_redact/push_redactions.py \
   --redacted work/<run>-redaction/redacted
+```
+
+### Native Windows PowerShell sequence
+
+Run this from the contributor-kit root. It uses an arbitrary free port and the canonical IPv4
+loopback URL; it does not require `python -X utf8`, `chcp`, WSL, or persistent environment edits.
+
+```powershell
+$Run = "work\repo-run"
+$Review = "work\repo-run-review"
+$Dialogue = "work\repo-run-dialogue"
+$Findings = "work\repo-run-findings"
+$Redaction = "work\repo-run-redaction"
+$Probes = "work\repo-run-probes"
+$Port = 3298
+
+python .\tools\llm_redact\prepare_ai_review_run.py `
+  --run "$Run" --out "$Review"
+python .\tools\llm_redact\audit_coverage.py "$Review"
+python .\tools\llm_redact\extract_dialogue.py "$Review" `
+  --out "$Dialogue"
+
+# After the configured AI model writes one findings JSON per dialogue bundle:
+python .\tools\llm_redact\verify_coverage.py `
+  --dialogue "$Dialogue" --findings "$Findings"
+python .\tools\llm_redact\merge_and_apply.py `
+  --dialogue "$Dialogue" --findings "$Findings" --out "$Redaction"
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
+  "$Review"
+
+# Terminal 1: keep the official Viewer running through review and download.
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  "$Review" --port $Port
+
+# Terminal 2: push only validated findings and probes to that exact Viewer.
+python .\tools\llm_redact\push_redactions.py `
+  --redacted "$Redaction\redacted" `
+  --base-url "http://127.0.0.1:$Port"
+python .\tools\llm_redact\push_probes.py `
+  --probes "$Probes" --dialogue "$Dialogue" `
+  --summary "$Review\preference-probes.json" --limit 12 `
+  --base-url "http://127.0.0.1:$Port"
 ```
 
 The push command automatically reads the adjacent `report.json`. It refuses incomplete worker

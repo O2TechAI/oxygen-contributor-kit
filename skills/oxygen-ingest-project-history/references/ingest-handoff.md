@@ -7,8 +7,11 @@ The bundled tools support three stable outputs:
 3. `import_meeting.py`: `meeting.json`, `raw.md`, and `timestamped.txt`.
 
 Repo collection matches sessions whose recorded working directory falls inside the resolved
-repository. It checks `~/.claude/projects` and `~/.codex/sessions`, and copies only allowed
-Claude/Codex memory and repository guidance files. Credential-like filenames are excluded.
+repository. It checks `~/.claude/projects` and the user-global `~/.codex/sessions` (normally
+`C:\Users\<user>\.codex\sessions` on Windows), and copies only allowed Claude/Codex memory
+and repository guidance files. Repository-local `.codex` is not a default session source. Exact
+and child cwd sessions are eligible; parent, sibling, and body-mention-only sessions are excluded.
+Credential-like filenames are excluded.
 
 The Claude importer supports `conversations.json`, `memories.json`, `projects/*.json`, and
 `design_chats/*.json`. It deliberately excludes `users.json` because it is pure account PII.

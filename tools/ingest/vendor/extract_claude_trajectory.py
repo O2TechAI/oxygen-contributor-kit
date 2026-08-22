@@ -457,6 +457,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    common.configure_utf8_stdio()
     args = parse_args(argv)
     try:
         extractor = ClaudeExtractor(
