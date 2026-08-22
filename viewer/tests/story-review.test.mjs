@@ -20,10 +20,12 @@ import {
 } from "../lib/story-review.ts";
 
 const evidence = { documentId: "doc", eventId: "event" };
+const reviewableInsightId = "shared-lesson";
 const context = (privacyCandidates = [], privacyDecisions = {}, chapterEvidence = [evidence], overrides = {}) => {
   const reviewedBlocks = overrides.reviewedBlocks || { en: {}, zh: {} };
   return {
     privacyCandidates, privacyDecisions, chapterEvidence,
+    reviewableInsightIds: overrides.reviewableInsightIds || [reviewableInsightId],
     evidenceResolved: overrides.evidenceResolved ?? true,
     supportedAddIds: overrides.supportedAddIds || [],
     sourceBlocks: overrides.sourceBlocks || reviewedBlocks,
@@ -36,7 +38,7 @@ const privacyCandidate = (releaseTargets = ["scene"]) => ({
   releaseTargets, original: { availability: "unavailable" }, whyFlagged: "Internal",
 });
 const highlight = {
-  id: "shared-lesson",
+  id: reviewableInsightId,
   title: "Reproducibility changed the discussion",
   noticed: "The benchmark became a shared contract.",
   lesson: "Define success before dividing the work.",
@@ -317,6 +319,38 @@ test("Accept cannot erase translation debt from a pending localized insight edit
   state = applyChapterReview(state, context()).state;
   assert.deepEqual(state.staleTranslations, [{ subject: `insight:${highlight.id}`, language: "zh", count: 1 }]);
   assert.equal(canMarkChapterReady(state, context()), false);
+});
+
+test("Reopen restores an applied rejected insight through a new reviewed revision", () => {
+  let state = updateInsightReview(emptyChapterReview(), highlight.id, "en", {
+    status: "rejected", text: highlight.lesson,
+  });
+  state = applyChapterReview(state, context()).state;
+  assert.equal(state.revision, 2);
+  assert.equal(state.insightReviews[highlight.id].status, "rejected");
+  assert.equal(state.insightReviews[highlight.id].resolution, "applied");
+  assert.equal(canMarkChapterReady(state, context()), true);
+
+  state = markChapterReady(state, context());
+  state = returnChapterToReview(state);
+  assert.equal(state.stage, "reviewing");
+  assert.equal(state.revision, 2);
+
+  state = updateInsightReview(state, highlight.id, "en", {
+    status: "accepted", text: highlight.lesson,
+  });
+  assert.equal(state.insightReviews[highlight.id].resolution, "pending");
+  assert.equal(canMarkChapterReady(state, context()), false);
+
+  state = applyChapterReview(state, context()).state;
+  assert.equal(state.revision, 3);
+  assert.equal(state.insightReviews[highlight.id].status, "accepted");
+  assert.equal(state.insightReviews[highlight.id].resolution, "applied");
+  assert.deepEqual(state.revisionHistory.map((record) => record.insightIds), [[highlight.id], [highlight.id]]);
+  assert.equal(canMarkChapterReady(state, context()), true);
+  state = markChapterReady(state, context());
+  assert.equal(state.stage, "human_confirmed");
+  assert.equal(state.publicationApproved, false);
 });
 
 test("typed Privacy decisions are revision provenance and Redact controls release blocks", () => {

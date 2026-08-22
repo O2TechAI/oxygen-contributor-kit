@@ -12,9 +12,10 @@ test("viewer uses local D1 with only organization tables", async () => {
 });
 test("chapter editor retains the application rail and exposes three bilingual sections", async () => {
   const ui=await read("../app/workspace.tsx"),episode=await read("../app/story-chapter-editor.tsx"),css=await read("../app/globals.css"),progress=await read("../app/organization-progress.tsx"),evidence=await read("../app/redaction-compare.tsx"),evidenceReview=await read("../app/api/evidence/route.ts");
-  for(const label of ["Project timelines","Source records","Timeline","Project story","meaningful milestones","Read chapter","Download HTML","Download ZIP","Local only"])assert.match(ui,new RegExp(label));
-  for(const contract of ["canvasHeadInner","storyTimelineLayout","phaseDirectory","Narrative phase directory","milestoneChips","Key facts","fmtTimelineDate"])assert.match(ui,new RegExp(contract));
-  assert.match(css,/\.phaseDirectory\{position:sticky;top:50%;align-self:start;transform:translateY\(-50%\)/);
+  for(const label of ["Storytelling Review","Project Story","Source records","meaningful milestones","Read chapter","Download HTML","Download ZIP","Local only"])assert.match(ui,new RegExp(label));
+  for(const contract of ["storyCanvasGrid","storyOrientation","phaseHeading","milestoneList","phaseDirectory","Narrative phase directory","milestoneChips","Key facts","fmtTimelineDate"])assert.match(ui,new RegExp(contract));
+  assert.match(css,/\.storyCanvasGrid>\.phaseDirectory\{position:sticky;top:34px;display:flex/);
+  assert.match(css,/@media\(max-width:1080px\)\{\.storyCanvasGrid\{grid-template-columns:minmax\(0,900px\)\}\.storyCanvasGrid>\.phaseDirectory\{display:none\}\}/);
   assert.doesNotMatch(ui,/className="projectStrip"/);
   assert.doesNotMatch(ui,/className="milestoneNarrative"/);
   assert.match(ui,/useState<StoryLanguage>\("en"\)/);
@@ -42,6 +43,7 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(episode,/original\.availability/);assert.match(episode,/Original content unavailable in the reviewed artifact/);
   assert.match(episode,/privacyState\.active\.whyFlagged/);assert.doesNotMatch(episode,/Suggested release|建议发布表述|labels\.suggestedRelease/);
   assert.match(episode,/baseRevision: chapterReview\.revision/);assert.match(episode,/publication approval/);
+  assert.match(episode,/insightReview\?\.status === "rejected"[\s\S]*chapterReview\.stage !== "reviewing"/);
   assert.match(episode,/role="region"/);assert.doesNotMatch(episode,/aria-modal/);
   assert.match(episode,/supportingEvidence/);assert.match(episode,/staleTranslations/);
   assert.match(episode,/fetch\("\/api\/evidence"/);assert.match(episode,/supportedAddIds/);assert.match(episode,/evidenceResolved/);assert.match(episode,/hasStoryAnnotationConflict/);
@@ -72,7 +74,7 @@ test("HTML and ZIP downloads accept only the reviewed Story release projection",
   assert.doesNotMatch(html,/formatted_summary_json|SELECT .*content|organization_reason/);
   for(const forbidden of ["exact evidence","Privacy originals","local identities","annotations","instructions"])assert.match(release,new RegExp(forbidden,"i"));
   assert.match(release,/story\/reviewed-project-story\.json/);
-  assert.match(release,/state\.stage !== "human_confirmed"/);assert.match(release,/!state\.evidenceVerified/);assert.match(release,/publication_approved: false/);
+  assert.match(release,/state\.stage !== "human_confirmed"/);assert.match(release,/validateChapterReviewCompletion/);assert.match(release,/publication_approved: false/);
   assert.match(ui,/buildReviewedStoryRelease/);assert.match(ui,/method:"POST"/);
 });
 test("removed features and login routes stay deleted", async () => {

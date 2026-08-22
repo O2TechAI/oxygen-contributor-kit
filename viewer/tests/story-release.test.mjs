@@ -58,6 +58,7 @@ const evidence = { documentId: "doc", eventId: "event" };
 const reviewContext = (privacyDecision) => ({
   privacyCandidates: [candidate],
   privacyDecisions: { "local-detail": privacyDecision },
+  reviewableInsightIds: ["lesson"],
   chapterEvidence: [evidence],
   evidenceResolved: true,
   supportedAddIds: [],
@@ -176,6 +177,42 @@ test("release projection excludes human-confirmed state with malformed applied p
     revisionHistory: [{ revision: 2, annotationIds: ["bad"], insightIds: [], privacyDecisions: {} }],
   };
   assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: malformed }).chapters, []);
+});
+
+test("release projection rejects forged pending or unrecorded insight state", () => {
+  const context = reviewContext("keep");
+  let review = applyChapterReview(emptyChapterReview(), context).state;
+  review = markChapterReady(review, context);
+
+  const pendingRejected = structuredClone(review);
+  pendingRejected.insightReviews.lesson = {
+    status: "rejected", text: "Do not preserve", localized: {}, pendingLanguages: [], resolution: "pending",
+  };
+  assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: pendingRejected }).chapters, []);
+
+  const unrecordedRejected = structuredClone(review);
+  unrecordedRejected.insightReviews.lesson = {
+    status: "rejected", text: "Do not preserve", localized: {}, pendingLanguages: [],
+    resolution: "applied", appliedRevision: 2,
+  };
+  assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: unrecordedRejected }).chapters, []);
+});
+
+test("release projection derives Privacy redaction from the latest recorded decision", () => {
+  const context = reviewContext("redact");
+  let review = applyChapterReview(emptyChapterReview(), context).state;
+  review = markChapterReady(review, context);
+  assert.deepEqual(review.redactedBlocks, ["detail-0"]);
+
+  const missingRedaction = { ...structuredClone(review), redactedBlocks: [] };
+  assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: missingRedaction }).chapters, []);
+
+  const staleHistory = structuredClone(review);
+  staleHistory.revisionHistory.at(-1).privacyDecisions["local-detail"] = "keep";
+  assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: staleHistory }).chapters, []);
+
+  const forgedTarget = { ...structuredClone(review), redactedBlocks: ["detail-0", "outcome"] };
+  assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: forgedTarget }).chapters, []);
 });
 
 test("package organization summaries strip Story review metadata before serialization", () => {
