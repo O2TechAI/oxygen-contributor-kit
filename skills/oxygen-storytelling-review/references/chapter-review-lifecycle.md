@@ -148,6 +148,22 @@ Apply annotation groups in ascending revision order; within one revision, proces
 
 Final release projection must run the same full-ledger replay validation. It must omit/fail closed on malformed applied provenance rather than silently skipping an invalid range while claiming the instruction was applied.
 
+The same fail-closed rule applies to non-annotation final state. Before All set and again before
+release projection, validate that:
+
+- every stored insight review belongs to the Chapter's single declared insight;
+- no insight review is pending;
+- the current applied insight state points to the latest revision record that names it;
+- revision history does not name an unknown insight;
+- applied Privacy decisions contain exactly the current candidate IDs and typed Keep/Redact values;
+- the latest revision record contains exactly those applied Privacy decisions;
+- the stored redacted-block set exactly equals the union of release targets for candidates whose
+  latest applied decision is Redact.
+
+Never trust a browser-supplied `human_confirmed` stage, rejected insight flag, Privacy map, or
+redacted-block array without this provenance check. A mismatch blocks confirmation/release rather
+than exporting an approximation.
+
 When an insight edit creates paired-language review debt, a later status-only action such as Accept must preserve that pending-language provenance. Status changes cannot erase bilingual debt without reviewing/applying the paired representation.
 
 ## Review summary
@@ -192,6 +208,11 @@ human_confirmed → reviewing
 
 Preserve revision provenance, Story content, Privacy decisions, and one shared bilingual history. Another Apply/All set cycle can create a newer confirmed version.
 
+If the confirmed revision applied `Do not preserve` to the Chapter's insight, Reopen must make that
+same insight available for review again. A human can create a new pending Accept/override operation,
+Apply it as another revision, inspect the restored insight, and then use All set. Do not erase the
+prior rejection record or restore it merely by changing the stage.
+
 ## Publication boundary
 
 No lifecycle action may:
@@ -223,4 +244,6 @@ Test at minimum:
 13. a real evidence ID with unsupported Add wording remains `needs_evidence`;
 14. overlapping or stale annotation batches fail atomically without a new revision;
 15. duplicate IDs across cancelled/pending states and malformed pre-applied records fail atomically and cannot enable All set or release projection;
-15. localized insight edit followed by Accept still creates paired-language review debt.
+16. localized insight edit followed by Accept still creates paired-language review debt;
+17. forged pending/applied insight state, Privacy history disagreement, or redacted-target mismatch blocks All set and release;
+18. Reject → Apply → All set → Reopen → Accept/override → Apply restores the insight through a new revision while preserving provenance.

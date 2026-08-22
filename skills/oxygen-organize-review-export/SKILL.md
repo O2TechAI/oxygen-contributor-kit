@@ -51,6 +51,22 @@ Timeline descriptions must be glanceable:
   presents those separately;
 - when a source event is long, summarize its project significance rather than its contents.
 
+## Delegate Storytelling after the reviewed boundary
+
+In the complete contributor workflow, organization alone is not the final human review. After the
+organized input has passed the required AI-privacy preparation and is safe to use as the reviewed
+copy, read and follow
+[`../oxygen-storytelling-review/SKILL.md`](../oxygen-storytelling-review/SKILL.md).
+
+That Skill owns Story selection, bilingual Story data, Chapter review, Privacy/evidence review,
+and Final Release Memory. Reuse the repository's existing Viewer shell and canonical Storytelling
+renderer/runtime; do not create another frontend or copy the Storytelling contract into this Skill.
+The contributor does not need to know or manually name the delegated Skill.
+
+After iterative Story review, return to the existing Release preview, Preferences, and package
+flow. `All set` is local human confirmation of the Story representation only; it does not create a
+package, publish, or change `publication_approved`.
+
 ## Launch the local review
 
 From the `contributor-kit` root run:

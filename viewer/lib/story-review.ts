@@ -67,16 +67,20 @@ export type ChapterReviewState = {
   publicationApproved: false;
 };
 
-export type ApplyReviewContext = {
+type StoryBlockCollection = Record<StoryLanguage, Record<string, string>>;
+
+export type ChapterReviewCompletionContext = {
   privacyCandidates: StoryPrivacyCandidate[];
   privacyDecisions: Record<string, PrivacyDecision>;
+  reviewableInsightIds: string[];
+  sourceBlocks: StoryBlockCollection;
+  reviewedBlocks: StoryBlockCollection;
+};
+
+export type ApplyReviewContext = ChapterReviewCompletionContext & {
   chapterEvidence: EvidenceReference[];
   evidenceResolved: boolean;
   supportedAddIds: string[];
-  /** Original reviewed release-draft blocks. Applied annotation provenance is
-   * replayed from these immutable sources before Apply, All set, or export. */
-  sourceBlocks: Record<StoryLanguage, Record<string, string>>;
-  reviewedBlocks: Record<StoryLanguage, Record<string, string>>;
 };
 
 export const emptyChapterReview = (): ChapterReviewState => ({
@@ -241,28 +245,37 @@ function updateTranslationStaleness(
     : [...current, { subject, language: target, count: 1 }];
 }
 
-function privacyComplete(context: ApplyReviewContext) {
+function privacyComplete(context: ChapterReviewCompletionContext) {
+  if (!Array.isArray(context.privacyCandidates)
+    || !context.privacyDecisions || typeof context.privacyDecisions !== "object" || Array.isArray(context.privacyDecisions)) return false;
   const ids = context.privacyCandidates.map((candidate) => candidate.id);
   return ids.every(validStableId)
     && new Set(ids).size === ids.length
     && context.privacyCandidates.every((candidate) => {
       const decision = context.privacyDecisions[candidate.id];
-      return validPrivacyDecision(decision);
+      return Array.isArray(candidate.releaseTargets)
+        && candidate.releaseTargets.every(validStableId)
+        && new Set(candidate.releaseTargets).size === candidate.releaseTargets.length
+        && validPrivacyDecision(decision);
     });
 }
 
-function currentPrivacyDecisions(context: ApplyReviewContext) {
+function currentPrivacyDecisions(context: ChapterReviewCompletionContext) {
   return Object.fromEntries(context.privacyCandidates.map((candidate) => [candidate.id, context.privacyDecisions[candidate.id]])) as Record<string, PrivacyDecision>;
 }
 
-function sameDecisions(left: Record<string, PrivacyDecision>, right: Record<string, PrivacyDecision>) {
-  const leftKeys = Object.keys(left).sort();
-  const rightKeys = Object.keys(right).sort();
+function sameDecisions(left: unknown, right: unknown) {
+  if (!left || typeof left !== "object" || Array.isArray(left)
+    || !right || typeof right !== "object" || Array.isArray(right)) return false;
+  const leftDecisions = left as Record<string, PrivacyDecision>;
+  const rightDecisions = right as Record<string, PrivacyDecision>;
+  const leftKeys = Object.keys(leftDecisions).sort();
+  const rightKeys = Object.keys(rightDecisions).sort();
   return leftKeys.length === rightKeys.length
-    && leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key]);
+    && leftKeys.every((key, index) => key === rightKeys[index]
+      && validPrivacyDecision(leftDecisions[key])
+      && leftDecisions[key] === rightDecisions[key]);
 }
-
-type StoryBlockCollection = Record<StoryLanguage, Record<string, string>>;
 
 const cloneBlocks = (source: StoryBlockCollection): StoryBlockCollection => ({
   en: { ...(source.en || {}) },
@@ -391,13 +404,109 @@ export function validateChapterReviewLedger(
   });
 }
 
+const insightStatuses: InsightReviewStatus[] = ["accepted", "needs_changes", "rejected", "overridden"];
+const insightResolutions: InsightReview["resolution"][] = ["pending", "applied"];
+
+function validLocalizedHighlight(value: unknown, insightId: string): value is StoryHighlightItem {
+  if (!value || typeof value !== "object") return false;
+  const highlight = value as StoryHighlightItem;
+  return highlight.id === insightId
+    && [highlight.title, highlight.noticed, highlight.lesson].every((copy) => (
+      typeof copy === "string" && copy.trim().length > 0 && copy.length <= 20_000
+    ));
+}
+
+/** Validate insight provenance independently from annotation replay. An insight
+ * may appear in more than one revision record when a human reopens and reviews
+ * it again, but the current applied state must point at its latest record. */
+export function validateInsightReviewLedger(state: ChapterReviewState, reviewableInsightIds: string[]) {
+  if (!Array.isArray(reviewableInsightIds) || reviewableInsightIds.length !== 1
+    || !reviewableInsightIds.every(validStableId)
+    || new Set(reviewableInsightIds).size !== reviewableInsightIds.length
+    || !state.insightReviews || typeof state.insightReviews !== "object" || Array.isArray(state.insightReviews)
+    || !Array.isArray(state.revisionHistory)) return false;
+  const allowedIds = new Set(reviewableInsightIds);
+  const reviews = Object.entries(state.insightReviews);
+  if (reviews.some(([insightId]) => !allowedIds.has(insightId))) return false;
+
+  const recordedRevisions = new Map<string, number[]>();
+  for (const record of state.revisionHistory) {
+    if (!Array.isArray(record?.insightIds) || record.insightIds.some((insightId) => !allowedIds.has(insightId))) return false;
+    for (const insightId of record.insightIds) {
+      recordedRevisions.set(insightId, [...(recordedRevisions.get(insightId) || []), record.revision]);
+    }
+  }
+  if ([...recordedRevisions.keys()].some((insightId) => !state.insightReviews[insightId])) return false;
+
+  return reviews.every(([insightId, review]) => {
+    if (!review || !insightStatuses.includes(review.status)
+      || typeof review.text !== "string" || !review.text.trim() || review.text.length > 20_000
+      || !review.localized || typeof review.localized !== "object" || Array.isArray(review.localized)
+      || Object.keys(review.localized).some((language) => language !== "en" && language !== "zh")
+      || Object.values(review.localized).some((highlight) => !validLocalizedHighlight(highlight, insightId))
+      || !Array.isArray(review.pendingLanguages)
+      || review.pendingLanguages.some((language) => language !== "en" && language !== "zh")
+      || new Set(review.pendingLanguages).size !== review.pendingLanguages.length
+      || (review.revision !== undefined && review.revision !== "direct" && review.revision !== "ai")
+      || !insightResolutions.includes(review.resolution)
+      || (review.status === "overridden" && Object.keys(review.localized).length === 0)) return false;
+    const history = recordedRevisions.get(insightId) || [];
+    if (review.resolution === "pending") return review.appliedRevision === undefined;
+    return Number.isInteger(review.appliedRevision)
+      && review.appliedRevision! >= 2
+      && review.appliedRevision! <= state.revision
+      && review.pendingLanguages.length === 0
+      && history.length > 0
+      && history[history.length - 1] === review.appliedRevision;
+  });
+}
+
+function expectedRedactedBlocks(context: ChapterReviewCompletionContext) {
+  return [...new Set(context.privacyCandidates.flatMap((candidate) => (
+    context.privacyDecisions[candidate.id] === "redact" ? candidate.releaseTargets : []
+  )))];
+}
+
+function sameUniqueStrings(left: unknown, right: unknown) {
+  return Array.isArray(left)
+    && Array.isArray(right)
+    && left.every(validStableId)
+    && right.every(validStableId)
+    && new Set(left).size === left.length
+    && new Set(right).size === right.length
+    && left.length === right.length
+    && left.every((value) => right.includes(value));
+}
+
+/** Validate all state required for All set or release projection. Browser-owned
+ * stage flags and cached redacted blocks are never sufficient by themselves. */
+export function validateChapterReviewCompletion(
+  state: ChapterReviewState,
+  context: ChapterReviewCompletionContext,
+) {
+  if (!privacyComplete(context)
+    || !validateChapterReviewLedger(state, context.sourceBlocks, context.reviewedBlocks)
+    || !validateInsightReviewLedger(state, context.reviewableInsightIds)
+    || !state.evidenceVerified
+    || !Array.isArray(state.staleTranslations) || state.staleTranslations.length > 0
+    || state.annotations.some((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence")
+    || Object.values(state.insightReviews).some((review) => review.resolution === "pending")
+    || !sameDecisions(state.appliedPrivacyDecisions, currentPrivacyDecisions(context))) return false;
+  const latest = state.revisionHistory[state.revisionHistory.length - 1];
+  return Boolean(latest)
+    && latest.revision === state.revision
+    && sameDecisions(latest.privacyDecisions, state.appliedPrivacyDecisions)
+    && sameUniqueStrings(state.redactedBlocks, expectedRedactedBlocks(context));
+}
+
 export function applyChapterReview(
   state: ChapterReviewState,
   context: ApplyReviewContext,
 ): { state: ChapterReviewState; blockedReason?: "privacy" | "evidence" | "annotations" } {
   if (!privacyComplete(context)) return { state, blockedReason: "privacy" };
   if (!context.evidenceResolved) return { state, blockedReason: "evidence" };
-  if (!validateChapterReviewLedger(state, context.sourceBlocks, context.reviewedBlocks)) {
+  if (!validateChapterReviewLedger(state, context.sourceBlocks, context.reviewedBlocks)
+    || !validateInsightReviewLedger(state, context.reviewableInsightIds)) {
     return { state, blockedReason: "annotations" };
   }
   const revision = state.revision + 1;
@@ -469,14 +578,7 @@ export function applyChapterReview(
 }
 
 export function canMarkChapterReady(state: ChapterReviewState, context: ApplyReviewContext) {
-  return privacyComplete(context)
-    && validateChapterReviewLedger(state, context.sourceBlocks, context.reviewedBlocks)
-    && sameDecisions(state.appliedPrivacyDecisions, currentPrivacyDecisions(context))
-    && state.stage === "revision_ready"
-    && state.evidenceVerified
-    && state.staleTranslations.length === 0
-    && !state.annotations.some((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence")
-    && !Object.values(state.insightReviews).some((review) => review.resolution === "pending");
+  return state.stage === "revision_ready" && validateChapterReviewCompletion(state, context);
 }
 
 export function markChapterReady(state: ChapterReviewState, context: ApplyReviewContext): ChapterReviewState {

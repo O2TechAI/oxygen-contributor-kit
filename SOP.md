@@ -220,7 +220,22 @@ offers `clear`, which returns the probe to unanswered rather than recording a re
 no answer produces no preference. Answers live in the `probes` table and are exported with the run;
 `preference-probes.json` remains the interchange format for anything outside the Viewer.
 
-## 6. Launch and show the Viewer
+## 6. Prepare Storytelling Review
+
+Once `work/<run>-review` is organized and has passed the required privacy preparation, read and
+follow `skills/oxygen-storytelling-review/SKILL.md`. Derive project-specific Story data only from
+that reviewed boundary and bind the validated result to the canonical Storytelling capability in
+the existing Viewer (`InlineWorkspace`, `StoryChapterEditor`, and their `viewer/lib/story-*`
+contracts). Do not build a separate Storytelling application or copy project prose into reusable
+source.
+
+The contributor reviews the Project Story, Chapters, inline insight, Privacy candidates, and exact
+evidence through the iterative annotation → Apply review loop. `All set` creates a human-confirmed
+Final Release Memory; it does not publish, package automatically, or set
+`publication_approved=true`. After Story review, continue through the existing Release preview,
+Preferences, and ZIP flow below.
+
+## 7. Launch and show the Viewer
 
 Start the local review server:
 
@@ -316,12 +331,14 @@ never mistaken for a finished one. Redactions are stored as offsets and applied 
 that, a Viewer serving a run is serving unredacted text over its API; never expose it beyond
 localhost without an authenticating proxy in front.
 
-## 7. Review and build the ZIP
+## 8. Review and build the ZIP
 
 Ask the contributor to inspect:
 
 - included sources and project assignments;
 - primary-project milestones against source evidence;
+- Project Story Chapters, inline insight, required Privacy decisions, exact evidence, and any
+  unresolved Story annotations;
 - AI-redaction counts, rejected-span count, and semantic review decisions;
 - bulk judgement-call decisions;
 - confirmed preference answers and skipped/unanswered probes;
@@ -357,7 +374,7 @@ Requirements:
   available, provide an immediately usable clickable local file/download link.
 - Do not finish with only a filesystem path the contributor cannot access.
 
-## 8. Handoff and stop
+## 9. Handoff and stop
 
 Tell the contributor:
 

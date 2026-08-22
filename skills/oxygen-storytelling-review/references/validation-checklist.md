@@ -13,11 +13,28 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Participant, insight, Privacy-candidate, and annotation IDs are bounded primitive strings and unique within each Chapter and paired language presentation; numeric/string coercion cannot collapse two identities.
 - [ ] Privacy decisions use an injective Chapter/candidate tuple identity rather than delimiter concatenation; delimiter-shaped IDs cannot collide.
 - [ ] Import accepts exactly one paired reviewable insight per Chapter, the release projection never emits multiple insights, and server sanitization rejects multiple insights.
+- [ ] Final confirmation/release revalidates insight provenance, latest Privacy decision history,
+      and the exact derived redacted-target set; forged browser state fails closed.
 - [ ] No identity/evidence/fact was fabricated.
 - [ ] Project-specific copy/excerpts do not appear in reusable generic source/Skill.
 - [ ] No unavailable Privacy candidate contains anything beyond its unavailable discriminator (no excerpt, language, removed value, or raw field).
 - [ ] Every Privacy candidate declares stable release targets; every target resolves in both language presentations, and an intentionally local-only candidate declares an explicit empty target set.
 - [ ] Package/publication behavior is unchanged.
+
+## Productization and workflow
+
+- [ ] Root contributor instructions and the organize/review workflow explicitly delegate the
+      reviewed-input stage to `oxygen-storytelling-review`; README listing alone is not counted.
+- [ ] A workflow-level instruction that does not name the Skill still selects it after organization
+      and privacy preparation.
+- [ ] The Skill requires reuse of `InlineWorkspace`, `StoryChapterEditor`, and the shared
+      `viewer/lib` contracts rather than a new independent frontend.
+- [ ] At least one safe synthetic project fixture differs from Golden in project name, Chapter
+      count, Phase count, People, Privacy candidates, dates, chips, and evidence IDs.
+- [ ] Renderer, Skill, and tests contain no Golden project copy, fixed Golden counts, local ports,
+      machine paths, or project-specific evidence IDs.
+- [ ] Golden behavior/composition is checked with bounded visual fidelity; private Golden data and
+      screenshots remain local-only.
 
 ## Project Story
 
@@ -90,6 +107,8 @@ Demonstrate this complete sequence in tests and browser QA:
 12. [ ] Publication approval remains false and no upload/package/publish occurs.
 13. [ ] Reopen review returns to editable reviewing state with provenance preserved.
 14. [ ] Another apply/confirmation cycle remains possible.
+15. [ ] An applied rejected insight can be reopened, restored through a new pending operation and
+        Apply, then confirmed again without deleting its prior provenance.
 
 Also verify:
 
@@ -103,6 +122,8 @@ Also verify:
 - [ ] Accepting a localized pending insight edit does not erase the paired-language review debt.
 - [ ] Summary counts and revision labels are correct.
 - [ ] Human intent is not silently dropped.
+- [ ] Pending/forged insight state, latest Privacy-history disagreement, and a forged
+      `redactedBlocks` set each block All set and release projection.
 
 ## Privacy
 

@@ -1,5 +1,5 @@
 import type { ChapterReviewState } from "./story-review.ts";
-import { applyAnnotationsToBlock, validateChapterReviewLedger } from "./story-review.ts";
+import { applyAnnotationsToBlock, validateChapterReviewCompletion } from "./story-review.ts";
 import {
   LEGACY_STORY_PREFIX,
   STORY_PREFIX,
@@ -98,7 +98,8 @@ function localeProjection(
     },
     insights: presentation.highlights.flatMap((highlight) => {
       const review = insightReviews[highlight.id];
-      if (state.redactedBlocks.includes(`insight:${highlight.id}`) || review?.status === "rejected") return [];
+      if (state.redactedBlocks.includes(`insight:${highlight.id}`)
+        || (review?.status === "rejected" && review.resolution === "applied")) return [];
       const localized = review?.localized[language] || highlight;
       return [{ id: localized.id, title: localized.title, noticed: localized.noticed, lesson: localized.lesson }];
     }),
@@ -114,9 +115,16 @@ export function buildReviewedStoryRelease(
 ): ReviewedStoryRelease {
   const chapters = milestones.flatMap((milestone) => {
     const state = reviews[milestone.story.key];
-    if (!state || state.stage !== "human_confirmed" || !state.evidenceVerified || state.staleTranslations.length
-      || state.annotations.some((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence")
-      || !validateChapterReviewLedger(state, sourceBlocks(milestone))) return [];
+    const enPresentation = milestone.story.reviewPresentation?.en;
+    const sources = sourceBlocks(milestone);
+    if (!state || state.stage !== "human_confirmed" || !enPresentation
+      || !validateChapterReviewCompletion(state, {
+        privacyCandidates: enPresentation.privacy.candidates,
+        privacyDecisions: state.appliedPrivacyDecisions,
+        reviewableInsightIds: enPresentation.highlights.map((highlight) => highlight.id),
+        sourceBlocks: sources,
+        reviewedBlocks: sources,
+      })) return [];
     const en = localeProjection(milestone, state, "en");
     const zh = localeProjection(milestone, state, "zh");
     if (!en || !zh) return [];

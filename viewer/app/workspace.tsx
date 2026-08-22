@@ -24,18 +24,18 @@ type Detail = { document:Doc; items:Item[] };
 
 const workspaceUi = {
   en: {
-    title:"Local project history review", local:"Local only · nothing uploaded", projects:"Project timelines", total:"total",
+    title:"Storytelling Review", local:"Local only · nothing uploaded", projects:"Project Story", total:"total",
     sources:"Source records", projectStory:"Project story", evidenceReview:"Evidence review", preferencesTitle:"Contributor preferences",
     milestones:"meaningful milestones", phases:"narrative phases", reviewed:"highlights reviewed", retained:"source records retained",
-    timeline:"Timeline", release:"Release preview", preferences:"Preferences", mainProject:"MAIN PROJECT", events:"events",
+    timeline:"Project Story", release:"Release preview", preferences:"Preferences", mainProject:"MAIN PROJECT", events:"events",
     introTitle:"AI-selected highlights are the table of contents.", intro:"Open a chapter for People, Story, and Privacy. AI insights stay inside the narrative; local evidence stays secondary.",
     before:"BEFORE", after:"AFTER", selected:"AI-selected highlight", evidence:"reviewed evidence event", read:"Read chapter",
   },
   zh: {
-    title:"本地项目历史审阅", local:"仅限本地 · 未上传", projects:"项目时间线", total:"个项目",
+    title:"故事审阅", local:"仅限本地 · 未上传", projects:"项目故事", total:"个项目",
     sources:"来源记录", projectStory:"项目故事", evidenceReview:"证据审阅", preferencesTitle:"贡献者偏好",
     milestones:"个重要章节", phases:"个叙事阶段", reviewed:"个高光已审阅", retained:"条来源记录保留",
-    timeline:"时间线", release:"发布预览", preferences:"偏好", mainProject:"主要项目", events:"条事件",
+    timeline:"项目故事", release:"发布预览", preferences:"偏好", mainProject:"主要项目", events:"条事件",
     introTitle:"AI 选择的高光就是故事目录。", intro:"打开一章，按人物、故事和隐私阅读；AI 洞察留在叙事中，本地证据保持为次要入口。",
     before:"之前", after:"之后", selected:"AI 选择的高光", evidence:"条已审阅证据", read:"阅读章节",
   },
@@ -313,7 +313,7 @@ export function InlineWorkspace() {
   const workspaceStyle={"--rail-width":`${railWidth}px`,"--rail-height":`${railHeight}px`} as CSSProperties;
   const activeChapterRestore=restoreChapterContext(chapterScrollRestore,activeMilestone?.story.key || "");
 
-  return <main className="shell">
+  return <main className="shell storytellingShell">
     <header className="topbar">
       <div className="brand"><span className="brandMark">O₂</span> Oxygen</div>
       <span className="topTitle">{labels.title}</span>
@@ -326,11 +326,11 @@ export function InlineWorkspace() {
       <button className="download" onClick={() => downloadReviewed("/api/organization/export","oxygen-reviewed-story.html")}>Download HTML</button>
       <button className="download primary" onClick={() => downloadReviewed("/api/package","oxygen-contribution.zip")}>Download ZIP</button>
     </header>
-    <div className={`workspace ${activeMilestone?"episodeOpen":""}`} style={workspaceStyle}>
-      <aside className="rail">
-        <div className="railHead"><b>{labels.projects}</b><span>{projectNames.length} {labels.total}</span></div>
-        <div className="docList">{projectNames.map((project) => <button className={`docCard overview ${selected===`project:${project}`?"active":""}`} key={project} onClick={() => { setSelected(`project:${project}`); setSourceFocus(""); setActiveStoryKey(""); setEvidenceReturn(null); setView("timeline"); }}>
-          <span className="docTitle">{project}</span><span className="kind">PROJECT</span><small>{projectCount(project).toLocaleString()} events · combined timeline</small>
+    <div className={`workspace storytellingWorkspace ${activeMilestone?"episodeOpen":""}`} style={workspaceStyle}>
+      <aside className="rail storyRail">
+        <div className="railHead"><b>{labels.projects}</b><span>{selectedProject?highlights.length:projectNames.length}</span></div>
+        <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selected===`project:${project}`?"active":""}`} key={project} onClick={() => { setSelected(`project:${project}`); setSourceFocus(""); setActiveStoryKey(""); setEvidenceReturn(null); setView("timeline"); }}>
+          <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${labels.phases}`:`${projectCount(project).toLocaleString()} ${labels.events}`}</small>
         </button>)}{activeMilestone && <div className="chapterRailContext" aria-label={language==="zh"?"章节选择器":"Chapter selector"}>
           <span>{language==="zh"?`章节 ${activeStoryIndex+1} / ${highlights.length}`:`Chapters ${activeStoryIndex+1} / ${highlights.length}`}</span>
           <nav className="chapterRailList" aria-label={language==="zh"?"章节":"Chapters"}>
@@ -338,26 +338,15 @@ export function InlineWorkspace() {
               <i>{milestoneNumber.get(event.story.key)}</i><b>{localized(event)?.title || event.story.title}</b>
             </button>})}
           </nav>
-        </div>}<div className="railHead evidence"><b>{labels.sources}</b><span>{docs.length}</span></div>{docs.map((doc) => <button className={`docCard ${selected===doc.id?"active":""}`} key={doc.id} onClick={() => { setSelected(doc.id); setSourceFocus(""); setActiveStoryKey(""); setEvidenceReturn(null); setView("redaction"); }}>
+        </div>}<div className="sourceRecords"><div className="railHead evidence"><b>{labels.sources}</b><span>{docs.length}</span></div>{docs.map((doc) => <button className={`docCard ${selected===doc.id?"active":""}`} key={doc.id} onClick={() => { setSelected(doc.id); setSourceFocus(""); setActiveStoryKey(""); setEvidenceReturn(null); setView("redaction"); }}>
           <span className="docTitle">{doc.title}</span><span className="kind">{doc.kind}</span><small>{doc.item_count} events · {doc.source_system || "local"}</small>
-        </button>)}</div>
+        </button>)}</div></div>
       </aside>
       <div className="splitter" role="separator" aria-label="Resize project and source panel" aria-orientation="vertical" onPointerDown={startResize}><span /></div>
-      <section className="canvas">
+      <section className="canvas storyCanvas">
         {!ready ? <div className="empty">No organized records found.</div> : <>
           {error && <div className="workspaceError" role="alert">{error}</div>}
-          <div className="canvasHead" aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}><div className="canvasHeadInner">
-            <span className="eyebrow">{view==="timeline"?labels.projectStory:view==="redaction"?labels.evidenceReview:labels.preferencesTitle}</span>
-            <h1>{summary.primary_project || detail?.document.title}</h1>
-            {view==="timeline" && <><p>{language==="zh" ? "这是一段由已审阅证据重建的项目故事：它保留关键转折、失败、决定与当前边界。" : summary.project_summary}</p><div className="headMeta">
-              <span><b>{highlights.length}</b> {labels.milestones}</span>
-              <span><b>{phaseGroups.length}</b> {labels.phases}</span>
-              <span><b>{reviewedInsights}/{highlights.length}</b> {labels.reviewed}</span>
-              <span><b>{docs.length}</b> {labels.retained}</span>
-            </div></>}
-          </div>
-          </div>
-          <nav className="toolbar" aria-label="Record view" aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
+          <nav className="toolbar storyToolbar" aria-label="Record view" aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
             <div className="toolbarInner"><button className={view==="timeline"?"active":""} onClick={() => { setActiveStoryKey(""); setView("timeline"); }}>{labels.timeline}</button>
             <button className={view==="redaction"?"active":""} onClick={() => { setSourceFocus(""); setActiveStoryKey(""); setView("redaction"); }}>
               {labels.release}{redactionJob?.status === "running" ? " · running"
@@ -368,25 +357,33 @@ export function InlineWorkspace() {
               {labels.preferences}{probeRun?.status === "running" ? " · running" : probes.length ? ` · ${probes.filter((p) => p.answered_at).length}/${probes.length}` : ""}
             </button></div>
           </nav>
-          <div className="stream" ref={timelineScrollRef} onScroll={updateActivePhase} aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
+          {view!=="timeline" && <div className="canvasHead" aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}><div className="canvasHeadInner">
+            <span className="eyebrow">{view==="redaction"?labels.evidenceReview:labels.preferencesTitle}</span>
+            <h1>{summary.primary_project || detail?.document.title}</h1>
+          </div></div>}
+          <div className={`stream ${view==="timeline"?"storyStream":""}`} ref={timelineScrollRef} onScroll={updateActivePhase} aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
             {view === "timeline" ? <>
-              <div className="storyTimelineLayout"><div className="timeline">{phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
-                <div className="storyPhaseHead"><div><small>{language==="zh"?"叙事阶段":"Narrative phase"}</small><span>{group.name}</span></div><b>{group.events.length} {language==="zh"?"个章节":`milestone${group.events.length===1?"":"s"}`}</b></div>
-                {group.events.map((event) => { const copy=localized(event); return <article className="timelineEvent" data-kind={event.story.kind} data-story-key={event.story.key} key={event.story.key} aria-labelledby={`milestone-${event.id}`}>
-                  <div className="timelineMarker">{milestoneNumber.get(event.story.key)}</div>
-                  <div className="timelineBody">
-                    <div className="milestoneMeta"><time dateTime={event.timestamp}>{fmtTimelineDate(event.timestamp,language)}</time><span className="milestoneType">{milestoneKindLabel(event.story.kind,language)}</span><span className="aiSelected">{labels.selected}</span></div>
-                    <h2 id={`milestone-${event.id}`}>{copy?.title || event.story.title}</h2>
-                    {(copy?.before || event.story.before) && (copy?.after || event.story.after) && <div className="stateChange">
-                      <div><small>{labels.before}</small><span>{copy?.before || event.story.before}</span></div><i aria-hidden="true">→</i><div><small>{labels.after}</small><span>{copy?.after || event.story.after}</span></div>
+              <div className="storyCanvasGrid"><div className="storyTimelineColumn">
+                <header className="storyOrientation"><p className="eyebrow">{labels.projectStory}</p><h1>{summary.primary_project || detail?.document.title}</h1>
+                  <p>{language==="zh" ? "这是一段由已审阅证据重建的项目故事：它保留关键转折、失败、决定与当前边界。" : summary.project_summary}</p>
+                  <div className="storyStats"><span><b>{highlights.length}</b> {labels.milestones}</span><span><b>{phaseGroups.length}</b> {labels.phases}</span><span><b>{reviewedInsights}/{highlights.length}</b> {labels.reviewed}</span><span><b>{docs.length}</b> {labels.retained}</span></div>
+                  <small>{docs.length} {language==="zh"?"条已审阅来源记录": "reviewed source records"} · {projectCount(selectedProject || primaryProject).toLocaleString()} {labels.events} · {language==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
+                </header>
+                {phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
+                  <header className="phaseHeading"><span>{String(phaseIndex+1).padStart(2,"0")}</span><div><h2>{group.name}</h2><p>{group.events.length} {language==="zh"?"个章节":`milestone${group.events.length===1?"":"s"}`}</p></div></header>
+                  <div className="milestoneList">{group.events.map((event) => { const copy=localized(event); return <article className="milestone" data-kind={event.story.kind} data-story-key={event.story.key} key={event.story.key} aria-labelledby={`milestone-${event.id}`}>
+                    <div className="milestoneMeta"><time dateTime={event.timestamp}>{fmtTimelineDate(event.timestamp,language)}</time><span>{milestoneKindLabel(event.story.kind,language)}</span><strong>{labels.selected}</strong></div>
+                    <h3 id={`milestone-${event.id}`}>{copy?.title || event.story.title}</h3>
+                    {(copy?.before || event.story.before) && (copy?.after || event.story.after) && <div className="transition" aria-label={`${labels.before} to ${labels.after}`}>
+                      <div><small>{labels.before}</small><p>{copy?.before || event.story.before}</p></div><b aria-hidden="true">→</b><div><small>{labels.after}</small><p>{copy?.after || event.story.after}</p></div>
                     </div>}
-                    {(copy?.timelineChips?.length || event.story.metric) && <div className="milestoneChips" aria-label={language==="zh"?"关键事实":"Key facts"}>{(copy?.timelineChips?.length?copy.timelineChips:event.story.metric?.split(/\s*·\s*/).filter(Boolean) || []).map((chip) => <span className="milestoneChip" key={chip}>{chip}</span>)}</div>}
-                    <div className="evidenceLink"><span>{event.story.evidence ? `${1+event.story.evidence.supporting.length} ${labels.evidence}${language==="en" && event.story.evidence.supporting.length ? "s" : ""}` : `Evidence · ${event.documentId} / ${event.id}`}</span>{event.story.releaseEpisode
+                    {(copy?.timelineChips?.length || event.story.metric) && <div className="milestoneChips" aria-label={language==="zh"?"关键事实":"Key facts"}>{(copy?.timelineChips?.length?copy.timelineChips:event.story.metric?.split(/\s*·\s*/).filter(Boolean) || []).map((chip) => <span key={chip}>{chip}</span>)}</div>}
+                    <footer><span>{event.story.evidence ? `${1+event.story.evidence.supporting.length} ${labels.evidence}${language==="en" && event.story.evidence.supporting.length ? "s" : ""}` : `Evidence · ${event.documentId} / ${event.id}`}</span>{event.story.releaseEpisode
                       ? <button id={`story-open-${event.story.key}`} onClick={() => openStory(event.story.key)}>{labels.read} · ≈ {event.story.releaseEpisode.readingTimeMinutes} {language==="zh"?"分钟":"min"} →</button>
-                      : <button onClick={() => { if(event.documentId) setSelected(event.documentId); setSourceFocus(event.id); setView("redaction"); }}>Open exact source event →</button>}</div>
-                  </div>
-                </article>})}
-              </section>)}</div><nav className="phaseDirectory" aria-label={language==="zh"?"叙事阶段目录":"Narrative phase directory"}><span>{language==="zh"?"阶段目录":"PHASES"}</span>{phaseGroups.map((group,index) => <button className={activePhaseIndex===index?"active":""} aria-current={activePhaseIndex===index?"location":undefined} onClick={() => scrollToPhase(index)} key={phaseGroupIdentity(group.name,index)}>{group.name}<small>{group.events.length}</small></button>)}</nav></div>
+                      : <button onClick={() => { if(event.documentId) setSelected(event.documentId); setSourceFocus(event.id); setView("redaction"); }}>Open exact source event →</button>}</footer>
+                  </article>})}</div>
+                </section>)}
+              </div><nav className="phaseDirectory" aria-label={language==="zh"?"叙事阶段目录":"Narrative phase directory"}><b>{language==="zh"?"故事阶段":"STORY PHASES"}</b>{phaseGroups.map((group,index) => <button className={activePhaseIndex===index?"active":""} aria-current={activePhaseIndex===index?"location":undefined} onClick={() => scrollToPhase(index)} key={phaseGroupIdentity(group.name,index)}>{group.name}</button>)}</nav></div>
             </> : view === "redaction" ? <>{evidenceReturn && <div className="evidenceReturnBar"><button onClick={backToChapter}>← {language==="zh"?"返回章节":"Back to chapter"}</button><span>{language==="zh"?"保持章节与证据来源位置":"Chapter and evidence origin preserved"}</span></div>}<RedactionCompare
               job={redactionJob}
               redactions={redactions}

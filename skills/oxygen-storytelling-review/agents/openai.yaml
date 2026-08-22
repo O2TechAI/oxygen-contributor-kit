@@ -1,4 +1,4 @@
 interface:
   display_name: "Oxygen Storytelling Review"
-  short_description: "Build evidence-grounded project Story reviews"
-  default_prompt: "Use $oxygen-storytelling-review to turn this reviewed contribution into a local Project Story with iterative bilingual Chapter review."
+  short_description: "Review projects in Oxygen's canonical Story runtime"
+  default_prompt: "Use $oxygen-storytelling-review to continue this reviewed contribution through Oxygen's canonical local Project Story and iterative bilingual Chapter review."

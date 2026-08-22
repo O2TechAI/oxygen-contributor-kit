@@ -190,6 +190,7 @@ export function StoryChapterEditor(props: {
   const applyContext = {
     privacyCandidates: candidates,
     privacyDecisions,
+    reviewableInsightIds: baseHighlight ? [baseHighlight.id] : [],
     chapterEvidence: evidence,
     evidenceResolved: chapterReview.evidenceVerified,
     supportedAddIds: [],
@@ -387,7 +388,8 @@ export function StoryChapterEditor(props: {
 
   const visiblePeople = presentation.people.filter((person) => !chapterReview.redactedBlocks.includes(`people:${person.id}`));
   const insightSuppressed = chapterReview.redactedBlocks.includes(`insight:${visibleHighlight.id}`)
-    || (insightReview?.status === "rejected" && insightReview.resolution === "applied");
+    || (insightReview?.status === "rejected" && insightReview.resolution === "applied"
+      && chapterReview.stage !== "reviewing");
 
   const saveInsightEdit = () => {
     onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "overridden", text: insightDraft.lesson.trim(), highlight: insightDraft, revision: "direct" }));

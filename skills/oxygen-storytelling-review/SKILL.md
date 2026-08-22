@@ -1,11 +1,11 @@
 ---
 name: oxygen-storytelling-review
-description: Transform an already-reviewed project history into an evidence-grounded Project Story with iterative bilingual human-AI Chapter review. Use for Storytelling Review generation or implementation; do not use it to collect raw history, rerun privacy redaction, or approve publication.
+description: Continue an already-reviewed project history through Oxygen's canonical evidence-grounded Project Story and iterative bilingual Chapter review. Use after organization and privacy preparation; reuse the repository Viewer/runtime rather than creating an independent frontend. Do not collect raw history, rerun redaction, or approve publication.
 ---
 
 # Oxygen Storytelling Review
 
-Build a local review experience that turns a reviewed project history into:
+Use Oxygen's canonical local Storytelling Review capability to turn a reviewed project history into:
 
 ```text
 Project Story
@@ -18,12 +18,12 @@ The input is reviewed history, never unrestricted raw history. The output is a h
 
 ## Required references
 
-Read these references before the corresponding work. For an end-to-end implementation, read all seven completely before editing:
+Read these references before the corresponding work. For end-to-end generation, adaptation, or validation, read all seven completely before editing:
 
-1. [product-contract.md](references/product-contract.md) — read before selecting Chapters or designing the Project Story/Chapter experience.
-2. [story-data-contract.md](references/story-data-contract.md) — read before generating Story data or defining frontend types/import validation.
-3. [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md) — read before implementing annotations, Apply review, All set, provenance, or Reopen review.
-4. [ui-interaction-contract.md](references/ui-interaction-contract.md) — read before implementing layout, navigation, selection, Privacy interactions, or responsive behavior.
+1. [product-contract.md](references/product-contract.md) — read before selecting Chapters or adapting the Project Story/Chapter experience.
+2. [story-data-contract.md](references/story-data-contract.md) — read before generating Story data or changing frontend types/import validation.
+3. [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md) — read before changing annotations, Apply review, All set, provenance, or Reopen review.
+4. [ui-interaction-contract.md](references/ui-interaction-contract.md) — read before changing layout, navigation, selection, Privacy interactions, or responsive behavior.
 5. [privacy-evidence-boundary.md](references/privacy-evidence-boundary.md) — read before opening input data, presenting local originals, or linking exact evidence.
 6. [bilingual-contract.md](references/bilingual-contract.md) — read before generating localized Story copy or review state.
 7. [validation-checklist.md](references/validation-checklist.md) — read before writing tests and again before handoff.
@@ -38,6 +38,29 @@ Read these references before the corresponding work. For an end-to-end implement
 - Keep project-specific Story copy and private/local presentation data outside reusable Skill and generic frontend source.
 
 If the reviewed artifact lacks information needed for a richer Story, remain conservative and disclose the limit.
+
+## Canonical Toolkit runtime
+
+Inside this repository, the default path is reuse, not reinvention:
+
+```text
+reviewed project data
+→ validated Story metadata (`viewer/lib/timeline.ts`)
+→ existing Viewer Project Story (`viewer/app/workspace.tsx`, `InlineWorkspace`)
+→ existing Chapter editor (`viewer/app/story-chapter-editor.tsx`, `StoryChapterEditor`)
+→ shared review/evidence/navigation/release primitives (`viewer/lib/story-*`)
+→ existing Release preview / Preferences / package surfaces
+```
+
+Generate and bind project-specific Story data to those entrypoints. Do not add a second app, a
+project-bound page, or a direct import of local Story copy. Do not reimplement Privacy, evidence,
+review-state, bilingual, release, or export rules in a new component. Modify the canonical runtime
+only when a missing generalized capability is demonstrated, and keep the change bounded so every
+valid project benefits.
+
+Workflow callers should delegate here automatically after organization and privacy preparation;
+the contributor should not need to know this Skill's name. When Story review finishes, return to
+the existing Release preview, Preferences, and package flow.
 
 ## End-to-end workflow
 
@@ -61,7 +84,7 @@ Create stable Chapter, participant, Story-block, inline-insight, Privacy-candida
 
 Attach Story metadata to reviewed evidence without replacing source content. Validate source hash, chronology, unique keys, bilingual structure, evidence resolution, and the final current-state Chapter.
 
-### 4. Implement the Project Story
+### 4. Bind data into the canonical Project Story
 
 Retain the existing application shell. The Timeline is the narrative table of contents and keeps project/source navigation, phases when meaningful, direct Chapter actions, Release preview, and Preferences.
 
@@ -87,7 +110,7 @@ Project Story → Chapter → Local Evidence
 
 Each level has its own conventional Back route and useful context restoration.
 
-### 5. Implement the Chapter document editor
+### 5. Use the canonical Chapter document editor
 
 Use unnumbered headings and this primary order:
 
@@ -104,13 +127,13 @@ Follow the rule:
 
 > Typography for reading. Boxes for interaction.
 
-### 6. Implement exact Story annotations
+### 6. Preserve exact Story annotations
 
 Selecting generated Story text opens a temporary Delete / Revise / Add toolbar. Store semantic block ID, exact start/end offsets, selected text, type, instruction, source language, base revision, resolution, and applied revision.
 
 Style only the exact validated inline range. Reject unsafe cross-block selections. Multiple non-overlapping ranges in one paragraph remain independent. Cancel removes only its annotation. Exact evidence is never annotatable or mutated.
 
-### 7. Implement iterative review
+### 7. Preserve iterative review
 
 The lifecycle is repeatable:
 
@@ -129,7 +152,7 @@ Apply review is never finalization. Revised text remains annotatable. Human inst
 
 Only All set creates human-confirmed Final Release Memory, and only after the latest revision was presented, all required Privacy decisions are complete, and no pending/unapplied/unsupported annotations remain. Reopen review resumes the same shared lifecycle.
 
-### 8. Implement contextual Privacy
+### 8. Preserve contextual Privacy
 
 Show one candidate at a time:
 
@@ -145,7 +168,7 @@ There is no Suggested Release field or AI-prescribed decision. When permitted re
 
 Write behavioral/model tests and perform browser verification from [validation-checklist.md](references/validation-checklist.md). Demonstrate at least two consecutive annotation → Apply review cycles before All set. Verify exact-range styling, available/unavailable Privacy, bilingual shared lifecycle, both Back routes, independent Chapter-list scrolling, unaffected Release preview/Preferences, and no publication side effect.
 
-Do not require pixel identity across implementations. Require material equivalence in reading hierarchy, restrained card usage, responsive article width, retained sidebar, semantic state, privacy/evidence boundaries, and interaction behavior.
+Do not require browser-independent pixel identity. Require bounded Golden-v1 fidelity: the retained three-region desktop composition, editorial hierarchy, restrained palette/card usage, responsive article width, Chapter reading order, and mandatory interactions remain recognizable. Project content, counts, wrapping, and minor spacing may vary. Reject a new visual system or information hierarchy when the canonical components can render the validated data.
 
 ## Completion standard
 

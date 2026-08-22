@@ -14,6 +14,20 @@ reviewed project history
 
 It must serve both a human who wants an understandable account and a future agent that needs evidence-grounded lessons. It is not an event browser with new styling, and Final Release Memory is not publication approval.
 
+## Productization boundary
+
+The repository Skill and Viewer are one reusable capability, not a template for a new standalone
+application. In this Toolkit, reuse `InlineWorkspace` in `viewer/app/workspace.tsx`,
+`StoryChapterEditor` in `viewer/app/story-chapter-editor.tsx`, and the shared Timeline/review/
+evidence/navigation/release primitives under `viewer/lib`. Generate validated Story data and bind
+it to that runtime. Change the renderer only to close a proven generalized capability gap.
+
+Keep these product constraints stable across projects: application shell, editorial hierarchy,
+phase-grouped Timeline, Chapter review interactions, privacy/evidence boundaries, bilingual shared
+state, and publication separation. Keep these values dynamic: project name/overview, Chapters,
+Phases, dates, People, prose, insights, Privacy candidates, metrics/chips, evidence IDs, and review
+progress. Golden examples and their counts are never reusable constants.
+
 ## Story selection
 
 Select Chapters by consequential state transition. Suitable signals include:
@@ -126,6 +140,12 @@ Apply this rule:
 Use typography and whitespace for People, Story, headings, metadata, and explanatory copy. Use bounded surfaces only when interaction benefits from containment: contextual editors, active Privacy decision, and focused completion feedback.
 
 Avoid nested boxes, card-per-field layouts, dashboard density, permanent text-review toolbars, and giant uninterrupted prose. The Chapter should read like a well-edited document or strong structured answer.
+
+Golden Design Reference v1 establishes bounded composition and behavior, not private fixture copy
+or pixel constants. Retain the left navigation rail, centered editorial content, secondary sticky
+Phase directory on wide layouts, warm off-white surface, serif reading hierarchy, sans-serif
+controls, restrained Oxygen green/blue-violet accents, and boxes-only-for-interaction rule. Natural
+wrapping, project-driven height/counts, font fallback, and small spacing differences may vary.
 
 Use a centered responsive article measure roughly comparable to `min(900px, 100%)`. Keep prose comfortable, do not stretch it across the workspace, and scope the width so the main Timeline remains unchanged.
 

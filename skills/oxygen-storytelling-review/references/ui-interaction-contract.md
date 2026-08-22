@@ -4,6 +4,12 @@
 
 Reuse the existing Viewer shell. Keep its top navigation, one left project/source rail, main canvas, Timeline, Release preview, Preferences, and download actions.
 
+The canonical repository entrypoints are `InlineWorkspace` in `viewer/app/workspace.tsx` and
+`StoryChapterEditor` in `viewer/app/story-chapter-editor.tsx`. Their data/state dependencies are
+the generalized modules in `viewer/lib/timeline.ts` and `viewer/lib/story-*`. Bind validated Story
+metadata to those components. Do not create a parallel page, second shell, project-bound renderer,
+or replacement privacy/release implementation merely because content differs.
+
 When a Chapter opens, do not replace the shell with a disconnected full-width reading page. Keep the rail visible on desktop and usable in responsive stacked form on small screens.
 
 ## Project Story Timeline
@@ -206,3 +212,7 @@ Material equivalence requires:
 - one active Privacy interaction;
 - one focused completion area;
 - no numbered Chapter sections, separate Highlights, Release/Original cards, fake steppers, or nested dashboard cards.
+
+This is bounded visual fidelity rather than pixel equality. A future project may change content,
+counts, wrapping, and content-driven height, but it must not substitute a dashboard, new visual
+system, disconnected article, or summary-only flow for the canonical composition and interactions.
