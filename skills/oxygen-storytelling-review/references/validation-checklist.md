@@ -1,0 +1,190 @@
+# Validation checklist
+
+Use behavioral/model/structural tests plus visible browser verification. Avoid brittle pixel equality; compare material product behavior and visual hierarchy.
+
+## Data and safety
+
+- [ ] Reviewed archive passes CRC/member-path safety.
+- [ ] Manifest counts match data and `publication_approved=false`.
+- [ ] Story data source hash matches the reviewed artifact.
+- [ ] No raw history, private ledger, removed text/value, source envelope, credential material, or forbidden sibling implementation was opened.
+- [ ] Chapter keys are unique/chronological and the last is honest current state.
+- [ ] Every primary/supporting evidence ID resolves.
+- [ ] No identity/evidence/fact was fabricated.
+- [ ] Project-specific copy/excerpts do not appear in reusable generic source/Skill.
+- [ ] No unavailable Privacy candidate contains an excerpt.
+- [ ] Package/publication behavior is unchanged.
+
+## Project Story
+
+- [ ] Selection is event-driven, globally consequential, deduplicated, and not time/volume bucketed.
+- [ ] When supported evidence contains the initiating problem/goal/baseline assumptions, the opening Chapter and overview establish that beginning instead of starting at a midstream routine setup/test failure.
+- [ ] Routine command, import-path, test-collection, and ordinary test incidents are compressed unless they demonstrably changed a durable contract, architecture, execution envelope, or direction.
+- [ ] Timeline remains the narrative table of contents with direct Chapter actions.
+- [ ] Project/source rail, Release preview, Preferences, and existing downloads remain usable.
+- [ ] Compact orientation retains canonical project name, overview, milestone count, phase count, reviewed-Highlight progress, and useful source/evidence context when available; values are derived rather than hardcoded.
+- [ ] The Timeline reading column is visibly centered in the available canvas and no giant project card dominates it.
+- [ ] Meaningful phases are visually stronger than card metadata; every milestone belongs visibly to one generated phase.
+- [ ] Desktop has a sticky ordered Phase directory with direct scroll navigation and active/visible indication where practical; narrow layouts collapse it without squeezing the Timeline.
+- [ ] Every selected milestone visibly exposes a mandatory date, milestone type, unmistakable AI-selected Highlight signal, short title, concise Before → After, and secondary evidence/read action.
+- [ ] Before/After can be understood in seconds and do not read like paragraph summaries.
+- [ ] Accent chips carry only high-signal supported counts, metrics, versions, named concepts, or status changes and replace prose rather than adding decorative density.
+- [ ] Long Timeline explanation, detailed summary, lesson, reasoning, and narrative prose live in the Chapter instead of milestone cards.
+
+## Chapter shell and visual structure
+
+- [ ] Left application rail remains present in Chapter.
+- [ ] Chapter selector is a bounded independent overflow region with visible scrollbar on overflow.
+- [ ] Mouse wheel/trackpad scroll the selector without moving Story.
+- [ ] Any Chapter, including the last, is directly reachable.
+- [ ] Active Chapter is highlighted and programmatic next/previous keeps it visible.
+- [ ] Source records remain usable below.
+- [ ] Article is moderately wide, responsive, centered, readable, and has no horizontal overflow.
+- [ ] Chapter has exactly unnumbered People, Story, Privacy primary sections.
+- [ ] No numbered markers, tabs, stepper, standalone Highlights, or Release/Original card pair.
+- [ ] Boxes are limited to interaction; Story/People remain typography-first.
+
+## People and Story
+
+- [ ] People markers use one centered non-wrapping size and AI aligns with humans.
+- [ ] Roles/descriptions are compact and evidence-supported.
+- [ ] Local/release identity distinction is clear; no fabricated name.
+- [ ] Story is a structured article with clear causal progression and uncertainty.
+- [ ] AI insight and reusable lesson appear inside Story and are labeled as interpretation.
+- [ ] Accept/remove/direct edit/human-directed revise work without a full chat UI.
+
+## Text annotations
+
+- [ ] Toolbar is absent until meaningful Story text is selected.
+- [ ] Toolbar has accessible Delete, Revise, Add actions.
+- [ ] Exact block ID, start, end, selected text, language, base revision, type, instruction, and resolution persist.
+- [ ] Only the exact range is styled; parent paragraph/list item is not.
+- [ ] Pending quote equals `source.slice(start,end)`.
+- [ ] Two non-overlapping annotations in one paragraph render independently.
+- [ ] Cancelling one removes only that range.
+- [ ] Stale/mismatched/cross-language literal ranges fail closed.
+- [ ] Cross-block/cross-paragraph selection is rejected when not safely supported.
+- [ ] Exact Evidence cannot be annotated or mutated.
+
+## Iterative lifecycle
+
+Demonstrate this complete sequence in tests and browser QA:
+
+1. [ ] Initial AI draft, revision 1, reviewing, publication false.
+2. [ ] Create first Delete or Revise annotation.
+3. [ ] All set unavailable while pending.
+4. [ ] Resolve required Privacy.
+5. [ ] Apply review produces revision 2.
+6. [ ] Revision 2 Story remains annotatable.
+7. [ ] Create a second annotation on revision 2.
+8. [ ] All set becomes unavailable again.
+9. [ ] Second Apply produces revision 3.
+10. [ ] Clean revision 3 plus complete Privacy enables All set.
+11. [ ] All set produces human-confirmed Final Release Memory.
+12. [ ] Publication approval remains false and no upload/package/publish occurs.
+13. [ ] Reopen review returns to editable reviewing state with provenance preserved.
+14. [ ] Another apply/confirmation cycle remains possible.
+
+Also verify:
+
+- [ ] Privacy blocks Apply/All set as specified.
+- [ ] Unsupported Add becomes `needs_evidence`, is not inserted, and blocks All set.
+- [ ] Summary counts and revision labels are correct.
+- [ ] Human intent is not silently dropped.
+
+## Privacy
+
+- [ ] One candidate at a time with progress.
+- [ ] Visible fields are Local original and Why AI flagged it, followed by Keep/Redact.
+- [ ] Suggested Release/recommendation copy is absent in both languages.
+- [ ] Available mode shows only permitted minimal original-language context and a specific concern.
+- [ ] Unavailable mode shows the explicit unavailable message, safe risk/uncertainty explanation, and no reconstructed value.
+- [ ] Keep/Redact advance naturally and Review again behaves safely.
+- [ ] Decisions drive completion state but never alter source evidence.
+
+## Navigation and evidence
+
+- [ ] Timeline scroll to a middle/late milestone → Chapter → Project Story Back restores useful scroll/focus.
+- [ ] Chapter → primary evidence focuses exact source event.
+- [ ] Chapter → supporting evidence focuses exact source event.
+- [ ] Evidence shows prominent Back to chapter.
+- [ ] Back restores originating Chapter, language, and useful Story scroll/origin context.
+- [ ] Evidence remains original-language and is labeled local-only/not exported.
+
+## Bilingual
+
+- [ ] Fresh state is English.
+- [ ] One shell-level `EN | 中文` control is compact and remains discoverable on Project Story, Chapter, and Exact Evidence; it is not duplicated as unrelated page-local controls.
+- [ ] Chinese changes Timeline Story labels and full Chapter presentation.
+- [ ] Chinese localizes inline insight title/observation/lesson, participant identity explanations, status/annotation copy, and review blockers; nontechnical English placeholder sentences do not remain.
+- [ ] Switching back restores equivalent English.
+- [ ] Shared semantic anchors/technical identifiers remain stable.
+- [ ] Annotation/Privacy/revision/All set state survives language switching.
+- [ ] One lifecycle/confirmation history drives both languages.
+- [ ] Evidence content remains source-language.
+
+## Automated validation
+
+Run the repository's required commands. For the Oxygen Viewer this normally includes:
+
+```bash
+cd viewer
+npm test
+npm run build
+```
+
+Also run:
+
+- focused ESLint on changed files;
+- `git diff --check`;
+- lockfile/dependency diff check;
+- staged-file check;
+- focused tests for every behavior above;
+- story-data/schema validation;
+- generic-source scan for project-specific/private copy.
+
+Do not fix unrelated origin debt or mutate dependencies/lockfiles merely to complete Storytelling Review.
+
+## Visible browser QA
+
+Use the actual local Viewer. Capture and inspect at least:
+
+1. Project Story opening;
+2. Chapter opening with retained rail and People;
+3. Story with inline AI insight;
+4. exact-range annotation and contextual input;
+5. Privacy available mode;
+6. Privacy unavailable mode;
+7. gated completion and clean revision-ready state;
+8. Final Release Memory and Reopen review;
+9. exact Evidence with Back to chapter;
+10. Chinese Chapter with shared review state.
+
+Check console errors and responsive layout. Preserve the user's visible review state or reset prototype-only QA edits before handoff.
+
+## Material-equivalence comparison
+
+Two implementations need not be pixel-identical. They are materially equivalent only when all of these match:
+
+- information architecture;
+- reading hierarchy and density;
+- retained application context;
+- direct Chapter/evidence navigation;
+- exact-range document annotation;
+- iterative Apply/All set/Reopen semantics;
+- one-at-a-time contextual Privacy with no Suggested Release;
+- evidence and identity safety boundaries;
+- bilingual shared lifecycle;
+- publication separation.
+
+Classify differences as:
+
+```text
+SKILL_MISSING_REQUIREMENT
+SKILL_AMBIGUOUS
+SKILL_CONTRADICTORY
+IMPLEMENTATION_BUG
+ACCEPTABLE_IMPLEMENTATION_VARIATION
+```
+
+A missing material behavior normally means the Skill is incomplete unless the requirement was already explicit and unambiguous.

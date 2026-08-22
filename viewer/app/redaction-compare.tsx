@@ -72,11 +72,12 @@ export function RedactionCompare(props: {
   redactions: Redaction[];
   detail: Detail;
   isProject: boolean;
+  focusItemId?: string;
   busyId: string;
   onUpdate: (id: string, patch: { category?: string; status?: string }) => void;
   onDelete: (id: string) => void;
 }) {
-  const { job, redactions, detail, isProject, busyId, onUpdate, onDelete } = props;
+  const { job, redactions, detail, isProject, focusItemId, busyId, onUpdate, onDelete } = props;
 
   const allItems = detail?.items || [];
   const documentId = detail?.document.id;
@@ -85,6 +86,17 @@ export function RedactionCompare(props: {
 
   // A different record starts from the top again.
   useEffect(() => { setLimit(PAGE_SIZE); }, [documentId]);
+
+  const focusIndex = focusItemId ? allItems.findIndex((item) => item.id === focusItemId) : -1;
+  const visibleLimit = focusIndex >= 0 ? Math.max(limit, focusIndex + 1) : limit;
+
+  useEffect(() => {
+    if (!focusItemId || focusIndex < 0 || focusIndex >= visibleLimit) return;
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(`source-event-${focusItemId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusItemId, focusIndex, visibleLimit, documentId]);
 
   useEffect(() => {
     if (limit >= allItems.length) return;
@@ -175,7 +187,7 @@ export function RedactionCompare(props: {
   const items = allItems;
   const redactedCount = items.filter((item) => byItem.has(item.id)).length;
   const spanCount = items.reduce((total, item) => total + (byItem.get(item.id)?.length || 0), 0);
-  const visible = items.slice(0, limit);
+  const visible = items.slice(0, visibleLimit);
 
   return <div className="redactionPanel">
     <h2>
@@ -184,7 +196,7 @@ export function RedactionCompare(props: {
     {notice}
     {visible.map((item) => {
       const spans = byItem.get(item.id) || [];
-      return <article className={`redactionRow ${spans.length ? "" : "clean"}`} key={item.id}>
+      return <article id={`source-event-${item.id}`} className={`redactionRow ${spans.length ? "" : "clean"} ${item.id===focusItemId?"sourceFocused":""}`} key={item.id}>
         <div className="redactionMeta">
           #{item.sequence} · {item.event_type || "record"} · {fmt(item.timestamp)} ·
           {" "}{spans.length ? `${spans.length} span(s)` : "no redactions"}

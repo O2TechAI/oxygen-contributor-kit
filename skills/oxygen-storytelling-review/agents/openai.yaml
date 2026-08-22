@@ -1,0 +1,4 @@
+interface:
+  display_name: "Oxygen Storytelling Review"
+  short_description: "Build evidence-grounded project Story reviews"
+  default_prompt: "Use $oxygen-storytelling-review to turn this reviewed contribution into a local Project Story with iterative bilingual Chapter review."

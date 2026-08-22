@@ -6,7 +6,7 @@
 
 [![SOP](https://img.shields.io/badge/SOP-READ_FIRST-2563eb?style=for-the-badge)](SOP.md)
 [![Agent contract](https://img.shields.io/badge/AGENT-CONTRACT-1f2937?style=for-the-badge)](AGENTS.md)
-[![Skills](https://img.shields.io/badge/SKILLS-3-7c3aed?style=for-the-badge)](#included-skills)
+[![Skills](https://img.shields.io/badge/SKILLS-4-7c3aed?style=for-the-badge)](#included-skills)
 [![Upload](https://img.shields.io/badge/UPLOAD-NEVER_AUTOMATIC-dc2626?style=for-the-badge)](#local-boundary)
 
 [![Python](https://img.shields.io/badge/PYTHON-3.11+-3776ab?style=for-the-badge&logo=python&logoColor=white)](#requirements)
@@ -177,6 +177,9 @@ Run in this order:
 3. **[`oxygen-elicit-contributor-preferences`](skills/oxygen-elicit-contributor-preferences/SKILL.md)**
    — finds high-signal friction moments and asks evidence-grounded questions, without inventing
    preferences.
+4. **[`oxygen-storytelling-review`](skills/oxygen-storytelling-review/SKILL.md)** — transforms an
+   already-reviewed project history into an evidence-linked, bilingual Project Story with
+   iterative human confirmation that remains separate from publication.
 
 Supporting tools live in [`tools/llm_redact/`](tools/llm_redact/) (model backend, validators,
 audits) and [`tools/ingest/`](tools/ingest/) (collection and import).
