@@ -20,20 +20,14 @@ import {
   returnChapterToReview,
   reviseHighlight,
   storyAnnotationSegments,
+  updateInsightReview,
   type ChapterReviewState,
   type PrivacyDecision,
   type StoryAnnotationType,
   type StoryReviewAnnotation,
 } from "../lib/story-review";
 
-export type InsightReviewStatus = "accepted" | "needs_changes" | "rejected" | "overridden";
-export type InsightReview = {
-  status: InsightReviewStatus;
-  text: string;
-  highlight?: StoryHighlightItem;
-  revision?: "direct" | "ai";
-};
-export type { ChapterReviewState, PrivacyDecision } from "../lib/story-review";
+export type { ChapterReviewState, InsightReview, PrivacyDecision } from "../lib/story-review";
 
 export type ChapterEvidenceContext = {
   storyKey: string;
@@ -56,7 +50,7 @@ const ui = {
     back: "Project story", chapter: "Chapter", previous: "Previous chapter", next: "Next chapter",
     aiDraft: "Initial AI draft", humanReview: "Review in progress", reviewedDraft: "Latest revision ready", ready: "Final Release Memory",
     releaseNote: "AI-compressed · human-authoritative review", minRead: "min read",
-    people: "People", peoplePrompt: "Who matters in this chapter?", localIdentity: "Local identity · hidden on export",
+    people: "People", peoplePrompt: "Who matters in this chapter?", localIdentity: "Local identity · hidden on export", noPeople: "No supported participant was identified for this chapter.",
     story: "Story", setup: "The setup", turn: "The turn", mattered: "What mattered", followed: "What followed", uncertain: "Still uncertain",
     aiInsight: "AI insight", aiInterpretation: "AI interpretation · not historical fact", observation: "Observation", lesson: "Reusable lesson",
     editInsight: "Edit insight", reviseInsight: "Revise insight with AI", acceptInsight: "Accept", removeInsight: "Do not preserve",
@@ -69,13 +63,13 @@ const ui = {
     evidence: "View local evidence", evidenceNote: "Exact source language · local only · never exported with the release chapter", primary: "Primary anchor", supporting: "Supporting evidence", inspect: "Inspect exact evidence",
     summary: "Review summary", revisions: "revisions", additions: "additions", removals: "removals", privacyDecisions: "privacy decisions",
     privacyBlocks: "Complete every privacy decision before applying review.", apply: "Apply review & prepare release", applyingNote: "Human instructions are authoritative. Unsupported additions are flagged rather than invented.",
-    addBlocked: "An addition still needs support from reviewed evidence. Cancel it or return to review before confirming.", markReady: "All set", returnReview: "Continue reviewing", reopen: "Reopen review", readyNote: "Human-confirmed locally. This is not publication approval.", revision: "Revision",
+    addBlocked: "An addition still needs support from reviewed evidence. Cancel it or return to review before confirming.", evidenceSupport: "Anchor this addition to the primary reviewed evidence", translationBlocked: "The paired language is stale. Review the same semantic passage in the other language before confirming.", noPrivacy: "AI found no release concerns in the reviewed artifact.", removedFromRelease: "Removed from release", markReady: "All set", returnReview: "Continue reviewing", reopen: "Reopen review", readyNote: "Human-confirmed locally. This is not publication approval.", revision: "Revision",
   },
   zh: {
     back: "项目故事", chapter: "章节", previous: "上一章", next: "下一章",
     aiDraft: "初始 AI 草稿", humanReview: "审阅进行中", reviewedDraft: "最新修订稿待确认", ready: "最终发布记忆",
     releaseNote: "AI 压缩 · 人工意见优先", minRead: "分钟阅读",
-    people: "人物", peoplePrompt: "这一章里，谁最重要？", localIdentity: "本地身份 · 导出时隐藏",
+    people: "人物", peoplePrompt: "这一章里，谁最重要？", localIdentity: "本地身份 · 导出时隐藏", noPeople: "这一章没有识别出有证据支持的参与者。",
     story: "故事", setup: "当时的局面", turn: "转折如何发生", mattered: "真正重要的细节", followed: "后来发生了什么", uncertain: "仍不确定",
     aiInsight: "AI 洞察", aiInterpretation: "AI 解释 · 并非历史事实", observation: "观察", lesson: "可复用经验",
     editInsight: "编辑洞察", reviseInsight: "让 AI 修改洞察", acceptInsight: "接受", removeInsight: "不保留",
@@ -88,7 +82,7 @@ const ui = {
     evidence: "查看本地证据", evidenceNote: "保持精确原文 · 仅限本地 · 不随发布章节导出", primary: "主要锚点", supporting: "补充证据", inspect: "查看精确证据",
     summary: "审阅摘要", revisions: "处修订", additions: "处补充", removals: "处删除", privacyDecisions: "项隐私决定",
     privacyBlocks: "应用审阅前，请完成全部隐私决定。", apply: "应用审阅并准备发布", applyingNote: "人工意见优先；缺乏支持的补充会被标记，不会被编造。",
-    addBlocked: "仍有补充内容需要已审阅证据支持。请取消该批注或返回审阅后再确认。", markReady: "确认完成", returnReview: "继续审阅", reopen: "重新打开审阅", readyNote: "已在本地获得人工确认；这不代表发布审批。", revision: "修订稿",
+    addBlocked: "仍有补充内容需要已审阅证据支持。请取消该批注或返回审阅后再确认。", evidenceSupport: "将此补充锚定到主要已审阅证据", translationBlocked: "另一语言版本仍待同步。请在另一语言中审阅同一语义段落后再确认。", noPrivacy: "AI 未在已审阅材料中发现发布风险。", removedFromRelease: "已从发布稿移除", markReady: "确认完成", returnReview: "继续审阅", reopen: "重新打开审阅", readyNote: "已在本地获得人工确认；这不代表发布审批。", revision: "修订稿",
   },
 } as const;
 
@@ -116,11 +110,12 @@ export function StoryChapterEditor(props: {
   position: number;
   total: number;
   language: StoryLanguage;
-  insightReview?: InsightReview;
   privacyDecisions: Record<string, PrivacyDecision>;
   chapterReview: ChapterReviewState;
   initialScrollTop?: number;
-  onInsightReview: (review?: InsightReview) => void;
+  focusOriginId?: string;
+  evidenceError?: string;
+  onContextRestored?: () => void;
   onPrivacyDecision: (candidateId: string, decision?: PrivacyDecision) => void;
   onChapterReview: (review: ChapterReviewState) => void;
   onOpenEvidence: (evidence: EvidenceReference, context: ChapterEvidenceContext) => void;
@@ -129,8 +124,8 @@ export function StoryChapterEditor(props: {
   onNext: () => void;
 }) {
   const {
-    milestone, position, total, language, insightReview, privacyDecisions, chapterReview, initialScrollTop = 0,
-    onInsightReview, onPrivacyDecision, onChapterReview, onOpenEvidence, onClose, onPrevious, onNext,
+    milestone, position, total, language, privacyDecisions, chapterReview, initialScrollTop = 0, focusOriginId, evidenceError,
+    onContextRestored, onPrivacyDecision, onChapterReview, onOpenEvidence, onClose, onPrevious, onNext,
   } = props;
   const { story } = milestone;
   const episode = story.releaseEpisode;
@@ -138,23 +133,37 @@ export function StoryChapterEditor(props: {
   const labels = ui[language];
   const articleRef = useRef<HTMLElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const backRef = useRef<HTMLButtonElement | null>(null);
+  const restoredContextRef = useRef(false);
   const [selection, setSelection] = useState<SelectionTarget | null>(null);
   const [annotationMode, setAnnotationMode] = useState<Exclude<StoryAnnotationType, "delete"> | null>(null);
   const [instruction, setInstruction] = useState("");
+  const [supportAddition, setSupportAddition] = useState(false);
   const [insightMode, setInsightMode] = useState<"none" | "edit" | "revise">("none");
   const baseHighlight = presentation?.highlights[0];
-  const visibleHighlight = insightReview?.highlight || baseHighlight;
+  const insightReview = baseHighlight ? chapterReview.insightReviews[baseHighlight.id] : undefined;
+  const visibleHighlight = insightReview?.localized[language] || baseHighlight;
   const [insightDraft, setInsightDraft] = useState<StoryHighlightItem | undefined>(visibleHighlight);
 
   useEffect(() => {
-    if (!scrollRef.current || !initialScrollTop) return;
-    requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: initialScrollTop }));
-  }, [initialScrollTop, story.key]);
+    if (restoredContextRef.current) return;
+    restoredContextRef.current = true;
+    const frame = requestAnimationFrame(() => {
+      if (scrollRef.current && initialScrollTop) scrollRef.current.scrollTo({ top: initialScrollTop });
+      const origin = focusOriginId ? document.getElementById(focusOriginId) : null;
+      const disclosure = origin?.closest("details");
+      const focusTarget = disclosure && !disclosure.open ? disclosure.querySelector<HTMLElement>("summary") : origin;
+      (focusTarget || backRef.current)?.focus({ preventScroll: true });
+      onContextRestored?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusOriginId, initialScrollTop, onContextRestored, story.key]);
 
   const candidates = presentation?.privacy.candidates || [];
   const privacyState = privacyReviewState(candidates, privacyDecisions);
   const summary = chapterReviewSummary(chapterReview);
   const evidence = story.evidence ? [story.evidence.primary, ...story.evidence.supporting] : [];
+  const applyContext = { privacyCandidates: candidates, privacyDecisions, chapterEvidence: evidence };
   const annotationsByBlock = useMemo(() => chapterReview.annotations.reduce<Record<string, StoryReviewAnnotation[]>>((result, annotation) => {
     if (annotation.resolution !== "cancelled") (result[annotation.blockId] ||= []).push(annotation);
     return result;
@@ -167,6 +176,7 @@ export function StoryChapterEditor(props: {
     setSelection(null);
     setAnnotationMode(null);
     setInstruction("");
+    setSupportAddition(false);
   };
 
   const captureSelection = () => {
@@ -261,12 +271,15 @@ export function StoryChapterEditor(props: {
       selection: { start: selection.start, end: selection.end, text: selection.text },
       baseRevision: chapterReview.revision,
       ...(textInstruction?.trim() ? { instruction: textInstruction.trim() } : {}),
+      ...(type === "add" && supportAddition && evidence[0] ? { supportingEvidence: [evidence[0]] } : {}),
     });
     onChapterReview(addStoryAnnotation(chapterReview, annotation));
     clearSelection();
   };
 
-  const blockCopy = (blockId: string, source: string) => chapterReview.revision > 1
+  const blockCopy = (blockId: string, source: string) => chapterReview.redactedBlocks.includes(blockId)
+    ? ""
+    : chapterReview.revision > 1
     ? applyAnnotationsToBlock(source, blockId, language, chapterReview.annotations)
     : source;
 
@@ -281,7 +294,7 @@ export function StoryChapterEditor(props: {
       <span>{annotationLabel(annotation, language)}</span>
       <q>{annotation.selection.text}</q>
       {annotation.instruction && <p>{annotation.instruction}</p>}
-      {chapterReview.stage !== "human_confirmed" && <button onClick={() => onChapterReview(cancelStoryAnnotation(chapterReview, annotation.id))}>{labels.cancelAnnotation}</button>}
+      {chapterReview.stage !== "human_confirmed" && ["pending", "needs_evidence"].includes(annotation.resolution) && <button onClick={() => onChapterReview(cancelStoryAnnotation(chapterReview, annotation.id))}>{labels.cancelAnnotation}</button>}
     </div>)}
   </div> : null;
 
@@ -302,24 +315,28 @@ export function StoryChapterEditor(props: {
     </li>;
   };
 
+  const visiblePeople = presentation.people.filter((person) => !chapterReview.redactedBlocks.includes(`people:${person.id}`));
+  const insightSuppressed = chapterReview.redactedBlocks.includes(`insight:${visibleHighlight.id}`)
+    || (insightReview?.status === "rejected" && insightReview.resolution === "applied");
+
   const saveInsightEdit = () => {
-    onInsightReview({ status: "overridden", text: insightDraft.lesson.trim(), highlight: insightDraft, revision: "direct" });
+    onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "overridden", text: insightDraft.lesson.trim(), highlight: insightDraft, revision: "direct" }));
     setInsightMode("none");
   };
   const applyInsightRevision = () => {
     const revised = reviseHighlight(visibleHighlight, instruction, language);
     if (!revised) return;
     setInsightDraft(revised);
-    onInsightReview({ status: "overridden", text: revised.lesson, highlight: revised, revision: "ai" });
+    onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "overridden", text: revised.lesson, highlight: revised, revision: "ai" }));
     setInstruction("");
     setInsightMode("none");
   };
 
   const handleToolbarMouseDown = (event: ReactMouseEvent) => event.preventDefault();
 
-  return <section className="simpleEpisode chapterEditor" role="dialog" aria-modal="true" aria-labelledby="episode-title">
+  return <section className="simpleEpisode chapterEditor" role="region" aria-labelledby="episode-title">
     <div className="simpleEpisodeChrome">
-      <button className="episodeBackLink" onClick={onClose}>← {labels.back}</button>
+      <button className="episodeBackLink" ref={backRef} onClick={onClose}>← {labels.back}</button>
       <div className="simpleEpisodePosition">{labels.chapter} {position} / {total}</div>
       <div className="simpleEpisodeNav">
         <button onClick={onPrevious} disabled={position === 1} aria-label={labels.previous}>←</button>
@@ -330,18 +347,18 @@ export function StoryChapterEditor(props: {
     <div className="simpleEpisodeScroll" ref={scrollRef}>
       <header className="simpleEpisodeHero">
         <div className="releaseDraftLabel"><b>{reviewStageLabel(chapterReview, language)}</b><span>{labels.releaseNote}</span></div>
-        <div className="simpleEpisodeMeta"><span>{presentation.phase}</span><time>{fmt(episode.startTimestamp || milestone.timestamp, language)}</time><span>≈ {episode.readingTimeMinutes} {labels.minRead}</span></div>
-        <h2 id="episode-title">{presentation.title}</h2>
-        <p className="episodeOverview">{presentation.overview}</p>
+        <div className="simpleEpisodeMeta"><span>{blockCopy("phase", presentation.phase) || labels.removedFromRelease}</span><time>{fmt(episode.startTimestamp || milestone.timestamp, language)}</time><span>≈ {episode.readingTimeMinutes} {labels.minRead}</span></div>
+        <h2 id="episode-title">{blockCopy("title", presentation.title) || labels.removedFromRelease}</h2>
+        <p className="episodeOverview">{blockCopy("overview", presentation.overview) || labels.removedFromRelease}</p>
       </header>
 
       <div className="simpleEpisodeBody">
         <section className="episodePrimarySection peopleSection" data-episode-section="people" aria-labelledby="people-heading">
           <div className="simpleSectionHead"><div><h3 id="people-heading">{labels.people}</h3><p>{labels.peoplePrompt}</p></div></div>
-          <div className="peopleList">{presentation.people.map((person) => <div className="personRow" key={person.id}>
+          {visiblePeople.length ? <div className="peopleList">{visiblePeople.map((person) => <div className="personRow" key={person.id}>
             <b aria-label={person.releaseLabel}>{person.releaseLabel}</b><div><strong>{person.role}</strong><p>{person.description}</p></div>
-          </div>)}</div>
-          <p className="identityNote">{labels.localIdentity}</p>
+          </div>)}</div> : <p className="emptySectionCopy">{labels.noPeople}</p>}
+          {visiblePeople.length > 0 && <p className="identityNote">{labels.localIdentity}</p>}
         </section>
 
         <section className="episodePrimarySection storySection" data-episode-section="story" aria-labelledby="story-heading">
@@ -352,21 +369,21 @@ export function StoryChapterEditor(props: {
             <h4>{labels.turn}</h4>
             {presentation.story.reconstruction.map((paragraph, index) => renderParagraph(`reconstruction-${index}`, paragraph))}
 
-            <aside className={`inlineInsight ${insightReview?.status === "rejected" ? "rejected" : ""}`} data-inline-insight={visibleHighlight.id}>
-              <div className="inlineInsightHead"><span>{labels.aiInsight}</span><small>{labels.aiInterpretation}</small><div>
+            {!insightSuppressed && <aside className={`inlineInsight ${insightReview?.status === "rejected" ? "rejected" : ""}`} data-inline-insight={visibleHighlight.id}>
+              <div className="inlineInsightHead"><span>{labels.aiInsight}</span><small>{labels.aiInterpretation}</small>{chapterReview.stage !== "human_confirmed" && <div>
                 <button title={labels.editInsight} aria-label={labels.editInsight} onClick={() => setInsightMode(insightMode === "edit" ? "none" : "edit")}>{language === "zh" ? "编辑" : "Edit"}</button>
                 <button title={labels.reviseInsight} aria-label={labels.reviseInsight} onClick={() => setInsightMode(insightMode === "revise" ? "none" : "revise")}>{language === "zh" ? "修改" : "Revise"}</button>
-              </div></div>
+              </div>}</div>
               {insightMode === "edit" ? <div className="inlineInsightEdit">
                 <label>{language === "zh" ? "标题" : "Title"}<input value={insightDraft.title} onChange={(event) => setInsightDraft({ ...insightDraft, title: event.target.value })} /></label>
                 <label>{labels.observation}<textarea rows={3} value={insightDraft.noticed} onChange={(event) => setInsightDraft({ ...insightDraft, noticed: event.target.value })} /></label>
                 <label>{labels.lesson}<textarea rows={3} value={insightDraft.lesson} onChange={(event) => setInsightDraft({ ...insightDraft, lesson: event.target.value })} /></label>
-                <div className="compactActions"><button className="primary" onClick={saveInsightEdit}>{labels.save}</button><button onClick={() => setInsightMode("none")}>{labels.cancel}</button></div>
+                <div className="compactActions"><button className="primary" disabled={!insightDraft.title.trim() || !insightDraft.noticed.trim() || !insightDraft.lesson.trim()} onClick={saveInsightEdit}>{labels.save}</button><button onClick={() => setInsightMode("none")}>{labels.cancel}</button></div>
               </div> : insightMode === "revise" ? <div className="inlineInsightEdit"><label>{labels.changeInsight}<textarea rows={3} value={instruction} onChange={(event) => setInstruction(event.target.value)} /></label><div className="compactActions"><button className="primary" disabled={!instruction.trim()} onClick={applyInsightRevision}>{labels.save}</button><button onClick={() => setInsightMode("none")}>{labels.cancel}</button></div></div> : <>
                 <h5>{visibleHighlight.title}</h5><dl><div><dt>{labels.observation}</dt><dd>{visibleHighlight.noticed}</dd></div><div><dt>{labels.lesson}</dt><dd>{visibleHighlight.lesson}</dd></div></dl>
-                <div className="inlineInsightReview"><button onClick={() => onInsightReview({ status: "accepted", text: visibleHighlight.lesson, highlight: visibleHighlight })}>{labels.acceptInsight}</button><button onClick={() => onInsightReview({ status: "rejected", text: visibleHighlight.lesson, highlight: visibleHighlight })}>{labels.removeInsight}</button></div>
+                {chapterReview.stage !== "human_confirmed" && <div className="inlineInsightReview"><button onClick={() => onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "accepted", text: visibleHighlight.lesson }))}>{labels.acceptInsight}</button><button onClick={() => onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "rejected", text: visibleHighlight.lesson }))}>{labels.removeInsight}</button></div>}
               </>}
-            </aside>
+            </aside>}
 
             <h4>{labels.mattered}</h4>
             <ul>{presentation.story.importantDetails.map((detail, index) => renderListItem(`detail-${index}`, detail))}</ul>
@@ -378,7 +395,7 @@ export function StoryChapterEditor(props: {
 
         <section className="episodePrimarySection privacySection" data-episode-section="privacy" aria-labelledby="privacy-heading">
           <div className="simpleSectionHead"><div><h3 id="privacy-heading">{labels.privacy}</h3><p>{labels.privacyPrompt}</p></div></div>
-          <p className="privacySummary">{presentation.privacy.summary}</p>
+          <p className="privacySummary">{candidates.length ? presentation.privacy.summary : labels.noPrivacy}</p>
           {privacyState.active ? <article className="privacyDecisionCard" data-privacy-candidate={privacyState.active.id}>
             <div className="privacyProgress"><span>{privacyState.reviewed + 1} / {candidates.length}</span><span>{labels.possibleSensitive}</span></div>
             <h4>{privacyState.active.title}</h4>
@@ -392,9 +409,10 @@ export function StoryChapterEditor(props: {
 
         <details className="localEvidenceDisclosure">
           <summary>{labels.evidence} → <span>{evidence.length}</span></summary><p>{labels.evidenceNote}</p>
-          <div>{evidence.map((item, index) => <button key={`${item.documentId}:${item.eventId}`} onClick={() => onOpenEvidence(item, { storyKey: story.key, language, scrollTop: scrollRef.current?.scrollTop || 0, originId: `${item.documentId}:${item.eventId}` })}>
+          {evidenceError && <p className="completionBlocker" role="alert">{evidenceError}</p>}
+          <div>{evidence.map((item, index) => { const originId=`chapter-evidence-${index}`; return <button id={originId} key={`${item.documentId}:${item.eventId}`} onClick={() => onOpenEvidence(item, { storyKey: story.key, language, scrollTop: scrollRef.current?.scrollTop || 0, originId })}>
             <span>{index === 0 ? labels.primary : item.label || labels.supporting}</span><code>{item.documentId} / {item.eventId}</code><b>{labels.inspect} →</b>
-          </button>)}</div>
+          </button>})}</div>
         </details>
 
         <section className="chapterCompletion" aria-labelledby="review-summary-heading">
@@ -402,9 +420,10 @@ export function StoryChapterEditor(props: {
           <ul><li><b>{summary.revise}</b> {labels.revisions}</li><li><b>{summary.add}</b> {labels.additions}</li><li><b>{summary.delete}</b> {labels.removals}</li><li><b>{privacyState.reviewed} / {candidates.length}</b> {labels.privacyDecisions}</li></ul>
           <p>{labels.applyingNote}</p>
           {!privacyState.complete && <p className="completionBlocker">{labels.privacyBlocks}</p>}
-          {chapterReview.stage === "reviewing" ? <button className="completionPrimary" disabled={!privacyState.complete} onClick={() => onChapterReview(applyChapterReview(chapterReview, privacyState.complete).state)}>{labels.apply}</button> : chapterReview.stage === "revision_ready" ? <>
+          {chapterReview.staleTranslations.length > 0 && <p className="completionBlocker">{labels.translationBlocked}</p>}
+          {chapterReview.stage === "reviewing" ? <button className="completionPrimary" disabled={!privacyState.complete} onClick={() => onChapterReview(applyChapterReview(chapterReview, applyContext).state)}>{labels.apply}</button> : chapterReview.stage === "revision_ready" ? <>
             {summary.unresolved > 0 && <p className="completionBlocker">{labels.addBlocked}</p>}
-            <div className="completionActions"><span>{summary.unresolved ? labels.addBlocked : language === "zh" ? "没有待应用的批注" : "No pending annotations"}</span><button className="completionPrimary" disabled={!canMarkChapterReady(chapterReview, privacyState.complete)} onClick={() => onChapterReview(markChapterReady(chapterReview, privacyState.complete))}>{labels.markReady}</button></div>
+            <div className="completionActions"><span>{summary.unresolved ? labels.addBlocked : language === "zh" ? "没有待应用的批注" : "No pending annotations"}</span><button className="completionPrimary" disabled={!canMarkChapterReady(chapterReview, applyContext)} onClick={() => onChapterReview(markChapterReady(chapterReview, applyContext))}>{labels.markReady}</button></div>
           </> : <div className="readyConfirmation"><b>{labels.ready}</b><p>{labels.readyNote}</p><button onClick={() => onChapterReview(returnChapterToReview(chapterReview))}>{labels.reopen}</button></div>}
         </section>
       </div>
@@ -416,6 +435,7 @@ export function StoryChapterEditor(props: {
       <button title={labels.add} aria-label={labels.add} onClick={() => setAnnotationMode("add")}><span>{labels.add}</span></button>
       {annotationMode && <form className="selectionPrompt" onSubmit={(event) => { event.preventDefault(); createAnnotation(annotationMode, instruction); }}>
         <label>{annotationMode === "revise" ? labels.revisePrompt : labels.addPrompt}<textarea autoFocus rows={3} value={instruction} placeholder={labels.instructionPlaceholder} onChange={(event) => setInstruction(event.target.value)} /></label>
+        {annotationMode === "add" && evidence[0] && <label className="selectionEvidenceSupport"><input type="checkbox" checked={supportAddition} onChange={(event) => setSupportAddition(event.target.checked)} />{labels.evidenceSupport}</label>}
         <div><button type="button" onClick={clearSelection}>{labels.cancel}</button><button type="submit" disabled={!instruction.trim()}>{labels.save}</button></div>
       </form>}
     </div>}

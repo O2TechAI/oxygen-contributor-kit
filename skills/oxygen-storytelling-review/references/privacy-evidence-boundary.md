@@ -67,7 +67,7 @@ Evidence → Chapter Back restores that context. Do not make the reviewer redisc
 
 ## Privacy candidate model
 
-Privacy asks one human decision at a time. Each candidate has a stable ID, localized title/explanation, required flag, original availability, and safe why-flagged copy.
+Privacy asks one human decision at a time. Each candidate has a stable ID, localized title/explanation, required flag, original availability, safe why-flagged copy, and an explicit set of stable semantic release targets. An empty target set means the reviewed concern is local-only/already absent from release copy; it must be explicit rather than inferred.
 
 The visible decision model is only:
 
@@ -114,7 +114,7 @@ Do not infer, approximate, hallucinate, reconstruct, recover, or display the rem
 ## Keep and Redact semantics
 
 - **Keep:** preserve the currently available safe release context; never restore unavailable content.
-- **Redact:** ensure the candidate does not appear in the revised release representation.
+- **Redact:** suppress every bound semantic release target in both languages and ensure the candidate does not appear in the reviewed release projection.
 
 Neither decision deletes source evidence. Decisions remain local Chapter review state and feed Apply/All set gating.
 
@@ -148,6 +148,7 @@ Verify:
 - why-flagged copy is specific but safe;
 - Suggested Release is absent in both languages;
 - Keep/Redact progression works;
+- Redact changes the allowlisted reviewed release projection for every bound target;
 - unresolved required decisions block Apply/All set as specified;
 - exported/generic source contains no local excerpt or removed content;
 - Final Release Memory keeps publication false.

@@ -72,12 +72,27 @@ type PrivacyOriginal =
   | { availability: "available"; excerpt: string; sourceLanguage: "en" | "zh" | string }
   | { availability: "unavailable" };
 
+type StoryBlockId =
+  | "phase"
+  | "title"
+  | "overview"
+  | "before"
+  | "after"
+  | `people:${string}`
+  | "scene"
+  | `reconstruction-${number}`
+  | `detail-${number}`
+  | "outcome"
+  | "uncertainty"
+  | `insight:${string}`;
+
 type PrivacyCandidate = {
   id: string;
   title: string;
   original: PrivacyOriginal;
   whyFlagged: string;
   required: boolean;
+  releaseTargets: StoryBlockId[];
 };
 
 type LanguagePresentation = {
@@ -119,6 +134,8 @@ type ChapterStory = {
 ```
 
 Internal compatibility fields such as a privacy recommendation or former suggested-release copy may exist in legacy data. They are not approved visible UI and must not drive the human decision panel.
+
+`releaseTargets` binds a candidate to stable semantic release blocks so a Redact decision changes the release projection rather than only completion state. Require the field even when empty: an empty array explicitly means the reviewed sensitive material is local-only/already absent from generated release copy. Reject targets that do not resolve to a block or inline-insight identity in both language presentations.
 
 ## Semantic Story blocks
 

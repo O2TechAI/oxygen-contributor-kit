@@ -34,6 +34,20 @@ export type EvidenceReference = {
   label?: string;
 };
 
+export type StoryReleaseTarget =
+  | "phase"
+  | "title"
+  | "overview"
+  | "before"
+  | "after"
+  | `people:${string}`
+  | "scene"
+  | `reconstruction-${number}`
+  | `detail-${number}`
+  | "outcome"
+  | "uncertainty"
+  | `insight:${string}`;
+
 export type ReleaseEpisode = {
   startTimestamp?: string;
   endTimestamp?: string;
@@ -88,13 +102,17 @@ export type StoryPrivacyCandidate = {
   title: string;
   explanation: string;
   recommendation: "keep" | "redact";
+  /** Stable semantic release blocks affected by a Redact decision. An empty
+   * array explicitly means the reviewed candidate is local-only and no release
+   * block contains it. */
+  releaseTargets: StoryReleaseTarget[];
   original: {
     availability: "available" | "unavailable";
     excerpt?: string;
     sourceLanguage?: StoryLanguage;
   };
   whyFlagged: string;
-  suggestedRelease: string;
+  suggestedRelease?: string;
 };
 
 export type StoryLanguagePresentation = {
@@ -268,6 +286,25 @@ function validEvidence(value: unknown): value is EvidenceReference {
   return Boolean(evidence.documentId && evidence.eventId);
 }
 
+const releaseTargetPattern = /^(?:phase|title|overview|before|after|scene|outcome|uncertainty|people:.+|reconstruction-\d+|detail-\d+|insight:.+)$/;
+
+function sameOrderedValues(left: string[], right: string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function semanticBlockIds(value: StoryLanguagePresentation) {
+  return [
+    "phase", "title", "overview", "before", "after",
+    ...value.people.map((person) => `people:${person.id}`),
+    "scene",
+    ...value.story.reconstruction.map((_, index) => `reconstruction-${index}`),
+    ...value.story.importantDetails.map((_, index) => `detail-${index}`),
+    "outcome",
+    ...(value.story.uncertainty ? ["uncertainty"] : []),
+    ...value.highlights.map((highlight) => `insight:${highlight.id}`),
+  ];
+}
+
 function validReviewLanguage(value: unknown): value is StoryLanguagePresentation {
   if (!value || typeof value !== "object") return false;
   const copy = value as Partial<StoryLanguagePresentation>;
@@ -278,7 +315,7 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
   return Boolean(
     copy.phase && copy.title && copy.timelineSummary && copy.before && copy.after && copy.overview
     && Array.isArray(copy.timelineChips) && copy.timelineChips.every((chip) => typeof chip === "string" && chip.trim())
-    && Array.isArray(people) && people.length > 0 && people.every((person) => (
+    && Array.isArray(people) && people.every((person) => (
       person.id && person.releaseLabel && person.role && person.description
       && ["not_identified", "local_only"].includes(person.localIdentityState)
     ))
@@ -286,14 +323,18 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
     && nonEmptyStrings(story.importantDetails) && story.decisionOutcome
     && Array.isArray(highlights) && highlights.length > 0
     && highlights.every((item) => item.id && item.title && item.noticed && item.lesson)
-    && privacy?.summary && Array.isArray(privacy.candidates) && privacy.candidates.length > 0
+    && privacy?.summary && Array.isArray(privacy.candidates)
     && privacy.candidates.every((candidate) => (
       candidate.id && candidate.title && candidate.explanation
       && ["keep", "redact"].includes(candidate.recommendation)
+      && Array.isArray(candidate.releaseTargets)
+      && candidate.releaseTargets.every((target) => typeof target === "string" && releaseTargetPattern.test(target))
       && candidate.original
       && ["available", "unavailable"].includes(candidate.original.availability)
-      && (candidate.original.availability === "unavailable" || Boolean(candidate.original.excerpt && candidate.original.sourceLanguage))
-      && candidate.whyFlagged && candidate.suggestedRelease
+      && (candidate.original.availability === "available"
+        ? Boolean(candidate.original.excerpt && candidate.original.sourceLanguage)
+        : candidate.original.excerpt === undefined && candidate.original.sourceLanguage === undefined)
+      && candidate.whyFlagged
     ))
   );
 }
@@ -301,9 +342,49 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
 function validReviewPresentation(value: unknown): value is EpisodeReviewPresentation {
   if (!value || typeof value !== "object") return false;
   const presentation = value as Partial<EpisodeReviewPresentation>;
-  return validReviewLanguage(presentation.en)
-    && validReviewLanguage(presentation.zh)
-    && nonEmptyStrings(presentation.semanticAnchors);
+  if (!validReviewLanguage(presentation.en)
+      || !validReviewLanguage(presentation.zh)
+      || !nonEmptyStrings(presentation.semanticAnchors)) return false;
+  const en = presentation.en;
+  const zh = presentation.zh;
+  const enBlocks = semanticBlockIds(en);
+  const zhBlocks = semanticBlockIds(zh);
+  return sameOrderedValues(en.people.map((person) => person.id), zh.people.map((person) => person.id))
+    && sameOrderedValues(en.people.map((person) => person.releaseLabel), zh.people.map((person) => person.releaseLabel))
+    && sameOrderedValues(en.people.map((person) => person.localIdentityState), zh.people.map((person) => person.localIdentityState))
+    && sameOrderedValues(en.highlights.map((highlight) => highlight.id), zh.highlights.map((highlight) => highlight.id))
+    && sameOrderedValues(en.privacy.candidates.map((candidate) => candidate.id), zh.privacy.candidates.map((candidate) => candidate.id))
+    && en.privacy.candidates.every((candidate, index) => {
+      const paired = zh.privacy.candidates[index];
+      return paired.recommendation === candidate.recommendation
+        && paired.original.availability === candidate.original.availability
+        && paired.original.excerpt === candidate.original.excerpt
+        && paired.original.sourceLanguage === candidate.original.sourceLanguage
+        && sameOrderedValues(candidate.releaseTargets, paired.releaseTargets)
+        && candidate.releaseTargets.every((target) => enBlocks.includes(target))
+        && paired.releaseTargets.every((target) => zhBlocks.includes(target));
+    })
+    && sameOrderedValues(enBlocks, zhBlocks);
+}
+
+export type EvidenceTargetResolution =
+  | { status: "resolved"; itemId: string; index: number }
+  | { status: "missing" | "ambiguous" };
+
+/** Resolve exact evidence against imported item IDs. Importers commonly qualify
+ * IDs as `document:event`; Story metadata may retain the reviewed bare event ID.
+ * Exact matches win, and a bare ID is accepted only when it has one match. */
+export function resolveEvidenceTarget(
+  items: Array<{ id: string }>,
+  eventId: string,
+): EvidenceTargetResolution {
+  const exactIndex = items.findIndex((item) => item.id === eventId);
+  if (exactIndex >= 0) return { status: "resolved", itemId: items[exactIndex].id, index: exactIndex };
+  const matches = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.id.slice(item.id.lastIndexOf(":") + 1) === eventId);
+  if (matches.length === 1) return { status: "resolved", itemId: matches[0].item.id, index: matches[0].index };
+  return { status: matches.length ? "ambiguous" : "missing" };
 }
 
 export function parseStoryAnnotation(summary?: string): StoryAnnotation | LegacyStoryAnnotation | null {
@@ -381,13 +462,27 @@ function inferredTitle(event: TimelineCandidate) {
   return sentence.slice(0, 140) || "Project state changed";
 }
 
+function canonicalStoryValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalStoryValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => [key, canonicalStoryValue(item)]));
+}
+
 function explicitMilestones<T extends TimelineCandidate>(events: T[], maximum: number) {
-  const seen = new Set<string>();
+  const seen = new Map<string, string>();
   const milestones: Array<TimelineMilestone<T>> = [];
   for (const event of events) {
     const annotation = parseStoryAnnotation(event.summary);
-    if (!annotation || seen.has(annotation.key)) continue;
-    seen.add(annotation.key);
+    if (!annotation) continue;
+    const serialized = JSON.stringify(canonicalStoryValue(annotation));
+    const previous = seen.get(annotation.key);
+    if (previous) {
+      if (previous !== serialized) throw new Error(`Conflicting reviewed Story chapter key: ${annotation.key}`);
+      continue;
+    }
+    seen.set(annotation.key, serialized);
     const isEpisode = annotation.schema === "oxygen.story-highlight/2";
     milestones.push({
       ...event,

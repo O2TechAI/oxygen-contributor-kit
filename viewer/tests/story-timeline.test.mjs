@@ -5,6 +5,7 @@ import {
   STORY_PREFIX,
   milestoneKindLabel,
   parseStoryAnnotation,
+  resolveEvidenceTarget,
   selectProjectTimeline,
 } from "../lib/timeline.ts";
 
@@ -42,6 +43,7 @@ const languagePresentation = (language, key) => ({
       title: language === "zh" ? "内部指标" : "Internal metric",
       explanation: language === "zh" ? "这个值可能不适合发布。" : "This value may not belong in a release.",
       recommendation: "redact",
+      releaseTargets: ["scene"],
       original: { availability: "unavailable" },
       whyFlagged: language === "zh" ? "已审阅元数据表明这里曾有内部指标，但原始数值已不可用；人工只能确认保留的上下文，不会恢复数值。" : "Reviewed metadata identifies an internal metric, but its original value is unavailable; the human confirms only the retained context and no value is restored.",
       suggestedRelease: language === "zh" ? "只保留决策。" : "Keep only the decision.",
@@ -50,6 +52,7 @@ const languagePresentation = (language, key) => ({
       title: language === "zh" ? "本地路径" : "Local path",
       explanation: language === "zh" ? "路径可能暴露项目身份。" : "The path may expose project identity.",
       recommendation: "redact",
+      releaseTargets: [],
       original: { availability: "available", excerpt: "/reviewed/local/project", sourceLanguage: "en" },
       whyFlagged: language === "zh" ? "显示的绝对路径包含机器特定目录，可能暴露本地环境与项目身份。" : "The displayed absolute path contains machine-specific directories that can reveal the local environment and project identity.",
       suggestedRelease: language === "zh" ? "不保留路径。" : "Do not retain the path.",
@@ -118,12 +121,21 @@ test("explicit reviewed annotations define the story without time buckets", () =
 
 test("repeated conversations cannot create duplicate milestones", () => {
   const repeated = story({ key:"one-decision", title:"One durable decision" });
+  const parsed = JSON.parse(repeated.slice(STORY_PREFIX.length));
+  const reordered = STORY_PREFIX + JSON.stringify(Object.fromEntries(Object.entries(parsed).reverse()));
   const selected = selectProjectTimeline([
     { id:"first", timestamp:"2026-08-01T00:00:00Z", summary:repeated },
-    { id:"repeat", timestamp:"2026-08-02T00:00:00Z", summary:repeated },
+    { id:"repeat", timestamp:"2026-08-02T00:00:00Z", summary:reordered },
     { id:"next", timestamp:"2026-08-03T00:00:00Z", summary:story({ key:"next-state", kind:"validation" }) },
   ]);
   assert.deepEqual(selected.map((event) => event.id), ["first", "next"]);
+});
+
+test("conflicting duplicate reviewed Chapter keys fail closed", () => {
+  assert.throws(() => selectProjectTimeline([
+    { id:"first", timestamp:"2026-08-01T00:00:00Z", summary:story({ key:"conflict", title:"First account" }) },
+    { id:"second", timestamp:"2026-08-02T00:00:00Z", summary:story({ key:"conflict", title:"Different account" }) },
+  ]), /Conflicting reviewed Story chapter key: conflict/);
 });
 
 test("explicit maximum keeps the most important milestones and restores chronology", () => {
@@ -172,4 +184,46 @@ test("bilingual review presentation preserves one evidence set", () => {
   assert.match(annotation.reviewPresentation.en.privacy.candidates[1].whyFlagged, /displayed absolute path/);
   assert.equal(annotation.reviewPresentation.en.after, "Evidence changed the direction.");
   assert.equal(annotation.reviewPresentation.zh.after, "证据改变了方向。");
+});
+
+test("review schema rejects unavailable excerpts and bilingual identity drift", () => {
+  const unavailableExcerpt = JSON.parse(story({ key:"unsafe-unavailable" }).slice(STORY_PREFIX.length));
+  unavailableExcerpt.reviewPresentation.en.privacy.candidates[0].original.excerpt = "must not survive";
+  unavailableExcerpt.reviewPresentation.en.privacy.candidates[0].original.sourceLanguage = "en";
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(unavailableExcerpt)), null);
+
+  const privacyDrift = JSON.parse(story({ key:"privacy-drift" }).slice(STORY_PREFIX.length));
+  privacyDrift.reviewPresentation.zh.privacy.candidates[0].id = "different-candidate";
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(privacyDrift)), null);
+
+  const peopleDrift = JSON.parse(story({ key:"people-drift" }).slice(STORY_PREFIX.length));
+  peopleDrift.reviewPresentation.zh.people[0].releaseLabel = "B";
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(peopleDrift)), null);
+
+  const targetDrift = JSON.parse(story({ key:"target-drift" }).slice(STORY_PREFIX.length));
+  targetDrift.reviewPresentation.zh.privacy.candidates[0].releaseTargets = ["outcome"];
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(targetDrift)), null);
+
+  const evidenceLanguageDrift = JSON.parse(story({ key:"evidence-language-drift" }).slice(STORY_PREFIX.length));
+  evidenceLanguageDrift.reviewPresentation.zh.privacy.candidates[1].original.excerpt = "translated local path";
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(evidenceLanguageDrift)), null);
+});
+
+test("valid Chapters may have no supported People and no Privacy candidates", () => {
+  const emptySets = JSON.parse(story({ key:"empty-supported-sets" }).slice(STORY_PREFIX.length));
+  for (const language of ["en", "zh"]) {
+    emptySets.reviewPresentation[language].people = [];
+    emptySets.reviewPresentation[language].privacy.candidates = [];
+  }
+  const parsed = parseStoryAnnotation(STORY_PREFIX + JSON.stringify(emptySets));
+  assert.deepEqual(parsed.reviewPresentation.en.people, []);
+  assert.deepEqual(parsed.reviewPresentation.zh.privacy.candidates, []);
+});
+
+test("exact Evidence resolver accepts one qualified or unqualified match and rejects uncertainty", () => {
+  const items = [{ id:"doc-a:event-1" }, { id:"doc-a:event-2" }];
+  assert.deepEqual(resolveEvidenceTarget(items, "doc-a:event-1"), { status:"resolved", itemId:"doc-a:event-1", index:0 });
+  assert.deepEqual(resolveEvidenceTarget(items, "event-2"), { status:"resolved", itemId:"doc-a:event-2", index:1 });
+  assert.deepEqual(resolveEvidenceTarget(items, "missing"), { status:"missing" });
+  assert.deepEqual(resolveEvidenceTarget([...items, { id:"doc-b:event-2" }], "event-2"), { status:"ambiguous" });
 });

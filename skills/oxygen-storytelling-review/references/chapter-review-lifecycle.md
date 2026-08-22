@@ -103,7 +103,7 @@ Add opens a contextual input such as `What is missing here?`.
 
 ## Pending visibility and cancellation
 
-Pending work should be visible but restrained:
+Unresolved work should be visible but restrained:
 
 - exact inline range styling;
 - type and resolution;
@@ -111,11 +111,7 @@ Pending work should be visible but restrained:
 - human instruction when present;
 - Cancel annotation.
 
-Cancellation changes only the target annotation to cancelled. Recalculate stage:
-
-- if any pending/needs-evidence work remains, stay reviewing;
-- if no unresolved work remains and revision > 1, return to revision_ready;
-- the initial draft without a presented revision remains reviewing.
+Cancellation is available only for `pending` or `needs_evidence` work and changes only that unresolved annotation to cancelled. Cancelling still returns/stays in reviewing until another Apply presents the resulting revision. Never expose Cancel for an applied annotation: reversing applied content must be represented as a new pending operation and pass through another Apply.
 
 ## Apply review contract
 
@@ -125,7 +121,7 @@ It must:
 
 - require complete required Privacy decisions;
 - increment the revision;
-- apply Delete and supported Revise in revision order;
+- apply Delete, Revise, and evidence-supported Add in revision order;
 - preserve unaffected useful detail, failures, disagreement, uncertainty, and causal relationships;
 - preserve evidence semantics and Privacy decisions;
 - keep the resulting Story fully annotatable;
@@ -166,6 +162,9 @@ Enable it only when:
 - no pending annotation remains;
 - no `needs_evidence` annotation remains;
 - every required Privacy candidate has a Keep/Redact decision.
+- no paired locale remains stale/unresolved;
+- no inline-insight operation remains pending;
+- the current Privacy decisions are the same typed decisions applied in the presented revision.
 
 Clicking it sets stage to human_confirmed without changing the revision or publication state. Show `Final Release Memory` plus a note that confirmation is local and not publication approval.
 

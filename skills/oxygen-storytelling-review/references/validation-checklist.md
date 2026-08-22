@@ -13,6 +13,7 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] No identity/evidence/fact was fabricated.
 - [ ] Project-specific copy/excerpts do not appear in reusable generic source/Skill.
 - [ ] No unavailable Privacy candidate contains an excerpt.
+- [ ] Every Privacy candidate declares stable release targets; every target resolves in both language presentations, and an intentionally local-only candidate declares an explicit empty target set.
 - [ ] Package/publication behavior is unchanged.
 
 ## Project Story
@@ -89,6 +90,10 @@ Also verify:
 
 - [ ] Privacy blocks Apply/All set as specified.
 - [ ] Unsupported Add becomes `needs_evidence`, is not inserted, and blocks All set.
+- [ ] Evidence-supported Add receives `appliedRevision`, enters the next draft, and can complete after paired-language review.
+- [ ] Applied annotations do not expose Cancel; reversal requires a new pending operation and revision.
+- [ ] Redact suppresses all bound targets in the allowlisted EN/中文 release projection, while Keep preserves permitted safe copy.
+- [ ] Pending insight changes and stale paired-language blocks disable All set.
 - [ ] Summary counts and revision labels are correct.
 - [ ] Human intent is not silently dropped.
 

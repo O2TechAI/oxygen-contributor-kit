@@ -8,11 +8,12 @@ import {
   StoryChapterEditor,
   type ChapterEvidenceContext,
   type ChapterReviewState,
-  type InsightReview,
   type PrivacyDecision,
 } from "./story-chapter-editor";
 import { emptyChapterReview } from "../lib/story-review";
 import { milestoneKindLabel, selectProjectTimeline, type EvidenceReference, type StoryLanguage } from "../lib/timeline";
+import { buildReviewedStoryRelease } from "../lib/story-release";
+import { phaseGroupIdentity, restoreChapterContext, type ChapterRestoreContext } from "../lib/story-navigation";
 
 type Status = { status:string; stage:string; completed:number; total:number; percent:number; documentCount:number; warnings:string[] };
 type Doc = { id:string; kind:string; title:string; source_user?:string; source_system?:string; source_timestamp?:string; item_count:number; organization_status:string; formatted_summary?: Summary };
@@ -57,18 +58,21 @@ export function InlineWorkspace() {
   const [sourceFocus,setSourceFocus] = useState("");
   const [activeStoryKey,setActiveStoryKey] = useState("");
   const [language,setLanguage] = useState<StoryLanguage>("en");
-  const [insightReviews,setInsightReviews] = useState<Record<string,InsightReview>>({});
   const [privacyDecisions,setPrivacyDecisions] = useState<Record<string,PrivacyDecision>>({});
   const [chapterReviews,setChapterReviews] = useState<Record<string,ChapterReviewState>>({});
   const [evidenceReturn,setEvidenceReturn] = useState<(ChapterEvidenceContext & { projectName:string })|null>(null);
-  const [chapterScrollRestore,setChapterScrollRestore] = useState(0);
+  const [chapterScrollRestore,setChapterScrollRestore] = useState<ChapterRestoreContext|null>(null);
+  const [evidenceNavigationError,setEvidenceNavigationError] = useState("");
   const timelineScrollRef = useRef<HTMLDivElement|null>(null);
   const phaseSectionRefs = useRef(new Map<number,HTMLElement>());
   const timelineContextRef = useRef({ key:"", scrollTop:0 });
   const activeChapterButtonRef = useCallback((node:HTMLButtonElement|null) => {
     if (!node) return;
     requestAnimationFrame(() => node.scrollIntoView({ block:"nearest" }));
-  }, [activeStoryKey]);
+  }, []);
+  const clearChapterRestore = useCallback(() => {
+    setChapterScrollRestore(null);
+  }, []);
   const [railWidth,setRailWidth] = useState(330);
   const [railHeight,setRailHeight] = useState(280);
   const [activePhaseIndex,setActivePhaseIndex] = useState(0);
@@ -203,9 +207,8 @@ export function InlineWorkspace() {
   const milestoneNumber = new Map(highlights.map((event,index) => [event.story.key,index+1]));
   const activeStoryIndex = highlights.findIndex((event) => event.story.key === activeStoryKey);
   const activeMilestone = activeStoryIndex >= 0 ? highlights[activeStoryIndex] : null;
-  const reviewKey = (storyKey:string) => storyKey;
   const privacyKey = (storyKey:string,candidateId:string) => `${storyKey}:${candidateId}`;
-  const reviewedInsights = highlights.filter((event) => insightReviews[reviewKey(event.story.key)]).length;
+  const reviewedInsights = highlights.filter((event) => Object.keys(chapterReviews[event.story.key]?.insightReviews || {}).length > 0).length;
   const phaseSectionRef = (index:number,node:HTMLElement|null) => {
     if(node) phaseSectionRefs.current.set(index,node);
     else phaseSectionRefs.current.delete(index);
@@ -233,8 +236,14 @@ export function InlineWorkspace() {
   },{}) || {};
   const openStory = (storyKey:string) => {
     timelineContextRef.current={key:storyKey,scrollTop:timelineScrollRef.current?.scrollTop || 0};
-    setChapterScrollRestore(0);
+    clearChapterRestore();
+    setEvidenceNavigationError("");
     setEvidenceReturn(null);
+    setActiveStoryKey(storyKey);
+  };
+  const navigateStory = (storyKey:string) => {
+    clearChapterRestore();
+    setEvidenceNavigationError("");
     setActiveStoryKey(storyKey);
   };
   const closeStory = () => {
@@ -246,6 +255,11 @@ export function InlineWorkspace() {
     });
   };
   const openEvidence = (evidence:EvidenceReference,context:ChapterEvidenceContext) => {
+    if(!docs.some((document) => document.id===evidence.documentId)) {
+      setEvidenceNavigationError(language==="zh"?"精确证据无法打开：引用的来源记录不存在。":"Exact evidence cannot open because the referenced source record is missing.");
+      return;
+    }
+    setEvidenceNavigationError("");
     setEvidenceReturn({...context,projectName:selectedProject || primaryProject});
     setActiveStoryKey("");
     setSelected(evidence.documentId);
@@ -257,16 +271,10 @@ export function InlineWorkspace() {
     setLanguage(evidenceReturn.language);
     setSelected(`project:${evidenceReturn.projectName}`);
     setView("timeline");
-    setChapterScrollRestore(evidenceReturn.scrollTop);
+    setChapterScrollRestore({storyKey:evidenceReturn.storyKey,scrollTop:evidenceReturn.scrollTop,focusOriginId:evidenceReturn.originId});
     setActiveStoryKey(evidenceReturn.storyKey);
     setEvidenceReturn(null);
   };
-  const updateInsightReview = (key:string,review?:InsightReview) => setInsightReviews((current) => {
-    const next={...current};
-    if(review) next[key]=review;
-    else delete next[key];
-    return next;
-  });
   const updatePrivacyDecision = (storyKey:string,candidateId:string,decision?:PrivacyDecision) => setPrivacyDecisions((current) => {
     const next={...current};
     const key=privacyKey(storyKey,candidateId);
@@ -275,6 +283,20 @@ export function InlineWorkspace() {
     return next;
   });
   const updateChapterReview = (storyKey:string,review:ChapterReviewState) => setChapterReviews((current) => ({...current,[storyKey]:review}));
+  const downloadReviewed = async (url:string,filename:string) => {
+    setError("");
+    const reviewedStory=buildReviewedStoryRelease(highlights,chapterReviews);
+    const response=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({reviewedStory})});
+    if(!response.ok) {
+      const failure=await response.json().catch(()=>({error:"Download failed"})) as {error?:string};
+      setError(failure.error || "Download failed");
+      return;
+    }
+    const href=URL.createObjectURL(await response.blob());
+    const anchor=document.createElement("a");
+    anchor.href=href;anchor.download=filename;anchor.click();
+    URL.revokeObjectURL(href);
+  };
   const ready = isProject || Boolean(detail);
   const startResize = (event:ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -290,6 +312,7 @@ export function InlineWorkspace() {
     window.addEventListener("pointermove",move);window.addEventListener("pointerup",stop);
   };
   const workspaceStyle={"--rail-width":`${railWidth}px`,"--rail-height":`${railHeight}px`} as CSSProperties;
+  const activeChapterRestore=restoreChapterContext(chapterScrollRestore,activeMilestone?.story.key || "");
 
   return <main className="shell">
     <header className="topbar">
@@ -301,8 +324,8 @@ export function InlineWorkspace() {
         <span>|</span>
         <button className={language==="zh"?"active":""} onClick={() => setLanguage("zh")} aria-pressed={language==="zh"}>中文</button>
       </div>
-      <a className="download" href="/api/organization/export">Download HTML</a>
-      <a className="download primary" href="/api/package">Download ZIP</a>
+      <button className="download" onClick={() => downloadReviewed("/api/organization/export","oxygen-reviewed-story.html")}>Download HTML</button>
+      <button className="download primary" onClick={() => downloadReviewed("/api/package","oxygen-contribution.zip")}>Download ZIP</button>
     </header>
     <div className={`workspace ${activeMilestone?"episodeOpen":""}`} style={workspaceStyle}>
       <aside className="rail">
@@ -312,7 +335,7 @@ export function InlineWorkspace() {
         </button>)}{activeMilestone && <div className="chapterRailContext" aria-label={language==="zh"?"章节选择器":"Chapter selector"}>
           <span>{language==="zh"?`章节 ${activeStoryIndex+1} / ${highlights.length}`:`Chapters ${activeStoryIndex+1} / ${highlights.length}`}</span>
           <nav className="chapterRailList" aria-label={language==="zh"?"章节":"Chapters"}>
-            {highlights.map((event) => { const active=event.story.key===activeStoryKey; return <button className={active?"active":""} aria-current={active?"page":undefined} ref={active?activeChapterButtonRef:undefined} key={event.story.key} onClick={() => setActiveStoryKey(event.story.key)}>
+            {highlights.map((event) => { const active=event.story.key===activeStoryKey; return <button className={active?"active":""} aria-current={active?"page":undefined} ref={active?activeChapterButtonRef:undefined} key={event.story.key} onClick={() => navigateStory(event.story.key)}>
               <i>{milestoneNumber.get(event.story.key)}</i><b>{localized(event)?.title || event.story.title}</b>
             </button>})}
           </nav>
@@ -323,7 +346,8 @@ export function InlineWorkspace() {
       <div className="splitter" role="separator" aria-label="Resize project and source panel" aria-orientation="vertical" onPointerDown={startResize}><span /></div>
       <section className="canvas">
         {!ready ? <div className="empty">No organized records found.</div> : <>
-          <div className="canvasHead"><div className="canvasHeadInner">
+          {error && <div className="workspaceError" role="alert">{error}</div>}
+          <div className="canvasHead" aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}><div className="canvasHeadInner">
             <span className="eyebrow">{view==="timeline"?labels.projectStory:view==="redaction"?labels.evidenceReview:labels.preferencesTitle}</span>
             <h1>{summary.primary_project || detail?.document.title}</h1>
             {view==="timeline" && <><p>{language==="zh" ? "这是一段由已审阅证据重建的项目故事：它保留关键转折、失败、决定与当前边界。" : summary.project_summary}</p><div className="headMeta">
@@ -334,7 +358,7 @@ export function InlineWorkspace() {
             </div></>}
           </div>
           </div>
-          <nav className="toolbar" aria-label="Record view">
+          <nav className="toolbar" aria-label="Record view" aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
             <div className="toolbarInner"><button className={view==="timeline"?"active":""} onClick={() => { setActiveStoryKey(""); setView("timeline"); }}>{labels.timeline}</button>
             <button className={view==="redaction"?"active":""} onClick={() => { setSourceFocus(""); setActiveStoryKey(""); setView("redaction"); }}>
               {labels.release}{redactionJob?.status === "running" ? " · running"
@@ -345,9 +369,9 @@ export function InlineWorkspace() {
               {labels.preferences}{probeRun?.status === "running" ? " · running" : probes.length ? ` · ${probes.filter((p) => p.answered_at).length}/${probes.length}` : ""}
             </button></div>
           </nav>
-          <div className="stream" ref={timelineScrollRef} onScroll={updateActivePhase}>
+          <div className="stream" ref={timelineScrollRef} onScroll={updateActivePhase} aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
             {view === "timeline" ? <>
-              <div className="storyTimelineLayout"><div className="timeline">{phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={group.name}>
+              <div className="storyTimelineLayout"><div className="timeline">{phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
                 <div className="storyPhaseHead"><div><small>{language==="zh"?"叙事阶段":"Narrative phase"}</small><span>{group.name}</span></div><b>{group.events.length} {language==="zh"?"个章节":`milestone${group.events.length===1?"":"s"}`}</b></div>
                 {group.events.map((event) => { const copy=localized(event); return <article className="timelineEvent" data-kind={event.story.kind} data-story-key={event.story.key} key={event.story.key} aria-labelledby={`milestone-${event.id}`}>
                   <div className="timelineMarker">{milestoneNumber.get(event.story.key)}</div>
@@ -363,7 +387,7 @@ export function InlineWorkspace() {
                       : <button onClick={() => { if(event.documentId) setSelected(event.documentId); setSourceFocus(event.id); setView("redaction"); }}>Open exact source event →</button>}</div>
                   </div>
                 </article>})}
-              </section>)}</div><nav className="phaseDirectory" aria-label={language==="zh"?"叙事阶段目录":"Narrative phase directory"}><span>{language==="zh"?"阶段目录":"PHASES"}</span>{phaseGroups.map((group,index) => <button className={activePhaseIndex===index?"active":""} aria-current={activePhaseIndex===index?"location":undefined} onClick={() => scrollToPhase(index)} key={group.name}>{group.name}<small>{group.events.length}</small></button>)}</nav></div>
+              </section>)}</div><nav className="phaseDirectory" aria-label={language==="zh"?"叙事阶段目录":"Narrative phase directory"}><span>{language==="zh"?"阶段目录":"PHASES"}</span>{phaseGroups.map((group,index) => <button className={activePhaseIndex===index?"active":""} aria-current={activePhaseIndex===index?"location":undefined} onClick={() => scrollToPhase(index)} key={phaseGroupIdentity(group.name,index)}>{group.name}<small>{group.events.length}</small></button>)}</nav></div>
             </> : view === "redaction" ? <>{evidenceReturn && <div className="evidenceReturnBar"><button onClick={backToChapter}>← {language==="zh"?"返回章节":"Back to chapter"}</button><span>{language==="zh"?"保持章节与证据来源位置":"Chapter and evidence origin preserved"}</span></div>}<RedactionCompare
               job={redactionJob}
               redactions={redactions}
@@ -401,17 +425,18 @@ export function InlineWorkspace() {
             position={activeStoryIndex+1}
             total={highlights.length}
             language={language}
-            insightReview={insightReviews[reviewKey(activeMilestone.story.key)]}
             privacyDecisions={activePrivacyReview}
             chapterReview={chapterReviews[activeMilestone.story.key] || emptyChapterReview()}
-            initialScrollTop={chapterScrollRestore}
-            onInsightReview={(review) => updateInsightReview(reviewKey(activeMilestone.story.key),review)}
+            initialScrollTop={activeChapterRestore.scrollTop}
+            focusOriginId={activeChapterRestore.focusOriginId}
+            onContextRestored={clearChapterRestore}
             onPrivacyDecision={(candidateId,decision) => updatePrivacyDecision(activeMilestone.story.key,candidateId,decision)}
             onChapterReview={(review) => updateChapterReview(activeMilestone.story.key,review)}
+            evidenceError={evidenceNavigationError}
             onOpenEvidence={openEvidence}
             onClose={closeStory}
-            onPrevious={() => setActiveStoryKey(highlights[activeStoryIndex-1]?.story.key || activeMilestone.story.key)}
-            onNext={() => setActiveStoryKey(highlights[activeStoryIndex+1]?.story.key || activeMilestone.story.key)}
+            onPrevious={() => navigateStory(highlights[activeStoryIndex-1]?.story.key || activeMilestone.story.key)}
+            onNext={() => navigateStory(highlights[activeStoryIndex+1]?.story.key || activeMilestone.story.key)}
           />}
         </>}
       </section>

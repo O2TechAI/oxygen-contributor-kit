@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { resolveEvidenceTarget } from "../lib/timeline";
 
 // Rows are mounted a page at a time as the sentinel scrolls into view. Row
 // heights vary by two orders of magnitude here (a one-line status event next to
@@ -87,16 +88,20 @@ export function RedactionCompare(props: {
   // A different record starts from the top again.
   useEffect(() => { setLimit(PAGE_SIZE); }, [documentId]);
 
-  const focusIndex = focusItemId ? allItems.findIndex((item) => item.id === focusItemId) : -1;
+  const focusResolution = focusItemId ? resolveEvidenceTarget(allItems, focusItemId) : null;
+  const focusIndex = focusResolution?.status === "resolved" ? focusResolution.index : -1;
+  const resolvedFocusId = focusResolution?.status === "resolved" ? focusResolution.itemId : "";
   const visibleLimit = focusIndex >= 0 ? Math.max(limit, focusIndex + 1) : limit;
 
   useEffect(() => {
     if (!focusItemId || focusIndex < 0 || focusIndex >= visibleLimit) return;
     const frame = requestAnimationFrame(() => {
-      document.getElementById(`source-event-${focusItemId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const target = document.getElementById(`source-event-${resolvedFocusId}`);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      target?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [focusItemId, focusIndex, visibleLimit, documentId]);
+  }, [focusItemId, focusIndex, resolvedFocusId, visibleLimit, documentId]);
 
   useEffect(() => {
     if (limit >= allItems.length) return;
@@ -194,9 +199,12 @@ export function RedactionCompare(props: {
       Release preview · {items.length} event(s) · {spanCount} span(s) across {redactedCount} event(s)
     </h2>
     {notice}
+    {focusItemId && focusResolution?.status !== "resolved" && <p className="redactionNotice" role="alert">
+      Exact evidence target {focusResolution?.status === "ambiguous" ? "is ambiguous" : "is missing"}. The reference was not approximated.
+    </p>}
     {visible.map((item) => {
       const spans = byItem.get(item.id) || [];
-      return <article id={`source-event-${item.id}`} className={`redactionRow ${spans.length ? "" : "clean"} ${item.id===focusItemId?"sourceFocused":""}`} key={item.id}>
+      return <article id={`source-event-${item.id}`} tabIndex={item.id===resolvedFocusId?-1:undefined} className={`redactionRow ${spans.length ? "" : "clean"} ${item.id===resolvedFocusId?"sourceFocused":""}`} key={item.id}>
         <div className="redactionMeta">
           #{item.sequence} · {item.event_type || "record"} · {fmt(item.timestamp)} ·
           {" "}{spans.length ? `${spans.length} span(s)` : "no redactions"}
