@@ -49,11 +49,13 @@ type ChapterReviewState = {
   stage: ChapterReviewStage;
   revision: number;
   annotations: StoryAnnotation[];
+  evidenceVerified: boolean;
   publicationApproved: false;
 };
 ```
 
 The annotation identity is semantic block + exact source-language selection + revision context, not English text alone.
+Annotation IDs are unique within the Chapter. Pending ranges in the same block, language, and base revision must not overlap; reject a conflicting annotation instead of allowing one revision record to claim that both were applied.
 
 ## Exact-range invariant
 
@@ -98,6 +100,7 @@ Add opens a contextual input such as `What is missing here?`.
 
 - Anchor the instruction to the selected semantic Story position.
 - Incorporate it only when support exists in permitted reviewed evidence/context.
+- Resolve the cited evidence against actual reviewed items and verify the proposed factual wording/content; a checkbox or matching ID alone is insufficient.
 - When support cannot be proven, set `needs_evidence`; do not add the factual claim.
 - `needs_evidence` remains visible and blocks All set until resolved or cancelled.
 
@@ -120,6 +123,9 @@ Apply review means only: apply currently pending human annotations and present a
 It must:
 
 - require complete required Privacy decisions;
+- require every unique Chapter evidence reference to resolve to exactly one actual reviewed item;
+- validate every pending annotation against the current block, language, revision, offsets, and exact selected quote before applying any annotation;
+- reject an overlapping, stale, mismatched, duplicated-ID, or otherwise invalid pending batch atomically without incrementing the revision or marking any annotation applied;
 - increment the revision;
 - apply Delete, Revise, and evidence-supported Add in revision order;
 - preserve unaffected useful detail, failures, disagreement, uncertainty, and causal relationships;
@@ -138,6 +144,8 @@ It must not:
 - change publication approval.
 
 Apply annotation groups in ascending revision order; within one revision, process spans from later offsets to earlier offsets so earlier edits do not invalidate later positions.
+
+When an insight edit creates paired-language review debt, a later status-only action such as Accept must preserve that pending-language provenance. Status changes cannot erase bilingual debt without reviewing/applying the paired representation.
 
 ## Review summary
 
@@ -165,6 +173,7 @@ Enable it only when:
 - no paired locale remains stale/unresolved;
 - no inline-insight operation remains pending;
 - the current Privacy decisions are the same typed decisions applied in the presented revision.
+- the latest successful Apply verified the Chapter's actual evidence references.
 
 Clicking it sets stage to human_confirmed without changing the revision or publication state. Show `Final Release Memory` plus a note that confirmation is local and not publication approval.
 
@@ -207,3 +216,7 @@ Test at minimum:
 9. All set creates human_confirmed without publication change;
 10. Reopen returns to reviewing and supports another cycle;
 11. English and Chinese expose the same stage/revision/history.
+12. unresolved/missing/ambiguous evidence blocks Apply and confirmation;
+13. a real evidence ID with unsupported Add wording remains `needs_evidence`;
+14. overlapping or stale annotation batches fail atomically without a new revision;
+15. localized insight edit followed by Accept still creates paired-language review debt.

@@ -40,6 +40,8 @@ Story is AI-compressed and human-reviewable. Evidence is authoritative local rev
 
 Every Chapter links stable primary/supporting evidence IDs. Evidence remains secondary in the Chapter UI but must be exactly traceable. Opening it reuses the existing release/evidence review surface and focuses the real event.
 
+Do not treat possession of a document/event ID as evidence verification. Before Apply succeeds, resolve every unique Chapter reference against the actual permitted reviewed item inventory and require exactly one match. Missing, ambiguous, duplicated, or cross-document references block the revision and human confirmation. A local verification endpoint should return only the minimum decision state needed by the editor (for example, resolved/not-resolved and supported annotation IDs), never source content to a release projection.
+
 ## Evidence language
 
 Exact evidence remains in its original source language. Do not silently translate evidence and present the translation as original.
@@ -109,7 +111,7 @@ The safe why-flagged explanation must use only surviving metadata/context and co
 - why human confirmation is still requested;
 - what Keep actually preserves (existing safe placeholder/context, never the removed value).
 
-Do not infer, approximate, hallucinate, reconstruct, recover, or display the removed text/value. Import validation must reject an unavailable candidate that carries an excerpt.
+Do not infer, approximate, hallucinate, reconstruct, recover, or display the removed text/value. Import validation must reject an unavailable candidate that carries any field beyond the unavailable discriminator, including an excerpt, source language, removed value, or raw compatibility payload.
 
 ## Keep and Redact semantics
 
@@ -134,17 +136,18 @@ Apply review may use Privacy decisions to remove/suppress release content. It mu
 - publish local excerpts;
 - treat Keep as permission to recover missing material.
 
-Unsupported Add instructions are blocked/flagged rather than satisfied from disallowed sources.
+Unsupported Add instructions are blocked/flagged rather than satisfied from disallowed sources. A user-selected checkbox or plausible evidence ID is not proof. Resolve the cited item and verify that the proposed factual wording is present in permitted reviewed content (or use an equally conservative evidence-entailment check); otherwise mark the Add `needs_evidence`. Never return the underlying reviewed content merely to certify the annotation.
 
 ## Validation
 
 Verify:
 
-- every evidence reference resolves;
+- every unique evidence reference resolves to exactly one actual reviewed item before Apply/All set;
+- arbitrary Add wording is rejected even when it cites a real Chapter evidence ID;
 - exact source content remains original-language;
 - no Story action mutates Evidence;
 - available excerpts are present in permitted reviewed data;
-- unavailable candidates contain no excerpt/value;
+- unavailable candidates contain no field beyond the unavailable discriminator;
 - why-flagged copy is specific but safe;
 - Suggested Release is absent in both languages;
 - Keep/Redact progression works;

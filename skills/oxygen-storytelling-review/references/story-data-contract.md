@@ -32,6 +32,8 @@ Use stable identities for:
 
 Do not use rendered English text as the sole identity. Stable IDs are required for language switching, revision provenance, navigation restoration, and exact evidence linkage.
 
+IDs must also be unique within their Chapter and semantic collection. Reject duplicate participant, insight, Privacy-candidate, annotation, or evidence-reference IDs rather than allowing keyed maps/decision records to collapse distinct objects into one review action. Paired English/Chinese presentations use the same ordered semantic IDs.
+
 ## Recommended Story envelope
 
 The exact implementation shape may vary, but it must represent these semantics:
@@ -155,7 +157,7 @@ The paired language presentations map to the same semantic block IDs, even when 
 
 ## Evidence linkage
 
-Every explicit Chapter must have one primary evidence reference anchored to an existing reviewed event. Supporting references may expand causal context. All references must resolve before import/render.
+Every explicit Chapter must have one primary evidence reference anchored to an existing reviewed event. Supporting references may expand causal context. References must be unique and all references must resolve to exactly one real item in the permitted reviewed artifact before Apply or human confirmation; a syntactically plausible document/event ID is not proof of resolution.
 
 Preserve:
 
@@ -200,13 +202,13 @@ Fail closed when any of these conditions is false:
 - every milestone belongs to a generated phase when phases are present;
 - milestone kind/state is allowed;
 - primary evidence matches the annotation anchor where that representation is used;
-- all primary/supporting evidence resolves;
+- all unique primary/supporting evidence resolves to exactly one reviewed item;
 - AI insight starts as an AI proposal;
 - release draft is the default Story view;
 - bilingual key sets and semantic block structures align;
 - required technical/semantic anchors appear in both presentations;
 - available Privacy original has an excerpt and source language;
-- unavailable Privacy original has no excerpt;
+- unavailable Privacy original contains only its unavailable discriminator and no excerpt, source language, removed value, raw field, or compatibility payload;
 - the last Chapter is current state.
 
 Malformed Story metadata should not fall back to confident invented copy. Stop with a clear local error or omit the invalid annotation and disclose the limitation.

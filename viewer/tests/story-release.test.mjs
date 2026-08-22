@@ -54,11 +54,21 @@ const milestone = {
   },
 };
 
+const evidence = { documentId: "doc", eventId: "event" };
+const reviewContext = (privacyDecision) => ({
+  privacyCandidates: [candidate],
+  privacyDecisions: { "local-detail": privacyDecision },
+  chapterEvidence: [evidence],
+  evidenceResolved: true,
+  supportedAddIds: [],
+  reviewedBlocks: { en: {}, zh: {} },
+});
+
 test("release projection includes only human-confirmed allowlisted Chapter copy", () => {
   const pending = buildReviewedStoryRelease([milestone], { chapter: emptyChapterReview() });
   assert.deepEqual(pending.chapters, []);
 
-  const context = { privacyCandidates: [candidate], privacyDecisions: { "local-detail": "redact" }, chapterEvidence: [] };
+  const context = reviewContext("redact");
   let review = applyChapterReview(emptyChapterReview(), context).state;
   review = markChapterReady(review, context);
   const release = buildReviewedStoryRelease([milestone], { chapter: review });
@@ -77,7 +87,7 @@ test("release projection includes only human-confirmed allowlisted Chapter copy"
 });
 
 test("server sanitizer reconstructs the reviewed Story from an explicit allowlist", () => {
-  const context = { privacyCandidates: [candidate], privacyDecisions: { "local-detail": "keep" }, chapterEvidence: [] };
+  const context = reviewContext("keep");
   let review = applyChapterReview(emptyChapterReview(), context).state;
   review = markChapterReady(review, context);
   const release = buildReviewedStoryRelease([milestone], { chapter: review });
@@ -102,7 +112,7 @@ test("server sanitizer reconstructs the reviewed Story from an explicit allowlis
 });
 
 test("HTML export serializes only the server-sanitized reviewed Story", async () => {
-  const context = { privacyCandidates: [candidate], privacyDecisions: { "local-detail": "redact" }, chapterEvidence: [] };
+  const context = reviewContext("redact");
   let review = applyChapterReview(emptyChapterReview(), context).state;
   review = markChapterReady(review, context);
   const untrusted = structuredClone(buildReviewedStoryRelease([milestone], { chapter: review }));
@@ -118,6 +128,12 @@ test("HTML export serializes only the server-sanitized reviewed Story", async ()
   const html = await response.text();
   assert.match(html, /Reviewed chapter/);
   assert.doesNotMatch(html, /must-not-ship|localOriginal|privateEvidence|localIdentityState/);
+});
+
+test("release projection excludes a manually confirmed Chapter without verified evidence", () => {
+  const unverified = { ...emptyChapterReview(), stage: "human_confirmed" };
+  assert.equal(unverified.evidenceVerified, false);
+  assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: unverified }).chapters, []);
 });
 
 test("package organization summaries strip Story review metadata before serialization", () => {

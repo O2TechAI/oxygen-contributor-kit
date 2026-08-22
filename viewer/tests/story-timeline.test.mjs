@@ -209,6 +209,48 @@ test("review schema rejects unavailable excerpts and bilingual identity drift", 
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(evidenceLanguageDrift)), null);
 });
 
+test("review schema rejects duplicate semantic IDs and hidden unavailable-original fields", () => {
+  const duplicatePeople = JSON.parse(story({ key:"duplicate-people" }).slice(STORY_PREFIX.length));
+  for (const language of ["en", "zh"]) {
+    duplicatePeople.reviewPresentation[language].people.push({
+      ...duplicatePeople.reviewPresentation[language].people[0],
+      role: language === "zh" ? "协作者" : "Collaborator",
+    });
+  }
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(duplicatePeople)), null);
+
+  const duplicateHighlights = JSON.parse(story({ key:"duplicate-highlights" }).slice(STORY_PREFIX.length));
+  for (const language of ["en", "zh"]) {
+    duplicateHighlights.reviewPresentation[language].highlights.push({
+      ...duplicateHighlights.reviewPresentation[language].highlights[0],
+      title: language === "zh" ? "第二条洞察" : "Second insight",
+    });
+  }
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(duplicateHighlights)), null);
+
+  const duplicatePrivacy = JSON.parse(story({ key:"duplicate-privacy" }).slice(STORY_PREFIX.length));
+  for (const language of ["en", "zh"]) {
+    duplicatePrivacy.reviewPresentation[language].privacy.candidates[1].id = "metric";
+  }
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(duplicatePrivacy)), null);
+
+  const hiddenUnavailable = JSON.parse(story({ key:"hidden-unavailable" }).slice(STORY_PREFIX.length));
+  for (const language of ["en", "zh"]) {
+    hiddenUnavailable.reviewPresentation[language].privacy.candidates[0].original.removedValue = "must not survive";
+  }
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(hiddenUnavailable)), null);
+});
+
+test("Story schema rejects duplicate or malformed evidence references", () => {
+  const duplicateEvidence = JSON.parse(story({ key:"duplicate-evidence" }).slice(STORY_PREFIX.length));
+  duplicateEvidence.evidence.supporting = [{ ...duplicateEvidence.evidence.primary }];
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(duplicateEvidence)), null);
+
+  const malformedLabel = JSON.parse(story({ key:"malformed-evidence-label" }).slice(STORY_PREFIX.length));
+  malformedLabel.evidence.primary.label = { hidden: "value" };
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(malformedLabel)), null);
+});
+
 test("valid Chapters may have no supported People and no Privacy candidates", () => {
   const emptySets = JSON.parse(story({ key:"empty-supported-sets" }).slice(STORY_PREFIX.length));
   for (const language of ["en", "zh"]) {
@@ -218,6 +260,16 @@ test("valid Chapters may have no supported People and no Privacy candidates", ()
   const parsed = parseStoryAnnotation(STORY_PREFIX + JSON.stringify(emptySets));
   assert.deepEqual(parsed.reviewPresentation.en.people, []);
   assert.deepEqual(parsed.reviewPresentation.zh.privacy.candidates, []);
+});
+
+test("legacy null uncertainty is normalized to an omitted optional field", () => {
+  const legacyNull = JSON.parse(story({ key:"legacy-null-uncertainty" }).slice(STORY_PREFIX.length));
+  legacyNull.reviewPresentation.en.story.uncertainty = null;
+  legacyNull.reviewPresentation.zh.story.uncertainty = null;
+  const parsed = parseStoryAnnotation(STORY_PREFIX + JSON.stringify(legacyNull));
+  assert.ok(parsed);
+  assert.equal(parsed.reviewPresentation.en.story.uncertainty, undefined);
+  assert.equal(parsed.reviewPresentation.zh.story.uncertainty, undefined);
 });
 
 test("exact Evidence resolver accepts one qualified or unqualified match and rejects uncertainty", () => {

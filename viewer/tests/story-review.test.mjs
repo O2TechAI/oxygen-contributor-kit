@@ -8,6 +8,7 @@ import {
   cancelStoryAnnotation,
   createStoryAnnotation,
   emptyChapterReview,
+  hasStoryAnnotationConflict,
   markChapterReady,
   privacyReviewState,
   returnChapterToReview,
@@ -17,9 +18,13 @@ import {
 } from "../lib/story-review.ts";
 
 const evidence = { documentId: "doc", eventId: "event" };
-const context = (privacyCandidates = [], privacyDecisions = {}, chapterEvidence = [evidence]) => ({
+const context = (privacyCandidates = [], privacyDecisions = {}, chapterEvidence = [evidence], overrides = {}) => ({
   privacyCandidates, privacyDecisions, chapterEvidence,
+  evidenceResolved: overrides.evidenceResolved ?? true,
+  supportedAddIds: overrides.supportedAddIds || [],
+  reviewedBlocks: overrides.reviewedBlocks || { en: {}, zh: {} },
 });
+const blocks = (en = {}, zh = {}) => ({ reviewedBlocks: { en, zh } });
 const privacyCandidate = (releaseTargets = ["scene"]) => ({
   id: "metric", title: "Metric", explanation: "Internal", recommendation: "redact",
   releaseTargets, original: { availability: "unavailable" }, whyFlagged: "Internal",
@@ -52,6 +57,33 @@ test("privacy review advances one candidate at a time and zero candidates are co
   assert.equal(complete.complete, true);
   assert.equal(complete.active, null);
   assert.deepEqual(privacyReviewState([], {}), { reviewed: 0, activeIndex: -1, active: null, complete: true });
+  assert.equal(privacyReviewState([privacyCandidate([])], { metric: "invalid" }).complete, false);
+
+  const duplicateIds = [privacyCandidate([]), { ...privacyCandidate([]), title: "Duplicate" }];
+  assert.deepEqual(privacyReviewState(duplicateIds, { metric: "redact" }), {
+    reviewed: 0, activeIndex: 0, active: duplicateIds[0], complete: false,
+  });
+  assert.equal(applyChapterReview(emptyChapterReview(), context(duplicateIds, { metric: "redact" })).blockedReason, "privacy");
+  assert.equal(applyChapterReview(emptyChapterReview(), context([privacyCandidate()], { metric: "invalid" })).blockedReason, "privacy");
+});
+
+test("unresolved Chapter evidence blocks Apply and release-ready confirmation", () => {
+  const source = "The draft changed.";
+  const removal = createStoryAnnotation({
+    blockId: "scene", type: "delete", sourceLanguage: "en", baseRevision: 1,
+    selection: { start: 4, end: 10, text: "draft " },
+  });
+  const reviewing = addStoryAnnotation(emptyChapterReview(), removal);
+  const unresolved = context([], {}, [evidence], {
+    ...blocks({ scene: source }, { scene: "草稿发生变化。" }),
+    evidenceResolved: false,
+  });
+  const result = applyChapterReview(reviewing, unresolved);
+  assert.equal(result.blockedReason, "evidence");
+  assert.equal(result.state, reviewing);
+  assert.equal(result.state.revision, 1);
+  assert.equal(result.state.evidenceVerified, false);
+  assert.equal(canMarkChapterReady({ ...reviewing, stage: "revision_ready" }, unresolved), false);
 });
 
 test("iterative bilingual review produces two revisions before explicit human confirmation", () => {
@@ -76,7 +108,7 @@ test("iterative bilingual review produces two revisions before explicit human co
   assert.equal(applyChapterReview(state, requiredPrivacy).blockedReason, "privacy");
   assert.equal(canMarkChapterReady(state, context()), false);
 
-  state = applyChapterReview(state, context()).state;
+  state = applyChapterReview(state, context([], {}, [evidence], blocks({ scene: enSource }, { scene: zhSource }))).state;
   assert.equal(state.stage, "revision_ready");
   assert.equal(state.revision, 2);
   assert.equal(state.staleTranslations.length, 0);
@@ -97,7 +129,7 @@ test("iterative bilingual review produces two revisions before explicit human co
   assert.equal(state.stage, "reviewing");
   assert.equal(canMarkChapterReady(state, context()), false);
 
-  state = applyChapterReview(state, context()).state;
+  state = applyChapterReview(state, context([], {}, [evidence], blocks({ scene: "The changed." }, { scene: zhRevised }))).state;
   assert.equal(state.revision, 3);
   assert.equal(state.revisionHistory.length, 2);
   assert.deepEqual(state.revisionHistory.map((record) => record.revision), [2, 3]);
@@ -121,8 +153,12 @@ test("unsupported Add blocks confirmation while reviewed-evidence Add can apply"
   const unsupported = createStoryAnnotation({
     blockId: "outcome", type: "add", sourceLanguage: "zh", baseRevision: 1,
     selection: { start: 0, end: 2, text: "决定" }, instruction: "补充 holdout test 后来提出了挑战。",
+    supportingEvidence: [evidence],
   });
-  state = applyChapterReview(addStoryAnnotation(state, unsupported), context()).state;
+  state = applyChapterReview(
+    addStoryAnnotation(state, unsupported),
+    context([], {}, [evidence], blocks({ outcome: "Decision followed." }, { outcome: "决定随后形成。" })),
+  ).state;
   assert.equal(state.annotations[0].resolution, "needs_evidence");
   assert.equal(canMarkChapterReady(state, context()), false);
   assert.equal(applyAnnotationsToBlock("决定随后形成。", "outcome", "zh", state.annotations), "决定随后形成。");
@@ -134,7 +170,10 @@ test("unsupported Add blocks confirmation while reviewed-evidence Add can apply"
     selection: { start: 0, end: 8, text: "Decision" }, instruction: "The holdout evidence remained visible.",
     supportingEvidence: [evidence],
   });
-  state = applyChapterReview(addStoryAnnotation(state, supported), context()).state;
+  state = applyChapterReview(
+    addStoryAnnotation(state, supported),
+    context([], {}, [evidence], { ...blocks({ outcome: enSource }, { outcome: "决定随后形成。" }), supportedAddIds: [supported.id] }),
+  ).state;
   assert.equal(state.annotations.at(-1).resolution, "applied");
   assert.equal(applyAnnotationsToBlock(enSource, "outcome", "en", state.annotations), "Decision The holdout evidence remained visible. followed.");
   assert.deepEqual(state.staleTranslations, [{ subject: "story:outcome", language: "zh", count: 1 }]);
@@ -145,7 +184,10 @@ test("unsupported Add blocks confirmation while reviewed-evidence Add can apply"
     selection: { start: 0, end: 2, text: "决定" }, instruction: "留存 holdout 证据。",
     supportingEvidence: [evidence],
   });
-  state = applyChapterReview(addStoryAnnotation(state, paired), context()).state;
+  state = applyChapterReview(
+    addStoryAnnotation(state, paired),
+    context([], {}, [evidence], { ...blocks({ outcome: "Decision The holdout evidence remained visible. followed." }, { outcome: zhSource }), supportedAddIds: [paired.id] }),
+  ).state;
   assert.equal(state.staleTranslations.length, 0);
   assert.equal(applyAnnotationsToBlock(zhSource, "outcome", "zh", state.annotations), "决定 留存 holdout 证据。随后形成。");
 });
@@ -157,7 +199,10 @@ test("one-language Revise leaves paired prose intact and blocks confirmation as 
     blockId: "outcome", type: "revise", sourceLanguage: "en", baseRevision: 1,
     selection: { start: 4, end: 12, text: "decision" }, instruction: "hypothesis",
   });
-  const state = applyChapterReview(addStoryAnnotation(emptyChapterReview(), correction), context()).state;
+  const state = applyChapterReview(
+    addStoryAnnotation(emptyChapterReview(), correction),
+    context([], {}, [evidence], blocks({ outcome: english }, { outcome: chinese })),
+  ).state;
   assert.equal(applyAnnotationsToBlock(english, "outcome", "en", state.annotations), "The hypothesis was final.");
   assert.equal(applyAnnotationsToBlock(chinese, "outcome", "zh", state.annotations), chinese);
   assert.deepEqual(state.staleTranslations, [{ subject: "story:outcome", language: "zh", count: 1 }]);
@@ -170,7 +215,10 @@ test("applied annotations cannot be cancelled without a new revision", () => {
     blockId: "scene", type: "delete", sourceLanguage: "en", baseRevision: 1,
     selection: { start: 4, end: 10, text: "draft " },
   });
-  state = applyChapterReview(addStoryAnnotation(state, removal), context()).state;
+  state = applyChapterReview(
+    addStoryAnnotation(state, removal),
+    context([], {}, [evidence], blocks({ scene: "The draft changed." }, { scene: "草稿发生变化。" })),
+  ).state;
   const unchanged = cancelStoryAnnotation(state, removal.id);
   assert.equal(unchanged, state);
   assert.equal(unchanged.annotations[0].resolution, "applied");
@@ -197,6 +245,20 @@ test("insight edits participate in review provenance and bilingual stale-state g
   assert.equal(state.insightReviews[highlight.id].localized.zh.lesson, "强调可复现性。");
   state = markChapterReady(state, context());
   assert.equal(updateInsightReview(state, highlight.id, "en", { status: "rejected", text: "remove" }), state);
+});
+
+test("Accept cannot erase translation debt from a pending localized insight edit", () => {
+  let state = updateInsightReview(emptyChapterReview(), highlight.id, "en", {
+    status: "overridden", text: "Focus on reproducibility.",
+    highlight: { ...highlight, lesson: "Focus on reproducibility." }, revision: "direct",
+  });
+  state = updateInsightReview(state, highlight.id, "en", {
+    status: "accepted", text: "Focus on reproducibility.",
+  });
+  assert.deepEqual(state.insightReviews[highlight.id].pendingLanguages, ["en"]);
+  state = applyChapterReview(state, context()).state;
+  assert.deepEqual(state.staleTranslations, [{ subject: `insight:${highlight.id}`, language: "zh", count: 1 }]);
+  assert.equal(canMarkChapterReady(state, context()), false);
 });
 
 test("typed Privacy decisions are revision provenance and Redact controls release blocks", () => {
@@ -241,6 +303,60 @@ test("pending Story annotations preserve and render only exact independent range
   const afterCancel = storyAnnotationSegments(source, "turn", "en", 1, state.annotations);
   assert.equal(afterCancel.some((segment) => segment.annotationIds.includes(first.id)), false);
   assert.equal(afterCancel.some((segment) => segment.annotationIds.includes(second.id)), true);
+});
+
+test("overlapping or stale ranges are rejected atomically before revision provenance", () => {
+  const source = "abcdef";
+  const removal = createStoryAnnotation({
+    blockId: "scene", type: "delete", sourceLanguage: "en", baseRevision: 1,
+    selection: { start: 1, end: 4, text: "bcd" },
+  });
+  const correction = createStoryAnnotation({
+    blockId: "scene", type: "revise", sourceLanguage: "en", baseRevision: 1,
+    selection: { start: 3, end: 5, text: "de" }, instruction: "X",
+  });
+  const first = addStoryAnnotation(emptyChapterReview(), removal);
+  assert.equal(hasStoryAnnotationConflict(first, correction), true);
+  assert.equal(addStoryAnnotation(first, correction), first);
+  const duplicateId = { ...correction, id: removal.id, selection: { start: 4, end: 5, text: "e" } };
+  assert.equal(hasStoryAnnotationConflict(first, duplicateId), true);
+
+  const adversarial = { ...emptyChapterReview(), annotations: [removal, correction] };
+  const result = applyChapterReview(
+    adversarial,
+    context([], {}, [evidence], blocks({ scene: source }, { scene: "uvwxyz" })),
+  );
+  assert.equal(result.blockedReason, "annotations");
+  assert.equal(result.state, adversarial);
+  assert.deepEqual(result.state.annotations.map((annotation) => annotation.resolution), ["pending", "pending"]);
+  assert.equal(result.state.revision, 1);
+
+  const mismatched = { ...emptyChapterReview(), annotations: [{
+    ...removal,
+    id: "mismatched",
+    selection: { start: 1, end: 4, text: "wrong" },
+  }] };
+  assert.equal(applyChapterReview(
+    mismatched,
+    context([], {}, [evidence], blocks({ scene: source }, { scene: "uvwxyz" })),
+  ).blockedReason, "annotations");
+
+  const duplicatedIds = { ...emptyChapterReview(), annotations: [removal, duplicateId] };
+  assert.equal(applyChapterReview(
+    duplicatedIds,
+    context([], {}, [evidence], blocks({ scene: source }, { scene: "uvwxyz" })),
+  ).blockedReason, "annotations");
+
+  const missingInstruction = { ...emptyChapterReview(), annotations: [{
+    ...correction,
+    id: "missing-instruction",
+    instruction: undefined,
+    selection: { start: 4, end: 5, text: "e" },
+  }] };
+  assert.equal(applyChapterReview(
+    missingInstruction,
+    context([], {}, [evidence], blocks({ scene: source }, { scene: "uvwxyz" })),
+  ).blockedReason, "annotations");
 });
 
 test("range styling rejects stale, mismatched, cross-language, and cross-block offsets", () => {

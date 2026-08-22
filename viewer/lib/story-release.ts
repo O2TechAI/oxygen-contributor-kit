@@ -99,7 +99,7 @@ export function buildReviewedStoryRelease(
 ): ReviewedStoryRelease {
   const chapters = milestones.flatMap((milestone) => {
     const state = reviews[milestone.story.key];
-    if (!state || state.stage !== "human_confirmed" || state.staleTranslations.length) return [];
+    if (!state || state.stage !== "human_confirmed" || !state.evidenceVerified || state.staleTranslations.length) return [];
     const en = localeProjection(milestone, state, "en");
     const zh = localeProjection(milestone, state, "zh");
     if (!en || !zh) return [];

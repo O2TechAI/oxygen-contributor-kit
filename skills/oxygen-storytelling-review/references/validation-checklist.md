@@ -9,10 +9,11 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Story data source hash matches the reviewed artifact.
 - [ ] No raw history, private ledger, removed text/value, source envelope, credential material, or forbidden sibling implementation was opened.
 - [ ] Chapter keys are unique/chronological and the last is honest current state.
-- [ ] Every primary/supporting evidence ID resolves.
+- [ ] Every primary/supporting evidence ID is unique and resolves to exactly one actual reviewed item before Apply/All set.
+- [ ] Participant, insight, Privacy-candidate, and annotation IDs are unique within each Chapter and paired language presentation.
 - [ ] No identity/evidence/fact was fabricated.
 - [ ] Project-specific copy/excerpts do not appear in reusable generic source/Skill.
-- [ ] No unavailable Privacy candidate contains an excerpt.
+- [ ] No unavailable Privacy candidate contains anything beyond its unavailable discriminator (no excerpt, language, removed value, or raw field).
 - [ ] Every Privacy candidate declares stable release targets; every target resolves in both language presentations, and an intentionally local-only candidate declares an explicit empty target set.
 - [ ] Package/publication behavior is unchanged.
 
@@ -62,6 +63,7 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Only the exact range is styled; parent paragraph/list item is not.
 - [ ] Pending quote equals `source.slice(start,end)`.
 - [ ] Two non-overlapping annotations in one paragraph render independently.
+- [ ] Overlapping same-revision ranges and duplicate annotation IDs are rejected before they enter/apply; adversarial batches fail atomically without revision provenance.
 - [ ] Cancelling one removes only that range.
 - [ ] Stale/mismatched/cross-language literal ranges fail closed.
 - [ ] Cross-block/cross-paragraph selection is rejected when not safely supported.
@@ -91,9 +93,11 @@ Also verify:
 - [ ] Privacy blocks Apply/All set as specified.
 - [ ] Unsupported Add becomes `needs_evidence`, is not inserted, and blocks All set.
 - [ ] Evidence-supported Add receives `appliedRevision`, enters the next draft, and can complete after paired-language review.
+- [ ] A real evidence ID plus arbitrary unsupported Add wording remains `needs_evidence`; checkbox/ID possession alone never certifies a factual claim.
 - [ ] Applied annotations do not expose Cancel; reversal requires a new pending operation and revision.
 - [ ] Redact suppresses all bound targets in the allowlisted EN/中文 release projection, while Keep preserves permitted safe copy.
 - [ ] Pending insight changes and stale paired-language blocks disable All set.
+- [ ] Accepting a localized pending insight edit does not erase the paired-language review debt.
 - [ ] Summary counts and revision labels are correct.
 - [ ] Human intent is not silently dropped.
 

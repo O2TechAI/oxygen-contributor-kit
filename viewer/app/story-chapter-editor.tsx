@@ -15,6 +15,7 @@ import {
   cancelStoryAnnotation,
   chapterReviewSummary,
   createStoryAnnotation,
+  hasStoryAnnotationConflict,
   markChapterReady,
   privacyReviewState,
   returnChapterToReview,
@@ -63,7 +64,7 @@ const ui = {
     evidence: "View local evidence", evidenceNote: "Exact source language · local only · never exported with the release chapter", primary: "Primary anchor", supporting: "Supporting evidence", inspect: "Inspect exact evidence",
     summary: "Review summary", revisions: "revisions", additions: "additions", removals: "removals", privacyDecisions: "privacy decisions",
     privacyBlocks: "Complete every privacy decision before applying review.", apply: "Apply review & prepare release", applyingNote: "Human instructions are authoritative. Unsupported additions are flagged rather than invented.",
-    addBlocked: "An addition still needs support from reviewed evidence. Cancel it or return to review before confirming.", evidenceSupport: "Anchor this addition to the primary reviewed evidence", translationBlocked: "The paired language is stale. Review the same semantic passage in the other language before confirming.", noPrivacy: "AI found no release concerns in the reviewed artifact.", removedFromRelease: "Removed from release", markReady: "All set", returnReview: "Continue reviewing", reopen: "Reopen review", readyNote: "Human-confirmed locally. This is not publication approval.", revision: "Revision",
+    addBlocked: "An addition still needs support from reviewed evidence. Cancel it or return to review before confirming.", evidenceSupport: "Use wording that appears in the primary reviewed evidence", evidenceBlocked: "The cited exact evidence could not be resolved. Review the evidence reference before applying.", annotationConflict: "This selection overlaps another pending annotation or no longer matches the current draft. Use separate, current ranges.", translationBlocked: "The paired language is stale. Review the same semantic passage in the other language before confirming.", noPrivacy: "AI found no release concerns in the reviewed artifact.", removedFromRelease: "Removed from release", markReady: "All set", returnReview: "Continue reviewing", reopen: "Reopen review", readyNote: "Human-confirmed locally. This is not publication approval.", revision: "Revision",
   },
   zh: {
     back: "项目故事", chapter: "章节", previous: "上一章", next: "下一章",
@@ -82,7 +83,7 @@ const ui = {
     evidence: "查看本地证据", evidenceNote: "保持精确原文 · 仅限本地 · 不随发布章节导出", primary: "主要锚点", supporting: "补充证据", inspect: "查看精确证据",
     summary: "审阅摘要", revisions: "处修订", additions: "处补充", removals: "处删除", privacyDecisions: "项隐私决定",
     privacyBlocks: "应用审阅前，请完成全部隐私决定。", apply: "应用审阅并准备发布", applyingNote: "人工意见优先；缺乏支持的补充会被标记，不会被编造。",
-    addBlocked: "仍有补充内容需要已审阅证据支持。请取消该批注或返回审阅后再确认。", evidenceSupport: "将此补充锚定到主要已审阅证据", translationBlocked: "另一语言版本仍待同步。请在另一语言中审阅同一语义段落后再确认。", noPrivacy: "AI 未在已审阅材料中发现发布风险。", removedFromRelease: "已从发布稿移除", markReady: "确认完成", returnReview: "继续审阅", reopen: "重新打开审阅", readyNote: "已在本地获得人工确认；这不代表发布审批。", revision: "修订稿",
+    addBlocked: "仍有补充内容需要已审阅证据支持。请取消该批注或返回审阅后再确认。", evidenceSupport: "使用主要已审阅证据中确实出现的表述", evidenceBlocked: "无法解析本章引用的精确证据。请先检查证据引用，再应用审阅。", annotationConflict: "所选范围与另一条待处理批注重叠，或已不再匹配当前草稿。请使用互不重叠的当前文本范围。", translationBlocked: "另一语言版本仍待同步。请在另一语言中审阅同一语义段落后再确认。", noPrivacy: "AI 未在已审阅材料中发现发布风险。", removedFromRelease: "已从发布稿移除", markReady: "确认完成", returnReview: "继续审阅", reopen: "重新打开审阅", readyNote: "已在本地获得人工确认；这不代表发布审批。", revision: "修订稿",
   },
 } as const;
 
@@ -139,6 +140,8 @@ export function StoryChapterEditor(props: {
   const [annotationMode, setAnnotationMode] = useState<Exclude<StoryAnnotationType, "delete"> | null>(null);
   const [instruction, setInstruction] = useState("");
   const [supportAddition, setSupportAddition] = useState(false);
+  const [applyError, setApplyError] = useState("");
+  const [applying, setApplying] = useState(false);
   const [insightMode, setInsightMode] = useState<"none" | "edit" | "revise">("none");
   const baseHighlight = presentation?.highlights[0];
   const insightReview = baseHighlight ? chapterReview.insightReviews[baseHighlight.id] : undefined;
@@ -163,7 +166,32 @@ export function StoryChapterEditor(props: {
   const privacyState = privacyReviewState(candidates, privacyDecisions);
   const summary = chapterReviewSummary(chapterReview);
   const evidence = story.evidence ? [story.evidence.primary, ...story.evidence.supporting] : [];
-  const applyContext = { privacyCandidates: candidates, privacyDecisions, chapterEvidence: evidence };
+  const reviewedBlocks = (["en", "zh"] as const).reduce<Record<StoryLanguage, Record<string, string>>>((result, locale) => {
+    const copy = story.reviewPresentation?.[locale];
+    if (!copy) return result;
+    const blocks = {
+      scene: copy.story.scene,
+      ...Object.fromEntries(copy.story.reconstruction.map((paragraph, index) => [`reconstruction-${index}`, paragraph])),
+      ...Object.fromEntries(copy.story.importantDetails.map((detail, index) => [`detail-${index}`, detail])),
+      outcome: copy.story.decisionOutcome,
+      ...(copy.story.uncertainty ? { uncertainty: copy.story.uncertainty } : {}),
+    };
+    result[locale] = Object.fromEntries(Object.entries(blocks).map(([blockId, source]) => [
+      blockId,
+      chapterReview.redactedBlocks.includes(blockId)
+        ? ""
+        : applyAnnotationsToBlock(source, blockId, locale, chapterReview.annotations),
+    ]));
+    return result;
+  }, { en: {}, zh: {} });
+  const applyContext = {
+    privacyCandidates: candidates,
+    privacyDecisions,
+    chapterEvidence: evidence,
+    evidenceResolved: chapterReview.evidenceVerified,
+    supportedAddIds: [],
+    reviewedBlocks,
+  };
   const annotationsByBlock = useMemo(() => chapterReview.annotations.reduce<Record<string, StoryReviewAnnotation[]>>((result, annotation) => {
     if (annotation.resolution !== "cancelled") (result[annotation.blockId] ||= []).push(annotation);
     return result;
@@ -177,6 +205,7 @@ export function StoryChapterEditor(props: {
     setAnnotationMode(null);
     setInstruction("");
     setSupportAddition(false);
+    setApplyError("");
   };
 
   const captureSelection = () => {
@@ -273,8 +302,45 @@ export function StoryChapterEditor(props: {
       ...(textInstruction?.trim() ? { instruction: textInstruction.trim() } : {}),
       ...(type === "add" && supportAddition && evidence[0] ? { supportingEvidence: [evidence[0]] } : {}),
     });
+    if (hasStoryAnnotationConflict(chapterReview, annotation)) {
+      setApplyError(labels.annotationConflict);
+      return;
+    }
     onChapterReview(addStoryAnnotation(chapterReview, annotation));
     clearSelection();
+  };
+
+  const handleApplyReview = async () => {
+    setApplying(true);
+    setApplyError("");
+    try {
+      const additions = chapterReview.annotations
+        .filter((annotation) => annotation.type === "add" && annotation.resolution === "pending")
+        .map((annotation) => ({
+          annotationId: annotation.id,
+          instruction: annotation.instruction || "",
+          supportingEvidence: annotation.supportingEvidence || [],
+        }));
+      const response = await fetch("/api/evidence", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chapterEvidence: evidence, additions }),
+      });
+      if (!response.ok) throw new Error(labels.evidenceBlocked);
+      const verification = await response.json() as { evidenceResolved: boolean; supportedAddIds: string[] };
+      const result = applyChapterReview(chapterReview, {
+        ...applyContext,
+        evidenceResolved: verification.evidenceResolved,
+        supportedAddIds: verification.supportedAddIds,
+      });
+      if (result.blockedReason === "evidence") setApplyError(labels.evidenceBlocked);
+      else if (result.blockedReason === "annotations") setApplyError(labels.annotationConflict);
+      else onChapterReview(result.state);
+    } catch (error) {
+      setApplyError(error instanceof Error ? error.message : labels.evidenceBlocked);
+    } finally {
+      setApplying(false);
+    }
   };
 
   const blockCopy = (blockId: string, source: string) => chapterReview.redactedBlocks.includes(blockId)
@@ -420,8 +486,9 @@ export function StoryChapterEditor(props: {
           <ul><li><b>{summary.revise}</b> {labels.revisions}</li><li><b>{summary.add}</b> {labels.additions}</li><li><b>{summary.delete}</b> {labels.removals}</li><li><b>{privacyState.reviewed} / {candidates.length}</b> {labels.privacyDecisions}</li></ul>
           <p>{labels.applyingNote}</p>
           {!privacyState.complete && <p className="completionBlocker">{labels.privacyBlocks}</p>}
+          {applyError && <p className="completionBlocker" role="alert">{applyError}</p>}
           {chapterReview.staleTranslations.length > 0 && <p className="completionBlocker">{labels.translationBlocked}</p>}
-          {chapterReview.stage === "reviewing" ? <button className="completionPrimary" disabled={!privacyState.complete} onClick={() => onChapterReview(applyChapterReview(chapterReview, applyContext).state)}>{labels.apply}</button> : chapterReview.stage === "revision_ready" ? <>
+          {chapterReview.stage === "reviewing" ? <button className="completionPrimary" disabled={!privacyState.complete || applying} onClick={handleApplyReview}>{labels.apply}</button> : chapterReview.stage === "revision_ready" ? <>
             {summary.unresolved > 0 && <p className="completionBlocker">{labels.addBlocked}</p>}
             <div className="completionActions"><span>{summary.unresolved ? labels.addBlocked : language === "zh" ? "没有待应用的批注" : "No pending annotations"}</span><button className="completionPrimary" disabled={!canMarkChapterReady(chapterReview, applyContext)} onClick={() => onChapterReview(markChapterReady(chapterReview, applyContext))}>{labels.markReady}</button></div>
           </> : <div className="readyConfirmation"><b>{labels.ready}</b><p>{labels.readyNote}</p><button onClick={() => onChapterReview(returnChapterToReview(chapterReview))}>{labels.reopen}</button></div>}

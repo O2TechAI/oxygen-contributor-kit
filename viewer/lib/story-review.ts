@@ -63,6 +63,7 @@ export type ChapterReviewState = {
   redactedBlocks: string[];
   staleTranslations: TranslationStaleness[];
   revisionHistory: ChapterRevisionRecord[];
+  evidenceVerified: boolean;
   publicationApproved: false;
 };
 
@@ -70,6 +71,9 @@ export type ApplyReviewContext = {
   privacyCandidates: StoryPrivacyCandidate[];
   privacyDecisions: Record<string, PrivacyDecision>;
   chapterEvidence: EvidenceReference[];
+  evidenceResolved: boolean;
+  supportedAddIds: string[];
+  reviewedBlocks: Record<StoryLanguage, Record<string, string>>;
 };
 
 export const emptyChapterReview = (): ChapterReviewState => ({
@@ -81,6 +85,7 @@ export const emptyChapterReview = (): ChapterReviewState => ({
   redactedBlocks: [],
   staleTranslations: [],
   revisionHistory: [],
+  evidenceVerified: false,
   publicationApproved: false,
 });
 
@@ -95,12 +100,25 @@ export function createStoryAnnotation(input: Omit<StoryReviewAnnotation, "id" | 
 }
 
 export function addStoryAnnotation(state: ChapterReviewState, annotation: StoryReviewAnnotation): ChapterReviewState {
-  if (state.stage === "human_confirmed") return state;
+  if (state.stage === "human_confirmed" || hasStoryAnnotationConflict(state, annotation)) return state;
   return {
     ...state,
     stage: "reviewing",
     annotations: [...state.annotations, annotation],
   };
+}
+
+const rangesOverlap = (left: StoryReviewAnnotation, right: StoryReviewAnnotation) => (
+  left.selection.start < right.selection.end && right.selection.start < left.selection.end
+);
+
+export function hasStoryAnnotationConflict(state: ChapterReviewState, candidate: StoryReviewAnnotation) {
+  return state.annotations.some((annotation) => annotation.id === candidate.id
+    || (annotation.resolution === "pending"
+      && annotation.blockId === candidate.blockId
+      && annotation.sourceLanguage === candidate.sourceLanguage
+      && annotation.baseRevision === candidate.baseRevision
+      && rangesOverlap(annotation, candidate)));
 }
 
 export function cancelStoryAnnotation(state: ChapterReviewState, annotationId: string): ChapterReviewState {
@@ -124,7 +142,7 @@ export function updateInsightReview(
   if (update.highlight) localized[language] = update.highlight;
   const pendingLanguages = update.highlight
     ? [...new Set([...(previous?.resolution === "pending" ? previous.pendingLanguages : []), language])]
-    : [];
+    : previous?.resolution === "pending" ? previous.pendingLanguages : [];
   return {
     ...state,
     stage: "reviewing",
@@ -186,8 +204,9 @@ export function chapterReviewSummary(state: ChapterReviewState) {
   };
 }
 
-const evidenceKey = (evidence: EvidenceReference) => `${evidence.documentId}:${evidence.eventId}`;
+const evidenceKey = (evidence: EvidenceReference) => JSON.stringify([evidence.documentId, evidence.eventId]);
 const oppositeLanguage = (language: StoryLanguage): StoryLanguage => language === "en" ? "zh" : "en";
+const validPrivacyDecision = (value: unknown): value is PrivacyDecision => value === "keep" || value === "redact";
 
 function updateTranslationStaleness(
   current: TranslationStaleness[],
@@ -205,7 +224,12 @@ function updateTranslationStaleness(
 }
 
 function privacyComplete(context: ApplyReviewContext) {
-  return context.privacyCandidates.every((candidate) => Boolean(context.privacyDecisions[candidate.id]));
+  const ids = context.privacyCandidates.map((candidate) => candidate.id);
+  return new Set(ids).size === ids.length
+    && context.privacyCandidates.every((candidate) => {
+      const decision = context.privacyDecisions[candidate.id];
+      return validPrivacyDecision(decision);
+    });
 }
 
 function currentPrivacyDecisions(context: ApplyReviewContext) {
@@ -222,16 +246,53 @@ function sameDecisions(left: Record<string, PrivacyDecision>, right: Record<stri
 export function applyChapterReview(
   state: ChapterReviewState,
   context: ApplyReviewContext,
-): { state: ChapterReviewState; blockedReason?: "privacy" } {
+): { state: ChapterReviewState; blockedReason?: "privacy" | "evidence" | "annotations" } {
   if (!privacyComplete(context)) return { state, blockedReason: "privacy" };
+  if (!context.evidenceResolved) return { state, blockedReason: "evidence" };
+  const pendingAnnotations = state.annotations.filter((annotation) => annotation.resolution === "pending");
+  if (new Set(pendingAnnotations.map((annotation) => annotation.id)).size !== pendingAnnotations.length) {
+    return { state, blockedReason: "annotations" };
+  }
+  const conflicting = new Set<string>();
+  for (let index = 0; index < pendingAnnotations.length; index += 1) {
+    for (let compare = index + 1; compare < pendingAnnotations.length; compare += 1) {
+      const left = pendingAnnotations[index];
+      const right = pendingAnnotations[compare];
+      if (left.blockId === right.blockId && left.sourceLanguage === right.sourceLanguage
+        && left.baseRevision === right.baseRevision && rangesOverlap(left, right)) {
+        conflicting.add(left.id);
+        conflicting.add(right.id);
+      }
+    }
+  }
+  const invalidRange = pendingAnnotations.some((annotation) => {
+    const source = context.reviewedBlocks[annotation.sourceLanguage]?.[annotation.blockId];
+    return conflicting.has(annotation.id)
+      || !annotation.id
+      || !annotation.blockId
+      || !["delete", "revise", "add"].includes(annotation.type)
+      || !["en", "zh"].includes(annotation.sourceLanguage)
+      || ((annotation.type === "revise" || annotation.type === "add") && !annotation.instruction?.trim())
+      || annotation.baseRevision !== state.revision
+      || !Number.isInteger(annotation.selection.start)
+      || !Number.isInteger(annotation.selection.end)
+      || annotation.selection.start < 0
+      || annotation.selection.end <= annotation.selection.start
+      || typeof source !== "string"
+      || annotation.selection.end > source.length
+      || source.slice(annotation.selection.start, annotation.selection.end) !== annotation.selection.text;
+  });
+  if (invalidRange) return { state, blockedReason: "annotations" };
   const revision = state.revision + 1;
   const availableEvidence = new Set(context.chapterEvidence.map(evidenceKey));
+  const supportedAddIds = new Set(context.supportedAddIds);
   const appliedAnnotationIds: string[] = [];
   let staleTranslations = [...state.staleTranslations];
   const annotations = state.annotations.map((annotation) => {
     if (annotation.resolution !== "pending") return annotation;
     const supportedAddition = annotation.type !== "add"
-      || Boolean(annotation.supportingEvidence?.length
+      || Boolean(supportedAddIds.has(annotation.id)
+        && annotation.supportingEvidence?.length
         && annotation.supportingEvidence.every((evidence) => availableEvidence.has(evidenceKey(evidence))));
     if (!supportedAddition) return { ...annotation, resolution: "needs_evidence" as const };
     appliedAnnotationIds.push(annotation.id);
@@ -249,7 +310,7 @@ export function applyChapterReview(
     appliedInsightIds.push(highlightId);
     if (review.status === "rejected") {
       staleTranslations = staleTranslations.filter((item) => item.subject !== `insight:${highlightId}`);
-    } else if (review.status === "overridden") {
+    } else {
       for (const language of review.pendingLanguages) {
         staleTranslations = updateTranslationStaleness(
           staleTranslations,
@@ -278,6 +339,7 @@ export function applyChapterReview(
       appliedPrivacyDecisions,
       redactedBlocks,
       staleTranslations,
+      evidenceVerified: true,
       revisionHistory: [...state.revisionHistory, {
         revision,
         annotationIds: appliedAnnotationIds,
@@ -292,6 +354,7 @@ export function canMarkChapterReady(state: ChapterReviewState, context: ApplyRev
   return privacyComplete(context)
     && sameDecisions(state.appliedPrivacyDecisions, currentPrivacyDecisions(context))
     && state.stage === "revision_ready"
+    && state.evidenceVerified
     && state.staleTranslations.length === 0
     && !state.annotations.some((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence")
     && !Object.values(state.insightReviews).some((review) => review.resolution === "pending");
@@ -354,8 +417,12 @@ export function privacyReviewState(
   candidates: StoryPrivacyCandidate[],
   decisions: Record<string, PrivacyDecision>,
 ) {
-  const reviewed = candidates.filter((candidate) => decisions[candidate.id]).length;
-  const activeIndex = candidates.findIndex((candidate) => !decisions[candidate.id]);
+  const uniqueIds = new Set(candidates.map((candidate) => candidate.id)).size === candidates.length;
+  if (!uniqueIds) {
+    return { reviewed: 0, activeIndex: 0, active: candidates[0] || null, complete: false };
+  }
+  const reviewed = candidates.filter((candidate) => validPrivacyDecision(decisions[candidate.id])).length;
+  const activeIndex = candidates.findIndex((candidate) => !validPrivacyDecision(decisions[candidate.id]));
   return {
     reviewed,
     activeIndex,

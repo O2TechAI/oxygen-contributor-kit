@@ -283,13 +283,46 @@ const nonEmptyStrings = (value: unknown) => Array.isArray(value)
 function validEvidence(value: unknown): value is EvidenceReference {
   if (!value || typeof value !== "object") return false;
   const evidence = value as Partial<EvidenceReference>;
-  return Boolean(evidence.documentId && evidence.eventId);
+  return Object.keys(value).every((key) => ["documentId", "eventId", "label"].includes(key))
+    && typeof evidence.documentId === "string" && Boolean(evidence.documentId.trim()) && evidence.documentId.length <= 500
+    && typeof evidence.eventId === "string" && Boolean(evidence.eventId.trim()) && evidence.eventId.length <= 500
+    && (evidence.label === undefined || (typeof evidence.label === "string" && evidence.label.length <= 500));
 }
+
+const evidenceKey = (value: EvidenceReference) => JSON.stringify([value.documentId, value.eventId]);
 
 const releaseTargetPattern = /^(?:phase|title|overview|before|after|scene|outcome|uncertainty|people:.+|reconstruction-\d+|detail-\d+|insight:.+)$/;
 
 function sameOrderedValues(left: string[], right: string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function uniqueValues(values: string[]) {
+  return new Set(values).size === values.length;
+}
+
+function onlyKeys(value: object, allowed: string[]) {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function validPrivacyCandidate(value: unknown): value is StoryPrivacyCandidate {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<StoryPrivacyCandidate>;
+  if (!onlyKeys(value, ["id", "title", "explanation", "recommendation", "releaseTargets", "original", "whyFlagged", "suggestedRelease"])
+    || !candidate.id || !candidate.title || !candidate.explanation
+    || !candidate.recommendation || !["keep", "redact"].includes(candidate.recommendation)
+    || !Array.isArray(candidate.releaseTargets)
+    || !candidate.releaseTargets.every((target) => typeof target === "string" && releaseTargetPattern.test(target))
+    || !uniqueValues(candidate.releaseTargets)
+    || !candidate.original || typeof candidate.original !== "object"
+    || !candidate.whyFlagged) return false;
+  if (candidate.original.availability === "unavailable") {
+    return onlyKeys(candidate.original, ["availability"]);
+  }
+  return candidate.original.availability === "available"
+    && onlyKeys(candidate.original, ["availability", "excerpt", "sourceLanguage"])
+    && Boolean(candidate.original.excerpt && candidate.original.sourceLanguage
+      && ["en", "zh"].includes(candidate.original.sourceLanguage));
 }
 
 function semanticBlockIds(value: StoryLanguagePresentation) {
@@ -321,21 +354,15 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
     ))
     && story?.scene && nonEmptyStrings(story.reconstruction)
     && nonEmptyStrings(story.importantDetails) && story.decisionOutcome
+    && (story.uncertainty === undefined || story.uncertainty === null
+      || (typeof story.uncertainty === "string" && Boolean(story.uncertainty.trim())))
     && Array.isArray(highlights) && highlights.length > 0
     && highlights.every((item) => item.id && item.title && item.noticed && item.lesson)
     && privacy?.summary && Array.isArray(privacy.candidates)
-    && privacy.candidates.every((candidate) => (
-      candidate.id && candidate.title && candidate.explanation
-      && ["keep", "redact"].includes(candidate.recommendation)
-      && Array.isArray(candidate.releaseTargets)
-      && candidate.releaseTargets.every((target) => typeof target === "string" && releaseTargetPattern.test(target))
-      && candidate.original
-      && ["available", "unavailable"].includes(candidate.original.availability)
-      && (candidate.original.availability === "available"
-        ? Boolean(candidate.original.excerpt && candidate.original.sourceLanguage)
-        : candidate.original.excerpt === undefined && candidate.original.sourceLanguage === undefined)
-      && candidate.whyFlagged
-    ))
+    && privacy.candidates.every(validPrivacyCandidate)
+    && uniqueValues(people.map((person) => person.id))
+    && uniqueValues(highlights.map((item) => item.id))
+    && uniqueValues(privacy.candidates.map((candidate) => candidate.id))
   );
 }
 
@@ -409,13 +436,19 @@ export function parseStoryAnnotation(summary?: string): StoryAnnotation | Legacy
       || !nonEmptyStrings(episode.compression.retained) || !nonEmptyStrings(episode.compression.omittedLowValue)
       || !episode.compression.rewriteBrief || !evidence || !validEvidence(evidence.primary)
       || !Array.isArray(evidence.supporting) || !evidence.supporting.every(validEvidence)
+      || !uniqueValues([evidence.primary, ...evidence.supporting].map(evidenceKey))
       || value.sourceVersion?.defaultView !== "release"
       || value.sourceVersion?.originalState !== "local_evidence_only"
       || value.sourceVersion?.releaseState !== "ai_prepared_draft"
       || !value.sourceVersion.note || !value.privacyReview?.state || !value.privacyReview.note
       || !validReviewPresentation(value.reviewPresentation)
     ) return null;
-    return value as StoryAnnotation;
+    const annotation = value as StoryAnnotation;
+    for (const language of ["en", "zh"] as const) {
+      const chapter = annotation.reviewPresentation[language].story as StoryChapter & { uncertainty?: string | null };
+      if (chapter.uncertainty === null) delete chapter.uncertainty;
+    }
+    return annotation;
   } catch {
     return null;
   }
