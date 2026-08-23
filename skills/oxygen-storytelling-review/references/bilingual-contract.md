@@ -16,6 +16,7 @@ Where Story presentation exists, switching language updates:
 
 - global Storytelling navigation labels;
 - Project Story title/overview labels;
+- concise project-story summary and compact evidence-derived Phase names;
 - phase and milestone-kind labels;
 - Timeline Chapter title, concise Before/After states, high-signal chips, and read action;
 - Chapter navigation, status, metadata, headings, and overview;
@@ -45,6 +46,13 @@ English and Chinese are two presentations of one Chapter, not independent Storie
 - Final Release Memory confirmation.
 
 The language versions must preserve the same factual claims, causal relationships, failures, uncertainty, decisions, and lessons. Chinese should be natural editorial Chinese rather than literal word-for-word translation.
+
+Apply the narrative-compression and voice rules from
+[product-contract.md](product-contract.md) to both presentations. The English project summary is
+normally 2–3 concise sentences; Chinese conveys the same start, turn, and current boundary in
+equally economical natural prose rather than mirroring English sentence structure. Prefer one- or
+two-word English Phase names and compact Chinese book-part labels without changing Phase semantics.
+What mattered and the AI insight remain equally concise and concrete in both languages.
 
 Natural localization applies to every reader-facing Story field, including inline insight title/observation/lesson, participant identity explanations, status copy, annotation labels, and review blockers. Do not leave an English narrative sentence or UI explanation inside the Chinese presentation merely because its stable ID is shared. Exact technical identifiers and deliberately preserved product terms are the only expected unchanged strings.
 

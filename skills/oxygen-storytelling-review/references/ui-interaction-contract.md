@@ -126,7 +126,10 @@ Direct edit may expose title/observation/lesson. Human-directed revise asks how 
 
 ## Text selection toolbar
 
-The toolbar is temporary and anchored near the selected generated Story range. It contains accessible Delete, Revise, Add actions.
+The toolbar is temporary and anchored near the selected generated Story range. It contains
+accessible Delete, Revise, Add, and compact Close (×) actions. Close immediately clears only the
+transient browser selection/toolbar state; it never cancels or deletes a saved annotation. Escape
+does the same, and click-outside may remain as an additional path.
 
 Selection requirements:
 

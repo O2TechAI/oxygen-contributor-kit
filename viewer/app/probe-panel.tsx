@@ -1,17 +1,26 @@
 "use client";
 
 import { useState } from "react";
+import {
+  resolveBulkPreferencePresentation,
+  resolveProbePresentation,
+  type BulkPreferencePresentations,
+  type ProbePresentations,
+} from "../lib/preference-presentation";
+import type { StoryLanguage } from "../lib/timeline";
 
 export type Probe = {
   id: string; document_id: string; document_kind?: string;
   event_ids: string[]; timestamp?: string; signal: string;
   score: number; turns: number; recap: string; question: string;
   options: Array<{ id: string; text: string }>;
+  presentations?: ProbePresentations;
   allow_other: number; allow_skip: number;
   answer_choice?: string | null; answer_text?: string | null; answered_at?: string | null;
 };
 export type BulkDecision = {
   id: string; kind: string; count: number; question: string;
+  presentations?: BulkPreferencePresentations;
   default_answer: string; answer?: string | null; answered_at?: string | null;
   evidence_sample: string[];
 };
@@ -20,84 +29,114 @@ export type ProbeRun = {
   generated: number; set_aside: number; auto_removed_json?: string;
 } | null;
 
+const preferenceUi = {
+  en: {
+    running: "Finding preference moments…", stage: "Stage", model: "model",
+    runningNote: "This page refreshes on its own and shows the questions when the pass finishes.",
+    empty: "No preference questions", noFindings: "The pass found no moment worth asking about. That is a valid result — it does not mean the session was reviewed poorly.",
+    noRun: "No elicitation pass has been run yet.", title: "Preference probes", questions: "questions", answered: "answered",
+    notice: "Answer only what you actually want recorded. An unanswered or skipped question produces no preference — silence is never read as agreement. Answering is not publication approval.",
+    setAside: "lower-scoring moments were set aside.", judgements: "Judgement calls", passages: "passages", defaultKeep: "default: keep",
+    choices: { remove: "remove", keep: "keep", inspect: "inspect" }, questionList: "Questions", score: "score", turns: "turns", evidence: "evidence",
+    skip: "Nothing worth recording here", other: "Something else — type it and press Save", save: "Save", recorded: "Recorded", nothing: "nothing recorded", clear: "clear",
+    localeMissing: "This preference does not yet have reviewed English display copy. Its answer state is unchanged.",
+  },
+  zh: {
+    running: "正在寻找偏好线索…", stage: "阶段", model: "模型",
+    runningNote: "此页面会自动刷新；处理完成后会显示问题。",
+    empty: "暂无偏好问题", noFindings: "本轮没有发现值得提问的时刻；这是有效结果，并不表示审阅质量不足。",
+    noRun: "尚未运行偏好提取。", title: "偏好问题", questions: "个问题", answered: "已回答",
+    notice: "只记录你明确愿意保留的偏好。未回答或跳过不会产生偏好，沉默不会被视为同意；回答也不代表发布批准。",
+    setAside: "个得分较低的时刻未进入提问。", judgements: "需要判断的事项", passages: "段内容", defaultKeep: "默认：保留",
+    choices: { remove: "移除", keep: "保留", inspect: "检查" }, questionList: "问题", score: "得分", turns: "轮次", evidence: "证据",
+    skip: "这里没有值得记录的内容", other: "其他内容——输入后点击保存", save: "保存", recorded: "已记录", nothing: "未记录内容", clear: "清除",
+    localeMissing: "此偏好尚无经过审阅的中文展示文本；其回答状态未改变。",
+  },
+} as const;
+
 export function ProbePanel(props: {
+  language: StoryLanguage;
   run: ProbeRun;
   probes: Probe[];
   bulkDecisions: BulkDecision[];
   busyId: string;
   onAnswer: (id: string, patch: { choice?: string; text?: string; clear?: boolean; bulk?: boolean }) => void;
 }) {
-  const { run, probes, bulkDecisions, busyId, onAnswer } = props;
+  const { language, run, probes, bulkDecisions, busyId, onAnswer } = props;
+  const labels = preferenceUi[language];
   const [drafts, setDrafts] = useState<Record<string, string>>({});
 
   if (run && run.status === "running") {
-    return <div className="redactionPanel">
-      <h2>Finding preference moments…</h2>
+    return <div className="redactionPanel preferencesPanel" lang={language === "zh" ? "zh-CN" : "en"}>
+      <h2>{labels.running}</h2>
       <p className="redactionMuted">
-        Stage: {run.stage}{run.model ? ` · model ${run.model}` : ""}
+        {labels.stage}: {run.stage}{run.model ? ` · ${labels.model} ${run.model}` : ""}
       </p>
       <div className="redactionBar"><span style={{ width: "40%" }} /></div>
-      <p className="redactionMuted">
-        This page refreshes on its own and shows the questions when the pass finishes.
-      </p>
+      <p className="redactionMuted">{labels.runningNote}</p>
     </div>;
   }
 
   if (!probes.length && !bulkDecisions.length) {
-    return <div className="redactionPanel">
-      <h2>No preference questions</h2>
-      <p className="redactionMuted">
-        {run
-          ? "The pass found no moment worth asking about. That is a valid result — it does not mean the session was reviewed poorly."
-          : "No elicitation pass has been run yet."}
-      </p>
+    return <div className="redactionPanel preferencesPanel" lang={language === "zh" ? "zh-CN" : "en"}>
+      <h2>{labels.empty}</h2>
+      <p className="redactionMuted">{run ? labels.noFindings : labels.noRun}</p>
     </div>;
   }
 
   const answered = probes.filter((probe) => probe.answered_at).length;
 
-  return <div className="redactionPanel">
-    <h2>Preference probes · {probes.length} question(s) · {answered} answered</h2>
+  return <div className="redactionPanel preferencesPanel" lang={language === "zh" ? "zh-CN" : "en"}>
+    <h2>{labels.title} · {probes.length} {labels.questions} · {answered} {labels.answered}</h2>
     <p className="redactionNotice">
-      Answer only what you actually want recorded. An unanswered or skipped question produces no
-      preference — silence is never read as agreement. Answering is not publication approval.
-      {run?.set_aside ? ` ${run.set_aside} lower-scoring moment(s) were set aside.` : ""}
+      {labels.notice}{run?.set_aside ? ` ${run.set_aside} ${labels.setAside}` : ""}
     </p>
 
-    {bulkDecisions.length > 0 && <>
-      <h3>Judgement calls</h3>
-      {bulkDecisions.map((decision) => <div className="probeCard bulk" key={decision.id}>
-        <div className="probeMeta">{decision.kind} · {decision.count} passage(s) · default: keep</div>
-        <p className="probeQuestion">{decision.question}</p>
-        <div className="probeOptions">
-          {["remove", "keep", "inspect"].map((choice) => <button
-            key={choice}
-            className={decision.answer === choice ? "chosen" : ""}
-            disabled={busyId === decision.id}
-            onClick={() => onAnswer(decision.id, { choice, bulk: true })}
-          >{choice}</button>)}
-          {decision.answer && <button
-            className="probeClear"
-            disabled={busyId === decision.id}
-            onClick={() => onAnswer(decision.id, { clear: true, bulk: true })}
-          >clear</button>}
-        </div>
-      </div>)}
-    </>}
+    {bulkDecisions.length > 0 ? <>
+      <h3>{labels.judgements}</h3>
+      {bulkDecisions.map((decision) => {
+        const display = resolveBulkPreferencePresentation(decision, language);
+        if (!display) return <div className="probeCard bulk localeMissing" data-preference-id={decision.id} key={decision.id}>
+          <p className="redactionMuted" role="alert">{labels.localeMissing}</p>
+        </div>;
+        return <div className="probeCard bulk" data-preference-id={decision.id} key={decision.id}>
+          <div className="probeMeta">{decision.kind} · {decision.count} {labels.passages} · {labels.defaultKeep}</div>
+          <p className="probeQuestion">{display.question}</p>
+          <div className="probeOptions">
+            {(["remove", "keep", "inspect"] as const).map((choice) => <button
+              key={choice}
+              className={decision.answer === choice ? "chosen" : ""}
+              disabled={busyId === decision.id}
+              onClick={() => onAnswer(decision.id, { choice, bulk: true })}
+            >{labels.choices[choice]}</button>)}
+            {decision.answer ? <button
+              className="probeClear"
+              disabled={busyId === decision.id}
+              onClick={() => onAnswer(decision.id, { clear: true, bulk: true })}
+            >{labels.clear}</button> : null}
+          </div>
+        </div>;
+      })}
+    </> : null}
 
-    <h3>Questions</h3>
+    <h3>{labels.questionList}</h3>
     {probes.map((probe) => {
+      const display = resolveProbePresentation(probe, language);
       const chosen = probe.answer_choice;
-      return <div className={`probeCard ${chosen ? "answered" : ""}`} key={probe.id}>
+      if (!display) return <div className="probeCard localeMissing" data-preference-id={probe.id} key={probe.id}>
+        <div className="probeMeta"><code>{probe.id}</code></div>
+        <p className="redactionMuted" role="alert">{labels.localeMissing}</p>
+      </div>;
+      return <div className={`probeCard ${chosen ? "answered" : ""}`} data-preference-id={probe.id} key={probe.id}>
         <div className="probeMeta">
-          {probe.signal} · score {probe.score} · {probe.turns} turn(s) ·
+          {probe.signal} · {labels.score} {probe.score} · {probe.turns} {labels.turns} ·
           {" "}<code>{probe.document_id}</code>
-          {probe.event_ids.length ? ` · evidence: ${probe.event_ids.join(", ")}` : ""}
+          {probe.event_ids.length ? ` · ${labels.evidence}: ${probe.event_ids.join(", ")}` : ""}
         </div>
-        <p className="probeRecap">{probe.recap}</p>
-        <p className="probeQuestion">{probe.question}</p>
+        <p className="probeRecap">{display.recap}</p>
+        <p className="probeQuestion">{display.question}</p>
         <div className="probeOptions">
-          {probe.options.map((option) => <button
+          {display.options.map((option) => <button
             key={option.id}
             className={chosen === option.id ? "chosen" : ""}
             disabled={busyId === probe.id}
@@ -107,27 +146,28 @@ export function ProbePanel(props: {
             className={chosen === "none" ? "chosen" : ""}
             disabled={busyId === probe.id}
             onClick={() => onAnswer(probe.id, { choice: "none" })}
-          >Nothing worth recording here</button> : null}
+          >{labels.skip}</button> : null}
         </div>
         {probe.allow_other ? <div className="probeOther">
           <input
-            placeholder="Something else — type it and press Save"
+            aria-label={labels.other}
+            placeholder={labels.other}
             value={drafts[probe.id] ?? (chosen === "other" ? probe.answer_text || "" : "")}
-            onChange={(event) => setDrafts({ ...drafts, [probe.id]: event.target.value })}
+            onChange={(event) => setDrafts((current) => ({ ...current, [probe.id]: event.target.value }))}
           />
           <button
             disabled={busyId === probe.id || !(drafts[probe.id] || "").trim()}
             onClick={() => onAnswer(probe.id, { choice: "other", text: drafts[probe.id] })}
-          >Save</button>
+          >{labels.save}</button>
         </div> : null}
-        {chosen && <div className="probeAnswered">
-          Recorded: {chosen === "other" ? probe.answer_text : chosen === "none" ? "nothing recorded" : chosen}
+        {chosen ? <div className="probeAnswered">
+          {labels.recorded}: {chosen === "other" ? probe.answer_text : chosen === "none" ? labels.nothing : chosen}
           <button
             className="probeClear"
             disabled={busyId === probe.id}
             onClick={() => onAnswer(probe.id, { clear: true })}
-          >clear</button>
-        </div>}
+          >{labels.clear}</button>
+        </div> : null}
       </div>;
     })}
   </div>;

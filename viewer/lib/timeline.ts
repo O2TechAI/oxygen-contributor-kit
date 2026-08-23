@@ -135,6 +135,7 @@ export type StoryLanguagePresentation = {
 export type EpisodeReviewPresentation = {
   en: StoryLanguagePresentation;
   zh: StoryLanguagePresentation;
+  projectSummary?: Record<StoryLanguage, string>;
   semanticAnchors: string[];
 };
 
@@ -399,6 +400,13 @@ function validReviewPresentation(value: unknown): value is EpisodeReviewPresenta
   const presentation = value as Partial<EpisodeReviewPresentation>;
   if (!validReviewLanguage(presentation.en)
       || !validReviewLanguage(presentation.zh)
+      || (presentation.projectSummary !== undefined
+        && (!presentation.projectSummary
+          || typeof presentation.projectSummary !== "object"
+          || !(typeof presentation.projectSummary.en === "string" && presentation.projectSummary.en.trim())
+          || !(typeof presentation.projectSummary.zh === "string" && presentation.projectSummary.zh.trim())
+          || presentation.projectSummary.en.length > 20_000
+          || presentation.projectSummary.zh.length > 20_000))
       || !nonEmptyStrings(presentation.semanticAnchors)
       || !uniqueValues(presentation.semanticAnchors)
       || presentation.semanticAnchors.some((anchor) => anchor.length > 500)) return false;

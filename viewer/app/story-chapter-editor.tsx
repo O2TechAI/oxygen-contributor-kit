@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import type {
   EvidenceReference,
   StoryHighlightItem,
@@ -57,7 +57,7 @@ const ui = {
     aiInsight: "AI insight", aiInterpretation: "AI interpretation · not historical fact", observation: "Observation", lesson: "Reusable lesson",
     editInsight: "Edit insight", reviseInsight: "Revise insight with AI", acceptInsight: "Accept", removeInsight: "Do not preserve",
     save: "Save", cancel: "Cancel", changeInsight: "How would you like to change this?",
-    delete: "Delete", revise: "Revise", add: "Add", revisePrompt: "What should be corrected here?", addPrompt: "What is missing here?",
+    delete: "Delete", revise: "Revise", add: "Add", closeToolbar: "Close review toolbar", revisePrompt: "What should be corrected here?", addPrompt: "What is missing here?",
     instructionPlaceholder: "Describe the correction without rewriting the whole paragraph.", pending: "Pending review", applied: "Applied", needsEvidence: "Needs reviewed evidence", cancelAnnotation: "Cancel annotation", reviewPassage: "Review this passage",
     privacy: "Privacy", privacyPrompt: "What might need to be removed before release?", possibleSensitive: "Possible sensitive content",
     localOriginal: "Local original", unavailable: "Original content unavailable in the reviewed artifact.", sourceLanguage: "Source language",
@@ -76,7 +76,7 @@ const ui = {
     aiInsight: "AI 洞察", aiInterpretation: "AI 解释 · 并非历史事实", observation: "观察", lesson: "可复用经验",
     editInsight: "编辑洞察", reviseInsight: "让 AI 修改洞察", acceptInsight: "接受", removeInsight: "不保留",
     save: "保存", cancel: "取消", changeInsight: "你希望怎样修改？",
-    delete: "删除", revise: "修订", add: "补充", revisePrompt: "这里应当怎样纠正？", addPrompt: "这里缺少什么？",
+    delete: "删除", revise: "修订", add: "补充", closeToolbar: "关闭审阅工具栏", revisePrompt: "这里应当怎样纠正？", addPrompt: "这里缺少什么？",
     instructionPlaceholder: "说明需要纠正的地方，无需重写整段。", pending: "待处理", applied: "已应用", needsEvidence: "需要已审阅证据支持", cancelAnnotation: "取消批注", reviewPassage: "审阅这段文字",
     privacy: "隐私", privacyPrompt: "发布前，哪些内容可能需要移除？", possibleSensitive: "可能敏感的内容",
     localOriginal: "本地原文", unavailable: "已审阅材料中不包含原始内容。", sourceLanguage: "原文语言",
@@ -134,6 +134,7 @@ export function StoryChapterEditor(props: {
   const presentation = story.reviewPresentation?.[language];
   const labels = ui[language];
   const articleRef = useRef<HTMLElement | null>(null);
+  const selectionToolbarRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const backRef = useRef<HTMLButtonElement | null>(null);
   const restoredContextRef = useRef(false);
@@ -148,6 +149,14 @@ export function StoryChapterEditor(props: {
   const insightReview = baseHighlight ? chapterReview.insightReviews[baseHighlight.id] : undefined;
   const visibleHighlight = insightReview?.localized[language] || baseHighlight;
   const [insightDraft, setInsightDraft] = useState<StoryHighlightItem | undefined>(visibleHighlight);
+  const clearSelection = useCallback(() => {
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+    setAnnotationMode(null);
+    setInstruction("");
+    setSupportAddition(false);
+    setApplyError("");
+  }, []);
 
   useEffect(() => {
     if (restoredContextRef.current) return;
@@ -160,6 +169,24 @@ export function StoryChapterEditor(props: {
     });
     return () => cancelAnimationFrame(frame);
   }, [focusOriginId, initialScrollTop, onContextRestored, story.key]);
+
+  useEffect(() => {
+    if (!selection) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") clearSelection();
+    };
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !selectionToolbarRef.current?.contains(event.target)) {
+        clearSelection();
+      }
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+    };
+  }, [clearSelection, selection]);
 
   const candidates = presentation?.privacy.candidates || [];
   const privacyState = privacyReviewState(candidates, privacyDecisions);
@@ -203,15 +230,6 @@ export function StoryChapterEditor(props: {
   }, {}), [chapterReview.annotations]);
 
   if (!episode || !presentation || !visibleHighlight || !insightDraft || !story.evidence) return null;
-
-  const clearSelection = () => {
-    window.getSelection()?.removeAllRanges();
-    setSelection(null);
-    setAnnotationMode(null);
-    setInstruction("");
-    setSupportAddition(false);
-    setApplyError("");
-  };
 
   const captureSelection = () => {
     if (chapterReview.stage === "human_confirmed") return;
@@ -502,10 +520,11 @@ export function StoryChapterEditor(props: {
       </div>
     </div>
 
-    {selection && <div className="selectionToolbar" role="toolbar" aria-label={labels.pending} style={{ left: selection.left, top: selection.top }} onMouseDown={handleToolbarMouseDown}>
+    {selection && <div className="selectionToolbar" ref={selectionToolbarRef} role="toolbar" aria-label={labels.pending} style={{ left: selection.left, top: selection.top }} onMouseDown={handleToolbarMouseDown}>
       <button title={labels.delete} aria-label={labels.delete} onClick={() => createAnnotation("delete")}><span>{labels.delete}</span></button>
       <button title={labels.revise} aria-label={labels.revise} onClick={() => setAnnotationMode("revise")}><span>{labels.revise}</span></button>
       <button title={labels.add} aria-label={labels.add} onClick={() => setAnnotationMode("add")}><span>{labels.add}</span></button>
+      <button className="selectionToolbarClose" title={labels.closeToolbar} aria-label={labels.closeToolbar} onClick={clearSelection}>×</button>
       {annotationMode && <form className="selectionPrompt" onSubmit={(event) => { event.preventDefault(); createAnnotation(annotationMode, instruction); }}>
         <label>{annotationMode === "revise" ? labels.revisePrompt : labels.addPrompt}<textarea autoFocus rows={3} value={instruction} placeholder={labels.instructionPlaceholder} onChange={(event) => setInstruction(event.target.value)} /></label>
         {annotationMode === "add" && evidence[0] && <label className="selectionEvidenceSupport"><input type="checkbox" checked={supportAddition} onChange={(event) => setSupportAddition(event.target.checked)} />{labels.evidenceSupport}</label>}

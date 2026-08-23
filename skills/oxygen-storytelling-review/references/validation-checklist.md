@@ -39,6 +39,9 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 ## Project Story
 
 - [ ] Selection is event-driven, globally consequential, deduplicated, and not time/volume bucketed.
+- [ ] Derivation considered every record in the approved reviewed input boundary while visible copy compresses routine history; no broader/private-history coverage is claimed.
+- [ ] Project Summary is nonempty, normally 2–3 concise sentences, and establishes the supported beginning, major turn, and current boundary without mechanically listing Phases or repeating visible metrics.
+- [ ] Phase labels are evidence-derived and strongly prefer one or two English words plus equivalently compact natural Chinese; selection/grouping was not changed merely for naming.
 - [ ] When supported evidence contains the initiating problem/goal/baseline assumptions, the opening Chapter and overview establish that beginning instead of starting at a midstream routine setup/test failure.
 - [ ] Routine command, import-path, test-collection, and ordinary test incidents are compressed unless they demonstrably changed a durable contract, architecture, execution envelope, or direction.
 - [ ] Timeline remains the narrative table of contents with direct Chapter actions.
@@ -71,13 +74,17 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Roles/descriptions are compact and evidence-supported.
 - [ ] Local/release identity distinction is clear; no fabricated name.
 - [ ] Story is a structured article with clear causal progression and uncertainty.
+- [ ] Chapter prose answers setup → change → cause → consequence → significance using concrete active language rather than procedure/audit-log narration.
+- [ ] What mattered is normally one concise sentence built from the strongest supported facts; deviations have a content reason.
 - [ ] The single reviewable AI insight and reusable lesson appear inside Story and are labeled as interpretation; no multi-insight fallback UI exists.
+- [ ] AI insight copy is one or two short, concrete, project-specific sentences and avoids generic summary formulas.
 - [ ] Accept/remove/direct edit/human-directed revise work without a full chat UI.
 
 ## Text annotations
 
 - [ ] Toolbar is absent until meaningful Story text is selected.
-- [ ] Toolbar has accessible Delete, Revise, Add actions.
+- [ ] Toolbar has accessible Delete, Revise, Add, and visible compact Close actions.
+- [ ] Close and Escape immediately clear only transient selection/toolbar state; saved annotations remain.
 - [ ] Exact block ID, start, end, selected text, language, base revision, type, instruction, and resolution persist.
 - [ ] Only the exact range is styled; parent paragraph/list item is not.
 - [ ] Pending quote equals `source.slice(start,end)`.

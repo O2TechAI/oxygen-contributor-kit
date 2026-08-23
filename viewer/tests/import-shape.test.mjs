@@ -36,6 +36,11 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(css,/Chapter sections are editorial headings, not sequential steps/);
   for(const label of ["Project story","View local evidence","Exact source language","AI insight","Delete","Revise","Add","Privacy review complete","All set","Reopen review","Final Release Memory"])assert.match(episode,new RegExp(label));
   assert.match(episode,/data-inline-insight/);assert.match(episode,/data-story-block/);assert.match(episode,/captureSelection/);
+  assert.match(episode,/closeToolbar: "Close review toolbar"/);assert.match(episode,/className="selectionToolbarClose"/);
+  assert.match(episode,/event\.key === "Escape"\) clearSelection\(\)/);
+  assert.match(episode,/window\.getSelection\(\)\?\.removeAllRanges\(\)/);
+  const clearSelection=episode.slice(episode.indexOf("const clearSelection"),episode.indexOf("}, []);",episode.indexOf("const clearSelection")));
+  assert.doesNotMatch(clearSelection,/onChapterReview|cancelStoryAnnotation/);
   assert.match(episode,/copy\.contains\(range\.startContainer\).*copy\.contains\(range\.endContainer\)/s);
   assert.match(episode,/storyAnnotatedRange/);assert.match(episode,/data-annotation-ids/);
   assert.match(css,/\.storyAnnotatedRange\{text-decoration:underline/);
@@ -54,6 +59,35 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(ui,/payload\.documents/);
   assert.match(progress,/role="progressbar"/);assert.match(progress,/Nothing is uploaded/);
   assert.doesNotMatch(ui+episode,/password|checklist/i);
+});
+test("Release Preview and Preferences use centered, gate-aware, locale-consistent surfaces", async () => {
+  const [ui,css,probes,probeApi,db,preferenceModel,release] = await Promise.all([
+    read("../app/workspace.tsx"), read("../app/globals.css"), read("../app/probe-panel.tsx"),
+    read("../app/api/probes/route.ts"), read("../db/index.ts"),
+    read("../lib/preference-presentation.ts"), read("../app/redaction-compare.tsx"),
+  ]);
+  assert.match(ui,/const openReleasePreview/);
+  assert.match(ui,/redactionJob\?\.status === "complete" && docs\[0\]/);
+  assert.match(ui,/setSelected\(docs\[0\]\.id\)/);
+  assert.match(ui,/releasePreviewReturnSelectionRef\.current=selected/);
+  assert.match(ui,/const restoreReleasePreviewSelection/);
+  assert.match(ui,/setSelected\(releasePreviewReturnSelectionRef\.current\)/);
+  assert.match(ui,/reviewStream releasePreviewStream/);
+  assert.match(ui,/reviewStream preferencesStream/);
+  assert.match(css,/\.reviewStream>\.redactionPanel\{width:min\(960px,100%\);margin-left:auto;margin-right:auto\}/);
+  assert.match(release,/const items = allItems/);
+  assert.doesNotMatch(release,/local original fallback|private evidence fallback/i);
+
+  assert.match(ui,/language=\{language\}/);
+  assert.match(probes,/resolveProbePresentation\(probe, language\)/);
+  assert.match(probes,/role="alert">\{labels\.localeMissing\}/);
+  assert.match(probes,/data-preference-id=\{probe\.id\}/);
+  assert.match(probeApi,/presentations_json/);
+  assert.match(probeApi,/normalizeProbePresentations/);
+  assert.match(db,/ALTER TABLE probes ADD COLUMN presentations_json/);
+  assert.match(db,/let initialization: Promise<void> \| null/);
+  assert.match(db,/initialization \?\?= \(async \(\) =>/);
+  assert.match(preferenceModel,/return presentation \? \{ \.\.\.probe, \.\.\.presentation \} : null/);
 });
 test("Chapter completion renders unsupported-Add copy only for a needs-evidence Add", async () => {
   const episode=await read("../app/story-chapter-editor.tsx");

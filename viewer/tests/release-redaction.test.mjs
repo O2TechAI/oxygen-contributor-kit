@@ -125,6 +125,10 @@ test("only internally consistent completed redaction passes are releasable", () 
     requestedStatus: "complete", completed: 3, total: 3,
     rejected: 0, sourceDigest: digest,
   }), "complete");
+  assert.equal(finalRedactionStatus({
+    requestedStatus: "complete", completed: 0, total: 0,
+    rejected: 0, sourceDigest: digest,
+  }), "complete");
 
   assert.match(redactionReleaseError({
     status: "complete", completed: 0, total: 999, rejected: 0,
@@ -140,6 +144,10 @@ test("only internally consistent completed redaction passes are releasable", () 
   }, digest), /rejected spans/);
   assert.equal(redactionReleaseError({
     status: "complete", completed: 3, total: 3, rejected: 0,
+    source_digest: digest,
+  }, digest), null);
+  assert.equal(redactionReleaseError({
+    status: "complete", completed: 0, total: 0, rejected: 0,
     source_digest: digest,
   }, digest), null);
 });

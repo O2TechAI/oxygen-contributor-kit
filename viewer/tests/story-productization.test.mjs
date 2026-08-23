@@ -4,7 +4,7 @@ import { access, readFile } from "node:fs/promises";
 import { syntheticStoryEvents, syntheticStoryProject } from "./fixtures/synthetic-story-project.mjs";
 import { buildReviewedStoryRelease } from "../lib/story-release.ts";
 import { applyChapterReview, emptyChapterReview, markChapterReady } from "../lib/story-review.ts";
-import { resolveEvidenceTarget, selectProjectTimeline } from "../lib/timeline.ts";
+import { STORY_PREFIX, parseStoryAnnotation, resolveEvidenceTarget, selectProjectTimeline } from "../lib/timeline.ts";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
@@ -13,6 +13,12 @@ test("a non-Golden synthetic project exercises dynamic Story shapes", () => {
   assert.equal(syntheticStoryProject.name, "Harbor Sensor Calibration");
   assert.equal(milestones.length, 3);
   assert.equal(new Set(milestones.map((milestone) => milestone.story.phase)).size, 2);
+  assert.ok(milestones.every((milestone) => milestone.story.reviewPresentation.en.phase.split(/\s+/).length <= 2));
+  assert.ok(milestones.every((milestone) => milestone.story.reviewPresentation.en.story.importantDetails.length === 1));
+  assert.deepEqual(milestones[0].story.reviewPresentation.projectSummary, syntheticStoryProject.overview);
+  const malformedSummary = JSON.parse(syntheticStoryEvents[0].summary.slice(STORY_PREFIX.length));
+  malformedSummary.reviewPresentation.projectSummary = null;
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(malformedSummary)), null);
   assert.deepEqual(milestones.map((milestone) => milestone.story.reviewPresentation.en.people.length), [1, 2, 0]);
   assert.deepEqual(milestones.map((milestone) => milestone.story.reviewPresentation.en.privacy.candidates.length), [0, 1, 1]);
   assert.ok(milestones.every((milestone) => milestone.story.reviewPresentation.en.highlights.length === 1));
@@ -25,6 +31,27 @@ test("a non-Golden synthetic project exercises dynamic Story shapes", () => {
   for (const milestone of milestones) {
     assert.equal(resolveEvidenceTarget(reviewedItems, milestone.story.evidence.primary.eventId).status, "resolved");
   }
+});
+
+test("the reusable narrative contract separates full-history derivation from concise copy", async () => {
+  const [product, data, bilingual, validation] = await Promise.all([
+    read("../../skills/oxygen-storytelling-review/references/product-contract.md"),
+    read("../../skills/oxygen-storytelling-review/references/story-data-contract.md"),
+    read("../../skills/oxygen-storytelling-review/references/bilingual-contract.md"),
+    read("../../skills/oxygen-storytelling-review/references/validation-checklist.md"),
+  ]);
+  for (const contract of [
+    "Every reviewed historical record", "2–3 concise sentences", "one or two scannable English words",
+    "Narrative coherence without fictionalization", "What mattered is normally one concise sentence",
+    "one or two short, project-specific sentences",
+  ]) assert.match(product, new RegExp(contract));
+  assert.match(data, /canonical narrative-compression and voice rules/);
+  assert.match(bilingual, /same start, turn, and current boundary/);
+  assert.match(validation, /visible copy compresses routine history/);
+  assert.doesNotMatch([product, data, bilingual, validation].join("\n"), /BOM Sourcing Benchmark|127\.0\.0\.1:326[14]/);
+
+  const sentences = syntheticStoryProject.overview.en.match(/[^.!?]+[.!?]+/g) || [];
+  assert.ok(sentences.length >= 2 && sentences.length <= 3);
 });
 
 test("the synthetic project completes through the shared review and release runtime", () => {

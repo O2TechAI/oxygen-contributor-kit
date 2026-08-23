@@ -173,19 +173,28 @@ Do not invent a source link merely to satisfy a schema. If evidence cannot be re
 
 ## Chapter-generation rules
 
+Apply the canonical narrative-compression and voice rules in
+[product-contract.md](product-contract.md) before generating fields. The structures below carry
+that narrative; they do not justify field-by-field or log-style prose.
+
 For each Chapter:
 
 1. Define one consequential transition and stable key.
 2. Choose primary evidence and only necessary supporting evidence.
 3. Write a concise Timeline summary.
 4. Write short Timeline Before/After states and select only evidence-backed high-signal chips; keep long explanation out of the card.
-5. Reconstruct a coherent article that preserves causal order and uncertainty.
+5. Reconstruct a concise coherent article that preserves causal order and uncertainty.
 6. Record what was retained, what routine material was compressed, and what sensitive material remains unavailable.
 7. Generate exactly one AI insight/lesson explicitly typed as interpretation.
 8. Generate People only when supported.
 9. Generate contextual Privacy candidates only from permitted reviewed information.
 10. Generate natural Chinese with the same facts, transition semantics, scan chips, and technical anchors.
 11. End the sequence with an honest current-state Chapter.
+
+At project level, generate a natural semantically equivalent EN/中文 summary of roughly 2–3
+sentences. Prefer one- or two-word English Phase labels and equivalently compact natural Chinese.
+Treat importantDetails as the source for a normally single-sentence What mattered unit rather
+than an invitation to repeat the Chapter as a fact list.
 
 ## Import and validation gates
 

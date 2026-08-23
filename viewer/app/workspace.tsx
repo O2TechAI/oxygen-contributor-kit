@@ -66,6 +66,7 @@ export function InlineWorkspace() {
   const timelineScrollRef = useRef<HTMLDivElement|null>(null);
   const phaseSectionRefs = useRef(new Map<number,HTMLElement>());
   const timelineContextRef = useRef({ key:"", scrollTop:0 });
+  const releasePreviewReturnSelectionRef = useRef<string|null>(null);
   const activeChapterButtonRef = useCallback((node:HTMLButtonElement|null) => {
     if (!node) return;
     requestAnimationFrame(() => node.scrollIntoView({ block:"nearest" }));
@@ -197,6 +198,10 @@ export function InlineWorkspace() {
   const highlights = selectProjectTimeline(summary.highlights || []);
   const labels = workspaceUi[language];
   const localized = (event:typeof highlights[number]) => event.story.reviewPresentation?.[language];
+  const projectStorySummary = highlights[0]?.story.reviewPresentation?.projectSummary?.[language]
+    || (language === "zh"
+      ? "这是一段由已审阅证据重建的项目故事：它保留关键转折、失败、决定与当前边界。"
+      : summary.project_summary);
   const phaseGroups = highlights.reduce<Array<{ name:string; events:typeof highlights }>>((groups,event) => {
     const phase=localized(event)?.phase || event.story.phase;
     const previous=groups.at(-1);
@@ -244,6 +249,23 @@ export function InlineWorkspace() {
     clearChapterRestore();
     setEvidenceNavigationError("");
     setActiveStoryKey(storyKey);
+  };
+  const openReleasePreview = () => {
+    setSourceFocus("");
+    setActiveStoryKey("");
+    setEvidenceReturn(null);
+    if (isProject && redactionJob?.status === "complete" && docs[0]) {
+      releasePreviewReturnSelectionRef.current=selected;
+      setDetail(null);
+      setSelected(docs[0].id);
+    }
+    setView("redaction");
+  };
+  const restoreReleasePreviewSelection = () => {
+    if(!releasePreviewReturnSelectionRef.current) return;
+    setSelected(releasePreviewReturnSelectionRef.current);
+    setDetail(null);
+    releasePreviewReturnSelectionRef.current=null;
   };
   const closeStory = () => {
     const context=timelineContextRef.current;
@@ -329,7 +351,7 @@ export function InlineWorkspace() {
     <div className={`workspace storytellingWorkspace ${activeMilestone?"episodeOpen":""}`} style={workspaceStyle}>
       <aside className="rail storyRail">
         <div className="railHead"><b>{labels.projects}</b><span>{selectedProject?highlights.length:projectNames.length}</span></div>
-        <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selected===`project:${project}`?"active":""}`} key={project} onClick={() => { setSelected(`project:${project}`); setSourceFocus(""); setActiveStoryKey(""); setEvidenceReturn(null); setView("timeline"); }}>
+        <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selected===`project:${project}`?"active":""}`} key={project} onClick={() => { releasePreviewReturnSelectionRef.current=null; setSelected(`project:${project}`); setSourceFocus(""); setActiveStoryKey(""); setEvidenceReturn(null); setView("timeline"); }}>
           <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${labels.phases}`:`${projectCount(project).toLocaleString()} ${labels.events}`}</small>
         </button>)}{activeMilestone && <div className="chapterRailContext" aria-label={language==="zh"?"章节选择器":"Chapter selector"}>
           <span>{language==="zh"?`章节 ${activeStoryIndex+1} / ${highlights.length}`:`Chapters ${activeStoryIndex+1} / ${highlights.length}`}</span>
@@ -347,13 +369,13 @@ export function InlineWorkspace() {
         {!ready ? <div className="empty">No organized records found.</div> : <>
           {error && <div className="workspaceError" role="alert">{error}</div>}
           <nav className="toolbar storyToolbar" aria-label="Record view" aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
-            <div className="toolbarInner"><button className={view==="timeline"?"active":""} onClick={() => { setActiveStoryKey(""); setView("timeline"); }}>{labels.timeline}</button>
-            <button className={view==="redaction"?"active":""} onClick={() => { setSourceFocus(""); setActiveStoryKey(""); setView("redaction"); }}>
+            <div className="toolbarInner"><button className={view==="timeline"?"active":""} onClick={() => { restoreReleasePreviewSelection(); setActiveStoryKey(""); setView("timeline"); }}>{labels.timeline}</button>
+            <button className={view==="redaction"?"active":""} onClick={openReleasePreview}>
               {labels.release}{redactionJob?.status === "running" ? " · running"
                 : redactionJob && redactionJob.status !== "complete" ? ` · ${redactionJob.status}`
                 : redactions.length ? ` · ${redactions.length} redacted` : ""}
             </button>
-            <button className={view==="probes"?"active":""} onClick={() => setView("probes")}>
+            <button className={view==="probes"?"active":""} onClick={() => { restoreReleasePreviewSelection(); setView("probes"); }}>
               {labels.preferences}{probeRun?.status === "running" ? " · running" : probes.length ? ` · ${probes.filter((p) => p.answered_at).length}/${probes.length}` : ""}
             </button></div>
           </nav>
@@ -361,11 +383,11 @@ export function InlineWorkspace() {
             <span className="eyebrow">{view==="redaction"?labels.evidenceReview:labels.preferencesTitle}</span>
             <h1>{summary.primary_project || detail?.document.title}</h1>
           </div></div>}
-          <div className={`stream ${view==="timeline"?"storyStream":""}`} ref={timelineScrollRef} onScroll={updateActivePhase} aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
+          <div className={`stream ${view==="timeline" ? "storyStream" : view==="redaction" ? "reviewStream releasePreviewStream" : "reviewStream preferencesStream"}`} ref={timelineScrollRef} onScroll={updateActivePhase} aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
             {view === "timeline" ? <>
               <div className="storyCanvasGrid"><div className="storyTimelineColumn">
                 <header className="storyOrientation"><p className="eyebrow">{labels.projectStory}</p><h1>{summary.primary_project || detail?.document.title}</h1>
-                  <p>{language==="zh" ? "这是一段由已审阅证据重建的项目故事：它保留关键转折、失败、决定与当前边界。" : summary.project_summary}</p>
+                  <p>{projectStorySummary}</p>
                   <div className="storyStats"><span><b>{highlights.length}</b> {labels.milestones}</span><span><b>{phaseGroups.length}</b> {labels.phases}</span><span><b>{reviewedInsights}/{highlights.length}</b> {labels.reviewed}</span><span><b>{docs.length}</b> {labels.retained}</span></div>
                   <small>{docs.length} {language==="zh"?"条已审阅来源记录": "reviewed source records"} · {projectCount(selectedProject || primaryProject).toLocaleString()} {labels.events} · {language==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
                 </header>
@@ -394,6 +416,7 @@ export function InlineWorkspace() {
               onUpdate={updateRedaction}
               onDelete={deleteRedaction}
             /></> : view === "probes" ? <ProbePanel
+              language={language}
               run={probeRun}
               probes={probes}
               bulkDecisions={bulkDecisions}

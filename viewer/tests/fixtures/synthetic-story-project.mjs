@@ -2,14 +2,17 @@ import { STORY_PREFIX } from "../../lib/timeline.ts";
 
 export const syntheticStoryProject = {
   name: "Harbor Sensor Calibration",
-  overview: "A safe synthetic project about establishing and validating a sensor baseline.",
+  overview: {
+    en: "The project began with sensors that could not be compared. A controlled trial exposed temperature drift, and an independent holdout became the release gate.",
+    zh: "项目起初无法比较不同传感器。对照试验暴露温度漂移后，独立留出验证成为发布门槛。",
+  },
   sourceRecordCount: 7,
 };
 
 const chapters = [
   {
     key: "baseline-question",
-    phase: { en: "Establish the signal", zh: "建立信号基线" },
+    phase: { en: "Signal Baseline", zh: "信号基线" },
     kind: "discovery",
     date: "2031-03-02T09:00:00Z",
     title: { en: "The baseline could not be compared", zh: "基线暂时无法比较" },
@@ -22,7 +25,7 @@ const chapters = [
   },
   {
     key: "controlled-trial",
-    phase: { en: "Establish the signal", zh: "建立信号基线" },
+    phase: { en: "Signal Baseline", zh: "信号基线" },
     kind: "validation",
     date: "2031-03-05T14:30:00Z",
     title: { en: "A controlled trial exposed drift", zh: "对照试验暴露了漂移" },
@@ -44,7 +47,7 @@ const chapters = [
   },
   {
     key: "deployment-gate",
-    phase: { en: "Confirm deployment", zh: "确认部署条件" },
+    phase: { en: "Deployment Gate", zh: "部署门槛" },
     kind: "current_state",
     date: "2031-03-11T16:00:00Z",
     title: { en: "The holdout became the deployment gate", zh: "留出验证成为部署门槛" },
@@ -161,6 +164,7 @@ function eventFor(chapter, index) {
     reviewPresentation: {
       en: presentation(chapter, "en"),
       zh: presentation(chapter, "zh"),
+      projectSummary: syntheticStoryProject.overview,
       semanticAnchors: ["SENSOR-DEMO"],
     },
   };

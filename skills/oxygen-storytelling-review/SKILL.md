@@ -76,6 +76,12 @@ Select Chapters by meaningful state transition, not time or activity volume. Pre
 
 Build one coherent, evidence-grounded story of why the project began, what changed, what surprised people, where work failed, what decision followed, what was learned, and where the project now stands. Compress procedure and repeated status while retaining causal transitions, technical precision, failure, disagreement, and uncertainty.
 
+Apply the canonical narrative-compression and voice rules in
+[product-contract.md](references/product-contract.md): consider the complete reviewed history at
+the approved boundary, then write a concise 2–3 sentence project arc, compact evidence-derived
+Phase names, causal Chapter prose, one-sentence What mattered copy, and a concrete natural
+1–2 sentence AI insight. Compression never permits fictionalization or unsupported causality.
+
 Before accepting the Chapter set, perform a narrative-coverage audit: when reviewed evidence contains the initiating problem, goal, or baseline assumptions, the opening Chapter/overview must establish that supported beginning rather than start at a midstream command, import-path, test-collection, or other routine setup failure. Keep such operational incidents only when they caused a durable contract, architecture, or direction change.
 
 ### 3. Generate project-local Story data
@@ -129,7 +135,7 @@ Follow the rule:
 
 ### 6. Preserve exact Story annotations
 
-Selecting generated Story text opens a temporary Delete / Revise / Add toolbar. Store semantic block ID, exact start/end offsets, selected text, type, instruction, source language, base revision, resolution, and applied revision.
+Selecting generated Story text opens a temporary Delete / Revise / Add / Close toolbar. Store semantic block ID, exact start/end offsets, selected text, type, instruction, source language, base revision, resolution, and applied revision.
 
 Style only the exact validated inline range. Reject unsafe cross-block selections. Multiple non-overlapping ranges in one paragraph remain independent. Cancel removes only its annotation. Exact evidence is never annotatable or mutated.
 

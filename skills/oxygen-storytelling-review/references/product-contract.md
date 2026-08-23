@@ -68,6 +68,48 @@ Prioritize causal transitions and consequential moments. Compress routine comman
 
 Never turn a small remark into a turning point without evidence. Never rewrite uncertainty or a blocked round into a successful conclusion.
 
+### Narrative compression and voice
+
+Every reviewed historical record available at the approved input boundary must be considered
+during Story derivation, but not every record belongs in visible copy. Do not claim full-history
+coverage unless that derivation actually considered the complete reviewed input. Keep routine
+commands, repeated validation, status chatter, and low-impact implementation detail available
+through Evidence while compressing the presentation around meaningful phases, causal turns,
+failures, decisions, outcomes, and the current state.
+
+The Project Story summary normally uses 2–3 concise sentences. It should establish where the
+project began, name the major transformation or turn, and explain where the reviewed history ends.
+It should represent the major trajectory without mechanically listing every Phase, repeating the
+metrics shown below, or sounding like an implementation log. Optimize for project understanding
+per sentence, not brevity that erases meaning.
+
+Phase names behave like book-part names. Strongly prefer one or two scannable English words and an
+equivalently compact natural Chinese label. Derive names from evidence; do not change supported
+Phase selection merely to obtain prettier labels and do not treat example names as a taxonomy.
+
+A Chapter should answer, in causal order: what was happening, what changed, why direction changed,
+what followed, and why the Chapter matters. Setup / turn / what followed / what mattered are useful
+editorial cues, not mandatory schema headings. Use short paragraphs, concrete nouns, active voice,
+important technical facts, and material numbers. Preserve supported failure, disagreement, and
+uncertainty. Remove audit-report voice, command-by-command narration, mechanical field enumeration,
+and generic summary filler.
+
+What mattered is normally one concise sentence derived from the Chapter's two to four strongest
+supported facts or chips. It connects those facts to the larger trajectory rather than repeating
+the article.
+
+The inline AI insight remains interpretation, not history. Write its observation and reusable
+lesson in one or two short, project-specific sentences that are concrete and memorable. Avoid
+formulaic openings such as “This chapter demonstrates,” “The key takeaway is,” and “This highlights
+the importance of,” plus abstract advice that could describe any project.
+
+The governing standard is:
+
+> Narrative coherence without fictionalization.
+
+Never invent dialogue, emotion, motivation, certainty, causality, or retrospective outcomes that
+the reviewed evidence does not support.
+
 ## Project Story page
 
 Retain the existing application shell and its project/source rail. Use a centered responsive Timeline column in the remaining canvas. Do not fill that canvas with one giant project card or leave the Timeline visibly pinned to one edge.
