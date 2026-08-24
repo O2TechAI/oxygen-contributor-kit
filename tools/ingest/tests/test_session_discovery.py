@@ -290,7 +290,10 @@ class CollectorMainBoundaryTest(unittest.TestCase):
             self.assertEqual(discovery["matched"], 1)
             self.assertEqual(discovery["approved_root_selected"], 0)
             self.assertEqual(index["memory_file_count"], 1)
-            self.assertEqual([entry["source"] for entry in index["memory"]], [str(repo / "AGENTS.md")])
+            self.assertEqual(
+                [entry["source"] for entry in index["memory"]],
+                [str((repo / "AGENTS.md").resolve())],
+            )
 
 
 class WorkflowProgressReporterTest(unittest.TestCase):
