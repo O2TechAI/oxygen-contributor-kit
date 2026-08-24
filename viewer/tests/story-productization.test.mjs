@@ -51,6 +51,7 @@ test("the reusable narrative contract separates a scan-first homepage from evide
   assert.match(data, /canonical narrative-compression and voice rules/);
   assert.match(data, /context-sufficient coherent article/);
   assert.match(data, /passage context for every Story-content block/);
+  assert.match(data, /A missing map, missing key, or extra key[\s\S]*no valid empty or silent fallback/);
   assert.match(bilingual, /same start, turn, and current boundary/);
   assert.match(bilingual, /Chapter depth remains semantically equivalent/);
   assert.match(validation, /visible copy compresses routine history/);
@@ -61,6 +62,8 @@ test("the reusable narrative contract separates a scan-first homepage from evide
   assert.match(narrative, /three to five concise sentences/);
   assert.match(narrative, /exactly one reviewable canonical Insight/);
   assert.match(lifecycle, /## Direct-edit transaction model/);
+  assert.match(lifecycle, /Direct editing is the primary current lifecycle/);
+  assert.match(lifecycle, /pending or needs evidence[\s\S]*paired locale is stale[\s\S]*evidence\/ledger provenance fails validation/);
   assert.match(lifecycle, /Undo marks the most recently changed active-locale pending transaction reverted/);
   assert.match(interaction, /current\/total position plus[\s\S]*Previous\/Next controls/);
   assert.match(validation, /## Direct Story editing/);
@@ -127,6 +130,9 @@ test("the normal workflow delegates to the canonical repository Story runtime", 
   assert.match(skill, /passage-context/);
   assert.match(skill, /narrative-writing-contract\.md/);
   assert.match(skill, /Direct typing, caret insertion, selection replacement\/deletion/);
+  assert.match(skill, /human direct edits and\/or compatible legacy review records/);
+  assert.match(skill, /completely fresh, contextless Agent[\s\S]*normal public Oxygen workflow request/);
+  assert.match(skill, /Missing or unsupported context makes that Chapter[\s\S]*incomplete/);
   assert.match(skill, /private latent reasoning/);
   assert.match(workspace, /export function InlineWorkspace/);
   assert.match(editor, /export function StoryChapterEditor/);

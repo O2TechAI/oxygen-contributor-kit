@@ -25,6 +25,17 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 
 ## Workflow progress
 
+- [ ] Project Story remains hidden through Collect, Organize, Privacy, and Build Project Story; organization records, fallback milestones, and partial Story rows never unlock it.
+- [ ] One persisted Story generation status survives refresh and reaches `ready_for_human_review` only through complete server-side package validation.
+- [ ] Activation atomically moves Build Project Story to complete and Review Story to current with human action required; a changed source revision or failed validation remains on Progress.
+- [ ] Direct Story navigation and Story review-session GET/POST fail closed before readiness.
+- [ ] An already-mounted Build Progress page reloads the activated Story snapshot and reveals the
+      complete Story within the normal polling interval; no manual refresh or tab reopening occurs.
+- [ ] Initial server render stays on persisted Build Progress before readiness and opens the
+      complete Story directly after Review readiness, without a fabricated Collect frame.
+- [ ] Stage 5 immediately surfaces the exact no-password URL and pauses the same Agent/Viewer for
+      real human review; unattended validation reports `WAITING_FOR_HUMAN_STORY_REVIEW`.
+
 - [ ] Existing centered loading treatment is reused for workflow progress rather than replaced by a developer dashboard.
 - [ ] Stages match the real contributor workflow and expose completed/current/next plus waiting, blocked, and human-action state.
 - [ ] Determinate progress appears only when backed by a real denominator; no fake percentage is shown.
@@ -54,6 +65,9 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Derivation considered every record in the approved reviewed input boundary while visible copy compresses routine history; no broader/private-history coverage is claimed.
 - [ ] Project Summary is nonempty, normally 2–3 concise sentences, and establishes the supported beginning, major turn, and current boundary without mechanically listing Phases or repeating visible metrics.
 - [ ] Phase labels are evidence-derived and strongly prefer one or two English words plus equivalently compact natural Chinese; selection/grouping was not changed merely for naming.
+- [ ] Each Phase has one consistent evidence-derived rationale, adjacent Phase rationales are
+      distinct, generic fallback labels fail activation, and a demonstrated coherent single Phase
+      remains valid without a minimum count.
 - [ ] When supported evidence contains the initiating problem/goal/baseline assumptions, the opening Chapter and overview establish that beginning instead of starting at a midstream routine setup/test failure.
 - [ ] Routine command, import-path, test-collection, and ordinary test incidents are compressed unless they demonstrably changed a durable contract, architecture, execution envelope, or direction.
 - [ ] Timeline remains the narrative table of contents with direct Chapter actions.
@@ -98,6 +112,14 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Evidence-driven narrative validation covers title tension/outcome, Background, minimum
       evidence thread, the turn, result, direct learning, bounded reusable principle, and open
       tension when supported; every factual step retains declared Evidence identity.
+- [ ] A bounded structured Stage-4 self-review maps those roles to stable Story/Insight blocks;
+      missing/failed review keeps Build Project Story active.
+- [ ] Every Passage Insight supplies what happened, why it mattered, learning, and a bounded reuse
+      rule without copying its owning Story sentence or repeating one field as another.
+- [ ] Generic activity titles and short filler formulations fail Story activation.
+- [ ] In read mode, double-clicking only reviewable Story copy enters Edit Mode, focuses the owning
+      semantic passage, preserves a safe selection/caret when possible, and creates no mutation;
+      the pencil remains the primary accessible entry.
 - [ ] Final reviewed Chapters are explicitly reusable human/future-Agent project memory, with no
       hidden model reasoning or unsupported retrospective causality.
 - [ ] Default read mode remains clean; accessible pencil/Edit enters a visibly contained review
@@ -117,6 +139,8 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
       concatenating passage assistance.
 - [ ] Passage-context key sets exactly cover rendered Story blocks in both languages and the release
       projection excludes all passage-context copy.
+- [ ] Removing either passage-context map, removing the maps from both locales, omitting any
+      rendered-block key, or adding an extra key fails import; no empty or generic fallback is valid.
 
 ## Direct selection and legacy annotation compatibility
 
@@ -245,6 +269,21 @@ Also verify:
 - [ ] Annotation/Privacy/revision/All set state survives language switching.
 - [ ] One lifecycle/confirmation history drives both languages.
 - [ ] Evidence content remains source-language.
+
+## Independent clean-room completion gate
+
+- [ ] Create a new clone from the exact candidate snapshot with no prior generated Story data,
+      validation reports, or failed-run residue.
+- [ ] Give a completely fresh contextless Agent only the normal public Oxygen workflow request; do
+      not name Storytelling, describe the expected UI/counts, provide hidden conversion steps, or
+      include prior task/chat history.
+- [ ] The Agent independently follows root routing into the one canonical Viewer and completes the
+      integrated Privacy, Story direct review, evidence, Preferences, Release preview, and package
+      workflow from the approved reviewed artifact boundary.
+- [ ] Record every intervention. Environment/user-input help may be disclosed, but any
+      Storytelling-specific steering or copied project-local generated data invalidates the run.
+- [ ] Unit/build success does not waive this gate. After any material fix, use a new exact snapshot,
+      new clean clone, and brand-new contextless Agent.
 
 ## Automated validation
 

@@ -60,6 +60,14 @@ export async function POST(request: Request) {
           SET status='stale',stage='source_changed',completed_at=NULL,updated_at=?
         WHERE status!='stale'`
     ).bind(now),
+    // Imports stage new organization/Story data. Invalidate any activated Story
+    // before item writes so the shell returns to persisted Workflow Progress.
+    db.prepare(`UPDATE workflow_runs
+      SET story_generation_status=CASE WHEN story_generation_status='running' THEN 'running' ELSE 'not_started' END,
+          story_generation_completed=0,
+          story_generation_total=0,story_source_revision=story_source_revision+1,
+          active_story_digest=NULL,updated_at=?
+      WHERE id=(SELECT id FROM workflow_runs ORDER BY updated_at DESC LIMIT 1)`).bind(now),
   ]);
 
   for (let start = 0; start < body.items.length; start += 75) {

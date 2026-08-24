@@ -301,6 +301,11 @@ test("passage context is keyed to every stable Story block and fails closed on d
   delete missing.reviewPresentation.en.passageContext.outcome;
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(missing)), null);
 
+  const missingBothMaps = JSON.parse(story({ key:"missing-both-context-maps" }).slice(STORY_PREFIX.length));
+  delete missingBothMaps.reviewPresentation.en.passageContext;
+  delete missingBothMaps.reviewPresentation.zh.passageContext;
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(missingBothMaps)), null);
+
   const extra = JSON.parse(story({ key:"extra-context" }).slice(STORY_PREFIX.length));
   extra.reviewPresentation.en.passageContext["unknown-block"] = extra.reviewPresentation.en.passageContext.scene;
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(extra)), null);

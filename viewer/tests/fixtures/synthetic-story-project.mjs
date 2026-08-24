@@ -18,6 +18,12 @@ const chapters = [
     title: { en: "The baseline could not be compared", zh: "基线暂时无法比较" },
     before: { en: "Sensors used unrelated scales", zh: "传感器使用不同量纲" },
     after: { en: "One calibration question was defined", zh: "团队明确了统一校准问题" },
+    constraint: { en: "Four sensor types described the same harbor condition with incompatible units", zh: "四类传感器用互不兼容的单位描述同一港区状态" },
+    turn: { en: "The calibration owner replaced four device-specific targets with one comparison question", zh: "校准负责人用一个共同比较问题取代了四套设备目标" },
+    detail: { en: "A shared question became the prerequisite for every later drift claim", zh: "共同问题成为后续所有漂移判断的前提" },
+    uncertainty: { en: "The shared question did not yet explain which operating condition caused drift", zh: "共同问题仍未解释哪种运行条件会导致漂移" },
+    principle: { en: "Define the comparison boundary before interpreting differences", zh: "先定义比较边界，再解释差异" },
+    phaseRationale: "Establish one comparable calibration signal before interpreting drift.",
     people: [{ id: "calibration-owner", label: "A", en: ["Calibration owner", "Defined the comparison boundary."], zh: ["校准负责人", "明确了比较边界。"] }],
     privacy: [],
     evidenceId: "synthetic-evidence-alpha",
@@ -31,6 +37,12 @@ const chapters = [
     title: { en: "A controlled trial exposed drift", zh: "对照试验暴露了漂移" },
     before: { en: "Drift looked like random noise", zh: "漂移看起来像随机噪声" },
     after: { en: "Temperature became a measured variable", zh: "温度成为明确测量变量" },
+    constraint: { en: "An apparent random error changed with operating temperature", zh: "看似随机的误差会随运行温度变化" },
+    turn: { en: "A controlled trial separated temperature drift from device-to-device noise", zh: "对照试验把温度漂移与设备间噪声区分开来" },
+    detail: { en: "The observed ±0.8 demo-unit swing was large enough to change the validation plan", zh: "观测到的 ±0.8 演示单位波动足以改变验证计划" },
+    uncertainty: { en: "The controlled trial still could not prove behavior outside its measured range", zh: "对照试验仍无法证明测量范围之外的表现" },
+    principle: { en: "Turn suspected noise into a controlled variable before widening a trial", zh: "扩大试验前，先把疑似噪声转化为受控变量" },
+    phaseRationale: "Establish one comparable calibration signal before interpreting drift.",
     people: [
       { id: "calibration-owner", label: "A", en: ["Calibration owner", "Kept the trial comparable."], zh: ["校准负责人", "保证试验可比较。"] },
       { id: "field-technician", label: "B", en: ["Field technician", "Connected the drift to operating conditions."], zh: ["现场技术员", "将漂移与运行条件联系起来。"] },
@@ -53,6 +65,12 @@ const chapters = [
     title: { en: "The holdout became the deployment gate", zh: "留出验证成为部署门槛" },
     before: { en: "A passing trial implied readiness", zh: "试验通过就被视为可部署" },
     after: { en: "A separate holdout now gates release", zh: "独立留出验证决定是否发布" },
+    constraint: { en: "The controlled trial and deployment decision still depended on the same evidence", zh: "对照试验与部署决定仍依赖同一组证据" },
+    turn: { en: "The team reserved an independent holdout instead of treating the passing trial as release proof", zh: "团队保留独立留出集，不再把试验通过当作发布证明" },
+    detail: { en: "One holdout gate now separates model tuning from deployment approval", zh: "一项留出门槛把模型调优与部署批准分开" },
+    uncertainty: { en: "Release remains blocked until the holdout reproduces the calibrated behavior", zh: "在留出集复现校准表现之前，发布仍然受阻" },
+    principle: { en: "Reserve independent evidence for the decision that matters most", zh: "为最关键的决定保留独立证据" },
+    phaseRationale: "Separate calibration evidence from the independent deployment decision gate.",
     people: [],
     privacy: [{
       id: "removed-demo-metric",
@@ -90,6 +108,21 @@ function privacyFor(chapter, language) {
 
 function presentation(chapter, language) {
   const chinese = language === "zh";
+  const story = {
+    scene: chinese
+      ? `SENSOR-DEMO 的起点是：${chapter.before.zh}；${chapter.constraint.zh}。`
+      : `SENSOR-DEMO began with ${chapter.before.en.toLowerCase()}; ${chapter.constraint.en.toLowerCase()}.`,
+    reconstruction: [chinese ? `${chapter.turn.zh}。` : `${chapter.turn.en}.`],
+    importantDetails: [chinese ? `${chapter.detail.zh}。` : `${chapter.detail.en}.`],
+    decisionOutcome: chinese ? `${chapter.after.zh}。` : `${chapter.after.en}.`,
+    uncertainty: chinese ? `${chapter.uncertainty.zh}。` : `${chapter.uncertainty.en}.`,
+  };
+  const context = (subject, consequence, learning, reusable) => ({
+    whatWasHappening: subject,
+    whyItMattered: consequence,
+    whatWeLearned: learning,
+    reusableLesson: reusable,
+  });
   return {
     phase: chapter.phase[language],
     title: chapter.title[language],
@@ -99,17 +132,48 @@ function presentation(chapter, language) {
     timelineChips: [chapter.chip[language]],
     overview: chinese ? "SENSOR-DEMO 展示证据如何改变下一步。" : "SENSOR-DEMO shows how evidence changed the next step.",
     people: peopleFor(chapter, language),
-    story: {
-      scene: chinese ? "SENSOR-DEMO 团队需要一个可比较的判断。" : "The SENSOR-DEMO team needed a comparable decision.",
-      reconstruction: [chinese ? "一项安全的合成观察改变了团队的判断。" : "A safe synthetic observation changed the team's interpretation."],
-      importantDetails: [chinese ? "不确定性仍然清晰可见。" : "Uncertainty remained visible."],
-      decisionOutcome: chapter.after[language],
+    story,
+    passageContext: {
+      scene: context(
+        chinese ? `本章开场时，${chapter.before.zh}，而且${chapter.constraint.zh}。` : `At the opening, ${chapter.before.en.toLowerCase()}, while ${chapter.constraint.en.toLowerCase()}.`,
+        chinese ? "没有共同边界，后续差异就无法区分信号与测量方式。" : "Without a common boundary, later differences could not distinguish signal from measurement method.",
+        chinese ? "首要任务不是增加数据，而是先明确什么算作可比较结果。" : "The first task was not more data; it was defining what would count as a comparable result.",
+        chinese ? chapter.principle.zh : chapter.principle.en,
+      ),
+      "reconstruction-0": context(
+        chinese ? `真正的转折是${chapter.turn.zh}。` : `The decisive turn was that ${chapter.turn.en.toLowerCase()}.`,
+        chinese ? "这一步改变了下一轮验证要隔离的变量。" : "That move changed which variable the next validation round had to isolate.",
+        chinese ? "可操作的重构把模糊分歧转化成了可检验问题。" : "An operational reframe turned an ambiguous disagreement into a testable question.",
+        chinese ? chapter.principle.zh : chapter.principle.en,
+      ),
+      "detail-0": context(
+        chinese ? `决定性的证据是${chapter.detail.zh}。` : `The consequential evidence was that ${chapter.detail.en.toLowerCase()}.`,
+        chinese ? "这个细节足以改变项目门槛，而不是只补充背景。" : "This detail was strong enough to change the project gate rather than merely add context.",
+        chinese ? "只有能改变下一步的测量，才应进入核心叙事。" : "A measurement belongs in the core narrative when it changes the next action.",
+        chinese ? chapter.principle.zh : chapter.principle.en,
+      ),
+      outcome: context(
+        chinese ? `结果把项目带到“${chapter.after.zh}”这一新状态。` : `The result moved the project to a new state: ${chapter.after.en.toLowerCase()}.`,
+        chinese ? "新的状态为后续工作提供了明确、可审查的门槛。" : "The new state gave later work an explicit, reviewable gate.",
+        chinese ? "结果的价值在于它改变了决策规则，而不只是完成了一项任务。" : "The result mattered because it changed the decision rule, not because a task was completed.",
+        chinese ? chapter.principle.zh : chapter.principle.en,
+      ),
+      uncertainty: context(
+        chinese ? `证据边界仍然是：${chapter.uncertainty.zh}。` : `The evidence boundary remained: ${chapter.uncertainty.en.toLowerCase()}.`,
+        chinese ? "明确剩余边界可以防止把阶段性结论误写成最终成功。" : "Naming the remaining boundary prevents an interim result from being rewritten as final success.",
+        chinese ? "可靠的项目记忆必须同时保存结论和它尚未覆盖的范围。" : "Reliable project memory preserves both the conclusion and the range it still does not cover.",
+        chinese ? chapter.principle.zh : chapter.principle.en,
+      ),
     },
     highlights: [{
       id: `insight-${chapter.key}`,
-      title: chinese ? "证据改变了共同标准" : "Evidence changed the shared standard",
-      noticed: chinese ? "团队用相同的合成信号讨论结果。" : "The team discussed results through the same synthetic signal.",
-      lesson: chinese ? "先定义可比较的判断，再扩大工作。" : "Define a comparable decision before scaling the work.",
+      title: chinese ? "证据重写了决策门槛" : "Evidence rewrote the decision gate",
+      noticed: chinese
+        ? `${chapter.constraint.zh}。${chapter.turn.zh}，因此${chapter.after.zh}。`
+        : `${chapter.constraint.en}. ${chapter.turn.en}, so ${chapter.after.en.toLowerCase()}.`,
+      lesson: chinese
+        ? `${chapter.principle.zh}。但${chapter.uncertainty.zh}，下一轮仍须验证这一边界。`
+        : `${chapter.principle.en}. However, ${chapter.uncertainty.en.toLowerCase()}, so the next round must still test that boundary.`,
     }],
     privacy: {
       summary: chinese ? `AI 找到 ${chapter.privacy.length} 项候选。` : `AI found ${chapter.privacy.length} candidate(s).`,
@@ -119,6 +183,7 @@ function presentation(chapter, language) {
 }
 
 function eventFor(chapter, index) {
+  const english = presentation(chapter, "en");
   const annotation = {
     schema: "oxygen.story-highlight/2",
     key: chapter.key,
@@ -133,10 +198,7 @@ function eventFor(chapter, index) {
     releaseEpisode: {
       readingTimeMinutes: 2,
       startTimestamp: chapter.date,
-      scene: "The synthetic team needed a comparable decision.",
-      reconstruction: ["A safe synthetic observation changed the interpretation."],
-      importantDetails: ["Uncertainty remained visible."],
-      decisionOutcome: chapter.after.en,
+      ...english.story,
       compression: {
         sourceScope: "One safe synthetic event",
         retained: ["Decision and uncertainty"],
@@ -162,10 +224,30 @@ function eventFor(chapter, index) {
     },
     privacyReview: { state: "reviewed_release", note: "Safe synthetic boundary." },
     reviewPresentation: {
-      en: presentation(chapter, "en"),
+      en: english,
       zh: presentation(chapter, "zh"),
       projectSummary: syntheticStoryProject.overview,
       semanticAnchors: ["SENSOR-DEMO"],
+    },
+    narrativeReview: {
+      schema: "oxygen.story-narrative-review/1",
+      status: "passed",
+      title: { tensionAndOutcome: true },
+      roles: {
+        background: ["scene"],
+        evidenceThread: ["reconstruction-0", "detail-0"],
+        turn: ["reconstruction-0"],
+        result: ["outcome"],
+        directLearning: [`insight:insight-${chapter.key}`],
+        reusablePrinciple: [`insight:insight-${chapter.key}`],
+        openTension: { state: "supported", blockIds: ["uncertainty"] },
+      },
+      phase: {
+        rationale: chapter.phaseRationale,
+        assignmentCoherent: true,
+        adjacentBoundaryReviewed: true,
+      },
+      passageInsightsDistinct: true,
     },
   };
   return {

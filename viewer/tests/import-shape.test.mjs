@@ -81,6 +81,18 @@ test("Chapter Story defaults to read mode and uses controlled direct editing plu
   assert.doesNotMatch(episode,/selectionToolbar|selectionPrompt|createAnnotation\(/);
   assert.match(episode,/const leaveEditMode = \(\) => \{[\s\S]*setEditMode\(false\)/);
   assert.match(episode,/onFocus=\{\(\) => activatePassage\(blockId\)\}/);
+  assert.match(episode,/const handleStoryDoubleClick = \(event: ReactMouseEvent<HTMLElement>\)/);
+  assert.match(episode,/closest<HTMLElement>\("\[data-story-copy\]"\)/);
+  assert.match(episode,/copy\.contains\(range\.startContainer\) && copy\.contains\(range\.endContainer\)/);
+  assert.match(episode,/enterStoryEditMode\(blockId, Math\.min\(start, end\), Math\.max\(start, end\)\)/);
+  assert.match(episode,/className="chapterArticle storyDocument"[^>]*onDoubleClick=\{handleStoryDoubleClick\}/);
+  assert.match(episode,/if \(editMode \|\| chapterReview\.stage === "human_confirmed"\) return/);
+  assert.equal((episode.match(/onDoubleClick=/g) || []).length, 1);
+  const doubleClickHandler = episode.slice(
+    episode.indexOf("const handleStoryDoubleClick"),
+    episode.indexOf("const commitDirectMutation"),
+  );
+  assert.doesNotMatch(doubleClickHandler,/recordStoryEdit|onChapterReview/);
   assert.match(episode,/type SyntheticEvent/);
   assert.doesNotMatch(episode,/captureDirectSelection|onSelect=/);
   assert.doesNotMatch(episode,/setSelection\(/);
@@ -91,7 +103,7 @@ test("Chapter Story defaults to read mode and uses controlled direct editing plu
   assert.match(episode,/discardStoryEdit/);assert.match(episode,/revertAppliedStoryEdit/);
   assert.match(episode,/focusAnnotation\(annotation\)/);
   assert.match(episode,/data-context-block=\{activePassageId/);
-  assert.match(episode,/presentation\.passageContext\?\.\[activePassageId\]/);
+  assert.match(episode,/presentation\.passageContext\[activePassageId\]/);
   assert.match(episode,/aria-label=\{labels\.previousInsight\}/);assert.match(episode,/aria-label=\{labels\.nextInsight\}/);
   assert.match(episode,/scrollToPassage/);assert.match(episode,/orderedPassageIds/);
   assert.match(episode,/data-story-editor=\{blockId\}/);
@@ -103,7 +115,7 @@ test("Chapter Story defaults to read mode and uses controlled direct editing plu
   assert.match(css,/\.passageInsightNav\{display:grid/);
   assert.match(css,/@media\(max-width:1300px\)[\s\S]*\.passageInsightPanel\{position:relative/);
   assert.match(css,/@media\(max-width:760px\)[\s\S]*\.storyMarginNotes\{display:flex;overflow-x:auto/);
-  assert.match(timeline,/passageContext\?: Record<string, StoryPassageContext>/);
+  assert.match(timeline,/passageContext: Record<string, StoryPassageContext>/);
   assert.doesNotMatch(release,/passageContext/);
   assert.match(workspace,/Read a Chapter to review the full story, evidence, and lessons\./);
   assert.match(workspace,/阅读任一章节，完整审阅故事、证据与可复用经验/);

@@ -62,7 +62,7 @@ const ui = {
     chapterGuide: "Read the Chapter, edit the Story where needed, review AI Insight and Privacy, then Apply review. Only All set confirms the final memory.",
     storyReadHelp: "Choose Edit to change the Story. Every change stays reviewable before it is applied.", storyEditHelp: "Type directly in the Story. Undo or discard any change. Apply Review when the draft is ready.",
     editStory: "Edit Story", finishEditing: "Finish editing", editingStory: "Editing Story", editMode: "Story Edit Mode", readMode: "Story read mode",
-    editInstruction: "Click anywhere to type. Select text to replace or delete. Every change is recorded as a note.", undo: "Undo", redo: "Redo", noUndo: "Nothing to undo", noRedo: "Nothing to redo",
+    editInstruction: "Edit one Story passage at a time. Click to type, or select text to replace or delete. Every change is recorded as a note; a cross-passage change is rejected without changing either passage.", undo: "Undo", redo: "Redo", noUndo: "Nothing to undo", noRedo: "Nothing to redo",
     aiInsight: "AI insight", aiInterpretation: "AI interpretation · not historical fact", observation: "Observation", lesson: "Reusable lesson", completeInsight: "Complete Chapter insight",
     contextualInsight: "Passage insight", contextualPrompt: "Select or click a Story passage to explore why it mattered.", selectedPassage: "Selected passage", whatHappened: "What was happening", whyMattered: "Why this mattered", learned: "What we learned", showContext: "Show passage insight", hideContext: "Hide passage insight", previousInsight: "Previous insight", nextInsight: "Next insight",
     editInsight: "Edit insight", reviseInsight: "Revise insight with AI", acceptInsight: "Accept", removeInsight: "Do not preserve",
@@ -86,7 +86,7 @@ const ui = {
     chapterGuide: "先阅读章节；如需调整，再编辑故事并审阅 AI 洞察与隐私，然后应用审阅。只有“确认完成”才会确认最终记忆。",
     storyReadHelp: "选择“编辑”即可修改故事；所有改动都会保留为可审阅记录，应用前不会定稿。", storyEditHelp: "直接修改故事文字；任何改动都可以撤销或丢弃。草稿就绪后再应用审阅。",
     editStory: "编辑故事", finishEditing: "结束编辑", editingStory: "正在编辑故事", editMode: "故事编辑模式", readMode: "故事阅读模式",
-    editInstruction: "点击任意位置即可输入；选中文字后可替换或删除。每一项改动都会记录为批注。", undo: "撤销", redo: "重做", noUndo: "没有可撤销的改动", noRedo: "没有可重做的改动",
+    editInstruction: "每次只编辑一个故事段落。点击即可输入，或选中文字进行替换、删除；每项改动都会记录为批注，跨段操作会被完整拒绝且不会改动任何段落。", undo: "撤销", redo: "重做", noUndo: "没有可撤销的改动", noRedo: "没有可重做的改动",
     aiInsight: "AI 洞察", aiInterpretation: "AI 解释 · 并非历史事实", observation: "观察", lesson: "可复用经验", completeInsight: "完整章节洞察",
     contextualInsight: "段落洞察", contextualPrompt: "选择或点击故事段落，了解它为何重要。", selectedPassage: "所选段落", whatHappened: "当时发生了什么", whyMattered: "为什么重要", learned: "我们学到了什么", showContext: "显示段落洞察", hideContext: "收起段落洞察", previousInsight: "上一条洞察", nextInsight: "下一条洞察",
     editInsight: "编辑洞察", reviseInsight: "让 AI 修改洞察", acceptInsight: "接受", removeInsight: "不保留",
@@ -255,12 +255,12 @@ export function StoryChapterEditor(props: {
     ...presentation.story.importantDetails.map((_, index) => `detail-${index}`),
     "outcome",
     ...(presentation.story.uncertainty ? ["uncertainty"] : []),
-  ].filter((blockId) => Boolean(presentation.passageContext?.[blockId]));
+  ];
   const activePassageId = contextTarget && orderedPassageIds.includes(contextTarget.blockId)
     ? contextTarget.blockId
     : orderedPassageIds[0];
   const activePassageIndex = activePassageId ? orderedPassageIds.indexOf(activePassageId) : -1;
-  const activePassageContext = activePassageId ? presentation.passageContext?.[activePassageId] : undefined;
+  const activePassageContext = activePassageId ? presentation.passageContext[activePassageId] : undefined;
 
   const activateStoryBlockFromKeyboard = (event: ReactKeyboardEvent<HTMLElement>) => {
     const key = event.key.toLowerCase();
@@ -301,6 +301,40 @@ export function StoryChapterEditor(props: {
       const boundedStart = Math.min(start, editor.value.length);
       editor.setSelectionRange(boundedStart, Math.min(end, editor.value.length));
     });
+  };
+
+  const enterStoryEditMode = (blockId?: string, start = 0, end = start) => {
+    if (chapterReview.stage === "human_confirmed") return;
+    setApplyError("");
+    if (blockId) activatePassage(blockId);
+    setEditMode(true);
+    if (blockId) restoreEditorSelection(blockId, start, end);
+  };
+
+  const handleStoryDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
+    if (editMode || chapterReview.stage === "human_confirmed") return;
+    const target = event.target as HTMLElement;
+    const copy = target.closest<HTMLElement>("[data-story-copy]");
+    const block = copy?.closest<HTMLElement>("[data-story-block]");
+    const blockId = block?.dataset.storyBlock || "";
+    if (!copy || !block || !blockId || !articleRef.current?.contains(block)) return;
+    let start = 0;
+    let end = 0;
+    const selection = window.getSelection();
+    if (selection?.rangeCount) {
+      const range = selection.getRangeAt(0);
+      if (copy.contains(range.startContainer) && copy.contains(range.endContainer)) {
+        const beforeStart = range.cloneRange();
+        beforeStart.selectNodeContents(copy);
+        beforeStart.setEnd(range.startContainer, range.startOffset);
+        const beforeEnd = range.cloneRange();
+        beforeEnd.selectNodeContents(copy);
+        beforeEnd.setEnd(range.endContainer, range.endOffset);
+        start = beforeStart.toString().length;
+        end = beforeEnd.toString().length;
+      }
+    }
+    enterStoryEditMode(blockId, Math.min(start, end), Math.max(start, end));
   };
 
   const commitDirectMutation = (
@@ -666,7 +700,7 @@ export function StoryChapterEditor(props: {
         </section>
 
         <section className="episodePrimarySection storySection" data-episode-section="story" aria-labelledby="story-heading">
-          <div className="simpleSectionHead storySectionHead"><div><h3 id="story-heading">{labels.story}</h3><p>{editMode ? labels.storyEditHelp : labels.storyReadHelp}</p></div>{!editMode && <button className="storyEditToggle" aria-label={labels.editStory} aria-pressed="false" disabled={chapterReview.stage === "human_confirmed"} onClick={() => { setApplyError(""); setEditMode(true); }}><span aria-hidden="true">✎</span>{language === "zh" ? "编辑" : "Edit"}</button>}</div>
+          <div className="simpleSectionHead storySectionHead"><div><h3 id="story-heading">{labels.story}</h3><p>{editMode ? labels.storyEditHelp : labels.storyReadHelp}</p></div>{!editMode && <button className="storyEditToggle" aria-label={labels.editStory} aria-pressed="false" disabled={chapterReview.stage === "human_confirmed"} onClick={() => enterStoryEditMode()}><span aria-hidden="true">✎</span>{language === "zh" ? "编辑" : "Edit"}</button>}</div>
           {editMode && <div className="storyEditingBar" role="toolbar" aria-label={labels.editMode}>
             <div><b>{labels.editingStory}</b><span>{labels.editInstruction}</span></div>
             <div className="storyEditingActions">
@@ -676,7 +710,7 @@ export function StoryChapterEditor(props: {
             </div>
           </div>}
           <div className={`storyReviewWorkspace ${editMode ? "editing" : "reading"}`} data-story-mode={editMode ? "edit" : "read"}>
-            <article className="chapterArticle storyDocument" aria-label={editMode ? labels.editMode : labels.readMode} ref={articleRef}>
+            <article className="chapterArticle storyDocument" aria-label={editMode ? labels.editMode : labels.readMode} ref={articleRef} onDoubleClick={handleStoryDoubleClick}>
               <h4 className="storySubheading">{labels.setup}</h4>
               {renderParagraph("scene", presentation.story.scene, "chapterLead")}
               <h4 className="storySubheading">{labels.turn}</h4>

@@ -7,6 +7,21 @@ description: Collect local Codex or Claude Code sessions and allowed memory rela
 
 Run from the `contributor-kit` root. Keep all output local and unapproved.
 
+## Start Workflow Progress before collection
+
+After resolving and verifying the contributor-approved working folder, start the canonical Viewer
+before scanning any history:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --target /path/to/repo
+```
+
+The launcher reserves an arbitrary free loopback port, opens the sanitized Workflow Progress
+surface, and prints the exact Viewer origin plus a stable workflow run ID. Keep it running. Do not
+start collection until the Viewer is healthy. An explicit `--port` remains available when needed;
+an occupied port fails closed without killing its owner or choosing another after announcement.
+
 ## Choose the input
 
 - Repository path: `tools/ingest/collect_repo_trajectories.py`
@@ -17,7 +32,8 @@ Run from the `contributor-kit` root. Keep all output local and unapproved.
 ## Collect
 
 ```bash
-python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/repo-run
+python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/repo-run \
+  --progress-url http://127.0.0.1:<port> --workflow-run-id <run-id>
 python3 tools/ingest/import_anthropic_export.py export.zip --out work/claude-run
 python3 tools/ingest/import_meeting.py meeting.txt --out work/meeting-run \
   --title "Project meeting" --no-publish
@@ -27,7 +43,8 @@ On native Windows PowerShell:
 
 ```powershell
 python .\tools\ingest\collect_repo_trajectories.py `
-  "D:\Coding Projects\my-project" --out "work\repo-run"
+  "D:\Coding Projects\my-project" --out "work\repo-run" `
+  --progress-url "http://127.0.0.1:<port>" --workflow-run-id "<run-id>"
 python .\tools\ingest\import_anthropic_export.py `
   "D:\Downloads\export.zip" --out "work\claude-run"
 python .\tools\ingest\import_meeting.py `
@@ -37,9 +54,20 @@ python .\tools\ingest\import_meeting.py `
 
 Codex discovery defaults to the contributor's global
 `Path.home() / ".codex" / "sessions"` (`C:\Users\<user>\.codex\sessions` on
-Windows). Do not substitute the repository-local `.codex`; that is ignored toolkit
-fixture/runtime space. Match only exact/child recorded cwd values. Parent, sibling, and
+Windows). Default discovery matches only exact/child recorded cwd values. Parent, sibling, and
 message-body-only references remain out of scope, so a valid global-store scan can return zero.
+
+Do not infer or automatically substitute a repository-local `.codex`; it can contain mixed
+Toolkit fixture/runtime output. If the contributor explicitly identifies and approves an exact
+Codex session directory after a metadata-only audit, pass that directory itself as
+`--codex-session-root <approved-session-directory>`. This explicit option is the collection
+boundary: every valid Codex session JSONL below it is eligible without reapplying target-cwd
+matching. Point only at the audited `sessions` child, never a mixed `.codex` parent, and never
+widen to a parent cwd or another session store without separate approval.
+
+Repository guidance and matched Claude project memory remain in scope by default. User-global
+`~/.codex/AGENTS.md` and `~/.claude/CLAUDE.md` are not collected automatically; include them only
+after separate approval with `--include-global-memory`.
 
 For audio, use local transcription. Only accept a Hugging Face token supplied by the current
 user and pass it at runtime; never store it:
@@ -74,7 +102,9 @@ Do not use `--publish`. Do not copy outputs to staging or any network location.
 - Treat zero histories for a newly cloned repo as a valid result.
 - Confirm `publication_approved=false`.
 
-Then invoke `$oxygen-organize-review-export` with the output directory.
+Then invoke `$oxygen-organize-review-export` with the output directory, exact Viewer origin, and
+workflow run ID. That Skill attaches the run to the already-running Viewer; it must not launch a
+second runtime.
 
 ## Boundaries
 
@@ -82,6 +112,8 @@ Then invoke `$oxygen-organize-review-export` with the output directory.
 - Only inspect the current contributor's local session directories.
 - Keep audio local.
 - Automatic filtering is not publication approval.
+- Progress accepts only fixed operational events/counts. Never send a target path, session name,
+  prompt, reasoning, tool argument, source payload, Story/Evidence content, or removed material.
 
 Read [references/ingest-handoff.md](references/ingest-handoff.md) only when troubleshooting
 format details or optional diarization.

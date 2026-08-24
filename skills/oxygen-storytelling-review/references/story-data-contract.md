@@ -82,6 +82,30 @@ type StoryPassageContext = {
   reusableLesson?: string;
 };
 
+type StoryNarrativeReview = {
+  schema: "oxygen.story-narrative-review/1";
+  status: "passed";
+  title: { tensionAndOutcome: true };
+  roles: {
+    background: StoryBlockId[];
+    evidenceThread: StoryBlockId[];
+    turn: StoryBlockId[];
+    result: StoryBlockId[];
+    directLearning: StoryBlockId[];
+    reusablePrinciple: StoryBlockId[];
+    openTension: {
+      state: "supported" | "not_supported";
+      blockIds: StoryBlockId[];
+    };
+  };
+  phase: {
+    rationale: string;
+    assignmentCoherent: true;
+    adjacentBoundaryReviewed: true;
+  };
+  passageInsightsDistinct: true;
+};
+
 type PrivacyOriginal =
   | { availability: "available"; excerpt: string; sourceLanguage: "en" | "zh" | string }
   | { availability: "unavailable" };
@@ -119,7 +143,7 @@ type LanguagePresentation = {
   overview: string;
   people: StoryPerson[];
   story: StoryChapterCopy;
-  passageContext?: Record<string, StoryPassageContext>;
+  passageContext: Record<string, StoryPassageContext>;
   insights: [StoryInsight];
   privacy: { summary: string; candidates: PrivacyCandidate[] };
 };
@@ -145,6 +169,7 @@ type ChapterStory = {
   };
   presentation: { en: LanguagePresentation; zh: LanguagePresentation };
   semanticAnchors: string[];
+  narrativeReview: StoryNarrativeReview;
 };
 ```
 
@@ -170,9 +195,11 @@ uncertainty
 
 The paired language presentations map to the same semantic block IDs, even when text lengths and literal offsets differ. An annotation or direct-edit transaction preserves its language, stable block, base revision, and exact range rather than using rendered English as identity.
 
-When passage-context assistance is present, its key set must equal the Chapter's complete rendered
-Story-content block set (`scene`, every reconstruction/detail block, `outcome`, and optional
-`uncertainty`) in each language. Each value contains only bounded reader-facing contextual copy:
+Every complete canonical Chapter requires passage-context assistance. Its key set must equal the
+Chapter's complete rendered Story-content block set (`scene`, every reconstruction/detail block,
+`outcome`, and optional `uncertainty`) in each language. A missing map, missing key, or extra key
+makes the Chapter incomplete and fails import; there is no valid empty or silent fallback. Each
+value contains only bounded reader-facing contextual copy:
 what was happening, why it mattered, and optional grounded learning/lesson. It is precomputed local
 review assistance, not a reviewable insight, semantic anchor, evidence record, or release field.
 English and Chinese use the same keys and equivalent supported meaning.
@@ -247,8 +274,14 @@ Fail closed when any of these conditions is false:
 - exactly one paired AI insight starts as an AI proposal; zero or multiple reviewable insights fail closed;
 - release draft is the default Story view;
 - bilingual key sets and semantic block structures align;
-- when passage context is present, it contains only the allowlisted bounded fields, covers exactly
-  every rendered Story-content block in both languages, and has an identical paired key set;
+- passage context is present in both language presentations, contains only the allowlisted bounded
+  fields, covers exactly every rendered Story-content block, and has an identical paired key set;
+- the structured narrative self-review passed, every required narrative role resolves to an owning
+  Story/Insight block, every Passage Insight contains all four grounded meanings without copying
+  its Story block, and the canonical Insight supplies distinct synthesis rather than repeated copy;
+- Phase labels reject generic fallbacks, each Phase has one consistent evidence-derived rationale,
+  adjacent Phases have distinct rationales, and one coherent Phase remains valid without a fixed
+  minimum count;
 - every declared required technical/semantic anchor appears in reader-facing fields of both presentations (or resolves through an explicit bilingual alignment map); a merely nonempty anchor list is not validation;
 - available Privacy original has an excerpt and source language;
 - unavailable Privacy original contains only its unavailable discriminator and no excerpt, source language, removed value, raw field, or compatibility payload;

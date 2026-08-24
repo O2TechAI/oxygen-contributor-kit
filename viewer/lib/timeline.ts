@@ -134,7 +134,7 @@ export type StoryLanguagePresentation = {
   story: StoryChapter;
   /** Precomputed local reading assistance keyed by stable Story block ID. It
    * is never an additional reviewable Insight or release field. */
-  passageContext?: Record<string, StoryPassageContext>;
+  passageContext: Record<string, StoryPassageContext>;
   highlights: StoryHighlightItem[];
   privacy: {
     summary: string;
@@ -147,6 +147,30 @@ export type EpisodeReviewPresentation = {
   zh: StoryLanguagePresentation;
   projectSummary?: Record<StoryLanguage, string>;
   semanticAnchors: string[];
+};
+
+export type StoryNarrativeReview = {
+  schema: "oxygen.story-narrative-review/1";
+  status: "passed";
+  title: { tensionAndOutcome: true };
+  roles: {
+    background: string[];
+    evidenceThread: string[];
+    turn: string[];
+    result: string[];
+    directLearning: string[];
+    reusablePrinciple: string[];
+    openTension: {
+      state: "supported" | "not_supported";
+      blockIds: string[];
+    };
+  };
+  phase: {
+    rationale: string;
+    assignmentCoherent: true;
+    adjacentBoundaryReviewed: true;
+  };
+  passageInsightsDistinct: true;
 };
 
 export type StoryAnnotation = {
@@ -179,6 +203,9 @@ export type StoryAnnotation = {
     prompt?: string;
   };
   reviewPresentation: EpisodeReviewPresentation;
+  /** Structured, payload-local Stage-4 editorial self-review. It records
+   * coverage decisions without exposing model reasoning in Workflow Progress. */
+  narrativeReview?: StoryNarrativeReview;
 };
 
 type LegacyStoryAnnotation = {
@@ -212,6 +239,7 @@ export type StoryPresentation = {
   sourceVersion?: StoryAnnotation["sourceVersion"];
   privacyReview?: StoryAnnotation["privacyReview"];
   reviewPresentation?: EpisodeReviewPresentation;
+  narrativeReview?: StoryNarrativeReview;
 };
 
 export type TimelineMilestone<T extends TimelineCandidate = TimelineCandidate> = T & {
@@ -287,11 +315,14 @@ const validStableId = (value: unknown): value is string => typeof value === "str
   && value.trim().length > 0
   && value.length <= 300;
 
+const nonEmptyString = (value: unknown): value is string => typeof value === "string"
+  && value.trim().length > 0;
+
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9\p{L}]+/gu, " ").trim();
 }
 
-const nonEmptyStrings = (value: unknown) => Array.isArray(value)
+const nonEmptyStrings = (value: unknown): value is string[] => Array.isArray(value)
   && value.length > 0
   && value.every((item) => typeof item === "string" && item.trim().length > 0);
 
@@ -339,8 +370,9 @@ function validPrivacyCandidate(value: unknown): value is StoryPrivacyCandidate {
   }
   return candidate.original.availability === "available"
     && onlyKeys(candidate.original, ["availability", "excerpt", "sourceLanguage"])
-    && Boolean(candidate.original.excerpt && candidate.original.sourceLanguage
-      && ["en", "zh"].includes(candidate.original.sourceLanguage));
+    && nonEmptyString(candidate.original.excerpt)
+    && typeof candidate.original.sourceLanguage === "string"
+    && ["en", "zh"].includes(candidate.original.sourceLanguage);
 }
 
 function storyContentBlockIds(value: StoryLanguagePresentation) {
@@ -354,7 +386,6 @@ function storyContentBlockIds(value: StoryLanguagePresentation) {
 }
 
 function validPassageContext(value: unknown, blockIds: string[]) {
-  if (value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entries = Object.entries(value);
   return entries.length === blockIds.length
@@ -387,7 +418,9 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
   const highlights = copy.highlights;
   const privacy = copy.privacy;
   return Boolean(
-    copy.phase && copy.title && copy.timelineSummary && copy.before && copy.after && copy.overview
+    nonEmptyString(copy.phase) && nonEmptyString(copy.title)
+    && nonEmptyString(copy.timelineSummary) && nonEmptyString(copy.before)
+    && nonEmptyString(copy.after) && nonEmptyString(copy.overview)
     && Array.isArray(copy.timelineChips) && copy.timelineChips.every((chip) => typeof chip === "string" && chip.trim())
     && Array.isArray(people) && people.every((person) => (
       validStableId(person.id)
@@ -396,8 +429,8 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
       && typeof person.description === "string" && Boolean(person.description.trim())
       && ["not_identified", "local_only"].includes(person.localIdentityState)
     ))
-    && story?.scene && nonEmptyStrings(story.reconstruction)
-    && nonEmptyStrings(story.importantDetails) && story.decisionOutcome
+    && nonEmptyString(story?.scene) && nonEmptyStrings(story.reconstruction)
+    && nonEmptyStrings(story.importantDetails) && nonEmptyString(story.decisionOutcome)
     && (story.uncertainty === undefined || story.uncertainty === null
       || (typeof story.uncertainty === "string" && Boolean(story.uncertainty.trim())))
     && validPassageContext(copy.passageContext, story ? storyContentBlockIds(copy as StoryLanguagePresentation) : [])
@@ -406,7 +439,7 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
       && typeof item.title === "string" && Boolean(item.title.trim())
       && typeof item.noticed === "string" && Boolean(item.noticed.trim())
       && typeof item.lesson === "string" && Boolean(item.lesson.trim()))
-    && privacy?.summary && Array.isArray(privacy.candidates)
+    && nonEmptyString(privacy?.summary) && Array.isArray(privacy.candidates)
     && privacy.candidates.every(validPrivacyCandidate)
     && uniqueValues(people.map((person) => person.id))
     && uniqueValues(highlights.map((item) => item.id))
@@ -455,7 +488,7 @@ function validReviewPresentation(value: unknown): value is EpisodeReviewPresenta
     && sameOrderedValues(en.people.map((person) => person.releaseLabel), zh.people.map((person) => person.releaseLabel))
     && sameOrderedValues(en.people.map((person) => person.localIdentityState), zh.people.map((person) => person.localIdentityState))
     && sameOrderedValues(en.highlights.map((highlight) => highlight.id), zh.highlights.map((highlight) => highlight.id))
-    && sameOrderedValues(Object.keys(en.passageContext || {}).sort(), Object.keys(zh.passageContext || {}).sort())
+    && sameOrderedValues(Object.keys(en.passageContext).sort(), Object.keys(zh.passageContext).sort())
     && sameOrderedValues(en.privacy.candidates.map((candidate) => candidate.id), zh.privacy.candidates.map((candidate) => candidate.id))
     && en.privacy.candidates.every((candidate, index) => {
       const paired = zh.privacy.candidates[index];
@@ -468,6 +501,51 @@ function validReviewPresentation(value: unknown): value is EpisodeReviewPresenta
         && paired.releaseTargets.every((target) => zhBlocks.includes(target));
     })
     && sameOrderedValues(enBlocks, zhBlocks);
+}
+
+function validNarrativeReview(
+  value: unknown,
+  presentation: EpisodeReviewPresentation,
+): value is StoryNarrativeReview {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || !onlyKeys(value, ["schema", "status", "title", "roles", "phase", "passageInsightsDistinct"])) return false;
+  const review = value as Partial<StoryNarrativeReview>;
+  if (review.schema !== "oxygen.story-narrative-review/1"
+    || review.status !== "passed"
+    || review.passageInsightsDistinct !== true
+    || !review.title || !onlyKeys(review.title, ["tensionAndOutcome"])
+    || review.title.tensionAndOutcome !== true
+    || !review.roles || !onlyKeys(review.roles, [
+      "background", "evidenceThread", "turn", "result", "directLearning",
+      "reusablePrinciple", "openTension",
+    ])
+    || !review.phase || !onlyKeys(review.phase, [
+      "rationale", "assignmentCoherent", "adjacentBoundaryReviewed",
+    ])) return false;
+  const storyBlocks = storyContentBlockIds(presentation.en);
+  const insightBlocks = presentation.en.highlights.map((highlight) => `insight:${highlight.id}`);
+  const validRole = (blockIds: unknown, allowed: string[]) => Array.isArray(blockIds)
+    && blockIds.length > 0
+    && blockIds.every((blockId) => typeof blockId === "string" && allowed.includes(blockId))
+    && uniqueValues(blockIds);
+  const openTension = review.roles.openTension;
+  return validRole(review.roles.background, storyBlocks)
+    && validRole(review.roles.evidenceThread, storyBlocks)
+    && validRole(review.roles.turn, storyBlocks)
+    && validRole(review.roles.result, storyBlocks)
+    && validRole(review.roles.directLearning, insightBlocks)
+    && validRole(review.roles.reusablePrinciple, insightBlocks)
+    && Boolean(openTension && onlyKeys(openTension, ["state", "blockIds"])
+      && (openTension.state === "supported" || openTension.state === "not_supported")
+      && Array.isArray(openTension.blockIds)
+      && uniqueValues(openTension.blockIds)
+      && openTension.blockIds.every((blockId) => [...storyBlocks, ...insightBlocks].includes(blockId))
+      && (openTension.state === "supported" ? openTension.blockIds.length > 0 : openTension.blockIds.length === 0))
+    && typeof review.phase.rationale === "string"
+    && review.phase.rationale.trim().length >= 12
+    && review.phase.rationale.length <= 2_000
+    && review.phase.assignmentCoherent === true
+    && review.phase.adjacentBoundaryReviewed === true;
 }
 
 export type EvidenceTargetResolution =
@@ -497,27 +575,45 @@ export function parseStoryAnnotation(summary?: string): StoryAnnotation | Legacy
   if (!summary || !prefix) return null;
   try {
     const value = JSON.parse(summary.slice(prefix.length)) as Partial<StoryAnnotation> | Partial<LegacyStoryAnnotation>;
-    if (!validStableId(value.key) || !value.phase || !value.title || !value.before || !value.after || !value.kind || !KINDS.has(value.kind)) return null;
+    if (!validStableId(value.key)
+      || !nonEmptyString(value.phase) || !nonEmptyString(value.title)
+      || !nonEmptyString(value.before) || !nonEmptyString(value.after)
+      || !value.kind || !KINDS.has(value.kind)) return null;
     if (value.schema === "oxygen.story-milestone/1") {
-      return value.narrative ? value as LegacyStoryAnnotation : null;
+      return nonEmptyString(value.narrative) ? value as LegacyStoryAnnotation : null;
     }
     if (value.schema !== "oxygen.story-highlight/2") return null;
     const episode = value.releaseEpisode;
     const evidence = value.evidence;
     if (
-      !value.timelineSummary || !value.whyThisMatters || !episode || !value.insight
-      || !value.insight.proposal || !value.insight.rationale || value.insight.reviewState !== "ai_proposed"
-      || !episode.scene || !nonEmptyStrings(episode.reconstruction) || !nonEmptyStrings(episode.importantDetails)
-      || !episode.decisionOutcome || !episode.compression || !episode.compression.sourceScope
+      !nonEmptyString(value.timelineSummary) || !nonEmptyString(value.whyThisMatters) || !episode || !value.insight
+      || (value.metric !== undefined && typeof value.metric !== "string")
+      || (value.importance !== undefined && (!Number.isFinite(value.importance) || value.importance < 0))
+      || !nonEmptyString(value.insight.proposal) || !nonEmptyString(value.insight.rationale) || value.insight.reviewState !== "ai_proposed"
+      || !Number.isFinite(episode.readingTimeMinutes) || episode.readingTimeMinutes <= 0
+      || (episode.startTimestamp !== undefined && typeof episode.startTimestamp !== "string")
+      || (episode.endTimestamp !== undefined && typeof episode.endTimestamp !== "string")
+      || !nonEmptyString(episode.scene) || !nonEmptyStrings(episode.reconstruction) || !nonEmptyStrings(episode.importantDetails)
+      || !nonEmptyString(episode.decisionOutcome)
+      || (episode.uncertainty !== undefined && !nonEmptyString(episode.uncertainty))
+      || !episode.compression || !nonEmptyString(episode.compression.sourceScope)
       || !nonEmptyStrings(episode.compression.retained) || !nonEmptyStrings(episode.compression.omittedLowValue)
-      || !episode.compression.rewriteBrief || !evidence || !validEvidence(evidence.primary)
+      || !Array.isArray(episode.compression.omittedSensitive)
+      || !episode.compression.omittedSensitive.every((item) => typeof item === "string")
+      || !nonEmptyString(episode.compression.rewriteBrief) || !evidence || !validEvidence(evidence.primary)
       || !Array.isArray(evidence.supporting) || !evidence.supporting.every(validEvidence)
       || !uniqueValues([evidence.primary, ...evidence.supporting].map(evidenceKey))
       || value.sourceVersion?.defaultView !== "release"
       || value.sourceVersion?.originalState !== "local_evidence_only"
       || value.sourceVersion?.releaseState !== "ai_prepared_draft"
-      || !value.sourceVersion.note || !value.privacyReview?.state || !value.privacyReview.note
+      || !nonEmptyString(value.sourceVersion.note)
+      || !value.privacyReview?.state
+      || !["reviewed_release", "needs_human_review", "not_applicable"].includes(value.privacyReview.state)
+      || !nonEmptyString(value.privacyReview.note)
+      || (value.privacyReview.prompt !== undefined && typeof value.privacyReview.prompt !== "string")
       || !validReviewPresentation(value.reviewPresentation)
+      || (value.narrativeReview !== undefined
+        && !validNarrativeReview(value.narrativeReview, value.reviewPresentation))
     ) return null;
     const annotation = value as StoryAnnotation;
     for (const language of ["en", "zh"] as const) {
@@ -614,6 +710,7 @@ function explicitMilestones<T extends TimelineCandidate>(events: T[], maximum: n
           sourceVersion: annotation.sourceVersion,
           privacyReview: annotation.privacyReview,
           reviewPresentation: annotation.reviewPresentation,
+          narrativeReview: annotation.narrativeReview,
         } : {}),
       },
     });

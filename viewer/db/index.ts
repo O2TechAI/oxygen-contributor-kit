@@ -27,6 +27,27 @@ const statements = [
     warnings_json TEXT NOT NULL DEFAULT '[]', started_at TEXT NOT NULL,
     updated_at TEXT NOT NULL, completed_at TEXT
   )`,
+  // This is the only pre-collection persistence surface. Keep it operational
+  // and allowlisted: no target path, reasoning, payload, or free-form status.
+  `CREATE TABLE IF NOT EXISTS workflow_runs (
+    id TEXT PRIMARY KEY, target_confirmed INTEGER NOT NULL DEFAULT 0,
+    collection_status TEXT NOT NULL DEFAULT 'pending',
+    collection_completed INTEGER NOT NULL DEFAULT 0,
+    collection_total INTEGER NOT NULL DEFAULT 0,
+    story_generation_status TEXT NOT NULL DEFAULT 'not_started',
+    story_generation_completed INTEGER NOT NULL DEFAULT 0,
+    story_generation_total INTEGER NOT NULL DEFAULT 0,
+    story_source_revision INTEGER NOT NULL DEFAULT 0,
+    active_story_digest TEXT,
+    blocker_code TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`,
+  // Local review persistence lets refresh hydrate the same validated Chapter
+  // lifecycle. Package/release code never selects this table.
+  `CREATE TABLE IF NOT EXISTS story_review_sessions (
+    workflow_run_id TEXT PRIMARY KEY, state_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
   // One row per redacted span. Offsets address items.content, which stays the
   // untouched original -- the tag is applied at render time so a reviewer can
   // still edit or delete the decision.
@@ -96,6 +117,19 @@ export async function getD1() {
         .all<{ name: string }>();
       if (!bulkColumns.results.some((column: { name: string }) => column.name === "presentations_json")) {
         await env.DB.prepare("ALTER TABLE probe_bulk_decisions ADD COLUMN presentations_json TEXT NOT NULL DEFAULT '{}'").run();
+      }
+      const workflowColumns = await env.DB.prepare("PRAGMA table_info(workflow_runs)")
+        .all<{ name: string }>();
+      const workflowNames = new Set(workflowColumns.results.map((column: { name: string }) => column.name));
+      const workflowMigrations = [
+        ["story_generation_status", "ALTER TABLE workflow_runs ADD COLUMN story_generation_status TEXT NOT NULL DEFAULT 'not_started'"],
+        ["story_generation_completed", "ALTER TABLE workflow_runs ADD COLUMN story_generation_completed INTEGER NOT NULL DEFAULT 0"],
+        ["story_generation_total", "ALTER TABLE workflow_runs ADD COLUMN story_generation_total INTEGER NOT NULL DEFAULT 0"],
+        ["story_source_revision", "ALTER TABLE workflow_runs ADD COLUMN story_source_revision INTEGER NOT NULL DEFAULT 0"],
+        ["active_story_digest", "ALTER TABLE workflow_runs ADD COLUMN active_story_digest TEXT"],
+      ] as const;
+      for (const [name, sql] of workflowMigrations) {
+        if (!workflowNames.has(name)) await env.DB.prepare(sql).run();
       }
       initialized = true;
     })().catch((error) => {

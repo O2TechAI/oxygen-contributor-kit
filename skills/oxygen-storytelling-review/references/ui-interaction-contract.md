@@ -137,7 +137,9 @@ coherent paragraphs and selective bullets over card-per-paragraph layouts.
 ## Contextual passage assistance
 
 On wide Chapter layouts, use a small restrained sticky panel to the right of the Story document.
-Order every valid `passageContext` by rendered Story-block order. Show current/total position plus
+Every complete Chapter supplies one valid `passageContext` for every rendered Story block in both
+languages; missing support makes the Chapter incomplete rather than producing an empty panel.
+Order the exact complete key set by rendered Story-block order. Show current/total position plus
 accessible Previous/Next controls; disable the unavailable boundary direction and do not wrap by
 default. Arrow navigation updates the context, scrolls the stable owning block to a useful position,
 highlights it, and clears the former highlight. Respect reduced-motion preference.

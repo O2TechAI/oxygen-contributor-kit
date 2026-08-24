@@ -1,5 +1,5 @@
 export const WORKFLOW_STAGE_IDS = [
-  "prepare",
+  "collect",
   "organize",
   "privacy",
   "story",
@@ -10,15 +10,25 @@ export const WORKFLOW_STAGE_IDS = [
 export type WorkflowStageId = typeof WORKFLOW_STAGE_IDS[number];
 export type WorkflowStageStatus = "complete" | "current" | "up_next" | "waiting" | "blocked";
 export type WorkflowStatus = "running" | "waiting" | "blocked" | "complete";
+export type StoryGenerationStatus =
+  | "not_started"
+  | "running"
+  | "blocked"
+  | "ready_for_human_review";
 export type WorkflowSafeStatusCode =
-  | "preparing_reviewed_project"
-  | "import_required"
+  | "target_working_folder_required"
+  | "target_working_folder_confirmed"
+  | "collecting_project_history"
+  | "collection_failed"
+  | "no_project_history_found"
+  | "collection_ready_for_organization"
   | "organizing_project"
   | "organization_blocked"
   | "checking_privacy"
   | "privacy_check_required"
   | "privacy_blocked"
   | "building_project_story"
+  | "story_generation_blocked"
   | "waiting_for_story_review"
   | "release_handoff_ready";
 
@@ -43,17 +53,29 @@ export type WorkflowProgressState = {
   totalStages: number;
   updatedAt: string | null;
   requiresHumanAction: boolean;
-  blockedReasonCode?: "ORGANIZATION_FAILED" | "PRIVACY_REVIEW_INCOMPLETE";
+  storyGenerationStatus: StoryGenerationStatus;
+  blockedReasonCode?:
+    | "COLLECTION_FAILED"
+    | "COLLECTION_EMPTY"
+    | "ORGANIZATION_FAILED"
+    | "PRIVACY_REVIEW_INCOMPLETE"
+    | "STORY_VALIDATION_FAILED";
 };
 
 export type WorkflowFacts = {
   workflowRunId?: string;
+  targetConfirmed?: boolean;
+  collectionStatus?: string | null;
+  collectionCompleted?: number;
+  collectionTotal?: number;
   documentCount: number;
   itemCount: number;
   organizedItemCount: number;
   organizationStatus?: string | null;
   redactionStatus?: string | null;
-  storyChapterCount: number;
+  storyGenerationStatus?: string | null;
+  storyGenerationCompleted?: number;
+  storyGenerationTotal?: number;
   updatedAt?: string | null;
 };
 
@@ -93,8 +115,51 @@ function state(
     totalStages: WORKFLOW_STAGE_IDS.length,
     updatedAt: facts.updatedAt || null,
     requiresHumanAction,
+    storyGenerationStatus: normalizeStoryGenerationStatus(facts.storyGenerationStatus),
     ...(blockedReasonCode ? { blockedReasonCode } : {}),
   };
+}
+
+const STORY_GENERATION_STATUSES = new Set<StoryGenerationStatus>([
+  "not_started", "running", "blocked", "ready_for_human_review",
+]);
+const WORKFLOW_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+export function isWorkflowRunId(value: unknown): value is string {
+  return typeof value === "string" && WORKFLOW_RUN_ID.test(value);
+}
+
+function normalizeStoryGenerationStatus(value: unknown): StoryGenerationStatus {
+  return typeof value === "string" && STORY_GENERATION_STATUSES.has(value as StoryGenerationStatus)
+    ? value as StoryGenerationStatus
+    : "not_started";
+}
+
+export function isStoryReviewReady(progress: WorkflowProgressState | null | undefined) {
+  return Boolean(progress
+    && progress.storyGenerationStatus === "ready_for_human_review"
+    && progress.currentStageId === "review"
+    && progress.requiresHumanAction === true);
+}
+
+/** Keep the full-screen workflow visible until the activated Story data and
+ * its review session have both hydrated for the exact ready workflow run. */
+export function isStoryWorkspaceReady(
+  progress: WorkflowProgressState | null | undefined,
+  activation: {
+    storyDataReadyRunId: string;
+    storySessionReadyRunId: string;
+    documentCount: number;
+    organizationStatus?: string;
+  },
+) {
+  const workflowRunId = progress?.workflowRunId || "";
+  return isStoryReviewReady(progress)
+    && Boolean(workflowRunId)
+    && activation.storyDataReadyRunId === workflowRunId
+    && activation.storySessionReadyRunId === workflowRunId
+    && activation.documentCount > 0
+    && activation.organizationStatus === "complete";
 }
 
 /** Derive display-safe progress only from persistent operational facts. The
@@ -103,13 +168,54 @@ function state(
 export function deriveWorkflowProgress(input: WorkflowFacts): WorkflowProgressState {
   const facts = {
     ...input,
+    collectionCompleted: nonNegativeInteger(input.collectionCompleted || 0),
+    collectionTotal: nonNegativeInteger(input.collectionTotal || 0),
     documentCount: nonNegativeInteger(input.documentCount),
     itemCount: nonNegativeInteger(input.itemCount),
     organizedItemCount: nonNegativeInteger(input.organizedItemCount),
-    storyChapterCount: nonNegativeInteger(input.storyChapterCount),
+    storyGenerationStatus: normalizeStoryGenerationStatus(input.storyGenerationStatus),
+    storyGenerationCompleted: nonNegativeInteger(input.storyGenerationCompleted || 0),
+    storyGenerationTotal: nonNegativeInteger(input.storyGenerationTotal || 0),
   };
   if (!facts.documentCount) {
-    return state(facts, 0, "prepare", "waiting", "waiting", "import_required", true);
+    const collectionStatus = String(facts.collectionStatus || "pending");
+    const collectionProgress = facts.collectionTotal > 0
+      ? {
+          completed: Math.min(facts.collectionCompleted, facts.collectionTotal),
+          total: facts.collectionTotal,
+        }
+      : undefined;
+    if (collectionStatus === "failed") {
+      return state(
+        facts, 0, "collect", "blocked", "blocked", "collection_failed", true,
+        collectionProgress, "COLLECTION_FAILED",
+      );
+    }
+    if (collectionStatus === "complete") {
+      if (!facts.collectionTotal) {
+        return state(
+          facts, 0, "collect", "blocked", "blocked", "no_project_history_found", true,
+          undefined, "COLLECTION_EMPTY",
+        );
+      }
+      return state(
+        facts, 1, "organize", "waiting", "waiting", "collection_ready_for_organization", false,
+      );
+    }
+    if (collectionStatus === "running") {
+      return state(
+        facts, 0, "collect", "running", "current", "collecting_project_history", false,
+        collectionProgress,
+      );
+    }
+    if (facts.targetConfirmed) {
+      return state(
+        facts, 0, "collect", "running", "current", "target_working_folder_confirmed", false,
+      );
+    }
+    return state(
+      facts, 0, "collect", "waiting", "waiting", "target_working_folder_required", true,
+    );
   }
 
   const organizationStatus = String(facts.organizationStatus || "idle");
@@ -136,15 +242,26 @@ export function deriveWorkflowProgress(input: WorkflowFacts): WorkflowProgressSt
     return state(facts, 2, "privacy", "waiting", "waiting", "privacy_check_required", false);
   }
 
-  if (!facts.storyChapterCount) {
-    return state(facts, 3, "story", "running", "current", "building_project_story", false);
+  if (facts.storyGenerationStatus === "blocked") {
+    return state(
+      facts, 3, "story", "blocked", "blocked", "story_generation_blocked", true,
+      undefined, "STORY_VALIDATION_FAILED",
+    );
   }
-
+  if (facts.storyGenerationStatus !== "ready_for_human_review") {
+    const progress = facts.storyGenerationTotal > 0
+      ? {
+          completed: Math.min(facts.storyGenerationCompleted, facts.storyGenerationTotal),
+          total: facts.storyGenerationTotal,
+        }
+      : undefined;
+    return state(facts, 3, "story", "running", "current", "building_project_story", false, progress);
+  }
   return state(facts, 4, "review", "waiting", "waiting", "waiting_for_story_review", true);
 }
 
-/** Overlay the in-session human review count without pretending it is a new
- * persisted workflow. Refresh safely falls back to persistent `review` state. */
+/** Overlay the source-validated human review count hydrated from the
+ * project-local Story review session. The projection remains count-only. */
 export function withHumanReviewProgress(
   progress: WorkflowProgressState,
   confirmedChapters: number,

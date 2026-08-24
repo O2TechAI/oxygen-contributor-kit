@@ -65,6 +65,115 @@ class LauncherUnitTest(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 1)
             owner.listen(1)
 
+    def test_os_selected_port_is_reserved_until_launcher_releases_it(self):
+        reservation = MODULE.reserve_free_port()
+        port = reservation.getsockname()[1]
+        try:
+            self.assertFalse(MODULE._port_available(port))
+        finally:
+            reservation.close()
+        self.assertTrue(MODULE._port_available(port))
+
+    def test_attach_url_is_strictly_local_and_origin_only(self):
+        self.assertEqual(
+            MODULE.normalize_local_viewer_url("http://127.0.0.1:3298/"),
+            "http://127.0.0.1:3298",
+        )
+        for value in (
+            "https://127.0.0.1:3298",
+            "http://example.com:3298",
+            "http://127.0.0.1:3298/api/workflow",
+        ):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                MODULE.normalize_local_viewer_url(value)
+
+    def test_attach_verifies_stable_workflow_run_before_import(self):
+        with (
+            mock.patch.object(MODULE, "request_json", return_value={"workflowRunId": "run-1"}),
+            mock.patch.object(MODULE, "import_run", return_value=(2, 9)) as imported,
+            mock.patch.object(MODULE, "complete_organization", return_value={"status": "complete"}),
+            mock.patch("builtins.print"),
+        ):
+            MODULE.attach_run("http://127.0.0.1:3298", "run-1", Path("reviewed run"))
+        imported.assert_called_once()
+
+    def test_attach_rejects_a_different_workflow_run(self):
+        with (
+            mock.patch.object(MODULE, "request_json", return_value={"workflowRunId": "other"}),
+            mock.patch.object(MODULE, "import_run") as imported,
+        ):
+            with self.assertRaisesRegex(SystemExit, "does not own"):
+                MODULE.attach_run("http://127.0.0.1:3298", "run-1", Path("reviewed run"))
+        imported.assert_not_called()
+
+    def test_story_progress_uses_only_sanitized_counts(self):
+        with (
+            mock.patch.object(MODULE, "request_json", return_value={
+                "currentStageId": "story",
+                "storyGenerationStatus": "running",
+                "requiresHumanAction": False,
+            }) as request,
+            mock.patch("builtins.print"),
+        ):
+            MODULE.update_story_workflow(
+                "http://127.0.0.1:3298", "run-1", "progress", 8, 14
+            )
+        request.assert_called_once_with(
+            mock.ANY,
+            "http://127.0.0.1:3298/api/workflow",
+            method="POST",
+            body={
+                "workflowRunId": "run-1",
+                "event": "story_generation_progress",
+                "completed": 8,
+                "total": 14,
+            },
+        )
+
+    def test_story_ready_event_does_not_send_story_payload(self):
+        with (
+            mock.patch.object(MODULE, "request_json", return_value={
+                "currentStageId": "review",
+                "storyGenerationStatus": "ready_for_human_review",
+                "requiresHumanAction": True,
+            }) as request,
+            mock.patch("builtins.print") as printed,
+        ):
+            result = MODULE.update_story_workflow(
+                "http://127.0.0.1:3298", "run-1", "ready"
+            )
+        request.assert_called_once_with(
+            mock.ANY,
+            "http://127.0.0.1:3298/api/workflow",
+            method="POST",
+            body={
+                "workflowRunId": "run-1",
+                "event": "story_ready_for_human_review",
+            },
+        )
+        self.assertEqual(result["viewer"], "http://127.0.0.1:3298")
+        self.assertEqual(result["handoff_state"], "WAITING_FOR_HUMAN_STORY_REVIEW")
+        self.assertFalse(result["password_required"])
+        self.assertTrue(result["pause_for_human_review"])
+        serialized = printed.call_args.args[0]
+        self.assertNotIn("story_payload", serialized)
+        self.assertNotIn("evidence_payload", serialized)
+
+    def test_story_ready_requires_the_exact_persisted_human_boundary(self):
+        with (
+            mock.patch.object(MODULE, "request_json", return_value={
+                "currentStageId": "story",
+                "storyGenerationStatus": "running",
+                "requiresHumanAction": False,
+            }),
+            mock.patch("builtins.print") as printed,
+        ):
+            with self.assertRaisesRegex(SystemExit, "human Story review boundary"):
+                MODULE.update_story_workflow(
+                    "http://127.0.0.1:3298", "run-1", "ready"
+                )
+        printed.assert_not_called()
+
     @unittest.skipUnless(os.name == "posix", "POSIX npm layout test")
     def test_incompatible_regular_file_shim_is_detected(self):
         with tempfile.TemporaryDirectory() as temporary:

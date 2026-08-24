@@ -296,6 +296,9 @@ mark.redactionHit{background:#ffe08a;padding:1px 0}
 .workflowOverlay{position:fixed;z-index:80;inset:0;display:grid;place-items:center;padding:24px;background:#24272277;backdrop-filter:blur(3px)}
 .workflowOverlay .workflowCard{max-height:min(820px,calc(100vh - 48px));overflow:auto;box-shadow:0 28px 80px #0003}
 .workflowCard{position:relative}.workflowClose{position:absolute;right:22px;top:20px;width:34px;height:34px;border:1px solid var(--line);border-radius:50%;background:var(--panel);color:var(--muted);cursor:pointer;font-size:20px}
+.progressTrack.indeterminate div{width:34%;animation:oxygenProgressDrift 1.8s ease-in-out infinite;transform:translateX(-110%)}
+@keyframes oxygenProgressDrift{0%{transform:translateX(-110%)}50%{transform:translateX(195%)}100%{transform:translateX(-110%)}}
+@media(prefers-reduced-motion:reduce){.progressTrack div{transition:none}.progressTrack.indeterminate div{width:100%;animation:none;transform:none;opacity:.45}}
 .workflowStatus{margin:22px 0 0;padding-left:13px;border-left:3px solid #70825e;color:#354034;font-weight:700;line-height:1.5}
 .workflowStages{grid-template-columns:repeat(3,minmax(0,1fr))}.workflowStages>div{display:flex;gap:9px;min-width:0}.workflowStages>div>span{display:grid;gap:2px}.workflowStages b{font-size:11px;line-height:1.35}.workflowStages small{color:var(--muted);font-size:9px}.workflowStages .complete,.workflowStages .current,.workflowStages .waiting,.workflowStages .blocked{color:var(--ink)}
 .workflowStages .complete i{background:#4f6d55;color:white;border-color:#4f6d55}.workflowStages .current i{background:var(--ink);color:white}.workflowStages .waiting i{border-color:#9b7d34;background:#fff6d8;color:#6e5314}.workflowStages .blocked i{border-color:#a34b42;background:#fff0ea;color:#8a1f1a}.workflowUpdated{display:block;margin-top:18px;color:var(--muted)}

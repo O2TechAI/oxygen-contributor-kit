@@ -6,7 +6,7 @@ The review loop is iterative, never one-shot:
 
 ```text
 initial AI draft (revision 1, reviewing)
-  → human directly edits or adds annotations
+  → human direct edits and/or compatible legacy review records
   → Apply review
   → revision 2 (revision_ready)
   → human reviews and may edit again
@@ -27,6 +27,12 @@ type ChapterReviewStage = "reviewing" | "revision_ready" | "human_confirmed";
 ```
 
 The initial draft is revision 1. Each successful Apply review increments the revision. All set does not increment it; it confirms the currently presented clean revision.
+
+Direct editing is the primary current lifecycle. Imported Delete/Revise/Add annotations are
+compatibility records only; they may be validated and resolved without becoming a creation toolbar.
+All set remains unavailable while any direct transaction is pending or needs evidence, any compatible
+legacy work is unresolved, Privacy is incomplete, a paired locale is stale, the canonical Insight is
+pending, or evidence/ledger provenance fails validation.
 
 ## Annotation model
 

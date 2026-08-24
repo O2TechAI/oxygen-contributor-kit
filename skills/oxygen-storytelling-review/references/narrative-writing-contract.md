@@ -18,6 +18,13 @@ A Phase names a supported class of project problem or transition. Internally, be
 
 Use compact, evidence-derived names. Do not force a fixed Phase count, invent hierarchy, or add homepage prose merely to expose the internal answer.
 
+Before activation, record one concise evidence-derived rationale for each Phase and use the same
+rationale for every Chapter assigned to it. Review whether neighboring Phases represent genuinely
+different problem/transition classes and whether their labels are understandable without opening a
+Chapter. A single Phase is valid only when that rationale demonstrates that all selected Chapters
+belong to one coherent class. Reject generic fallbacks such as `Project evolution`; prefer one or
+two familiar English words and equally compact natural Chinese without manufacturing divisions.
+
 ## Chapter title
 
 Express both:
@@ -128,7 +135,10 @@ Keep the stable Story-block schema. Do not add a new field merely to mirror thes
 
 ## Passage Insight
 
-Generate local passage assistance for every rendered Story block when the data contract supports it. In roughly three to five concise sentences, communicate:
+Generate local passage assistance for every rendered Story block. A Chapter without safe support
+for any required passage is incomplete and must not be presented as conforming; do not omit the map,
+drop the block, or substitute a generic fallback. In roughly three to five concise sentences,
+communicate:
 
 1. what was happening;
 2. which tension, choice, or constraint mattered;
@@ -137,6 +147,10 @@ Generate local passage assistance for every rendered Story block when the data c
 5. what a future person or Agent can reuse, when supported.
 
 Write a small narrative, not a field dump. Use specific nouns, consequential constraints, supported numbers, and direct causal language. Omit repetitive or unsupported parts. Passage assistance is local-only, non-reviewable context and never enters release/export.
+It must not copy the owning Story sentence into `whatWasHappening` or restate one sentence across
+several fields. Each required block supplies what was happening, why it mattered, what was learned,
+and a bounded reusable lesson; when safe support for one of those meanings is absent, the candidate
+remains on Build rather than substituting filler.
 
 ## Canonical Chapter Insight
 
@@ -158,6 +172,11 @@ Use writing that is:
 
 Avoid mechanical summary voice, abstract noun chains, generic project-management prose, raw chronological dumps, motivational filler, invented dialogue, sarcasm, and unsupported retrospective certainty. Avoid generic formulas such as “the key takeaway” when a specific causal statement can carry the meaning.
 
+Reject generic activity titles equivalent to `Project update`, `Benchmark discussion`, `Project
+evolution`, or `Workflow progress`. Also reject short filler such as “The team needed to…”, “This
+passage shows…”, “This highlights the importance of…”, or “The key takeaway is…” when it supplies
+no concrete causal information.
+
 English is the canonical default. Chinese must be natural and semantically equivalent, preserving technical terms, identifiers, claims, uncertainty, and the same conflict/turn/result/principle. Never translate Evidence and present it as original.
 
 ## Narrative validation
@@ -175,3 +194,9 @@ For every Chapter, verify with safe structured data:
 - EN/中文 preserve the same claims and uncertainty;
 - exactly one canonical Insight exists;
 - passage assistance remains absent from release/export.
+
+Persist this result as a bounded structured self-review: passed status, title check, stable block-ID
+mappings for every narrative role, Phase rationale/boundary checks, and passage-distinctness check.
+This is an activation proof, not model reasoning; never put its free-form contents in Workflow
+Progress. Stage 4 remains current or blocked until the self-review and the complete Story package
+both validate.

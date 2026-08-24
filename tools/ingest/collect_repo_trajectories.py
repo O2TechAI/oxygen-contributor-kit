@@ -19,6 +19,7 @@ Everything starts as review_status=pending / publication_approved=false.
 from __future__ import annotations
 
 import argparse
+import atexit
 from dataclasses import dataclass, field
 import getpass
 import json
@@ -26,6 +27,9 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from oxygen_common import (
@@ -46,6 +50,84 @@ from oxygen_common import (
 SESSION_SCAN_MAX_RECORDS = 2048
 SESSION_SCAN_MAX_BYTES = 4 * 1024 * 1024
 CODEX_CWD_RECORD_TYPES = {"session_meta", "turn_context"}
+
+
+def normalize_progress_url(value: str) -> str:
+    """Accept only an explicit loopback HTTP Viewer origin."""
+    parsed = urllib.parse.urlparse(value)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "localhost"}
+        or parsed.port is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("progress URL must be an explicit localhost HTTP origin")
+    return f"http://{parsed.hostname}:{parsed.port}"
+
+
+class WorkflowProgressReporter:
+    """Send fixed operational events only; never send paths or project data."""
+
+    def __init__(self, base_url: str, workflow_run_id: str):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", workflow_run_id):
+            raise ValueError("workflow run ID is invalid")
+        self.base_url = normalize_progress_url(base_url)
+        self.workflow_run_id = workflow_run_id
+        self.completed = 0
+        self.total = 0
+        self.active = False
+
+    def post(self, event: str, *, completed: int | None = None, total: int | None = None) -> None:
+        payload: dict[str, object] = {
+            "workflowRunId": self.workflow_run_id,
+            "event": event,
+        }
+        if completed is not None:
+            payload["completed"] = max(0, int(completed))
+        if total is not None:
+            payload["total"] = max(0, int(total))
+        request = urllib.request.Request(
+            f"{self.base_url}/api/workflow",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise RuntimeError(f"workflow progress returned HTTP {response.status}")
+        except (OSError, urllib.error.URLError) as error:
+            raise RuntimeError("could not update the local Workflow Progress Viewer") from error
+
+    def start(self) -> None:
+        self.post("collection_started")
+        self.active = True
+        atexit.register(self.fail_if_active)
+
+    def update(self, completed: int, total: int) -> None:
+        self.completed = max(0, int(completed))
+        self.total = max(0, int(total))
+        self.post("collection_progress", completed=self.completed, total=self.total)
+
+    def finish(self, *, failed: bool = False) -> None:
+        event = "collection_failed" if failed else "collection_completed"
+        self.post(event, completed=self.completed, total=self.total)
+        self.active = False
+        atexit.unregister(self.fail_if_active)
+
+    def fail_if_active(self) -> None:
+        if not self.active:
+            return
+        try:
+            self.post("collection_failed", completed=self.completed, total=self.total)
+        except Exception:
+            pass
+        self.active = False
 
 
 @dataclass
@@ -209,6 +291,7 @@ class DiscoveryStats:
     missing_unparseable: int = 0
     limit_reached_without_cwd: int = 0
     malformed_records: int = 0
+    approved_root_selected: int = 0
 
     def add(self, scan: SessionCwdScan, repo: Path) -> None:
         self.files_scanned += 1
@@ -243,6 +326,7 @@ class DiscoveryStats:
             },
             "limit_reached_without_cwd": self.limit_reached_without_cwd,
             "malformed_records": self.malformed_records,
+            "approved_root_selected": self.approved_root_selected,
             "scan_limits": {
                 "records_per_session": SESSION_SCAN_MAX_RECORDS,
                 "bytes_per_session": SESSION_SCAN_MAX_BYTES,
@@ -259,7 +343,8 @@ def report_discovery(stats: DiscoveryStats) -> None:
         f"exact={scope['exact']}, child={scope['child']}, parent={scope['parent']}, "
         f"sibling={scope['sibling']}, unrelated={scope['unrelated']}, "
         f"missing/unparseable={scope['missing_unparseable']}, "
-        f"limit-without-cwd={stats.limit_reached_without_cwd}",
+        f"limit-without-cwd={stats.limit_reached_without_cwd}, "
+        f"approved-root-selected={stats.approved_root_selected}",
     )
 
 
@@ -294,17 +379,72 @@ def find_codex_sessions(
     session_root: Path | None = None,
     diagnostics: DiscoveryStats | None = None,
 ) -> list[Path]:
+    """Find target-cwd sessions, or every valid session in an explicit approved root.
+
+    Passing ``session_root`` is an affirmative source-boundary decision. The implicit global
+    store remains cwd-filtered; an explicit root is never inferred from the repository.
+    """
     sessions_root = session_root or home / ".codex" / "sessions"
     sessions: list[Path] = []
     if not sessions_root.is_dir():
         return sessions
+    explicit_boundary = session_root is not None
+    try:
+        resolved_root = sessions_root.resolve(strict=True)
+    except OSError:
+        return sessions
     for jsonl in sorted(sessions_root.rglob("*.jsonl")):
-        scan = session_cwds(jsonl, "codex", repo)
+        try:
+            resolved_jsonl = jsonl.resolve(strict=True)
+        except OSError:
+            continue
+        if jsonl.is_symlink() or not resolved_jsonl.is_relative_to(resolved_root):
+            continue
+        scan = session_cwds(resolved_jsonl, "codex", repo)
         if diagnostics is not None:
             diagnostics.add(scan, repo)
-        if any(is_inside(cwd, repo) for cwd in scan.cwds):
-            sessions.append(jsonl)
+        if explicit_boundary:
+            if is_codex_session_file(resolved_jsonl):
+                sessions.append(resolved_jsonl)
+                if diagnostics is not None:
+                    diagnostics.approved_root_selected += 1
+        elif any(is_inside(cwd, repo) for cwd in scan.cwds):
+            sessions.append(resolved_jsonl)
     return sessions
+
+
+def is_codex_session_file(path: Path) -> bool:
+    """Validate the minimum structured Codex identity envelope without reading bodies."""
+    try:
+        with path.open("rb") as handle:
+            records = 0
+            bytes_scanned = 0
+            while records < SESSION_SCAN_MAX_RECORDS and bytes_scanned < SESSION_SCAN_MAX_BYTES:
+                raw = handle.readline(SESSION_SCAN_MAX_BYTES - bytes_scanned)
+                if not raw:
+                    return False
+                records += 1
+                bytes_scanned += len(raw)
+                if b'"session_meta"' not in raw or b'"type"' not in raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(record, dict) or record.get("type") != "session_meta":
+                    continue
+                payload = record.get("payload")
+                return (
+                    isinstance(record.get("timestamp"), str)
+                    and isinstance(payload, dict)
+                    and isinstance(payload.get("id"), str)
+                    and bool(payload["id"])
+                    and isinstance(payload.get("cwd"), str)
+                    and bool(payload["cwd"])
+                )
+    except OSError:
+        return False
+    return False
 
 
 def extract(session: Path, system: str, out_root: Path, home: Path, user: str) -> dict:
@@ -378,7 +518,27 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--codex-session-root",
         type=Path,
-        help="explicit Codex session root (default: <home>/.codex/sessions)",
+        help=(
+            "user-approved exact Codex session boundary; valid session JSONL files inside are "
+            "selected without cwd re-filtering (default: strict target-cwd filtering under "
+            "<home>/.codex/sessions)"
+        ),
+    )
+    parser.add_argument(
+        "--include-global-memory",
+        action="store_true",
+        help=(
+            "include user-global CLAUDE.md/AGENTS.md only after explicit approval "
+            "(default: project-scoped memory and repository guidance only)"
+        ),
+    )
+    parser.add_argument(
+        "--progress-url",
+        help="exact localhost Viewer origin for sanitized Workflow Progress",
+    )
+    parser.add_argument(
+        "--workflow-run-id",
+        help="stable workflow run ID printed by the progress-first launcher",
     )
     parser.add_argument("--user", default=getpass.getuser())
     parser.add_argument(
@@ -387,6 +547,8 @@ def main(argv=None) -> int:
     parser.add_argument("--publish", action="store_true",
                         help="copy the result into the shared ingest-staging area")
     args = parser.parse_args(argv)
+    if bool(args.progress_url) != bool(args.workflow_run_id):
+        parser.error("--progress-url and --workflow-run-id must be supplied together")
 
     repo = args.repo.expanduser().resolve()
     if not repo.is_dir():
@@ -404,6 +566,13 @@ def main(argv=None) -> int:
         if args.codex_session_root
         else home / ".codex" / "sessions"
     )
+    reporter = (
+        WorkflowProgressReporter(args.progress_url, args.workflow_run_id)
+        if args.progress_url and args.workflow_run_id
+        else None
+    )
+    if reporter:
+        reporter.start()
 
     progress(2, "scan", f"scanning sessions related to {repo}")
     claude_sessions: list[Path] = []
@@ -418,10 +587,15 @@ def main(argv=None) -> int:
     if "codex" in agents:
         codex_stats = DiscoveryStats("codex", codex_root)
         discovery["codex"] = codex_stats
-        codex_sessions = find_codex_sessions(home, repo, codex_root, codex_stats)
+        approved_codex_root = codex_root if args.codex_session_root else None
+        codex_sessions = find_codex_sessions(
+            home, repo, approved_codex_root, codex_stats
+        )
         report_discovery(codex_stats)
     total = len(claude_sessions) + len(codex_sessions)
     progress(10, "scan", f"{len(claude_sessions)} claude + {len(codex_sessions)} codex sessions match")
+    if reporter:
+        reporter.update(0, total)
 
     trajectories: list[dict] = []
     done = 0
@@ -433,6 +607,8 @@ def main(argv=None) -> int:
             pct = 10 + 75 * done / max(1, total)
             status = "ok" if entry["ok"] else "FAILED"
             progress(pct, "extract", f"[{done}/{total}] {entry['trajectory_id']} {status}")
+            if reporter:
+                reporter.update(done, total)
 
     progress(88, "memory", "collecting memory files")
     memory: list[dict] = []
@@ -442,11 +618,13 @@ def main(argv=None) -> int:
             copy_memory(
                 project_dir / "memory", memory_root / "claude", f"project-{project_dir.name}", memory
             )
-        copy_memory(home / ".claude" / "CLAUDE.md", memory_root / "claude", "global", memory)
+        if args.include_global_memory:
+            copy_memory(home / ".claude" / "CLAUDE.md", memory_root / "claude", "global", memory)
         copy_memory(repo / "CLAUDE.md", memory_root / "claude", "repo", memory)
         copy_memory(repo / ".claude", memory_root / "claude", "repo-dot-claude", memory)
     if "codex" in agents:
-        copy_memory(home / ".codex" / "AGENTS.md", memory_root / "codex", "global", memory)
+        if args.include_global_memory:
+            copy_memory(home / ".codex" / "AGENTS.md", memory_root / "codex", "global", memory)
         copy_memory(repo / "AGENTS.md", memory_root / "codex", "repo", memory)
 
     index = {
@@ -476,6 +654,8 @@ def main(argv=None) -> int:
         f"{index['trajectory_count']} trajectories ({index['trajectory_failures']} failed), "
         f"{index['memory_file_count']} memory files -> {out}",
     )
+    if reporter:
+        reporter.finish(failed=index["trajectory_failures"] > 0)
     print(json.dumps({"output": str(out), "index": str(out / 'index.json')}, ensure_ascii=False))
     return 0
 

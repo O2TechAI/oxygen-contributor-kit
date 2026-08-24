@@ -76,7 +76,8 @@ Use stable shared keys and validate:
 - matching evidence-backed chip facts, with natural localized wording around preserved technical anchors;
 - matching participant/insight/privacy IDs;
 - matching reconstruction and important-detail semantic block counts, or an explicit alignment map;
-- matching passage-context key sets and equivalent evidence-grounded meaning when passage context is present;
+- mandatory passage context in both presentations, with key sets exactly matching every rendered
+  Story-content block and equivalent evidence-grounded meaning; a missing map or key is incomplete;
 - presence of every declared selected technical/semantic anchor in reader-facing fields of both language presentations, or an explicit bilingual alignment for a non-literal semantic anchor; reject absent and one-locale-only anchors;
 - one shared evidence set;
 - unavailable Privacy candidates have no excerpt in either language;

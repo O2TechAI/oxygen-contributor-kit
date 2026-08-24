@@ -29,14 +29,29 @@ The workflow is complete only when all of the following are true:
 - Keep raw inputs, working files, redaction cases, and review metadata local.
 - Download, ZIP creation, review, and publication are separate actions. None implies another.
 
+Immediately after confirming the target, start the canonical progress-first Viewer **before any
+collection**:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --target /path/to/repo
+```
+
+The launcher reserves an arbitrary free loopback port, opens the sanitized Workflow Progress UI,
+and prints the exact Viewer origin plus stable workflow run ID. Keep the process running through
+the remaining stages. Do not begin collection until this surface is healthy. It may store only a
+target-confirmed flag, fixed stage/status/blocker codes, justified counts, timestamps, and human-
+action state—never the target path, session names, reasoning, prompts, raw model/tool data,
+private messages, Story/Evidence payloads, or removed content.
+
 ## 2. Collect
 
 Read and follow `skills/oxygen-ingest-project-history/SKILL.md`. Choose the applicable input:
 
 ```bash
-# Repository-related Codex and Claude Code history, including allowed memory.
+# Repository-related Codex and Claude Code history, with project-scoped memory.
 python3 tools/ingest/collect_repo_trajectories.py /path/to/repo \
-  --out work/repo-run
+  --out work/repo-run --progress-url <viewer-url> --workflow-run-id <run-id>
 
 # claude.ai export ZIP, JSON, file, or directory.
 python3 tools/ingest/import_anthropic_export.py export.zip \
@@ -51,7 +66,8 @@ Native Windows PowerShell equivalents are:
 
 ```powershell
 python .\tools\ingest\collect_repo_trajectories.py `
-  "D:\Coding Projects\my-project" --out "work\repo-run"
+  "D:\Coding Projects\my-project" --out "work\repo-run" `
+  --progress-url "<viewer-url>" --workflow-run-id "<run-id>"
 
 python .\tools\ingest\import_anthropic_export.py `
   "D:\Downloads\export.zip" --out "work\claude-run"
@@ -111,6 +127,17 @@ Read and follow `skills/oxygen-organize-review-export/SKILL.md`.
 
 Report how many source records and events were assigned to each project, what was excluded, and
 which classification decisions remain uncertain.
+
+Attach the organized run to the already-running progress Viewer so organization advances in the
+same D1 workflow run:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/repo-run \
+  --attach-url <viewer-url> --workflow-run-id <run-id>
+```
+
+Do not start a second Viewer. When the prepared reviewed boundary or validated Story metadata
+changes later, reattach that updated run to the same origin/run ID.
 
 ## 4. Prepare privacy review
 
@@ -230,7 +257,8 @@ contracts). Do not build a separate Storytelling application or copy project pro
 source.
 
 The contributor reviews the Project Story, Chapters, inline insight, Privacy candidates, and exact
-evidence through the iterative annotation → Apply review loop. `All set` creates a human-confirmed
+evidence through the iterative direct edit → Apply review loop. Compatible imported
+Delete/Revise/Add records remain reviewable legacy provenance, not the primary current UI. `All set` creates a human-confirmed
 Final Release Memory; it does not publish, package automatically, or set
 `publication_approved=true`. After Story review, continue through the existing Release preview,
 Preferences, and ZIP flow below.
@@ -240,27 +268,27 @@ workflow boundaries with sanitized stage/state, real counts where a denominator 
 codes, timestamps, and human-action state. Do not expose chain-of-thought, prompts, raw model/tool
 output, private messages, Story/Evidence content, or removed material through progress.
 
-## 7. Launch and show the Viewer
+## 7. Continue and show the Viewer
 
-Start the local review server:
+The progress-first Viewer from §1 is still running. Attach the safe reviewed run to that same
+origin and workflow run ID:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
-  work/<run>-review
+  work/<run>-review --attach-url <viewer-url> --workflow-run-id <run-id>
 ```
 
-On native Windows and Linux/WSL the launcher validates Node/npm, resolves the platform-native npm
-command, repairs missing or cross-OS `node_modules` with lockfile-preserving `npm ci`, binds
-directly to `127.0.0.1`, and creates fresh launch-owned D1 state. Do not move or delete
-`.wrangler`; the official launcher never reuses it. To select a non-default port, pass
-`--port <number>`. If the port is occupied, startup fails immediately without killing the owning
-process.
+The initial launcher validates Node/npm, resolves the platform-native npm command, repairs missing
+or cross-OS `node_modules` with lockfile-preserving `npm ci`, and creates fresh launch-owned D1
+state. It reserves an OS-selected free `127.0.0.1` port by default and announces only the exact
+healthy URL. Do not move or delete `.wrangler`; the official launcher never reuses it. An explicit
+occupied `--port` fails immediately without killing the owning process or silently falling back.
 
 After the server is healthy, push the validated AI spans from another terminal:
 
 ```bash
 python3 tools/llm_redact/push_redactions.py \
-  --redacted work/<run>-redaction/redacted
+  --redacted work/<run>-redaction/redacted --base-url <viewer-url>
 ```
 
 ### Native Windows PowerShell sequence
@@ -275,7 +303,8 @@ $Dialogue = "work\repo-run-dialogue"
 $Findings = "work\repo-run-findings"
 $Redaction = "work\repo-run-redaction"
 $Probes = "work\repo-run-probes"
-$Port = 3298
+$Viewer = "http://127.0.0.1:<port>" # exact value printed by §1
+$WorkflowRun = "<run-id>"           # exact value printed by §1
 
 python .\tools\llm_redact\prepare_ai_review_run.py `
   --run "$Run" --out "$Review"
@@ -291,18 +320,18 @@ python .\tools\llm_redact\merge_and_apply.py `
 python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
   "$Review"
 
-# Terminal 1: keep the official Viewer running through review and download.
+# Reattach the reviewed boundary to the Viewer already running from §1.
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  "$Review" --port $Port
+  "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
-# Terminal 2: push only validated findings and probes to that exact Viewer.
+# Push only validated findings and probes to that exact Viewer.
 python .\tools\llm_redact\push_redactions.py `
   --redacted "$Redaction\redacted" `
-  --base-url "http://127.0.0.1:$Port"
+  --base-url "$Viewer"
 python .\tools\llm_redact\push_probes.py `
   --probes "$Probes" --dialogue "$Dialogue" `
   --summary "$Review\preference-probes.json" --limit 12 `
-  --base-url "http://127.0.0.1:$Port"
+  --base-url "$Viewer"
 ```
 
 The push command automatically reads the adjacent `report.json`. It refuses incomplete worker
@@ -316,6 +345,13 @@ As soon as it is healthy:
 3. Reuse an available in-app browser or visible frontend surface.
 4. If opening is unavailable, provide a clickable URL and state that no password is required.
 5. Keep the process alive until review/download finishes or the contributor asks to stop.
+
+When a validated Story atomically advances the same Viewer to Stage 5 Review Story, this browser
+handoff happens immediately, before evaluator QA or any release work. Surface the exact URL, say
+that no password is required, and pause with the Viewer and originating Agent alive. Do not invent
+human edits, Privacy choices, preference answers, `All set`, or publication state. In unattended
+validation the correct terminal state is `WAITING_FOR_HUMAN_STORY_REVIEW`, not a completed package
+handoff. Resume release/package work only after the contributor says the review is complete.
 
 The Viewer must show organization progress, project groups, the primary project, one combined
 timeline per project, 10-40 concise primary-project milestones, source-event evidence, and visible

@@ -42,3 +42,29 @@ export const organizationJobs = sqliteTable("organization_jobs", {
   updatedAt: text("updated_at").notNull(),
   completedAt: text("completed_at"),
 });
+
+// Sanitized operational state begins before collection. It intentionally has
+// no target path, free-form message, model output, or project payload column.
+export const workflowRuns = sqliteTable("workflow_runs", {
+  id: text("id").primaryKey(),
+  targetConfirmed: integer("target_confirmed").notNull().default(0),
+  collectionStatus: text("collection_status").notNull().default("pending"),
+  collectionCompleted: integer("collection_completed").notNull().default(0),
+  collectionTotal: integer("collection_total").notNull().default(0),
+  storyGenerationStatus: text("story_generation_status").notNull().default("not_started"),
+  storyGenerationCompleted: integer("story_generation_completed").notNull().default(0),
+  storyGenerationTotal: integer("story_generation_total").notNull().default(0),
+  storySourceRevision: integer("story_source_revision").notNull().default(0),
+  activeStoryDigest: text("active_story_digest"),
+  blockerCode: text("blocker_code"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+// Project-local Story review state persists only for the lifetime of the
+// isolated Viewer runtime. It is never part of the reviewed release package.
+export const storyReviewSessions = sqliteTable("story_review_sessions", {
+  workflowRunId: text("workflow_run_id").primaryKey(),
+  stateJson: text("state_json").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});

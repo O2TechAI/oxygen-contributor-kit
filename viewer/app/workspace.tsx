@@ -11,17 +11,40 @@ import {
   type PrivacyDecision,
 } from "./story-chapter-editor";
 import { emptyChapterReview, privacyDecisionKey } from "../lib/story-review";
-import { milestoneKindLabel, selectProjectTimeline, type EvidenceReference, type StoryLanguage } from "../lib/timeline";
+import { milestoneKindLabel, type EvidenceReference, type StoryLanguage } from "../lib/timeline";
+import { selectReviewableStoryTimeline } from "../lib/story-readiness";
 import { buildReviewedStoryRelease } from "../lib/story-release";
 import { phaseGroupIdentity, restoreChapterContext, type ChapterRestoreContext } from "../lib/story-navigation";
-import { withHumanReviewProgress, type WorkflowProgressState } from "../lib/workflow-progress";
+import { createStoryReviewSession, hydrateStoryReviewSession } from "../lib/story-review-session";
+import {
+  isStoryReviewReady,
+  isStoryWorkspaceReady,
+  isWorkflowRunId,
+  withHumanReviewProgress,
+  type WorkflowProgressState,
+} from "../lib/workflow-progress";
+import {
+  parseWorkspaceStatus,
+  type WorkspaceDocument,
+  type WorkspaceStatus,
+  type WorkspaceSummary,
+} from "../lib/workspace-types";
 
-type Status = { status:string; stage:string; completed:number; total:number; percent:number; documentCount:number; warnings:string[] };
-type Doc = { id:string; kind:string; title:string; source_user?:string; source_system?:string; source_timestamp?:string; item_count:number; organization_status:string; formatted_summary?: Summary };
-type Highlight = { id:string;sequence:number;timestamp?:string;project?:string;summary?:string;content?:string;documentId?:string };
-type Summary = { primary_project?:string; project_summary?:string; projects?:Array<{name:string;event_count:number;primary:boolean}>; highlights?:Highlight[] };
+type Status = WorkspaceStatus;
+type Doc = WorkspaceDocument;
+type Summary = WorkspaceSummary;
 type Item = { id:string; sequence:number; event_type?:string; actor_id?:string; actor_type?:string; timestamp?:string; content:string; organization_category?:string; organization_confidence?:number; organization_reason?:string };
 type Detail = { document:Doc; items:Item[] };
+
+async function fetchOrganizationStatus(init?: RequestInit): Promise<Status> {
+  const response = await fetch("/api/organization", { cache:"no-store", ...init });
+  if (!response.ok) throw new Error("Organization could not be prepared");
+  const payload = parseWorkspaceStatus(await response.json());
+  if (!payload) {
+    throw new Error("Organization returned an invalid status");
+  }
+  return payload;
+}
 
 const workspaceUi = {
   en: {
@@ -52,19 +75,41 @@ const fmtTimelineDate = (value: string | undefined, language: StoryLanguage = "e
   ? new Date(value).toLocaleDateString(language === "zh" ? "zh-CN" : "en-US", { dateStyle:"medium" })
   : language === "zh" ? "日期不可用" : "Date unavailable";
 
-export function InlineWorkspace() {
-  const [status,setStatus] = useState<Status|null>(null);
-  const [workflow,setWorkflow] = useState<WorkflowProgressState|null>(null);
+export function InlineWorkspace({
+  initialWorkflow,
+  initialStatus,
+  initialDocuments,
+  initialChapterReviews,
+  initialPrivacyDecisions,
+  initialStorySessionReadyRunId,
+}: {
+  initialWorkflow: WorkflowProgressState;
+  initialStatus: WorkspaceStatus | null;
+  initialDocuments: WorkspaceDocument[];
+  initialChapterReviews: Record<string,ChapterReviewState>;
+  initialPrivacyDecisions: Record<string,PrivacyDecision>;
+  initialStorySessionReadyRunId: string;
+}) {
+  const [status,setStatus] = useState<Status|null>(initialStatus);
+  const [workflow,setWorkflow] = useState<WorkflowProgressState>(initialWorkflow);
+  const workflowRunId = workflow?.workflowRunId || "";
+  const scopedWorkflowRunId = isWorkflowRunId(workflowRunId)
+    ? workflowRunId
+    : "";
+  const storyReviewReady = isStoryReviewReady(workflow);
   const [workflowOpen,setWorkflowOpen] = useState(false);
-  const [docs,setDocs] = useState<Doc[]>([]);
-  const [selected,setSelected] = useState("");
+  const [docs,setDocs] = useState<Doc[]>(initialDocuments);
+  const initialProject = initialDocuments[0]?.formatted_summary?.primary_project || "Oxygen";
+  const [selected,setSelected] = useState(initialDocuments.length ? `project:${initialProject}` : "");
   const [detail,setDetail] = useState<Detail|null>(null);
   const [view,setView] = useState<"timeline"|"redaction"|"probes">("timeline");
   const [sourceFocus,setSourceFocus] = useState("");
   const [activeStoryKey,setActiveStoryKey] = useState("");
   const [language,setLanguage] = useState<StoryLanguage>("en");
-  const [privacyDecisions,setPrivacyDecisions] = useState<Record<string,PrivacyDecision>>({});
-  const [chapterReviews,setChapterReviews] = useState<Record<string,ChapterReviewState>>({});
+  const [privacyDecisions,setPrivacyDecisions] = useState<Record<string,PrivacyDecision>>(initialPrivacyDecisions);
+  const [chapterReviews,setChapterReviews] = useState<Record<string,ChapterReviewState>>(initialChapterReviews);
+  const [storyDataReadyRunId,setStoryDataReadyRunId] = useState(initialStorySessionReadyRunId);
+  const [storySessionReadyRunId,setStorySessionReadyRunId] = useState(initialStorySessionReadyRunId);
   const [evidenceReturn,setEvidenceReturn] = useState<(ChapterEvidenceContext & { projectName:string })|null>(null);
   const [chapterScrollRestore,setChapterScrollRestore] = useState<ChapterRestoreContext|null>(null);
   const [evidenceNavigationError,setEvidenceNavigationError] = useState("");
@@ -72,6 +117,9 @@ export function InlineWorkspace() {
   const phaseSectionRefs = useRef(new Map<number,HTMLElement>());
   const timelineContextRef = useRef({ key:"", scrollTop:0 });
   const releasePreviewReturnSelectionRef = useRef<string|null>(null);
+  const storyDataLoadingRunRef = useRef("");
+  const storySessionLoadingRunRef = useRef("");
+  const storySessionHydratedRunRef = useRef(initialStorySessionReadyRunId);
   const activeChapterButtonRef = useCallback((node:HTMLButtonElement|null) => {
     if (!node) return;
     requestAnimationFrame(() => node.scrollIntoView({ block:"nearest" }));
@@ -86,12 +134,23 @@ export function InlineWorkspace() {
   const [redactions,setRedactions] = useState<Redaction[]>([]);
   const [redactionJob,setRedactionJob] = useState<RedactionJob>(null);
   const [redactionBusy,setRedactionBusy] = useState("");
+  const redactionJobStatus = redactionJob?.status;
 
   const loadWorkflow = useCallback(async () => {
-    const response = await fetch("/api/workflow", { cache:"no-store" });
-    if (!response.ok) return;
-    setWorkflow(await response.json() as WorkflowProgressState);
-  }, []);
+    const query = scopedWorkflowRunId
+      ? `?workflowRunId=${encodeURIComponent(scopedWorkflowRunId)}`
+      : "";
+    const response = await fetch(`/api/workflow${query}`, { cache:"no-store" });
+    if (!response.ok) return null;
+    const next = await response.json() as WorkflowProgressState;
+    setWorkflow(next);
+    return next;
+  }, [scopedWorkflowRunId]);
+
+  useEffect(() => {
+    const polling = setInterval(() => { void loadWorkflow(); }, 2000);
+    return () => clearInterval(polling);
+  }, [loadWorkflow]);
 
   const loadRedactions = useCallback(async () => {
     const response = await fetch("/api/redactions", { cache:"no-store" });
@@ -105,12 +164,15 @@ export function InlineWorkspace() {
   // Poll only while a pass is in flight, so the tab can say "还在跑" instead of
   // showing an empty comparison that looks like "nothing was found".
   useEffect(() => {
-    loadRedactions();
-    if (redactionJob && redactionJob.status === "running") {
-      const timer = setInterval(loadRedactions, 4000);
-      return () => clearInterval(timer);
-    }
-  }, [loadRedactions, redactionJob?.status]);
+    const initial = setTimeout(() => { void loadRedactions(); }, 0);
+    const polling = redactionJobStatus === "running"
+      ? setInterval(() => { void loadRedactions(); }, 4000)
+      : undefined;
+    return () => {
+      clearTimeout(initial);
+      if (polling) clearInterval(polling);
+    };
+  }, [loadRedactions, redactionJobStatus]);
 
   async function updateRedaction(id: string, patch: { category?: string; status?: string }) {
     setRedactionBusy(id);
@@ -133,6 +195,7 @@ export function InlineWorkspace() {
   const [bulkDecisions,setBulkDecisions] = useState<BulkDecision[]>([]);
   const [probeRun,setProbeRun] = useState<ProbeRun>(null);
   const [probeBusy,setProbeBusy] = useState("");
+  const probeRunStatus = probeRun?.status;
 
   const loadProbes = useCallback(async () => {
     const response = await fetch("/api/probes", { cache:"no-store" });
@@ -144,12 +207,15 @@ export function InlineWorkspace() {
   }, []);
 
   useEffect(() => {
-    loadProbes();
-    if (probeRun && probeRun.status === "running") {
-      const timer = setInterval(loadProbes, 4000);
-      return () => clearInterval(timer);
-    }
-  }, [loadProbes, probeRun?.status]);
+    const initial = setTimeout(() => { void loadProbes(); }, 0);
+    const polling = probeRunStatus === "running"
+      ? setInterval(() => { void loadProbes(); }, 4000)
+      : undefined;
+    return () => {
+      clearTimeout(initial);
+      if (polling) clearInterval(polling);
+    };
+  }, [loadProbes, probeRunStatus]);
 
   async function answerProbe(id: string, patch: { choice?: string; text?: string; clear?: boolean; bulk?: boolean }) {
     setProbeBusy(id);
@@ -175,11 +241,13 @@ export function InlineWorkspace() {
     let cancelled = false;
     async function organize() {
       try {
-        await loadWorkflow();
-        let current = await fetch("/api/organization", { cache:"no-store" }).then((r) => r.json()) as Status;
+        const currentWorkflow = await loadWorkflow();
+        if (currentWorkflow?.currentStageId === "collect"
+          || currentWorkflow?.currentStageId === "review") return;
+        let current = await fetchOrganizationStatus();
         let passes = 0;
         while (!cancelled && current.status !== "complete" && current.status !== "empty") {
-          current = await fetch("/api/organization", { method:"POST" }).then((r) => r.json()) as Status;
+          current = await fetchOrganizationStatus({ method:"POST" });
           setStatus(current);
           passes += 1;
           if (passes % 4 === 0) await loadWorkflow();
@@ -188,7 +256,40 @@ export function InlineWorkspace() {
       } catch (value) { if (!cancelled) setError(value instanceof Error ? value.message : "Organization failed"); }
     }
     organize(); return () => { cancelled = true; };
-  }, [loadDocs, loadWorkflow]);
+  }, [loadDocs, loadWorkflow, workflow?.currentStageId]);
+
+  useEffect(() => {
+    if (!workflowRunId || !storyReviewReady) {
+      storyDataLoadingRunRef.current = "";
+      storySessionLoadingRunRef.current = "";
+      storySessionHydratedRunRef.current = "";
+      return;
+    }
+    if (storyDataReadyRunId === workflowRunId
+      || storyDataLoadingRunRef.current === workflowRunId) return;
+    storyDataLoadingRunRef.current = workflowRunId;
+    let cancelled = false;
+    const loadActivatedStory = async () => {
+      try {
+        const response = await fetch("/api/organization", { cache:"no-store" });
+        if (!response.ok) throw new Error("Story organization status could not be loaded");
+        const nextStatus = await response.json() as Status;
+        await loadDocs();
+        if (!cancelled) {
+          setStatus(nextStatus);
+          storySessionHydratedRunRef.current = "";
+          setStorySessionReadyRunId("");
+          setStoryDataReadyRunId(workflowRunId);
+        }
+      } catch (value) {
+        if (!cancelled) setError(value instanceof Error ? value.message : "Project Story could not be loaded");
+      } finally {
+        if (storyDataLoadingRunRef.current === workflowRunId) storyDataLoadingRunRef.current = "";
+      }
+    };
+    void loadActivatedStory();
+    return () => { cancelled = true; };
+  }, [loadDocs, storyDataReadyRunId, storyReviewReady, workflowRunId]);
 
   useEffect(() => {
     if (!selected || selected.startsWith("project:")) return;
@@ -197,7 +298,74 @@ export function InlineWorkspace() {
     return () => { cancelled = true; };
   }, [selected]);
 
-  if (!status || (status.status !== "complete" && status.status !== "empty")) return <WorkflowProgress workflow={workflow} status={status} error={error} language={language} />;
+  useEffect(() => {
+    const documentsReady = status?.status === "empty"
+      || (status?.status === "complete" && docs.length >= status.documentCount);
+    if (!workflowRunId || !storyReviewReady || storyDataReadyRunId !== workflowRunId || !documentsReady
+      || storySessionHydratedRunRef.current === workflowRunId
+      || storySessionLoadingRunRef.current === workflowRunId) return;
+    storySessionLoadingRunRef.current = workflowRunId;
+    let cancelled = false;
+    const hydrate = async () => {
+      try {
+        const response = await fetch(`/api/story-review-session?workflowRunId=${encodeURIComponent(workflowRunId)}`, { cache:"no-store" });
+        if (!response.ok) throw new Error("Story review persistence could not be loaded");
+        const payload = await response.json() as { session?: unknown };
+        const events = docs.flatMap((doc) => (doc.formatted_summary?.highlights || []).map((event) => ({ ...event, documentId:doc.id })))
+          .sort((a,b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
+        const restored = hydrateStoryReviewSession(payload.session, workflowRunId, selectReviewableStoryTimeline(events));
+        if (!cancelled) {
+          setChapterReviews(restored.chapterReviews);
+          setPrivacyDecisions(restored.privacyDecisions);
+          storySessionHydratedRunRef.current = workflowRunId;
+          setStorySessionReadyRunId(workflowRunId);
+        }
+      } catch (value) {
+        if (!cancelled) {
+          setChapterReviews({});
+          setPrivacyDecisions({});
+          setError(value instanceof Error ? value.message : "Story review persistence could not be loaded");
+        }
+      } finally {
+        if (!cancelled) storySessionLoadingRunRef.current = "";
+      }
+    };
+    void hydrate();
+    return () => {
+      cancelled = true;
+      if (storySessionLoadingRunRef.current === workflowRunId) storySessionLoadingRunRef.current = "";
+    };
+  }, [docs, status?.documentCount, status?.status, storyDataReadyRunId, storyReviewReady, workflowRunId]);
+
+  useEffect(() => {
+    if (!workflowRunId || storySessionReadyRunId !== workflowRunId
+      || storySessionHydratedRunRef.current !== workflowRunId) return;
+    const session = createStoryReviewSession(workflowRunId, chapterReviews, privacyDecisions);
+    if (!session) {
+      const errorTimer = setTimeout(() => setError("Story review state could not be safely persisted"), 0);
+      return () => clearTimeout(errorTimer);
+    }
+    const timer = setTimeout(() => {
+      void fetch("/api/story-review-session", {
+        method:"POST",
+        headers:{ "content-type":"application/json" },
+        body:JSON.stringify(session),
+      }).then((response) => {
+        if (!response.ok) throw new Error("Story review state could not be safely persisted");
+      }).catch((value) => setError(value instanceof Error ? value.message : "Story review state could not be safely persisted"));
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [chapterReviews, privacyDecisions, storySessionReadyRunId, workflowRunId]);
+
+  const storyWorkspaceReady = isStoryWorkspaceReady(workflow, {
+    storyDataReadyRunId,
+    storySessionReadyRunId,
+    documentCount: docs.length,
+    organizationStatus: status?.status,
+  });
+  if (!storyWorkspaceReady) {
+    return <WorkflowProgress workflow={workflow} status={status} error={error} language={language} />;
+  }
   const isProject = selected.startsWith("project:");
   const selectedProject = isProject ? selected.slice("project:".length) : "";
   const allHighlights = docs.flatMap((doc) => (doc.formatted_summary?.highlights || []).map((event) => ({ ...event, documentId:doc.id })))
@@ -211,7 +379,10 @@ export function InlineWorkspace() {
     projects: [{ name:selectedProject, event_count:projectCount(selectedProject), primary:selectedProject === primaryProject }],
     highlights: allHighlights.filter((event) => event.project === selectedProject),
   } : detail?.document.formatted_summary || {};
-  const highlights = selectProjectTimeline(summary.highlights || []);
+  const highlights = selectReviewableStoryTimeline(summary.highlights || []);
+  if (!highlights.length || storySessionReadyRunId !== workflowRunId) {
+    return <WorkflowProgress workflow={workflow} status={status} error={error} language={language} />;
+  }
   const labels = workspaceUi[language];
   const localized = (event:typeof highlights[number]) => event.story.reviewPresentation?.[language];
   const projectStorySummary = highlights[0]?.story.reviewPresentation?.projectSummary?.[language]
@@ -229,7 +400,7 @@ export function InlineWorkspace() {
   const activeStoryIndex = highlights.findIndex((event) => event.story.key === activeStoryKey);
   const activeMilestone = activeStoryIndex >= 0 ? highlights[activeStoryIndex] : null;
   const reviewedInsights = highlights.filter((event) => Object.keys(chapterReviews[event.story.key]?.insightReviews || {}).length > 0).length;
-  const confirmedChapters = highlights.filter((event) => chapterReviews[event.story.key]?.stage === "human_confirmed").length;
+  const confirmedChapters = buildReviewedStoryRelease(highlights,chapterReviews).chapters.length;
   const displayedWorkflow = workflow ? withHumanReviewProgress(workflow, confirmedChapters, highlights.length) : null;
   const phaseSectionRef = (index:number,node:HTMLElement|null) => {
     if(node) phaseSectionRefs.current.set(index,node);

@@ -73,6 +73,19 @@ Do not rerun collection or privacy redaction unless separately requested and aut
 
 ### 2. Distill the Project Story
 
+Before generating any Story candidate, persist the Build Project Story state in the already-running
+Viewer:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --attach-url <viewer-url> --workflow-run-id <run-id> --story-event started
+```
+
+Keep the full-screen Workflow Progress surface active. Generate into project-local staged data;
+never treat partially written Phases, milestones, or Chapters as the active Project Story. Optional
+real subprogress may use `--story-event progress --story-completed <n> --story-total <n>` only when
+the denominator is known.
+
 Select Chapters by meaningful state transition, not time or activity volume. Prefer problem discovery, baseline, surprising result, failure, root cause, decision, direction change, architecture change, quantitative shift, validation, freeze, handoff, and current state. Deduplicate repeated discussion and keep Chapters chronological.
 
 Build one coherent, evidence-grounded story of why the project began, what changed, what surprised people, where work failed, what decision followed, what was learned, and where the project now stands. Compress procedure and repeated status while retaining causal transitions, technical precision, failure, disagreement, and uncertainty.
@@ -97,6 +110,37 @@ source text language-independent. Passage context is precomputed local review as
 stable Story block; it is not a second release insight and is excluded from release/export.
 
 Attach Story metadata to reviewed evidence without replacing source content. Validate source hash, chronology, unique keys, bilingual structure, evidence resolution, and the final current-state Chapter.
+
+The staged package is ready only when its bilingual Project Summary is complete; every selected
+milestone is an explicit ordered Phase member with one complete Chapter; every required Story block
+has matching EN/中文 `passageContext`; every Chapter has exactly one canonical Insight; evidence and
+Privacy structures resolve; and no placeholder, fallback milestone, partial job, or validation debt
+remains. Do not require a fixed number of Phases, milestones, or Chapters.
+
+Before activation, write and validate the structured Stage-4 narrative self-review defined in the
+data and narrative contracts. Map Background, evidence thread, turn, result, direct learning,
+reusable principle, and supported open tension to stable Story/Insight block IDs; confirm that the
+title names tension plus outcome; confirm each Phase assignment and each adjacent boundary; and
+confirm that every Passage Insight adds interpretation rather than repeating its Story block. Use a
+concise evidence-derived Phase rationale, not hidden chain-of-thought. If any check fails, keep the
+workflow on Build Project Story and improve the staged candidate or disclose the evidence
+limitation. Never activate a merely structural package.
+
+After reattaching the fully generated candidate and restoring a complete privacy pass, request the
+single atomic activation:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --attach-url <viewer-url> --workflow-run-id <run-id> --story-event ready
+```
+
+The Viewer revalidates the complete staged package and activates it only if its source revision is
+unchanged. A failed activation remains on Workflow Progress. Report it with `--story-event blocked`
+when no automatic correction remains; never patch the Viewer database or reveal the partial draft.
+
+On successful activation, immediately give the contributor the exact Viewer URL, say that no
+password is required, and pause with this Agent and Viewer alive. Do not perform human review or
+release work first. In an unattended run, report `WAITING_FOR_HUMAN_STORY_REVIEW` and wait.
 
 ### 4. Bind data into the canonical Project Story
 
@@ -161,6 +205,11 @@ evidence-backed `passageContext`. Collapse it inline on narrower screens. Keep e
 reviewable Chapter Insight, collapsed by default at the end of Story; its existing review lifecycle
 remains unchanged.
 
+Every complete Chapter must supply `passageContext` for the exact rendered Story-block set in both
+English and Chinese with identical stable keys. Missing or unsupported context makes that Chapter
+incomplete; do not use an empty panel, generic copy, or an optional import fallback. Passage context
+is local non-reviewable reading assistance and never enters Final Release Memory, HTML, or ZIP.
+
 Follow the rule:
 
 > Typography for reading. Boxes for interaction.
@@ -191,18 +240,25 @@ The lifecycle is repeatable:
 
 ```text
 initial AI draft
-→ human annotations
+→ human direct edits and/or compatible legacy review records
 → Apply review
 → revised draft
-→ human reviews and may annotate again
+→ human directly reviews and may edit again
 → Apply review again
 → ...
 → All set
 ```
 
-Apply review is never finalization. Revised text remains annotatable. Human instructions are authoritative, but unsupported Add requests must be flagged rather than fabricated. Preserve revision provenance.
+Apply review is never finalization. Revised text remains directly editable. Legacy Delete/Revise/Add
+annotations are compatibility records, not the primary current interaction. Human instructions are
+authoritative, but unsupported factual additions must be flagged rather than fabricated. Preserve
+revision provenance.
 
-Only All set creates human-confirmed Final Release Memory, and only after the latest revision was presented, all required Privacy decisions are complete, and no pending/unapplied/unsupported annotations remain. Reopen review resumes the same shared lifecycle.
+Only All set creates human-confirmed Final Release Memory, and only after the latest revision was
+presented, all required Privacy decisions are complete, no pending or needs-evidence direct
+transaction remains, no unresolved compatible legacy work remains, paired-language debt is clear,
+the canonical Insight is settled, and evidence plus complete provenance validate. Reopen review
+resumes the same shared lifecycle.
 
 ### 8. Preserve contextual Privacy
 
@@ -225,3 +281,10 @@ Do not require browser-independent pixel identity. Require bounded Golden-v1 fid
 ## Completion standard
 
 The result is complete only when a fresh reviewer can understand what to read and what to do without learning Oxygen's internal schema, every Story claim remains traceable to reviewed evidence, the Chapter is useful reusable project memory for humans and future Agents, the iterative review loop works in both languages, and Final Release Memory remains explicitly separate from publication. Reusable memory may preserve evidence-backed user-visible rationale, mistakes, decisions, corrections, rejected approaches, and outcomes; it never records private latent reasoning.
+
+Completion also requires a new clean clone and a completely fresh, contextless Agent to receive only
+the normal public Oxygen workflow request and independently reach the same integrated canonical
+Viewer capability. Do not provide the Storytelling Skill name, prior task/chat context, expected UI,
+golden counts, hidden conversion steps, or generated project-local data. Unit tests and a hand-built
+candidate are necessary evidence but are not substitutes for this clean-room gate. Any material fix
+requires a new exact snapshot, new clone, and new Agent run.

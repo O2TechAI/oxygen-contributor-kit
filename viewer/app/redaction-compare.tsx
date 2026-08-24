@@ -82,11 +82,9 @@ export function RedactionCompare(props: {
 
   const allItems = detail?.items || [];
   const documentId = detail?.document.id;
-  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [pagination, setPagination] = useState({ documentId, limit: PAGE_SIZE });
+  const limit = pagination.documentId === documentId ? pagination.limit : PAGE_SIZE;
   const sentinel = useRef<HTMLDivElement | null>(null);
-
-  // A different record starts from the top again.
-  useEffect(() => { setLimit(PAGE_SIZE); }, [documentId]);
 
   const focusResolution = focusItemId ? resolveEvidenceTarget(allItems, focusItemId) : null;
   const focusIndex = focusResolution?.status === "resolved" ? focusResolution.index : -1;
@@ -109,12 +107,18 @@ export function RedactionCompare(props: {
     if (!node) return;
     const observer = new IntersectionObserver((entries) => {
       if (entries[0]?.isIntersecting) {
-        setLimit((current) => Math.min(current + PAGE_SIZE, allItems.length));
+        setPagination((current) => ({
+          documentId,
+          limit: Math.min(
+            current.documentId === documentId ? current.limit + PAGE_SIZE : PAGE_SIZE * 2,
+            allItems.length,
+          ),
+        }));
       }
     }, { rootMargin: "800px" });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [limit, allItems.length]);
+  }, [limit, allItems.length, documentId]);
 
   if (job && job.status === "running") {
     const percent = job.total ? Math.round((job.completed / job.total) * 100) : 0;

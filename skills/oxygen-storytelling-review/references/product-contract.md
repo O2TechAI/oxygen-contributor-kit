@@ -41,6 +41,12 @@ Never expose chain-of-thought, hidden reasoning, prompts, scratchpad, raw model 
 arguments, private agent messages, Story/Evidence content, removed values, or other private workflow
 material. Do not invent a percentage when no real denominator exists.
 
+The server's initial render and the mounted client's polling use that same persisted projection.
+Before readiness, refresh remains on Build Progress. When atomic activation reaches Review Story,
+the already-open tab loads the activated Story snapshot and reveals it within the normal polling
+interval; manual refresh, tab reopening, or evaluator intervention is never part of the product
+boundary.
+
 ## Story selection
 
 Select Chapters by consequential state transition. Suitable signals include:
@@ -99,6 +105,10 @@ per sentence, not brevity that erases meaning.
 Phase names behave like book-part names. Strongly prefer one or two scannable English words and an
 equivalently compact natural Chinese label. Derive names from evidence; do not change supported
 Phase selection merely to obtain prettier labels and do not treat example names as a taxonomy.
+Each Phase must represent one coherent problem/transition class with a concise evidence-derived
+rationale. Review neighboring boundaries before activation. One Phase is legitimate when all
+selected Chapters share that class; a generic fallback such as `Project evolution` is not evidence
+of coherence and fails activation.
 
 A Chapter is durable project memory for humans and future Agents. Without reopening Evidence merely
 to recover the basic Story, it should provide enough supported context to understand the problem,
@@ -241,8 +251,11 @@ Show annotation notes in the left margin beside their block on wide screens and 
 block-associated inline treatment on narrow screens. Notes are local review metadata and never
 enter release output.
 
-Precomputed evidence-grounded `passageContext`, keyed by stable Story block, may drive a small sticky
-right-side reading companion. Clicking or selecting a passage changes that local panel. It may
+Mandatory precomputed evidence-grounded `passageContext`, keyed by every stable rendered Story
+block, drives a small sticky right-side reading companion. English and Chinese require the exact
+same complete key set. A Chapter with any unsupported or missing passage context is incomplete;
+never render it through a silent empty or generic fallback. Clicking or selecting a passage changes
+that local panel. It may
 explain what was happening, why the moment mattered, what became clearer, and a reusable lesson,
 conservatively omitting claims the reviewed context cannot support. It is not another reviewable or
 release Insight and is excluded from export by default.
