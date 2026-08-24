@@ -122,7 +122,7 @@ class DiscoveryContractTest(unittest.TestCase):
             write_jsonl(session, [codex_record(EXACT)])
             stats = MODULE.DiscoveryStats("codex", home / ".codex" / "sessions")
             matches = MODULE.find_codex_sessions(home, REPO, diagnostics=stats)
-            self.assertEqual(matches, [session])
+            self.assertEqual(matches, [session.resolve()])
             self.assertEqual(stats.exact, 1)
             self.assertEqual(stats.matched, 1)
 

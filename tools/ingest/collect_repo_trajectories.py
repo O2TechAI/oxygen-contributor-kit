@@ -23,6 +23,7 @@ import atexit
 from dataclasses import dataclass, field
 import getpass
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -229,6 +230,14 @@ def canonical_location(value: str | Path) -> tuple[str, str, tuple[str, ...]]:
     if not text or "\0" in text:
         raise ValueError("cwd must be a nonempty absolute path")
     if WINDOWS_ABSOLUTE.match(text):
+        # Native tools may record one existing directory through an 8.3 alias
+        # and another through its long name. Expand that filesystem alias before
+        # applying the lexical/case normalization shared with non-native audits.
+        if os.name == "nt":
+            try:
+                text = str(Path(text).resolve(strict=False))
+            except OSError:
+                pass
         path = PureWindowsPath(text)
         return (
             "windows",
