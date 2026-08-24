@@ -52,6 +52,12 @@ export async function POST(request: Request) {
       db.prepare("UPDATE items SET organization_category=NULL, organization_confidence=NULL, organization_reason=NULL"),
       db.prepare("UPDATE documents SET organization_status='pending', formatted_summary_json='{}'"),
       db.prepare("DELETE FROM organization_jobs WHERE id=?").bind(JOB_ID),
+      db.prepare(`UPDATE workflow_runs
+        SET story_generation_status=CASE WHEN story_generation_status='running' THEN 'running' ELSE 'not_started' END,
+            story_generation_completed=0,
+            story_generation_total=0,story_source_revision=story_source_revision+1,
+            active_story_digest=NULL,updated_at=?
+        WHERE id=(SELECT id FROM workflow_runs ORDER BY updated_at DESC LIMIT 1)`).bind(now),
     ]);
   }
   const totalRow = await db.prepare("SELECT COUNT(*) AS count FROM items").first<{ count: number }>();

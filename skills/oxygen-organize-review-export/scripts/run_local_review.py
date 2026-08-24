@@ -18,7 +18,9 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 import webbrowser
 
 
@@ -226,6 +228,41 @@ def _port_available(port: int, host: str = VIEWER_HOST) -> bool:
 def ensure_port_available(port: int, host: str = VIEWER_HOST) -> None:
     if not _port_available(port, host):
         raise SystemExit(f"Port {port} is already in use on {host}; choose another --port.")
+
+
+def reserve_free_port(host: str = VIEWER_HOST) -> socket.socket:
+    """Reserve an OS-selected loopback port until immediately before launch."""
+    reservation = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        reservation.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    try:
+        reservation.bind((host, 0))
+    except Exception:
+        reservation.close()
+        raise
+    return reservation
+
+
+def select_free_port(host: str = VIEWER_HOST) -> int:
+    with reserve_free_port(host) as reservation:
+        return int(reservation.getsockname()[1])
+
+
+def normalize_local_viewer_url(value: str) -> str:
+    parsed = urllib.parse.urlparse(value)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {VIEWER_HOST, "localhost"}
+        or parsed.port is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise SystemExit("--attach-url must be an explicit localhost HTTP origin")
+    return f"http://{parsed.hostname}:{parsed.port}"
 
 
 def wait_for_port_release(port: int, host: str = VIEWER_HOST, timeout: float = 8) -> None:
@@ -697,18 +734,7 @@ def locate_inputs(run: Path):
     return trajectories, meeting if meeting.exists() else None
 
 
-def main():
-    configure_utf8_stdio()
-    parser = argparse.ArgumentParser()
-    parser.add_argument("run", type=Path, help="Oxygen ingest output directory")
-    parser.add_argument("--port", type=int, default=3210)
-    parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--skip-install", action="store_true")
-    parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
-    args = parser.parse_args()
-    if not 1 <= args.port <= 65535:
-        parser.error("--port must be between 1 and 65535")
-    run = args.run.expanduser().resolve()
+def import_run(opener, base_url: str, run: Path) -> tuple[int, int]:
     trajectories, meeting = locate_inputs(run)
     project_map_path = run / "project-map.json"
     project_map = (
@@ -716,18 +742,164 @@ def main():
         if project_map_path.exists()
         else {}
     )
+    event_count = sum(
+        import_trajectory(opener, base_url, path, project_map) for path in trajectories
+    )
+    if meeting:
+        event_count += import_meeting(opener, base_url, meeting)
+    return len(trajectories) + int(meeting is not None), event_count
+
+
+def complete_organization(opener, base_url: str) -> dict:
+    current = request_json(opener, f"{base_url}/api/organization")
+    while current["status"] not in {"complete", "empty"}:
+        current = request_json(
+            opener, f"{base_url}/api/organization", method="POST", body={}
+        )
+    return current
+
+
+def attach_run(base_url: str, workflow_run_id: str, run: Path) -> None:
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+    )
+    workflow = request_json(opener, f"{base_url}/api/workflow")
+    if workflow.get("workflowRunId") != workflow_run_id:
+        raise SystemExit("The target Viewer does not own the requested workflow run ID")
+    document_count, event_count = import_run(opener, base_url, run)
+    organization = complete_organization(opener, base_url)
+    print(json.dumps({
+        "attached_to": base_url,
+        "workflow_run_id": workflow_run_id,
+        "documents": document_count,
+        "events_or_records": event_count,
+        "organization": organization,
+    }, ensure_ascii=False), flush=True)
+
+
+STORY_WORKFLOW_EVENTS = {
+    "started": "story_generation_started",
+    "progress": "story_generation_progress",
+    "blocked": "story_generation_blocked",
+    "ready": "story_ready_for_human_review",
+}
+
+
+def update_story_workflow(
+    base_url: str,
+    workflow_run_id: str,
+    story_event: str,
+    completed: int | None = None,
+    total: int | None = None,
+) -> dict:
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+    )
+    payload = {
+        "workflowRunId": workflow_run_id,
+        "event": STORY_WORKFLOW_EVENTS[story_event],
+    }
+    if story_event == "progress":
+        payload.update({"completed": completed, "total": total})
+    workflow = request_json(
+        opener, f"{base_url}/api/workflow", method="POST", body=payload
+    )
+    if story_event == "ready" and not (
+        workflow.get("currentStageId") == "review"
+        and workflow.get("storyGenerationStatus") == "ready_for_human_review"
+        and workflow.get("requiresHumanAction") is True
+    ):
+        raise SystemExit("The Viewer did not enter the persisted human Story review boundary")
+    result = {
+        "viewer": base_url,
+        "workflow_run_id": workflow_run_id,
+        "story_event": story_event,
+        "current_stage": workflow.get("currentStageId"),
+        "story_generation_status": workflow.get("storyGenerationStatus"),
+        "requires_human_action": workflow.get("requiresHumanAction"),
+        **({
+            "handoff_state": "WAITING_FOR_HUMAN_STORY_REVIEW",
+            "password_required": False,
+            "pause_for_human_review": True,
+        } if story_event == "ready" else {}),
+    }
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+    return result
+
+
+def main():
+    configure_utf8_stdio()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("run", nargs="?", type=Path, help="Oxygen ingest output directory")
+    parser.add_argument("--target", type=Path, help="working folder confirmed before collection")
+    parser.add_argument("--attach-url", help="attach the run to an existing progress-first Viewer")
+    parser.add_argument("--workflow-run-id", help="stable progress-first workflow run ID")
+    parser.add_argument("--story-event", choices=sorted(STORY_WORKFLOW_EVENTS))
+    parser.add_argument("--story-completed", type=int)
+    parser.add_argument("--story-total", type=int)
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--skip-install", action="store_true")
+    parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+
+    if args.story_event:
+        if args.run or args.target or not args.attach_url or not args.workflow_run_id:
+            parser.error("Story events require --attach-url and --workflow-run-id only")
+        has_counts = args.story_completed is not None or args.story_total is not None
+        if args.story_event == "progress":
+            if args.story_completed is None or args.story_total is None:
+                parser.error("Story progress requires --story-completed and --story-total")
+            if not 0 <= args.story_completed <= args.story_total:
+                parser.error("Story progress counts must satisfy 0 <= completed <= total")
+        elif has_counts:
+            parser.error("Story counts are accepted only with --story-event progress")
+        update_story_workflow(
+            normalize_local_viewer_url(args.attach_url), args.workflow_run_id,
+            args.story_event, args.story_completed, args.story_total,
+        )
+        return
+
+    if args.attach_url:
+        if not args.run or args.target or not args.workflow_run_id:
+            parser.error("attach mode requires RUN, --attach-url, and --workflow-run-id only")
+        run = args.run.expanduser().resolve()
+        attach_run(normalize_local_viewer_url(args.attach_url), args.workflow_run_id, run)
+        return
+
+    if bool(args.run) == bool(args.target):
+        parser.error("choose exactly one of RUN or --target")
+    if args.port is not None and not 1 <= args.port <= 65535:
+        parser.error("--port must be between 1 and 65535")
+    if args.workflow_run_id and not args.target:
+        parser.error("--workflow-run-id without --attach-url requires --target")
+
+    run = args.run.expanduser().resolve() if args.run else None
+    target = args.target.expanduser().resolve() if args.target else None
+    if run:
+        locate_inputs(run)
+    if target and not target.is_dir():
+        raise SystemExit(f"Working folder not found: {target}")
 
     install_signal_handlers()
-    base_url = f"http://{VIEWER_HOST}:{args.port}"
-    ensure_port_available(args.port)
-    npm = ensure_dependencies(skip_install=args.skip_install)
-    # Check again immediately before launch in case dependency installation took time.
-    ensure_port_available(args.port)
-    with tempfile.TemporaryDirectory(prefix=f"oxygen-viewer-{args.port}-") as runtime:
+    reservation = reserve_free_port() if args.port is None else None
+    port = int(reservation.getsockname()[1]) if reservation else int(args.port)
+    if not reservation:
+        ensure_port_available(port)
+    try:
+        npm = ensure_dependencies(skip_install=args.skip_install)
+    finally:
+        if reservation:
+            reservation.close()
+    # Fail closed if the exact selected/requested port changed owners during setup.
+    ensure_port_available(port)
+    base_url = f"http://{VIEWER_HOST}:{port}"
+
+    with tempfile.TemporaryDirectory(prefix=f"oxygen-viewer-{port}-") as runtime:
         process = start_owned_process(
-            viewer_command(args.port, npm),
+            viewer_command(port, npm),
             cwd=VIEWER,
-            env=viewer_environment(Path(runtime), args.port),
+            env=viewer_environment(Path(runtime), port),
         )
         try:
             for _ in range(90):
@@ -744,30 +916,42 @@ def main():
             opener = urllib.request.build_opener(
                 urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
             )
-            event_count = sum(
-                import_trajectory(opener, base_url, path, project_map) for path in trajectories
-            )
-            if meeting:
-                event_count += import_meeting(opener, base_url, meeting)
-            print(f"\nOxygen local review: {base_url}", flush=True)
-            print("No password is required for this localhost-only viewer", flush=True)
-            print(
-                f"Imported: {len(trajectories)} trajectories, {event_count} events/records",
-                flush=True,
-            )
-            print("Nothing has been uploaded. Press Ctrl+C to stop.\n", flush=True)
-            if args.smoke_test:
-                status = request_json(opener, f"{base_url}/api/organization")
-                while status["status"] in {"idle", "running"}:
-                    status = request_json(
-                        opener, f"{base_url}/api/organization", method="POST", body={}
-                    )
-                if event_count and status["status"] != "complete":
-                    raise SystemExit(f"Organizer did not complete: {status}")
-                print(json.dumps({"smoke_test": "passed", "organization": status}))
-                return
-            if not args.no_browser:
-                webbrowser.open(base_url)
+            if target:
+                workflow_run_id = args.workflow_run_id or f"oxygen-{uuid.uuid4().hex}"
+                request_json(opener, f"{base_url}/api/workflow", method="POST", body={
+                    "workflowRunId": workflow_run_id,
+                    "event": "target_confirmed",
+                })
+                print(f"\nOxygen Workflow Progress: {base_url}", flush=True)
+                print(f"Workflow run: {workflow_run_id}", flush=True)
+                print("Working folder confirmed; collection has not started.", flush=True)
+                print("No password is required for this localhost-only viewer", flush=True)
+                print("Nothing has been uploaded. Press Ctrl+C to stop.\n", flush=True)
+                if not args.no_browser:
+                    webbrowser.open(base_url)
+                if args.smoke_test:
+                    workflow = request_json(opener, f"{base_url}/api/workflow")
+                    print(json.dumps({"smoke_test": "passed", "workflow": workflow}))
+                    return
+            else:
+                document_count, event_count = import_run(opener, base_url, run)
+                print(f"\nOxygen local review: {base_url}", flush=True)
+                print("No password is required for this localhost-only viewer", flush=True)
+                print(
+                    f"Imported: {document_count} trajectories/meetings, "
+                    f"{event_count} events/records",
+                    flush=True,
+                )
+                print("Nothing has been uploaded. Press Ctrl+C to stop.\n", flush=True)
+                if args.smoke_test:
+                    status = complete_organization(opener, base_url)
+                    if event_count and status["status"] != "complete":
+                        raise SystemExit(f"Organizer did not complete: {status}")
+                    print(json.dumps({"smoke_test": "passed", "organization": status}))
+                    return
+                if not args.no_browser:
+                    webbrowser.open(base_url)
+
             return_code = wait_for_owned_exit(process)
             if return_code != 0:
                 raise SystemExit(f"Viewer exited unexpectedly with status {return_code}")
@@ -775,7 +959,7 @@ def main():
             pass
         finally:
             terminate_process_group(process)
-            wait_for_port_release(args.port)
+            wait_for_port_release(port)
 
 
 if __name__ == "__main__":

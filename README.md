@@ -6,7 +6,7 @@
 
 [![SOP](https://img.shields.io/badge/SOP-READ_FIRST-2563eb?style=for-the-badge)](SOP.md)
 [![Agent contract](https://img.shields.io/badge/AGENT-CONTRACT-1f2937?style=for-the-badge)](AGENTS.md)
-[![Skills](https://img.shields.io/badge/SKILLS-3-7c3aed?style=for-the-badge)](#included-skills)
+[![Skills](https://img.shields.io/badge/SKILLS-4-7c3aed?style=for-the-badge)](#included-skills)
 [![Upload](https://img.shields.io/badge/UPLOAD-NEVER_AUTOMATIC-dc2626?style=for-the-badge)](#local-boundary)
 
 [![Python](https://img.shields.io/badge/PYTHON-3.11+-3776ab?style=for-the-badge&logo=python&logoColor=white)](#requirements)
@@ -173,10 +173,13 @@ Run in this order:
    meeting text or audio.
 2. **[`oxygen-organize-review-export`](skills/oxygen-organize-review-export/SKILL.md)** — labels
    mixed conversations by project, selects the primary project, builds one combined timeline per
-   project, launches the Viewer, packages the reviewed run.
+   project, continues the progress-first Viewer, and packages the reviewed run.
 3. **[`oxygen-elicit-contributor-preferences`](skills/oxygen-elicit-contributor-preferences/SKILL.md)**
    — finds high-signal friction moments and asks evidence-grounded questions, without inventing
    preferences.
+4. **[`oxygen-storytelling-review`](skills/oxygen-storytelling-review/SKILL.md)** — transforms an
+   already-reviewed project history into an evidence-linked, bilingual Project Story with
+   iterative human confirmation that remains separate from publication.
 
 Supporting tools live in [`tools/llm_redact/`](tools/llm_redact/) (model backend, validators,
 audits) and [`tools/ingest/`](tools/ingest/) (collection and import).
@@ -186,31 +189,45 @@ audits) and [`tools/ingest/`](tools/ingest/) (collection and import).
 ## Manual quick start
 
 ```bash
-# 1. collect
-python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/my-project
+# 1. Terminal 1: resolve the target, reserve a free port, and show progress before collection.
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --target /path/to/repo
 
-# 2. after the agent creates project-map.json, build the AI review boundary
+# Record the exact URL and workflow run ID printed above, then use Terminal 2.
+VIEWER_URL=http://127.0.0.1:<port>
+WORKFLOW_RUN_ID=<run-id>
+
+# 2. Collect with fixed operational progress events only.
+python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/my-project \
+  --progress-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
+
+# 3. After the agent creates project-map.json, attach to the same Viewer.
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-project \
+  --attach-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
+
+# 4. Build the AI review boundary.
 python3 tools/llm_redact/prepare_ai_review_run.py \
   --run work/my-project --out work/my-review
 
-# 3. see what a redaction pass would actually be reviewing
+# 5. See what a redaction pass would actually be reviewing.
 python3 tools/llm_redact/audit_coverage.py work/my-review
 
-# 4. extract only conversational turns for the configured model
+# 6. Extract only conversational turns for the configured model.
 python3 tools/llm_redact/extract_dialogue.py work/my-review --out work/my-dialogue
 
-# 5. after the model writes one findings JSON per bundle, validate and merge
+# 7. After the model writes one findings JSON per bundle, validate and merge.
 python3 tools/llm_redact/verify_coverage.py \
   --dialogue work/my-dialogue --findings work/my-findings
 python3 tools/llm_redact/merge_and_apply.py \
   --dialogue work/my-dialogue --findings work/my-findings --out work/my-redaction
 
-# 6. review locally; keep this process running
-python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-review
+# 8. Reattach the reviewed boundary to the same Viewer.
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-review \
+  --attach-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
 
-# 7. in another terminal, push validated spans into the Viewer
+# 9. Push validated spans into that exact Viewer.
 python3 tools/llm_redact/push_redactions.py \
-  --redacted work/my-redaction/redacted
+  --redacted work/my-redaction/redacted --base-url "$VIEWER_URL"
 ```
 
 Native Windows PowerShell uses the same workflow without `python -X utf8`, `chcp`, WSL, or a
@@ -223,11 +240,22 @@ $Review = "work\my-review"
 $Dialogue = "work\my-dialogue"
 $Findings = "work\my-findings"
 $Redaction = "work\my-redaction"
-$Port = 3296
+
+# Terminal 1: show Workflow Progress before collection; keep this running.
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --target "$Repo"
+
+# In Terminal 2, copy the exact values printed by Terminal 1.
+$Viewer = "http://127.0.0.1:<port>"
+$WorkflowRun = "<run-id>"
 
 # 1. Collect from C:\Users\<user>\.codex\sessions by default.
 python .\tools\ingest\collect_repo_trajectories.py "$Repo" `
-  --out "$Run"
+  --out "$Run" --progress-url "$Viewer" --workflow-run-id "$WorkflowRun"
+
+# Attach the organized run to the same Viewer after project-map.json exists.
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  "$Run" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
 # 2. After the agent creates project-map.json, prepare the safe review boundary.
 python .\tools\llm_redact\prepare_ai_review_run.py `
@@ -242,14 +270,14 @@ python .\tools\llm_redact\verify_coverage.py `
 python .\tools\llm_redact\merge_and_apply.py `
   --dialogue "$Dialogue" --findings "$Findings" --out "$Redaction"
 
-# 4. Keep the official local Viewer running during review.
+# 4. Reattach the safe reviewed boundary to the already-running Viewer.
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  "$Review" --port $Port
+  "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
 # 5. In another PowerShell terminal, push only validated findings.
 python .\tools\llm_redact\push_redactions.py `
   --redacted "$Redaction\redacted" `
-  --base-url "http://127.0.0.1:$Port"
+  --base-url "$Viewer"
 ```
 
 Optional Windows audio uses a project-local environment only. Install its optional dependencies
@@ -269,15 +297,17 @@ finally {
 }
 ```
 
-Step 6 prints a localhost URL and must keep running during review. Download ZIP remains blocked
+The progress-first launcher prints the localhost URL and stable workflow run ID before collection;
+keep that owned process running through review. Download ZIP remains blocked
 until the AI pass is complete, every bundle has worker output, and every rejected span has been
 resolved. `push_redactions.py` reads `work/my-redaction/report.json` automatically and refuses to
 mark the pass complete when coverage is missing.
 
-Each official launch uses a fresh process-owned D1 runtime and binds Vinext directly to the
-requested IPv4 loopback port. Existing `viewer/.wrangler` data is never reused or deleted. Use
-`--port <number>` for an isolated non-default port; an occupied port fails immediately with a
-clear diagnostic and no unrelated process is stopped.
+Each official launch uses a fresh process-owned D1 runtime and binds Vinext directly to IPv4
+loopback. By default the OS reserves an arbitrary free port and the launcher announces it only
+after that exact port becomes healthy. Existing `viewer/.wrangler` data is never reused or deleted.
+Use `--port <number>` for a specific isolated port; an occupied port fails immediately with a clear
+diagnostic and no unrelated process is stopped.
 
 ---
 

@@ -11,6 +11,12 @@ import {
 } from "../../../lib/release.mjs";
 import { computeSourceDigest, redactionReleaseError } from "../../../lib/redaction-pass.mjs";
 import { canonicalizeStoredAutoRemoved } from "../../../lib/auto-removed.mjs";
+import {
+  releaseOrganizationReason,
+  reviewedStoryPackageEntry,
+  sanitizeReviewedStoryRelease,
+  type ReviewedStoryRelease,
+} from "../../../lib/story-release";
 
 const clean = <T,>(value: string, fallback: T): T => {
   try { return JSON.parse(value) as T; } catch { return fallback; }
@@ -27,7 +33,7 @@ type ReleaseEvent = {
   organization_confidence?: number | null; organization_reason: string;
 };
 
-export async function GET() {
+async function buildPackage(reviewedStory?: ReviewedStoryRelease) {
   const db = await getD1();
   const redactionJob = await db.prepare(
     "SELECT * FROM redaction_jobs ORDER BY started_at DESC LIMIT 1"
@@ -134,7 +140,7 @@ export async function GET() {
   const releaseItems = (items as ReleaseEvent[]).map((item) => ({
     ...item,
     organization_category: safeText(item.organization_category),
-    organization_reason: safeText(item.organization_reason),
+    organization_reason: safeText(releaseOrganizationReason(item.organization_reason)),
   }));
 
   const primaryProject = safeText(
@@ -283,10 +289,23 @@ export async function GET() {
       data: JSON.stringify(preferenceProbes, null, 2),
     });
   }
+  const storyEntry = reviewedStoryPackageEntry(reviewedStory);
+  if (storyEntry) entries.push(storyEntry);
   const zip = createZip(entries);
   return new Response(zip, { headers: {
     "content-type": "application/zip",
     "content-disposition": 'attachment; filename="oxygen-contribution.zip"',
     "cache-control": "no-store",
   } });
+}
+
+export async function GET() {
+  return buildPackage();
+}
+
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => null) as { reviewedStory?: unknown } | null;
+  const reviewedStory = sanitizeReviewedStoryRelease(body?.reviewedStory);
+  if (!reviewedStory) return Response.json({ error: "ZIP export blocked: invalid reviewed Story release projection" }, { status: 400 });
+  return buildPackage(reviewedStory);
 }

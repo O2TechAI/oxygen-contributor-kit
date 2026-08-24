@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 INGEST_DIR = Path(__file__).resolve().parents[1]
@@ -26,6 +27,14 @@ SIBLING = r"D:\Coding Projects\O2-Intern\other-repo"
 
 def codex_record(cwd: str) -> dict:
     return {"type": "turn_context", "payload": {"cwd": cwd}}
+
+
+def codex_session_meta(cwd: str, session_id: str = "synthetic-session") -> dict:
+    return {
+        "timestamp": "2026-01-02T03:04:05.000Z",
+        "type": "session_meta",
+        "payload": {"id": session_id, "cwd": cwd},
+    }
 
 
 def write_jsonl(path: Path, records: list[dict]) -> None:
@@ -113,7 +122,7 @@ class DiscoveryContractTest(unittest.TestCase):
             write_jsonl(session, [codex_record(EXACT)])
             stats = MODULE.DiscoveryStats("codex", home / ".codex" / "sessions")
             matches = MODULE.find_codex_sessions(home, REPO, diagnostics=stats)
-            self.assertEqual(matches, [session])
+            self.assertEqual(matches, [session.resolve()])
             self.assertEqual(stats.exact, 1)
             self.assertEqual(stats.matched, 1)
 
@@ -125,6 +134,40 @@ class DiscoveryContractTest(unittest.TestCase):
             repo.mkdir()
             write_jsonl(repo / ".codex" / "sessions" / "local.jsonl", [codex_record(str(repo))])
             self.assertEqual(MODULE.find_codex_sessions(home, repo), [])
+
+    def test_explicit_session_root_is_the_approved_boundary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "user-home"
+            approved = root / "semantic project" / ".codex" / "sessions"
+            session = approved / "2026" / "01" / "parent-cwd.jsonl"
+            write_jsonl(session, [codex_session_meta(PARENT), codex_record(PARENT)])
+            stats = MODULE.DiscoveryStats("codex", approved)
+
+            matches = MODULE.find_codex_sessions(
+                home, REPO, session_root=approved, diagnostics=stats
+            )
+
+            self.assertEqual(matches, [session.resolve()])
+            self.assertEqual(stats.parent, 1)
+            self.assertEqual(stats.matched, 0)
+            self.assertEqual(stats.approved_root_selected, 1)
+
+    def test_explicit_session_root_skips_non_session_jsonl_and_siblings(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "user-home"
+            approved = root / "approved" / "sessions"
+            valid = approved / "valid.jsonl"
+            invalid = approved / "work" / "events.jsonl"
+            outside = root / "sibling" / "outside.jsonl"
+            write_jsonl(valid, [codex_session_meta(PARENT)])
+            write_jsonl(invalid, [codex_record(PARENT)])
+            write_jsonl(outside, [codex_session_meta(PARENT, "outside")])
+
+            matches = MODULE.find_codex_sessions(home, REPO, session_root=approved)
+
+            self.assertEqual(matches, [valid.resolve()])
 
     def test_exact_child_parent_sibling_and_unrelated_are_distinct(self):
         expected = {
@@ -204,6 +247,99 @@ class DiscoveryContractTest(unittest.TestCase):
         })
         self.assertEqual(summary["limit_reached_without_cwd"], 1)
         self.assertEqual(summary["matched"], 2)
+
+
+class CollectorMainBoundaryTest(unittest.TestCase):
+    def test_default_cli_keeps_cwd_filtering_and_excludes_global_memory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            repo = root / "target"
+            out = root / "out"
+            repo.mkdir()
+            exact = home / ".codex" / "sessions" / "exact.jsonl"
+            unrelated = home / ".codex" / "sessions" / "unrelated.jsonl"
+            write_jsonl(exact, [codex_session_meta(str(repo), "exact")])
+            write_jsonl(unrelated, [codex_session_meta(str(root / "other"), "unrelated")])
+            (home / ".codex" / "AGENTS.md").write_text("global", encoding="utf-8")
+            (repo / "AGENTS.md").write_text("project", encoding="utf-8")
+
+            def fake_extract(session, system, out_root, source_home, user):
+                return {
+                    "trajectory_id": session.stem,
+                    "system": system,
+                    "source_session": str(session),
+                    "source_sha256_prefix": "synthetic",
+                    "ok": True,
+                }
+
+            with (
+                mock.patch.object(MODULE, "extract", side_effect=fake_extract) as extracted,
+                mock.patch("builtins.print"),
+            ):
+                result = MODULE.main([
+                    str(repo), "--home", str(home), "--out", str(out),
+                    "--agents", "codex", "--user", "synthetic",
+                ])
+
+            self.assertEqual(result, 0)
+            self.assertEqual([call.args[0] for call in extracted.call_args_list], [exact.resolve()])
+            index = json.loads((out / "index.json").read_text(encoding="utf-8"))
+            discovery = index["session_discovery"]["codex"]
+            self.assertEqual(discovery["files_scanned"], 2)
+            self.assertEqual(discovery["matched"], 1)
+            self.assertEqual(discovery["approved_root_selected"], 0)
+            self.assertEqual(index["memory_file_count"], 1)
+            self.assertEqual(
+                [entry["source"] for entry in index["memory"]],
+                [str((repo / "AGENTS.md").resolve())],
+            )
+
+
+class WorkflowProgressReporterTest(unittest.TestCase):
+    def test_progress_origin_is_strictly_loopback(self):
+        self.assertEqual(
+            MODULE.normalize_progress_url("http://127.0.0.1:3298/"),
+            "http://127.0.0.1:3298",
+        )
+        for value in (
+            "https://127.0.0.1:3298",
+            "http://example.com:3298",
+            "http://127.0.0.1:3298/api/workflow",
+        ):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                MODULE.normalize_progress_url(value)
+
+    def test_progress_payload_contains_only_fixed_operational_fields(self):
+        response = mock.MagicMock()
+        response.status = 200
+        response.__enter__.return_value = response
+        reporter = MODULE.WorkflowProgressReporter("http://127.0.0.1:3298", "run-1")
+        with mock.patch.object(MODULE.urllib.request, "urlopen", return_value=response) as opened:
+            reporter.post("collection_progress", completed=2, total=5)
+        request = opened.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:3298/api/workflow")
+        self.assertEqual(json.loads(request.data), {
+            "workflowRunId": "run-1",
+            "event": "collection_progress",
+            "completed": 2,
+            "total": 5,
+        })
+
+    def test_progress_lifecycle_is_terminal_and_counted(self):
+        reporter = MODULE.WorkflowProgressReporter("http://localhost:3298", "run-1")
+        with (
+            mock.patch.object(reporter, "post") as post,
+            mock.patch.object(MODULE.atexit, "register"),
+            mock.patch.object(MODULE.atexit, "unregister"),
+        ):
+            reporter.start()
+            reporter.update(3, 5)
+            reporter.finish()
+        self.assertEqual([call.args[0] for call in post.call_args_list], [
+            "collection_started", "collection_progress", "collection_completed",
+        ])
+        self.assertFalse(reporter.active)
 
 
 if __name__ == "__main__":

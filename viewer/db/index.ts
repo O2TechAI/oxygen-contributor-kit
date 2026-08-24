@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 
 let initialized = false;
+let initialization: Promise<void> | null = null;
 
 const statements = [
   `CREATE TABLE IF NOT EXISTS documents (
@@ -25,6 +26,27 @@ const statements = [
     completed INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0,
     warnings_json TEXT NOT NULL DEFAULT '[]', started_at TEXT NOT NULL,
     updated_at TEXT NOT NULL, completed_at TEXT
+  )`,
+  // This is the only pre-collection persistence surface. Keep it operational
+  // and allowlisted: no target path, reasoning, payload, or free-form status.
+  `CREATE TABLE IF NOT EXISTS workflow_runs (
+    id TEXT PRIMARY KEY, target_confirmed INTEGER NOT NULL DEFAULT 0,
+    collection_status TEXT NOT NULL DEFAULT 'pending',
+    collection_completed INTEGER NOT NULL DEFAULT 0,
+    collection_total INTEGER NOT NULL DEFAULT 0,
+    story_generation_status TEXT NOT NULL DEFAULT 'not_started',
+    story_generation_completed INTEGER NOT NULL DEFAULT 0,
+    story_generation_total INTEGER NOT NULL DEFAULT 0,
+    story_source_revision INTEGER NOT NULL DEFAULT 0,
+    active_story_digest TEXT,
+    blocker_code TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`,
+  // Local review persistence lets refresh hydrate the same validated Chapter
+  // lifecycle. Package/release code never selects this table.
+  `CREATE TABLE IF NOT EXISTS story_review_sessions (
+    workflow_run_id TEXT PRIMARY KEY, state_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
   )`,
   // One row per redacted span. Offsets address items.content, which stays the
   // untouched original -- the tag is applied at render time so a reviewer can
@@ -54,7 +76,7 @@ const statements = [
     event_ids_json TEXT NOT NULL DEFAULT '[]', timestamp TEXT,
     signal TEXT NOT NULL, score INTEGER NOT NULL DEFAULT 0,
     turns INTEGER NOT NULL DEFAULT 0, recap TEXT NOT NULL, question TEXT NOT NULL,
-    options_json TEXT NOT NULL DEFAULT '[]',
+    options_json TEXT NOT NULL DEFAULT '[]', presentations_json TEXT NOT NULL DEFAULT '{}',
     allow_other INTEGER NOT NULL DEFAULT 1, allow_skip INTEGER NOT NULL DEFAULT 1,
     answer_choice TEXT, answer_text TEXT, answered_at TEXT,
     created_at TEXT NOT NULL
@@ -65,6 +87,7 @@ const statements = [
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
     question TEXT NOT NULL, default_answer TEXT NOT NULL DEFAULT 'keep',
     answer TEXT, answered_at TEXT, evidence_sample_json TEXT NOT NULL DEFAULT '[]',
+    presentations_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS probe_runs (
@@ -78,13 +101,42 @@ const statements = [
 export async function getD1() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
   if (!initialized) {
-    await env.DB.batch(statements.map((sql) => env.DB.prepare(sql)));
-    const columns = await env.DB.prepare("PRAGMA table_info(redaction_jobs)")
-      .all<{ name: string }>();
-    if (!columns.results.some((column: { name: string }) => column.name === "source_digest")) {
-      await env.DB.prepare("ALTER TABLE redaction_jobs ADD COLUMN source_digest TEXT").run();
-    }
-    initialized = true;
+    initialization ??= (async () => {
+      await env.DB.batch(statements.map((sql) => env.DB.prepare(sql)));
+      const columns = await env.DB.prepare("PRAGMA table_info(redaction_jobs)")
+        .all<{ name: string }>();
+      if (!columns.results.some((column: { name: string }) => column.name === "source_digest")) {
+        await env.DB.prepare("ALTER TABLE redaction_jobs ADD COLUMN source_digest TEXT").run();
+      }
+      const probeColumns = await env.DB.prepare("PRAGMA table_info(probes)")
+        .all<{ name: string }>();
+      if (!probeColumns.results.some((column: { name: string }) => column.name === "presentations_json")) {
+        await env.DB.prepare("ALTER TABLE probes ADD COLUMN presentations_json TEXT NOT NULL DEFAULT '{}'").run();
+      }
+      const bulkColumns = await env.DB.prepare("PRAGMA table_info(probe_bulk_decisions)")
+        .all<{ name: string }>();
+      if (!bulkColumns.results.some((column: { name: string }) => column.name === "presentations_json")) {
+        await env.DB.prepare("ALTER TABLE probe_bulk_decisions ADD COLUMN presentations_json TEXT NOT NULL DEFAULT '{}'").run();
+      }
+      const workflowColumns = await env.DB.prepare("PRAGMA table_info(workflow_runs)")
+        .all<{ name: string }>();
+      const workflowNames = new Set(workflowColumns.results.map((column: { name: string }) => column.name));
+      const workflowMigrations = [
+        ["story_generation_status", "ALTER TABLE workflow_runs ADD COLUMN story_generation_status TEXT NOT NULL DEFAULT 'not_started'"],
+        ["story_generation_completed", "ALTER TABLE workflow_runs ADD COLUMN story_generation_completed INTEGER NOT NULL DEFAULT 0"],
+        ["story_generation_total", "ALTER TABLE workflow_runs ADD COLUMN story_generation_total INTEGER NOT NULL DEFAULT 0"],
+        ["story_source_revision", "ALTER TABLE workflow_runs ADD COLUMN story_source_revision INTEGER NOT NULL DEFAULT 0"],
+        ["active_story_digest", "ALTER TABLE workflow_runs ADD COLUMN active_story_digest TEXT"],
+      ] as const;
+      for (const [name, sql] of workflowMigrations) {
+        if (!workflowNames.has(name)) await env.DB.prepare(sql).run();
+      }
+      initialized = true;
+    })().catch((error) => {
+      initialization = null;
+      throw error;
+    });
+    await initialization;
   }
   return env.DB;
 }

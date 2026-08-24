@@ -1,6 +1,6 @@
 ---
 name: oxygen-organize-review-export
-description: Separate mixed-project content across one or many Oxygen trajectories, identify the dominant project, label every event by project, synthesize a chronological main-project timeline, proactively open the local English review viewer, and export one final ZIP. Use after project histories or meetings have been collected and before any upload or publication decision.
+description: Continue the progress-first local Viewer after collection, separate mixed-project content across one or many Oxygen trajectories, identify the dominant project, synthesize one chronological main-project timeline, and export one final ZIP. Use after project histories or meetings have been collected and before any upload or publication decision.
 ---
 
 # Organize, review, and export
@@ -51,40 +51,83 @@ Timeline descriptions must be glanceable:
   presents those separately;
 - when a source event is long, summarize its project significance rather than its contents.
 
-## Launch the local review
+## Delegate Storytelling after the reviewed boundary
 
-From the `contributor-kit` root run:
+In the complete contributor workflow, organization alone is not the final human review. After the
+organized input has passed the required AI-privacy preparation and is safe to use as the reviewed
+copy, read and follow
+[`../oxygen-storytelling-review/SKILL.md`](../oxygen-storytelling-review/SKILL.md).
+
+That Skill owns Story selection, bilingual Story data, Chapter review, Privacy/evidence review,
+and Final Release Memory. Reuse the repository's existing Viewer shell and canonical Storytelling
+renderer/runtime; do not create another frontend or copy the Storytelling contract into this Skill.
+The contributor does not need to know or manually name the delegated Skill.
+
+At workflow boundaries, expose progress through the existing Viewer using sanitized stage IDs,
+completion/current/next state, justified counts, blocker codes, timestamps, and whether human
+action is required. Never expose chain-of-thought, prompts, raw model/tool output, private messages,
+Story/Evidence payloads, or removed content as workflow progress.
+
+After iterative Story review, return to the existing Release preview, Preferences, and package
+flow. `All set` is local human confirmation of the Story representation only; it does not create a
+package, publish, or change `publication_approved`.
+
+## Continue the same progress-first Viewer
+
+The normal workflow already launched Workflow Progress before collection and retained its exact
+Viewer origin and stable workflow run ID. After `project-map.json` exists, attach the ingest run to
+that same process-owned D1 state:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run> \
+  --attach-url http://127.0.0.1:<port> --workflow-run-id <run-id>
+```
+
+Native Windows PowerShell uses the same attach operation:
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  "work\<run>" --attach-url "http://127.0.0.1:<port>" `
+  --workflow-run-id "<run-id>"
+```
+
+Attach mode verifies ownership of the exact workflow run, imports the project map and source
+records, and advances organization in the existing Viewer. Reattach the prepared reviewed run
+after privacy-boundary preparation, and reattach again when validated Story metadata changes;
+these are idempotent updates to the same canonical runtime, not new Viewers.
+
+For a downstream reviewed-artifact resume or a compatibility-only manual review, the launcher
+still accepts a run directly and starts a fresh Viewer:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run>
 ```
 
-Native Windows PowerShell uses the same launcher and an arbitrary free port:
-
-```powershell
-python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  "work\<run>" --port 3298
-```
-
-The launcher validates the run, starts the password-free localhost Viewer, imports the project
-map and source records into SQLite/D1, builds the timeline, and proactively opens the browser.
-Keep it running while the user reviews.
+That compatibility path starts after collection and therefore must not be claimed as a complete
+progress-first Toolkit run.
 
 On native Windows and Linux/WSL it also verifies Node/npm and the platform-specific dependency
 installation, rebuilding incompatible modules with `npm ci`. Windows resolution uses the real
-`npm.cmd` command and rejects POSIX-only shims. Every launch receives fresh process-owned D1 state
-and binds directly to the exact requested `127.0.0.1` port; never move `.wrangler` or add a manual
-socat bridge. Use `--port <number>` when a specific isolated port is required. An occupied port
-fails without killing its owner or choosing a fallback port.
+`npm.cmd` command and rejects POSIX-only shims. Every launch receives fresh process-owned D1 state.
+Without `--port`, the launcher reserves an OS-selected free `127.0.0.1` port and announces only
+the exact port that becomes healthy. Use `--port <number>` when a specific isolated port is
+required. An occupied port fails without killing its owner or choosing a fallback port.
 
 ## Browser handoff is required
 
 After the Viewer becomes ready:
 
-1. Open the local Viewer URL without waiting for a follow-up.
+1. Once ready, proactively open the local Viewer URL without waiting for a follow-up.
 2. Tell the user the URL and that no password is required.
 3. If automatic opening fails, surface the exact URL clearly.
 4. Keep the process alive until the user finishes or asks to stop.
+
+The atomic transition to Stage 5 Review Story is an immediate human handoff, not permission for an
+Agent or evaluator to review the Story first. The same Agent must surface the exact URL, state that
+there is no password, and pause while the Viewer stays alive. Never fabricate Story edits, Privacy
+decisions, preference answers, `All set`, or release state. An unattended run ends at
+`WAITING_FOR_HUMAN_STORY_REVIEW`; continue to release/package work only after the contributor
+explicitly indicates that review is complete.
 
 Do not use `--no-browser` except for automated tests or headless environments.
 
