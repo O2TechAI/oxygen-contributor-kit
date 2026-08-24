@@ -22,7 +22,10 @@ Where Story presentation exists, switching language updates:
 - Chapter navigation, status, metadata, headings, and overview;
 - People role/descriptions and identity explanation;
 - Story prose and subheadings;
-- inline AI insight title/observation/lesson/actions;
+- Story read/Edit labels and helper copy;
+- margin-note type/state/action UI;
+- passage-context headings/copy and compact fallback;
+- collapsed canonical AI insight title/observation/lesson/actions;
 - selection toolbar and contextual editors;
 - annotation type/state/cancel UI;
 - Privacy title/summary/why-flagged/actions;
@@ -38,6 +41,7 @@ English and Chinese are two presentations of one Chapter, not independent Storie
 - Chapter key/order/kind;
 - participant IDs and safe release identity;
 - semantic Story block IDs/structure;
+- passage-context block-key set and supported meaning;
 - inline insight IDs and review state;
 - Privacy candidate IDs and decisions;
 - evidence references;
@@ -52,7 +56,11 @@ Apply the narrative-compression and voice rules from
 normally 2–3 concise sentences; Chinese conveys the same start, turn, and current boundary in
 equally economical natural prose rather than mirroring English sentence structure. Prefer one- or
 two-word English Phase names and compact Chinese book-part labels without changing Phase semantics.
-What mattered and the AI insight remain equally concise and concrete in both languages.
+Chapter depth remains semantically equivalent in both languages: problem, constraints, attempts,
+failures, evidence, decision/rationale, action/outcome, uncertainty, and reusable learning may use
+different natural sentence structures but cannot diverge in claims. The canonical AI insight stays
+concrete and project-specific in both languages rather than being forced to an arbitrary sentence
+count.
 
 Natural localization applies to every reader-facing Story field, including inline insight title/observation/lesson, participant identity explanations, status copy, annotation labels, and review blockers. Do not leave an English narrative sentence or UI explanation inside the Chinese presentation merely because its stable ID is shared. Exact technical identifiers and deliberately preserved product terms are the only expected unchanged strings.
 
@@ -68,6 +76,7 @@ Use stable shared keys and validate:
 - matching evidence-backed chip facts, with natural localized wording around preserved technical anchors;
 - matching participant/insight/privacy IDs;
 - matching reconstruction and important-detail semantic block counts, or an explicit alignment map;
+- matching passage-context key sets and equivalent evidence-grounded meaning when passage context is present;
 - presence of every declared selected technical/semantic anchor in reader-facing fields of both language presentations, or an explicit bilingual alignment for a non-literal semantic anchor; reject absent and one-locale-only anchors;
 - one shared evidence set;
 - unavailable Privacy candidates have no excerpt in either language;
@@ -122,3 +131,5 @@ Story can switch language; Evidence remains source-language. Localize only the s
 10. exact Evidence stays in original language.
 11. the single shell language control remains discoverable on Project Story, Chapter, and Exact Evidence;
 12. Chinese inline insights and identity/review explanations contain natural Chinese rather than English placeholder copy.
+13. Read/Edit, margin-note, passage-context, and collapsed canonical-Insight controls localize while
+    sharing one underlying semantic/review state.

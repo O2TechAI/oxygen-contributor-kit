@@ -63,6 +63,11 @@ and Final Release Memory. Reuse the repository's existing Viewer shell and canon
 renderer/runtime; do not create another frontend or copy the Storytelling contract into this Skill.
 The contributor does not need to know or manually name the delegated Skill.
 
+At workflow boundaries, expose progress through the existing Viewer using sanitized stage IDs,
+completion/current/next state, justified counts, blocker codes, timestamps, and whether human
+action is required. Never expose chain-of-thought, prompts, raw model/tool output, private messages,
+Story/Evidence payloads, or removed content as workflow progress.
+
 After iterative Story review, return to the existing Release preview, Preferences, and package
 flow. `All set` is local human confirmation of the Story representation only; it does not create a
 package, publish, or change `publication_approved`.

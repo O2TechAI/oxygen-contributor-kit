@@ -114,7 +114,16 @@ Unresolved work should be visible but restrained:
 - human instruction when present;
 - Cancel annotation.
 
+Present the same ledger entry as a Word/Docs-like note beside its stable Story block on wide screens
+and as a compact block-associated inline note on narrow screens. Selecting a note focuses its exact
+validated range. The note is presentation metadata only: it does not duplicate, replace, or bypass
+the annotation ledger, and it never enters release output.
+
 Cancellation is available only for `pending` or `needs_evidence` work and changes only that unresolved annotation to cancelled. Cancelling still returns/stays in reviewing until another Apply presents the resulting revision. Never expose Cancel for an applied annotation: reversing applied content must be represented as a new pending operation and pass through another Apply.
+
+Story Read/Edit mode is also presentation state only. Leaving Edit clears transient selection and
+toolbar state but never deletes pending/applied annotations or revision provenance. Precomputed
+passage context does not create annotations, insight-review state, or lifecycle transitions.
 
 ## Apply review contract
 

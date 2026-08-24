@@ -28,6 +28,19 @@ state, and publication separation. Keep these values dynamic: project name/overv
 Phases, dates, People, prose, insights, Privacy candidates, metrics/chips, evidence IDs, and review
 progress. Golden examples and their counts are never reusable constants.
 
+## Safe workflow progress
+
+The existing Viewer loading treatment is also the contributor's workflow-progress surface. Derive
+its stages from the actual prepare → organize → privacy → Story → human review → release-handoff
+workflow. Show only sanitized operational facts: stable stage/status codes, completed/current/next
+state, justified counts, timestamps, blocker codes, and whether human action is required. Persist
+those facts in existing workflow/runtime state so refresh can hydrate them and provide a quiet shell
+action to reopen the surface.
+
+Never expose chain-of-thought, hidden reasoning, prompts, scratchpad, raw model output, raw tool
+arguments, private agent messages, Story/Evidence content, removed values, or other private workflow
+material. Do not invent a percentage when no real denominator exists.
+
 ## Story selection
 
 Select Chapters by consequential state transition. Suitable signals include:
@@ -87,25 +100,30 @@ Phase names behave like book-part names. Strongly prefer one or two scannable En
 equivalently compact natural Chinese label. Derive names from evidence; do not change supported
 Phase selection merely to obtain prettier labels and do not treat example names as a taxonomy.
 
-A Chapter should answer, in causal order: what was happening, what changed, why direction changed,
-what followed, and why the Chapter matters. Setup / turn / what followed / what mattered are useful
-editorial cues, not mandatory schema headings. Use short paragraphs, concrete nouns, active voice,
-important technical facts, and material numbers. Preserve supported failure, disagreement, and
-uncertainty. Remove audit-report voice, command-by-command narration, mechanical field enumeration,
-and generic summary filler.
+A Chapter is durable project memory for humans and future Agents. Without reopening Evidence merely
+to recover the basic Story, it should provide enough supported context to understand the problem,
+why it mattered, constraints, prior attempts, failures or rejected approaches, evidence that changed
+the direction, the decision and its supported rationale, the action that followed, the result,
+remaining uncertainty, and what should be remembered. Not every Chapter needs a separate heading for
+every element, but material elements present in the evidence must not disappear merely to minimize
+word count.
 
-What mattered is normally one concise sentence derived from the Chapter's two to four strongest
-supported facts or chips. It connects those facts to the larger trajectory rather than repeating
-the article.
+Setup / attempt / problem / turn / what followed / what mattered are useful editorial cues, not
+mandatory schema headings. Use coherent paragraphs, concrete nouns, active voice, important
+technical facts, and material numbers. A Chapter may contain several substantial paragraphs when
+the evidence requires them. Remove audit-report voice, command-by-command narration, mechanical
+field enumeration, generic summary filler, and repeated test/status noise that adds no learning.
 
-The inline AI insight remains interpretation, not history. Write its observation and reusable
-lesson in one or two short, project-specific sentences that are concrete and memorable. Avoid
-formulaic openings such as “This chapter demonstrates,” “The key takeaway is,” and “This highlights
-the importance of,” plus abstract advice that could describe any project.
+The canonical AI insight remains interpretation, not history. Its observation and reusable lesson
+may be fuller when needed to preserve a grounded pattern, but must stay project-specific and avoid
+formulaic openings or abstract advice that could describe any project. Final reviewed Chapters may
+carry evidence-backed visible rationale, mistakes, corrections, human overrides, rejected
+approaches, successful patterns, and outcomes forward to future Agents. Never preserve private
+latent model reasoning as Story.
 
 The governing standard is:
 
-> Narrative coherence without fictionalization.
+> Rich context without fictionalization.
 
 Never invent dialogue, emotion, motivation, certainty, causality, or retrospective outcomes that
 the reviewed evidence does not support.
@@ -171,7 +189,10 @@ These are natural document sections, not sequential steps. Use headings, whitesp
 
 The Chapter header includes conventional Project Story Back, Chapter position, previous/next, review stage, phase, time/range, reading time, title, and a short why-read overview.
 
-The default is the AI-compressed release draft. Original/local evidence is a secondary disclosure, not an equal reading mode. Do not render large Release/Original comparison cards.
+The default is a clean reading view of the AI-prepared release draft. Original/local evidence is a
+secondary disclosure, not an equal reading mode. Do not render large Release/Original comparison
+cards. Give the reader restrained guidance for Read → optional Story Edit → Insight → Privacy →
+Apply review → All set without turning the Chapter into a stepper.
 
 ## Visual language
 
@@ -189,7 +210,10 @@ Phase directory on wide layouts, warm off-white surface, serif reading hierarchy
 controls, restrained Oxygen green/blue-violet accents, and boxes-only-for-interaction rule. Natural
 wrapping, project-driven height/counts, font fallback, and small spacing differences may vary.
 
-Use a centered responsive article measure roughly comparable to `min(900px, 100%)`. Keep prose comfortable, do not stretch it across the workspace, and scope the width so the main Timeline remains unchanged.
+Use a centered responsive Chapter composition with a dominant readable document, a small annotation
+margin, and a secondary contextual panel where space permits. Keep prose comfortable, do not stretch
+it across the workspace, and scope the width so the main Timeline remains unchanged. On narrower
+screens, fold annotation notes and contextual assistance inline without horizontal overflow.
 
 ## People
 
@@ -203,11 +227,30 @@ Participant records use stable IDs, safe release labels (`A`, `B`, `C`, `AI`, or
 
 Real/local identity may be used only when supported and permitted for local review. It never automatically becomes release identity. If identity is uncertain, keep it generic. Never fabricate a person or name.
 
-## Story and inline AI insight
+## Story, passage context, and canonical AI insight
 
-Render Story as one coherent article with short paragraphs, meaningful subheadings, bullets where scanning improves, and explicit uncertainty where supported. Internal fields such as scene, reconstruction, retained details, outcome, and significance help generate the article but must not appear as a dashboard of schema labels.
+Render Story as one coherent article with readable paragraphs, meaningful subheadings, bullets where
+scanning improves, and explicit uncertainty where supported. Internal fields such as scene,
+reconstruction, retained details, outcome, and significance help generate the article but must not
+appear as a dashboard of schema labels.
 
-Exactly one structured, reviewable AI Highlight remains in each Chapter's data and lives inside Story at the relevant narrative point. Reject a Chapter with zero or multiple reviewable insights rather than silently rendering only the first. A restrained inline insight includes:
+Read mode is the default. A compact accessible pencil/Edit control enters a contained Story Edit
+Mode. It may look like an editable document, but stable semantic blocks, exact ranges, annotations,
+and revision provenance remain authoritative; do not use uncontrolled `contenteditable` mutation.
+Show annotation notes in the left margin beside their block on wide screens and in a compact
+block-associated inline treatment on narrow screens. Notes are local review metadata and never
+enter release output.
+
+Precomputed evidence-grounded `passageContext`, keyed by stable Story block, may drive a small sticky
+right-side reading companion. Clicking or selecting a passage changes that local panel. It may
+explain what was happening, why the moment mattered, what became clearer, and a reusable lesson,
+conservatively omitting claims the reviewed context cannot support. It is not another reviewable or
+release Insight and is excluded from export by default.
+
+Exactly one structured, reviewable AI Highlight remains in each Chapter's data. Present its full
+content in a disclosure at the end of Story, collapsed by default. Reject a Chapter with zero or
+multiple reviewable insights rather than silently rendering only the first. The canonical insight
+includes:
 
 - a label such as AI insight or Turning point;
 - explicit `AI interpretation · not historical fact` status;

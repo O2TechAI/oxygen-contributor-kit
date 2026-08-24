@@ -26,6 +26,7 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.equal((ui.match(/key=\{phaseGroupIdentity\(/g)||[]).length,2);
   assert.match(css,/\.workspace\.episodeOpen\{grid-template-columns:var\(--rail-width\)/);assert.match(css,/\.chapterRailContext/);
   assert.match(css,/\.chapterEditor \.simpleEpisodeHero,.chapterEditor \.simpleEpisodeBody\{width:min\(900px,100%\)/);
+  assert.match(css,/\.chapterEditor \.simpleEpisodeBody\{width:min\(1180px,100%\)\}/);
   assert.match(ui,/chapterRailList/);assert.match(ui,/highlights\.map/);assert.match(ui,/aria-current=/);assert.match(ui,/scrollIntoView\(\{ block:"nearest" \}\)/);
   assert.match(css,/\.chapterRailList\{[^}]*max-height:[^}]*overflow-y:auto[^}]*overscroll-behavior:contain/);
   assert.match(css,/\.workspace\.episodeOpen \.rail\{visibility:visible;overflow-y:auto;overscroll-behavior:contain\}/);
@@ -39,7 +40,7 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(episode,/closeToolbar: "Close review toolbar"/);assert.match(episode,/className="selectionToolbarClose"/);
   assert.match(episode,/event\.key === "Escape"\) clearSelection\(\)/);
   assert.match(episode,/window\.getSelection\(\)\?\.removeAllRanges\(\)/);
-  const clearSelection=episode.slice(episode.indexOf("const clearSelection"),episode.indexOf("}, []);",episode.indexOf("const clearSelection")));
+  const clearSelection=episode.slice(episode.indexOf("const clearSelection"),episode.indexOf("const leaveEditMode",episode.indexOf("const clearSelection")));
   assert.doesNotMatch(clearSelection,/onChapterReview|cancelStoryAnnotation/);
   assert.match(episode,/copy\.contains\(range\.startContainer\).*copy\.contains\(range\.endContainer\)/s);
   assert.match(episode,/storyAnnotatedRange/);assert.match(episode,/data-annotation-ids/);
@@ -59,6 +60,36 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(ui,/payload\.documents/);
   assert.match(progress,/role="progressbar"/);assert.match(progress,/Nothing is uploaded/);
   assert.doesNotMatch(ui+episode,/password|checklist/i);
+});
+test("Chapter Story defaults to read mode and uses controlled margin/context review surfaces", async () => {
+  const [episode,css,timeline,release,workspace,progress,workflowRoute] = await Promise.all([
+    read("../app/story-chapter-editor.tsx"), read("../app/globals.css"), read("../lib/timeline.ts"),
+    read("../lib/story-release.ts"), read("../app/workspace.tsx"),
+    read("../app/organization-progress.tsx"), read("../app/api/workflow/route.ts"),
+  ]);
+  assert.match(episode,/const \[editMode, setEditMode\] = useState\(false\)/);
+  assert.match(episode,/data-story-mode=\{editMode \? "edit" : "read"\}/);
+  assert.match(episode,/aria-label=\{editMode \? labels\.finishEditing : labels\.editStory\}/);
+  assert.match(episode,/editMode && selection && <div className="selectionToolbar"/);
+  assert.match(episode,/const leaveEditMode[\s\S]*clearSelection\(\)[\s\S]*setEditMode\(false\)/);
+  assert.match(episode,/data-annotation-note=\{annotation\.id\}/);
+  assert.match(episode,/focusAnnotation\(annotation\)/);
+  assert.match(episode,/data-context-block=\{contextTarget\?\.blockId/);
+  assert.match(episode,/presentation\.passageContext\?\.\[contextTarget\.blockId\]/);
+  assert.equal((episode.match(/data-inline-insight=/g) || []).length, 1);
+  assert.match(episode,/<details className=\{`canonicalInsightDisclosure/);
+  assert.match(css,/\.storyReviewWorkspace\.editing \.storyDocument\{border:/);
+  assert.match(css,/\.storyBlockRow\{display:grid;grid-template-columns:160px minmax\(0,1fr\)/);
+  assert.match(css,/\.passageInsightPanel\{position:sticky/);
+  assert.match(css,/@media\(max-width:1300px\)[\s\S]*\.passageInsightPanel\{position:relative/);
+  assert.match(css,/@media\(max-width:760px\)[\s\S]*\.storyMarginNotes\{display:flex;overflow-x:auto/);
+  assert.match(timeline,/passageContext\?: Record<string, StoryPassageContext>/);
+  assert.doesNotMatch(release,/passageContext/);
+  assert.match(workspace,/Read a Chapter to review the full story, evidence, and lessons\./);
+  assert.match(workspace,/阅读任一章节，完整审阅故事、证据与可复用经验/);
+  assert.match(workspace,/setWorkflowOpen\(true\)/);
+  assert.match(progress,/private Agent reasoning is never shown here/);
+  assert.doesNotMatch(workflowRoute,/original_json|SELECT\s+content|reasoning|prompt/i);
 });
 test("Release Preview and Preferences use centered, gate-aware, locale-consistent surfaces", async () => {
   const [ui,css,probes,probeApi,db,preferenceModel,release] = await Promise.all([

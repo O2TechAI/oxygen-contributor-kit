@@ -79,20 +79,33 @@ Build one coherent, evidence-grounded story of why the project began, what chang
 Apply the canonical narrative-compression and voice rules in
 [product-contract.md](references/product-contract.md): consider the complete reviewed history at
 the approved boundary, then write a concise 2–3 sentence project arc, compact evidence-derived
-Phase names, causal Chapter prose, one-sentence What mattered copy, and a concrete natural
-1–2 sentence AI insight. Compression never permits fictionalization or unsupported causality.
+Phase names, and context-sufficient causal Chapter prose. A Chapter may use several substantial
+paragraphs when needed to preserve the problem, constraints, attempts, failures, evidence, decision,
+action, outcome, uncertainty, and reusable lesson. Compression never permits fictionalization,
+hidden model reasoning, or unsupported causality.
 
 Before accepting the Chapter set, perform a narrative-coverage audit: when reviewed evidence contains the initiating problem, goal, or baseline assumptions, the opening Chapter/overview must establish that supported beginning rather than start at a midstream command, import-path, test-collection, or other routine setup failure. Keep such operational incidents only when they caused a durable contract, architecture, or direction change.
 
 ### 3. Generate project-local Story data
 
-Create stable Chapter, participant, Story-block, inline-insight, Privacy-candidate, and evidence identities using [story-data-contract.md](references/story-data-contract.md). Generate English as canonical default and natural semantically equivalent Chinese. Keep evidence IDs and source text language-independent.
+Create stable Chapter, participant, Story-block, passage-context, inline-insight, Privacy-candidate,
+and evidence identities using [story-data-contract.md](references/story-data-contract.md). Generate
+English as canonical default and natural semantically equivalent Chinese. Keep evidence IDs and
+source text language-independent. Passage context is precomputed local review assistance keyed by
+stable Story block; it is not a second release insight and is excluded from release/export.
 
 Attach Story metadata to reviewed evidence without replacing source content. Validate source hash, chronology, unique keys, bilingual structure, evidence resolution, and the final current-state Chapter.
 
 ### 4. Bind data into the canonical Project Story
 
 Retain the existing application shell. The Timeline is the narrative table of contents and keeps project/source navigation, phases when meaningful, direct Chapter actions, Release preview, and Preferences.
+
+Reuse the existing centered loading treatment as the workflow-progress surface. Derive its stages
+from the contributor workflow and show completed/current/next, waiting/blocked state, real
+denominator-based progress when available, and human-action state. Persist operational progress in
+existing workflow data so refresh can hydrate it; do not invent percentages or expose reasoning,
+prompts, raw tool arguments, private messages, Story/Evidence payloads, or removed content. Keep a
+quiet shell action for reopening the status.
 
 Treat the Project Story homepage as a scan-first table of contents, not a compressed Chapter. Preserve this hierarchy:
 
@@ -128,6 +141,17 @@ Review status / completion
 ```
 
 AI Highlights live inside Story as restrained interpretations with reusable lessons. Do not create a standalone Highlights section, a wizard, numbered section markers, a Release/Original card pair, or a dashboard of schema fields.
+
+Default to a clean read mode. A compact accessible pencil/Edit control enters a visually contained
+Story Edit Mode without using uncontrolled `contenteditable`; stable semantic blocks and the review
+ledger remain authoritative. Show exact-range annotations as restrained Word/Docs-like notes in the
+left Story margin on wide screens and as compact block-associated inline notes on narrow screens.
+
+On wide screens, a secondary sticky passage-context panel follows the Story block the reader clicks
+or selects. It may explain what was happening, why the moment mattered, what became clearer, and a
+grounded reusable lesson, but only from precomputed evidence-backed `passageContext`. Collapse it
+inline on narrower screens. Keep exactly one canonical reviewable Chapter Insight, collapsed by
+default at the end of Story; its existing review lifecycle remains unchanged.
 
 Follow the rule:
 
@@ -172,10 +196,10 @@ There is no Suggested Release field or AI-prescribed decision. When permitted re
 
 ### 9. Validate behavior, safety, and visual language
 
-Write behavioral/model tests and perform browser verification from [validation-checklist.md](references/validation-checklist.md). Demonstrate at least two consecutive annotation → Apply review cycles before All set. Verify exact-range styling, available/unavailable Privacy, bilingual shared lifecycle, both Back routes, independent Chapter-list scrolling, unaffected Release preview/Preferences, and no publication side effect.
+Write behavioral/model tests and perform browser verification from [validation-checklist.md](references/validation-checklist.md). Demonstrate at least two consecutive annotation → Apply review cycles before All set. Verify safe progress hydration, read/Edit mode, margin notes, contextual passage changes, the collapsed canonical Insight, exact-range styling, available/unavailable Privacy, bilingual shared lifecycle, both Back routes, independent Chapter-list scrolling, unaffected Release preview/Preferences, and no publication side effect.
 
 Do not require browser-independent pixel identity. Require bounded Golden-v1 fidelity: the retained three-region desktop composition, editorial hierarchy, restrained palette/card usage, responsive article width, Chapter reading order, and mandatory interactions remain recognizable. Project content, counts, wrapping, and minor spacing may vary. Reject a new visual system or information hierarchy when the canonical components can render the validated data.
 
 ## Completion standard
 
-The result is complete only when a fresh reviewer can understand what to read and what to do without learning Oxygen's internal schema, every Story claim remains traceable to reviewed evidence, the iterative review loop works in both languages, and Final Release Memory remains explicitly separate from publication.
+The result is complete only when a fresh reviewer can understand what to read and what to do without learning Oxygen's internal schema, every Story claim remains traceable to reviewed evidence, the Chapter is useful reusable project memory for humans and future Agents, the iterative review loop works in both languages, and Final Release Memory remains explicitly separate from publication. Reusable memory may preserve evidence-backed user-visible rationale, mistakes, decisions, corrections, rejected approaches, and outcomes; it never records private latent reasoning.

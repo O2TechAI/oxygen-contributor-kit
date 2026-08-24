@@ -54,11 +54,15 @@ const ui = {
     releaseNote: "AI-compressed · human-authoritative review", minRead: "min read",
     people: "People", peoplePrompt: "Who matters in this chapter?", localIdentity: "Local identity · hidden on export", noPeople: "No supported participant was identified for this chapter.",
     story: "Story", setup: "The setup", turn: "The turn", mattered: "What mattered", followed: "What followed", uncertain: "Still uncertain",
-    aiInsight: "AI insight", aiInterpretation: "AI interpretation · not historical fact", observation: "Observation", lesson: "Reusable lesson",
+    chapterGuide: "Read the Chapter, edit the Story where needed, review AI Insight and Privacy, then Apply review. Only All set confirms the final memory.",
+    storyReadHelp: "Read first. Choose Edit when you want to annotate the release draft.", storyEditHelp: "Edit mode · select exact Story text to Delete, Revise, or Add context.",
+    editStory: "Edit Story", finishEditing: "Finish editing", editMode: "Story Edit Mode", readMode: "Story read mode",
+    aiInsight: "AI insight", aiInterpretation: "AI interpretation · not historical fact", observation: "Observation", lesson: "Reusable lesson", completeInsight: "Complete Chapter insight",
+    contextualInsight: "Passage insight", contextualPrompt: "Select or click a Story passage to explore why it mattered.", selectedPassage: "Selected passage", whatHappened: "What was happening", whyMattered: "Why this mattered", learned: "What we learned", showContext: "Show passage insight", hideContext: "Hide passage insight",
     editInsight: "Edit insight", reviseInsight: "Revise insight with AI", acceptInsight: "Accept", removeInsight: "Do not preserve",
     save: "Save", cancel: "Cancel", changeInsight: "How would you like to change this?",
     delete: "Delete", revise: "Revise", add: "Add", closeToolbar: "Close review toolbar", revisePrompt: "What should be corrected here?", addPrompt: "What is missing here?",
-    instructionPlaceholder: "Describe the correction without rewriting the whole paragraph.", pending: "Pending review", applied: "Applied", needsEvidence: "Needs reviewed evidence", cancelAnnotation: "Cancel annotation", reviewPassage: "Review this passage",
+    instructionPlaceholder: "Describe the correction without rewriting the whole paragraph.", pending: "Pending review", applied: "Applied", needsEvidence: "Needs reviewed evidence", cancelAnnotation: "Cancel annotation", reviewPassage: "Review this passage", marginNotes: "Story review notes", focusAnnotation: "Show annotated passage",
     privacy: "Privacy", privacyPrompt: "What might need to be removed before release?", possibleSensitive: "Possible sensitive content",
     localOriginal: "Local original", unavailable: "Original content unavailable in the reviewed artifact.", sourceLanguage: "Source language",
     whyFlagged: "Why AI flagged it", keep: "Keep", redact: "Redact", reviewComplete: "Privacy review complete", reviewAgain: "Review again",
@@ -73,11 +77,15 @@ const ui = {
     releaseNote: "AI 压缩 · 人工意见优先", minRead: "分钟阅读",
     people: "人物", peoplePrompt: "这一章里，谁最重要？", localIdentity: "本地身份 · 导出时隐藏", noPeople: "这一章没有识别出有证据支持的参与者。",
     story: "故事", setup: "当时的局面", turn: "转折如何发生", mattered: "真正重要的细节", followed: "后来发生了什么", uncertain: "仍不确定",
-    aiInsight: "AI 洞察", aiInterpretation: "AI 解释 · 并非历史事实", observation: "观察", lesson: "可复用经验",
+    chapterGuide: "先阅读章节；如需调整，再编辑故事并审阅 AI 洞察与隐私，然后应用审阅。只有“确认完成”才会确认最终记忆。",
+    storyReadHelp: "先阅读；需要批注发布草稿时再进入编辑模式。", storyEditHelp: "故事编辑模式 · 选择精确文字后，可删除、修订或补充上下文。",
+    editStory: "编辑故事", finishEditing: "结束编辑", editMode: "故事编辑模式", readMode: "故事阅读模式",
+    aiInsight: "AI 洞察", aiInterpretation: "AI 解释 · 并非历史事实", observation: "观察", lesson: "可复用经验", completeInsight: "完整章节洞察",
+    contextualInsight: "段落洞察", contextualPrompt: "选择或点击故事段落，了解它为何重要。", selectedPassage: "所选段落", whatHappened: "当时发生了什么", whyMattered: "为什么重要", learned: "我们学到了什么", showContext: "显示段落洞察", hideContext: "收起段落洞察",
     editInsight: "编辑洞察", reviseInsight: "让 AI 修改洞察", acceptInsight: "接受", removeInsight: "不保留",
     save: "保存", cancel: "取消", changeInsight: "你希望怎样修改？",
     delete: "删除", revise: "修订", add: "补充", closeToolbar: "关闭审阅工具栏", revisePrompt: "这里应当怎样纠正？", addPrompt: "这里缺少什么？",
-    instructionPlaceholder: "说明需要纠正的地方，无需重写整段。", pending: "待处理", applied: "已应用", needsEvidence: "需要已审阅证据支持", cancelAnnotation: "取消批注", reviewPassage: "审阅这段文字",
+    instructionPlaceholder: "说明需要纠正的地方，无需重写整段。", pending: "待处理", applied: "已应用", needsEvidence: "需要已审阅证据支持", cancelAnnotation: "取消批注", reviewPassage: "审阅这段文字", marginNotes: "故事审阅批注", focusAnnotation: "定位批注原文",
     privacy: "隐私", privacyPrompt: "发布前，哪些内容可能需要移除？", possibleSensitive: "可能敏感的内容",
     localOriginal: "本地原文", unavailable: "已审阅材料中不包含原始内容。", sourceLanguage: "原文语言",
     whyFlagged: "AI 标记原因", keep: "保留", redact: "移除", reviewComplete: "隐私审阅已完成", reviewAgain: "重新审阅",
@@ -138,7 +146,11 @@ export function StoryChapterEditor(props: {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const backRef = useRef<HTMLButtonElement | null>(null);
   const restoredContextRef = useRef(false);
+  const [editMode, setEditMode] = useState(false);
   const [selection, setSelection] = useState<SelectionTarget | null>(null);
+  const [contextTarget, setContextTarget] = useState<{ blockId: string; quote?: string } | null>(null);
+  const [contextCollapsed, setContextCollapsed] = useState(false);
+  const [focusedAnnotationId, setFocusedAnnotationId] = useState("");
   const [annotationMode, setAnnotationMode] = useState<Exclude<StoryAnnotationType, "delete"> | null>(null);
   const [instruction, setInstruction] = useState("");
   const [supportAddition, setSupportAddition] = useState(false);
@@ -156,7 +168,12 @@ export function StoryChapterEditor(props: {
     setInstruction("");
     setSupportAddition(false);
     setApplyError("");
-  }, []);
+  }, [setAnnotationMode, setApplyError, setInstruction, setSelection, setSupportAddition]);
+
+  const leaveEditMode = useCallback(() => {
+    clearSelection();
+    setEditMode(false);
+  }, [clearSelection]);
 
   useEffect(() => {
     if (restoredContextRef.current) return;
@@ -231,8 +248,11 @@ export function StoryChapterEditor(props: {
 
   if (!episode || !presentation || !visibleHighlight || !insightDraft || !story.evidence) return null;
 
+  const activePassageContext = contextTarget
+    ? presentation.passageContext?.[contextTarget.blockId]
+    : undefined;
+
   const captureSelection = () => {
-    if (chapterReview.stage === "human_confirmed") return;
     const nativeSelection = window.getSelection();
     if (!nativeSelection || nativeSelection.isCollapsed || nativeSelection.rangeCount !== 1) {
       setSelection(null);
@@ -257,9 +277,15 @@ export function StoryChapterEditor(props: {
     prefix.selectNodeContents(copy);
     prefix.setEnd(range.startContainer, range.startOffset);
     const start = prefix.toString().length + Math.max(0, leading);
+    const blockId = block.dataset.storyBlock || "";
+    setContextTarget({ blockId, quote: text });
+    if (!editMode || chapterReview.stage === "human_confirmed") {
+      setSelection(null);
+      return;
+    }
     const rect = range.getBoundingClientRect();
     setSelection({
-      blockId: block.dataset.storyBlock || "",
+      blockId,
       start,
       end: start + text.length,
       text,
@@ -270,13 +296,14 @@ export function StoryChapterEditor(props: {
 
   const captureKeyboardSelection = (event: ReactKeyboardEvent<HTMLElement>) => {
     const key = event.key.toLowerCase();
-    if (chapterReview.stage === "human_confirmed" || (key !== "enter" && key !== " " && key !== "space")) return;
+    if (!editMode || chapterReview.stage === "human_confirmed" || (key !== "enter" && key !== " " && key !== "space")) return;
     const block = (event.target as HTMLElement).closest<HTMLElement>("[data-story-block]");
     const copy = block?.querySelector<HTMLElement>("[data-story-copy]");
     const text = copy?.textContent?.trim();
     if (!block || !copy || !text) return;
     event.preventDefault();
     const rect = copy.getBoundingClientRect();
+    setContextTarget({ blockId: block.dataset.storyBlock || "", quote: text });
     setSelection({
       blockId: block.dataset.storyBlock || "",
       start: 0,
@@ -288,7 +315,7 @@ export function StoryChapterEditor(props: {
   };
 
   const captureDoubleClickSelection = (event: ReactMouseEvent<HTMLElement>) => {
-    if (chapterReview.stage === "human_confirmed" || String(window.getSelection()).trim()) return;
+    if (!editMode || chapterReview.stage === "human_confirmed" || String(window.getSelection()).trim()) return;
     const block = (event.target as HTMLElement).closest<HTMLElement>("[data-story-block]");
     const copy = block?.querySelector<HTMLElement>("[data-story-copy]");
     const text = copy?.textContent || "";
@@ -304,6 +331,7 @@ export function StoryChapterEditor(props: {
     while (start > 0 && wordCharacter(text[start - 1])) start -= 1;
     while (end < text.length && wordCharacter(text[end])) end += 1;
     if (end - start < 2) return;
+    setContextTarget({ blockId: block.dataset.storyBlock || "", quote: text.slice(start, end) });
     setSelection({
       blockId: block.dataset.storyBlock || "",
       start,
@@ -314,8 +342,15 @@ export function StoryChapterEditor(props: {
     });
   };
 
+  const activateStoryBlock = (event: ReactMouseEvent<HTMLElement>) => {
+    if (String(window.getSelection()).trim().length >= 3) return;
+    const block = (event.target as HTMLElement).closest<HTMLElement>("[data-story-block]");
+    if (!block || !articleRef.current?.contains(block)) return;
+    setContextTarget({ blockId: block.dataset.storyBlock || "" });
+  };
+
   const createAnnotation = (type: StoryAnnotationType, textInstruction?: string) => {
-    if (!selection) return;
+    if (!editMode || !selection) return;
     const annotation = createStoryAnnotation({
       blockId: selection.blockId,
       type,
@@ -375,33 +410,52 @@ export function StoryChapterEditor(props: {
   const renderStoryCopy = (blockId: string, copy: string) => storyAnnotationSegments(
     copy, blockId, language, chapterReview.revision, chapterReview.annotations,
   ).map((segment, index) => segment.annotationIds.length
-    ? <span className="storyAnnotatedRange" data-annotation-ids={segment.annotationIds.join(" ")} key={`${blockId}-range-${index}`}>{segment.text}</span>
+    ? <span className={`storyAnnotatedRange ${segment.annotationIds.includes(focusedAnnotationId) ? "focused" : ""}`} data-annotation-ids={segment.annotationIds.join(" ")} tabIndex={-1} key={`${blockId}-range-${index}`}>{segment.text}</span>
     : segment.text);
 
-  const renderAnnotations = (blockId: string) => (annotationsByBlock[blockId] || []).length ? <div className="storyAnnotations" aria-label={labels.pending} key={`${blockId}-annotations`}>
-    {(annotationsByBlock[blockId] || []).map((annotation) => <div className={`storyAnnotation ${annotation.type}`} key={annotation.id}>
-      <span>{annotationLabel(annotation, language)}</span>
-      <q>{annotation.selection.text}</q>
-      {annotation.instruction && <p>{annotation.instruction}</p>}
-      {chapterReview.stage !== "human_confirmed" && ["pending", "needs_evidence"].includes(annotation.resolution) && <button onClick={() => onChapterReview(cancelStoryAnnotation(chapterReview, annotation.id))}>{labels.cancelAnnotation}</button>}
+  const focusAnnotation = (annotation: StoryReviewAnnotation) => {
+    setFocusedAnnotationId(annotation.id);
+    setContextTarget({ blockId: annotation.blockId, quote: annotation.selection.text });
+    requestAnimationFrame(() => {
+      const ranges = Array.from(articleRef.current?.querySelectorAll<HTMLElement>("[data-annotation-ids]") || []);
+      const exactRange = ranges.find((range) => (range.dataset.annotationIds || "").split(" ").includes(annotation.id));
+      const blocks = Array.from(articleRef.current?.querySelectorAll<HTMLElement>("[data-story-block]") || []);
+      const block = blocks.find((candidate) => candidate.dataset.storyBlock === annotation.blockId);
+      const target = exactRange || block;
+      target?.scrollIntoView({ block: "center", behavior: "smooth" });
+      target?.focus({ preventScroll: true });
+    });
+  };
+
+  const renderMarginNotes = (blockId: string) => (annotationsByBlock[blockId] || []).length ? <aside className="storyMarginNotes" aria-label={labels.marginNotes} key={`${blockId}-annotations`}>
+    {(annotationsByBlock[blockId] || []).map((annotation) => <div className={`storyMarginNote ${annotation.type} ${focusedAnnotationId === annotation.id ? "focused" : ""}`} data-annotation-note={annotation.id} key={annotation.id}>
+      <button className="storyAnnotationFocus" onClick={() => focusAnnotation(annotation)} aria-label={`${labels.focusAnnotation}: ${annotation.selection.text}`}>
+        <span>{annotationLabel(annotation, language)}</span>
+        <q>{annotation.selection.text}</q>
+        {annotation.instruction && <p>{annotation.instruction}</p>}
+      </button>
+      {chapterReview.stage !== "human_confirmed" && ["pending", "needs_evidence"].includes(annotation.resolution) && <button className="storyAnnotationCancel" onClick={() => onChapterReview(cancelStoryAnnotation(chapterReview, annotation.id))}>{labels.cancelAnnotation}</button>}
     </div>)}
-  </div> : null;
+  </aside> : <span className="storyMarginEmpty" aria-hidden="true" />;
 
   const renderParagraph = (blockId: string, source: string, className?: string) => {
     const copy = blockCopy(blockId, source);
-    if (!copy) return renderAnnotations(blockId);
-    return <div className={`reviewableStoryBlock ${annotationsByBlock[blockId]?.length ? "annotated" : ""}`} data-story-block={blockId} tabIndex={0} aria-label={labels.reviewPassage} onKeyDown={captureKeyboardSelection} key={blockId}>
-      <p className={className} data-story-copy>{renderStoryCopy(blockId, copy)}</p>
-      {renderAnnotations(blockId)}
+    return <div className="storyBlockRow" data-story-row={blockId} key={blockId}>
+      {renderMarginNotes(blockId)}
+      <div className={`reviewableStoryBlock ${annotationsByBlock[blockId]?.length ? "annotated" : ""} ${contextTarget?.blockId === blockId ? "contextActive" : ""}`} data-story-block={blockId} tabIndex={0} aria-label={labels.reviewPassage} onClick={activateStoryBlock} onKeyDown={captureKeyboardSelection}>
+        {copy ? <p className={className} data-story-copy>{renderStoryCopy(blockId, copy)}</p> : <p className="removedStoryBlock">{labels.removedFromRelease}</p>}
+      </div>
     </div>;
   };
 
   const renderListItem = (blockId: string, source: string) => {
     const copy = blockCopy(blockId, source);
-    if (!copy) return <li key={blockId}>{renderAnnotations(blockId)}</li>;
-    return <li className={annotationsByBlock[blockId]?.length ? "annotated" : ""} data-story-block={blockId} key={blockId} tabIndex={0} aria-label={labels.reviewPassage} onKeyDown={captureKeyboardSelection}>
-      <span data-story-copy>{renderStoryCopy(blockId, copy)}</span>{renderAnnotations(blockId)}
-    </li>;
+    return <div className="storyBlockRow storyListRow" data-story-row={blockId} key={blockId}>
+      {renderMarginNotes(blockId)}
+      <div className={`reviewableStoryBlock ${annotationsByBlock[blockId]?.length ? "annotated" : ""} ${contextTarget?.blockId === blockId ? "contextActive" : ""}`} data-story-block={blockId} role="listitem" tabIndex={0} aria-label={labels.reviewPassage} onClick={activateStoryBlock} onKeyDown={captureKeyboardSelection}>
+        {copy ? <span data-story-copy>{renderStoryCopy(blockId, copy)}</span> : <span className="removedStoryBlock">{labels.removedFromRelease}</span>}
+      </div>
+    </div>;
   };
 
   const visiblePeople = presentation.people.filter((person) => !chapterReview.redactedBlocks.includes(`people:${person.id}`));
@@ -422,6 +476,25 @@ export function StoryChapterEditor(props: {
     setInsightMode("none");
   };
 
+  const canonicalInsightDisclosure = !insightSuppressed ? <details className={`canonicalInsightDisclosure ${insightReview?.status === "rejected" ? "rejected" : ""}`} data-canonical-insight={visibleHighlight.id} data-inline-insight={visibleHighlight.id}>
+    <summary><span>✦ {labels.aiInsight}</span><b>{visibleHighlight.title}</b><small>{labels.aiInterpretation}</small></summary>
+    <div className="canonicalInsightBody">
+      <div className="inlineInsightHead"><span>{labels.completeInsight}</span>{chapterReview.stage !== "human_confirmed" && <div>
+        <button title={labels.editInsight} aria-label={labels.editInsight} onClick={() => setInsightMode(insightMode === "edit" ? "none" : "edit")}>{language === "zh" ? "编辑" : "Edit"}</button>
+        <button title={labels.reviseInsight} aria-label={labels.reviseInsight} onClick={() => setInsightMode(insightMode === "revise" ? "none" : "revise")}>{language === "zh" ? "修改" : "Revise"}</button>
+      </div>}</div>
+      {insightMode === "edit" ? <div className="inlineInsightEdit">
+        <label>{language === "zh" ? "标题" : "Title"}<input value={insightDraft.title} onChange={(event) => setInsightDraft({ ...insightDraft, title: event.target.value })} /></label>
+        <label>{labels.observation}<textarea rows={3} value={insightDraft.noticed} onChange={(event) => setInsightDraft({ ...insightDraft, noticed: event.target.value })} /></label>
+        <label>{labels.lesson}<textarea rows={3} value={insightDraft.lesson} onChange={(event) => setInsightDraft({ ...insightDraft, lesson: event.target.value })} /></label>
+        <div className="compactActions"><button className="primary" disabled={!insightDraft.title.trim() || !insightDraft.noticed.trim() || !insightDraft.lesson.trim()} onClick={saveInsightEdit}>{labels.save}</button><button onClick={() => setInsightMode("none")}>{labels.cancel}</button></div>
+      </div> : insightMode === "revise" ? <div className="inlineInsightEdit"><label>{labels.changeInsight}<textarea rows={3} value={instruction} onChange={(event) => setInstruction(event.target.value)} /></label><div className="compactActions"><button className="primary" disabled={!instruction.trim()} onClick={applyInsightRevision}>{labels.save}</button><button onClick={() => setInsightMode("none")}>{labels.cancel}</button></div></div> : <>
+        <dl><div><dt>{labels.observation}</dt><dd>{visibleHighlight.noticed}</dd></div><div><dt>{labels.lesson}</dt><dd>{visibleHighlight.lesson}</dd></div></dl>
+        {chapterReview.stage !== "human_confirmed" && <div className="inlineInsightReview"><button onClick={() => onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "accepted", text: visibleHighlight.lesson }))}>{labels.acceptInsight}</button><button onClick={() => onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "rejected", text: visibleHighlight.lesson }))}>{labels.removeInsight}</button></div>}
+      </>}
+    </div>
+  </details> : null;
+
   const handleToolbarMouseDown = (event: ReactMouseEvent) => event.preventDefault();
 
   return <section className="simpleEpisode chapterEditor" role="region" aria-labelledby="episode-title">
@@ -440,6 +513,7 @@ export function StoryChapterEditor(props: {
         <div className="simpleEpisodeMeta"><span>{blockCopy("phase", presentation.phase) || labels.removedFromRelease}</span><time>{fmt(episode.startTimestamp || milestone.timestamp, language)}</time><span>≈ {episode.readingTimeMinutes} {labels.minRead}</span></div>
         <h2 id="episode-title">{blockCopy("title", presentation.title) || labels.removedFromRelease}</h2>
         <p className="episodeOverview">{blockCopy("overview", presentation.overview) || labels.removedFromRelease}</p>
+        <p className="chapterReviewGuide">{labels.chapterGuide}</p>
       </header>
 
       <div className="simpleEpisodeBody">
@@ -452,35 +526,31 @@ export function StoryChapterEditor(props: {
         </section>
 
         <section className="episodePrimarySection storySection" data-episode-section="story" aria-labelledby="story-heading">
-          <div className="simpleSectionHead"><div><h3 id="story-heading">{labels.story}</h3></div></div>
-          <article className="chapterArticle" ref={articleRef} onMouseUp={captureSelection} onKeyUp={captureSelection} onDoubleClick={captureDoubleClickSelection}>
-            <h4>{labels.setup}</h4>
-            {renderParagraph("scene", presentation.story.scene, "chapterLead")}
-            <h4>{labels.turn}</h4>
-            {presentation.story.reconstruction.map((paragraph, index) => renderParagraph(`reconstruction-${index}`, paragraph))}
-
-            {!insightSuppressed && <aside className={`inlineInsight ${insightReview?.status === "rejected" ? "rejected" : ""}`} data-inline-insight={visibleHighlight.id}>
-              <div className="inlineInsightHead"><span>{labels.aiInsight}</span><small>{labels.aiInterpretation}</small>{chapterReview.stage !== "human_confirmed" && <div>
-                <button title={labels.editInsight} aria-label={labels.editInsight} onClick={() => setInsightMode(insightMode === "edit" ? "none" : "edit")}>{language === "zh" ? "编辑" : "Edit"}</button>
-                <button title={labels.reviseInsight} aria-label={labels.reviseInsight} onClick={() => setInsightMode(insightMode === "revise" ? "none" : "revise")}>{language === "zh" ? "修改" : "Revise"}</button>
-              </div>}</div>
-              {insightMode === "edit" ? <div className="inlineInsightEdit">
-                <label>{language === "zh" ? "标题" : "Title"}<input value={insightDraft.title} onChange={(event) => setInsightDraft({ ...insightDraft, title: event.target.value })} /></label>
-                <label>{labels.observation}<textarea rows={3} value={insightDraft.noticed} onChange={(event) => setInsightDraft({ ...insightDraft, noticed: event.target.value })} /></label>
-                <label>{labels.lesson}<textarea rows={3} value={insightDraft.lesson} onChange={(event) => setInsightDraft({ ...insightDraft, lesson: event.target.value })} /></label>
-                <div className="compactActions"><button className="primary" disabled={!insightDraft.title.trim() || !insightDraft.noticed.trim() || !insightDraft.lesson.trim()} onClick={saveInsightEdit}>{labels.save}</button><button onClick={() => setInsightMode("none")}>{labels.cancel}</button></div>
-              </div> : insightMode === "revise" ? <div className="inlineInsightEdit"><label>{labels.changeInsight}<textarea rows={3} value={instruction} onChange={(event) => setInstruction(event.target.value)} /></label><div className="compactActions"><button className="primary" disabled={!instruction.trim()} onClick={applyInsightRevision}>{labels.save}</button><button onClick={() => setInsightMode("none")}>{labels.cancel}</button></div></div> : <>
-                <h5>{visibleHighlight.title}</h5><dl><div><dt>{labels.observation}</dt><dd>{visibleHighlight.noticed}</dd></div><div><dt>{labels.lesson}</dt><dd>{visibleHighlight.lesson}</dd></div></dl>
-                {chapterReview.stage !== "human_confirmed" && <div className="inlineInsightReview"><button onClick={() => onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "accepted", text: visibleHighlight.lesson }))}>{labels.acceptInsight}</button><button onClick={() => onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "rejected", text: visibleHighlight.lesson }))}>{labels.removeInsight}</button></div>}
-              </>}
-            </aside>}
-
-            <h4>{labels.mattered}</h4>
-            <ul>{presentation.story.importantDetails.map((detail, index) => renderListItem(`detail-${index}`, detail))}</ul>
-            <h4>{labels.followed}</h4>
-            {renderParagraph("outcome", presentation.story.decisionOutcome)}
-            {presentation.story.uncertainty && <div className="storyUncertainty"><b>{labels.uncertain}:</b>{renderParagraph("uncertainty", presentation.story.uncertainty)}</div>}
-          </article>
+          <div className="simpleSectionHead storySectionHead"><div><h3 id="story-heading">{labels.story}</h3><p>{editMode ? labels.storyEditHelp : labels.storyReadHelp}</p></div><button className="storyEditToggle" aria-label={editMode ? labels.finishEditing : labels.editStory} aria-pressed={editMode} disabled={chapterReview.stage === "human_confirmed"} onClick={() => editMode ? leaveEditMode() : setEditMode(true)}><span aria-hidden="true">✎</span>{editMode ? labels.finishEditing : language === "zh" ? "编辑" : "Edit"}</button></div>
+          <div className={`storyReviewWorkspace ${editMode ? "editing" : "reading"}`} data-story-mode={editMode ? "edit" : "read"}>
+            <article className="chapterArticle storyDocument" aria-label={editMode ? labels.editMode : labels.readMode} ref={articleRef} onMouseUp={captureSelection} onKeyUp={captureSelection} onDoubleClick={captureDoubleClickSelection}>
+              <h4 className="storySubheading">{labels.setup}</h4>
+              {renderParagraph("scene", presentation.story.scene, "chapterLead")}
+              <h4 className="storySubheading">{labels.turn}</h4>
+              {presentation.story.reconstruction.map((paragraph, index) => renderParagraph(`reconstruction-${index}`, paragraph))}
+              <h4 className="storySubheading">{labels.mattered}</h4>
+              <div className="storyImportantList" role="list">{presentation.story.importantDetails.map((detail, index) => renderListItem(`detail-${index}`, detail))}</div>
+              <h4 className="storySubheading">{labels.followed}</h4>
+              {renderParagraph("outcome", presentation.story.decisionOutcome)}
+              {presentation.story.uncertainty && <><h4 className="storySubheading storyUncertaintyHeading">{labels.uncertain}</h4>{renderParagraph("uncertainty", presentation.story.uncertainty)}</>}
+              {canonicalInsightDisclosure && <div className="storyBlockRow canonicalInsightRow"><span className="storyMarginEmpty" aria-hidden="true" />{canonicalInsightDisclosure}</div>}
+            </article>
+            <aside className={`passageInsightPanel ${contextCollapsed ? "collapsed" : ""}`} data-context-block={contextTarget?.blockId || ""} aria-label={labels.contextualInsight}>
+              <header><div><span>✦</span><b>{labels.contextualInsight}</b></div><button onClick={() => setContextCollapsed((current) => !current)} aria-label={contextCollapsed ? labels.showContext : labels.hideContext}>{contextCollapsed ? "+" : "−"}</button></header>
+              {!contextCollapsed && <div className="passageInsightBody">{activePassageContext ? <>
+                {contextTarget?.quote && <blockquote><small>{labels.selectedPassage}</small>{contextTarget.quote}</blockquote>}
+                <section><h5>{labels.whatHappened}</h5><p>{activePassageContext.whatWasHappening}</p></section>
+                <section><h5>{labels.whyMattered}</h5><p>{activePassageContext.whyItMattered}</p></section>
+                {activePassageContext.whatWeLearned && <section><h5>{labels.learned}</h5><p>{activePassageContext.whatWeLearned}</p></section>}
+                {activePassageContext.reusableLesson && <section className="passageLesson"><h5>{labels.lesson}</h5><p>{activePassageContext.reusableLesson}</p></section>}
+              </> : <p className="passageInsightPrompt">{labels.contextualPrompt}</p>}</div>}
+            </aside>
+          </div>
         </section>
 
         <section className="episodePrimarySection privacySection" data-episode-section="privacy" aria-labelledby="privacy-heading">
@@ -514,13 +584,13 @@ export function StoryChapterEditor(props: {
           {chapterReview.staleTranslations.length > 0 && <p className="completionBlocker">{labels.translationBlocked}</p>}
           {chapterReview.stage === "reviewing" ? <button className="completionPrimary" disabled={!privacyState.complete || applying} onClick={handleApplyReview}>{labels.apply}</button> : chapterReview.stage === "revision_ready" ? <>
             {summary.needsEvidenceAdd > 0 && <p className="completionBlocker">{labels.addBlocked}</p>}
-            <div className="completionActions"><span>{summary.needsEvidenceAdd > 0 ? labels.addBlocked : summary.pendingInsights > 0 ? labels.insightBlocked : summary.pendingAnnotations > 0 ? labels.pendingBlocked : chapterReview.staleTranslations.length > 0 ? labels.translationBlocked : language === "zh" ? "没有待应用的批注" : "No pending annotations"}</span><button className="completionPrimary" disabled={!canMarkChapterReady(chapterReview, applyContext)} onClick={() => onChapterReview(markChapterReady(chapterReview, applyContext))}>{labels.markReady}</button></div>
+            <div className="completionActions"><span>{summary.needsEvidenceAdd > 0 ? labels.addBlocked : summary.pendingInsights > 0 ? labels.insightBlocked : summary.pendingAnnotations > 0 ? labels.pendingBlocked : chapterReview.staleTranslations.length > 0 ? labels.translationBlocked : language === "zh" ? "没有待应用的批注" : "No pending annotations"}</span><button className="completionPrimary" disabled={!canMarkChapterReady(chapterReview, applyContext)} onClick={() => { leaveEditMode(); onChapterReview(markChapterReady(chapterReview, applyContext)); }}>{labels.markReady}</button></div>
           </> : <div className="readyConfirmation"><b>{labels.ready}</b><p>{labels.readyNote}</p><button onClick={() => onChapterReview(returnChapterToReview(chapterReview))}>{labels.reopen}</button></div>}
         </section>
       </div>
     </div>
 
-    {selection && <div className="selectionToolbar" ref={selectionToolbarRef} role="toolbar" aria-label={labels.pending} style={{ left: selection.left, top: selection.top }} onMouseDown={handleToolbarMouseDown}>
+    {editMode && selection && <div className="selectionToolbar" ref={selectionToolbarRef} role="toolbar" aria-label={labels.pending} style={{ left: selection.left, top: selection.top }} onMouseDown={handleToolbarMouseDown}>
       <button title={labels.delete} aria-label={labels.delete} onClick={() => createAnnotation("delete")}><span>{labels.delete}</span></button>
       <button title={labels.revise} aria-label={labels.revise} onClick={() => setAnnotationMode("revise")}><span>{labels.revise}</span></button>
       <button title={labels.add} aria-label={labels.add} onClick={() => setAnnotationMode("add")}><span>{labels.add}</span></button>

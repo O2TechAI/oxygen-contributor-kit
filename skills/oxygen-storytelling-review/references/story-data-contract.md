@@ -70,6 +70,13 @@ type StoryInsight = {
   initialReviewState: "ai_proposed";
 };
 
+type StoryPassageContext = {
+  whatWasHappening: string;
+  whyItMattered: string;
+  whatWeLearned?: string;
+  reusableLesson?: string;
+};
+
 type PrivacyOriginal =
   | { availability: "available"; excerpt: string; sourceLanguage: "en" | "zh" | string }
   | { availability: "unavailable" };
@@ -107,6 +114,7 @@ type LanguagePresentation = {
   overview: string;
   people: StoryPerson[];
   story: StoryChapterCopy;
+  passageContext?: Record<string, StoryPassageContext>;
   insights: [StoryInsight];
   privacy: { summary: string; candidates: PrivacyCandidate[] };
 };
@@ -157,6 +165,13 @@ uncertainty
 
 The paired language presentations map to the same semantic block IDs, even when text lengths and literal offsets differ. An annotation preserves the language and exact offsets of the selection plus the shared semantic block ID.
 
+When passage-context assistance is present, its key set must equal the Chapter's complete rendered
+Story-content block set (`scene`, every reconstruction/detail block, `outcome`, and optional
+`uncertainty`) in each language. Each value contains only bounded reader-facing contextual copy:
+what was happening, why it mattered, and optional grounded learning/lesson. It is precomputed local
+review assistance, not a reviewable insight, semantic anchor, evidence record, or release field.
+English and Chinese use the same keys and equivalent supported meaning.
+
 ## Evidence linkage
 
 Every explicit Chapter must have one primary evidence reference anchored to an existing reviewed event. Supporting references may expand causal context. References must be unique and all references must resolve to exactly one real item in the permitted reviewed artifact before Apply or human confirmation; a syntactically plausible document/event ID is not proof of resolution.
@@ -183,18 +198,24 @@ For each Chapter:
 2. Choose primary evidence and only necessary supporting evidence.
 3. Write a concise Timeline summary.
 4. Write short Timeline Before/After states and select only evidence-backed high-signal chips; keep long explanation out of the card.
-5. Reconstruct a concise coherent article that preserves causal order and uncertainty.
+5. Reconstruct a context-sufficient coherent article that preserves the problem, purpose,
+   constraints, attempts, failures/rejected approaches, directional evidence, decision/rationale,
+   resulting action/outcome, uncertainty, and reusable learning when those elements are supported.
+   Several substantial paragraphs are acceptable; raw logs and repeated operational noise are not.
 6. Record what was retained, what routine material was compressed, and what sensitive material remains unavailable.
-7. Generate exactly one AI insight/lesson explicitly typed as interpretation.
+7. Generate exactly one canonical AI insight/lesson explicitly typed as interpretation.
 8. Generate People only when supported.
 9. Generate contextual Privacy candidates only from permitted reviewed information.
-10. Generate natural Chinese with the same facts, transition semantics, scan chips, and technical anchors.
-11. End the sequence with an honest current-state Chapter.
+10. When useful, generate local passage context for every Story-content block without creating
+    additional release insights or unsupported lessons.
+11. Generate natural Chinese with the same facts, transition semantics, scan chips, passage-context
+    meaning, and technical anchors.
+12. End the sequence with an honest current-state Chapter.
 
 At project level, generate a natural semantically equivalent EN/中文 summary of roughly 2–3
 sentences. Prefer one- or two-word English Phase labels and equivalently compact natural Chinese.
-Treat importantDetails as the source for a normally single-sentence What mattered unit rather
-than an invitation to repeat the Chapter as a fact list.
+Treat `importantDetails` as high-signal support within the coherent Chapter, not an invitation to
+repeat the Chapter as a fact list or compress material causal context into one sentence.
 
 ## Import and validation gates
 
@@ -217,6 +238,8 @@ Fail closed when any of these conditions is false:
 - exactly one paired AI insight starts as an AI proposal; zero or multiple reviewable insights fail closed;
 - release draft is the default Story view;
 - bilingual key sets and semantic block structures align;
+- when passage context is present, it contains only the allowlisted bounded fields, covers exactly
+  every rendered Story-content block in both languages, and has an identical paired key set;
 - every declared required technical/semantic anchor appears in reader-facing fields of both presentations (or resolves through an explicit bilingual alignment map); a merely nonempty anchor list is not validation;
 - available Privacy original has an excerpt and source language;
 - unavailable Privacy original contains only its unavailable discriminator and no excerpt, source language, removed value, raw field, or compatibility payload;

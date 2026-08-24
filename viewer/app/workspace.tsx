@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { OrganizationProgress } from "./organization-progress";
+import { WorkflowProgress } from "./organization-progress";
 import { RedactionCompare, segments, type Redaction, type RedactionJob } from "./redaction-compare";
 import { ProbePanel, type Probe, type BulkDecision, type ProbeRun } from "./probe-panel";
 import {
@@ -14,6 +14,7 @@ import { emptyChapterReview, privacyDecisionKey } from "../lib/story-review";
 import { milestoneKindLabel, selectProjectTimeline, type EvidenceReference, type StoryLanguage } from "../lib/timeline";
 import { buildReviewedStoryRelease } from "../lib/story-release";
 import { phaseGroupIdentity, restoreChapterContext, type ChapterRestoreContext } from "../lib/story-navigation";
+import { withHumanReviewProgress, type WorkflowProgressState } from "../lib/workflow-progress";
 
 type Status = { status:string; stage:string; completed:number; total:number; percent:number; documentCount:number; warnings:string[] };
 type Doc = { id:string; kind:string; title:string; source_user?:string; source_system?:string; source_timestamp?:string; item_count:number; organization_status:string; formatted_summary?: Summary };
@@ -29,7 +30,8 @@ const workspaceUi = {
     milestones:"meaningful milestones", phases:"narrative phases", reviewed:"highlights reviewed", retained:"source records retained",
     timeline:"Project Story", release:"Release preview", preferences:"Preferences", mainProject:"MAIN PROJECT", events:"events",
     introTitle:"AI-selected highlights are the table of contents.", intro:"Open a chapter for People, Story, and Privacy. AI insights stay inside the narrative; local evidence stays secondary.",
-    before:"BEFORE", after:"AFTER", selected:"AI-selected highlight", evidence:"reviewed evidence event", read:"Read chapter",
+    before:"BEFORE", after:"AFTER", selected:"AI-selected highlight", evidence:"reviewed evidence event", read:"Read chapter", workflow:"Workflow",
+    nextStep:"Read a Chapter to review the full story, evidence, and lessons.",
   },
   zh: {
     title:"故事审阅", local:"仅限本地 · 未上传", projects:"项目故事", total:"个项目",
@@ -37,7 +39,8 @@ const workspaceUi = {
     milestones:"个重要章节", phases:"个叙事阶段", reviewed:"个高光已审阅", retained:"条来源记录保留",
     timeline:"项目故事", release:"发布预览", preferences:"偏好", mainProject:"主要项目", events:"条事件",
     introTitle:"AI 选择的高光就是故事目录。", intro:"打开一章，按人物、故事和隐私阅读；AI 洞察留在叙事中，本地证据保持为次要入口。",
-    before:"之前", after:"之后", selected:"AI 选择的高光", evidence:"条已审阅证据", read:"阅读章节",
+    before:"之前", after:"之后", selected:"AI 选择的高光", evidence:"条已审阅证据", read:"阅读章节", workflow:"工作流",
+    nextStep:"阅读任一章节，完整审阅故事、证据与可复用经验。",
   },
 } as const;
 
@@ -51,6 +54,8 @@ const fmtTimelineDate = (value: string | undefined, language: StoryLanguage = "e
 
 export function InlineWorkspace() {
   const [status,setStatus] = useState<Status|null>(null);
+  const [workflow,setWorkflow] = useState<WorkflowProgressState|null>(null);
+  const [workflowOpen,setWorkflowOpen] = useState(false);
   const [docs,setDocs] = useState<Doc[]>([]);
   const [selected,setSelected] = useState("");
   const [detail,setDetail] = useState<Detail|null>(null);
@@ -82,13 +87,20 @@ export function InlineWorkspace() {
   const [redactionJob,setRedactionJob] = useState<RedactionJob>(null);
   const [redactionBusy,setRedactionBusy] = useState("");
 
+  const loadWorkflow = useCallback(async () => {
+    const response = await fetch("/api/workflow", { cache:"no-store" });
+    if (!response.ok) return;
+    setWorkflow(await response.json() as WorkflowProgressState);
+  }, []);
+
   const loadRedactions = useCallback(async () => {
     const response = await fetch("/api/redactions", { cache:"no-store" });
     if (!response.ok) return;
     const payload = await response.json() as { redactions: Redaction[]; job: RedactionJob };
     setRedactions(payload.redactions || []);
     setRedactionJob(payload.job);
-  }, []);
+    void loadWorkflow();
+  }, [loadWorkflow]);
 
   // Poll only while a pass is in flight, so the tab can say "还在跑" instead of
   // showing an empty comparison that looks like "nothing was found".
@@ -163,16 +175,20 @@ export function InlineWorkspace() {
     let cancelled = false;
     async function organize() {
       try {
+        await loadWorkflow();
         let current = await fetch("/api/organization", { cache:"no-store" }).then((r) => r.json()) as Status;
+        let passes = 0;
         while (!cancelled && current.status !== "complete" && current.status !== "empty") {
           current = await fetch("/api/organization", { method:"POST" }).then((r) => r.json()) as Status;
           setStatus(current);
+          passes += 1;
+          if (passes % 4 === 0) await loadWorkflow();
         }
-        if (!cancelled) { setStatus(current); await loadDocs(); }
+        if (!cancelled) { setStatus(current); await loadDocs(); await loadWorkflow(); }
       } catch (value) { if (!cancelled) setError(value instanceof Error ? value.message : "Organization failed"); }
     }
     organize(); return () => { cancelled = true; };
-  }, [loadDocs]);
+  }, [loadDocs, loadWorkflow]);
 
   useEffect(() => {
     if (!selected || selected.startsWith("project:")) return;
@@ -181,7 +197,7 @@ export function InlineWorkspace() {
     return () => { cancelled = true; };
   }, [selected]);
 
-  if (!status || (status.status !== "complete" && status.status !== "empty")) return <OrganizationProgress status={status} error={error} />;
+  if (!status || (status.status !== "complete" && status.status !== "empty")) return <WorkflowProgress workflow={workflow} status={status} error={error} language={language} />;
   const isProject = selected.startsWith("project:");
   const selectedProject = isProject ? selected.slice("project:".length) : "";
   const allHighlights = docs.flatMap((doc) => (doc.formatted_summary?.highlights || []).map((event) => ({ ...event, documentId:doc.id })))
@@ -213,6 +229,8 @@ export function InlineWorkspace() {
   const activeStoryIndex = highlights.findIndex((event) => event.story.key === activeStoryKey);
   const activeMilestone = activeStoryIndex >= 0 ? highlights[activeStoryIndex] : null;
   const reviewedInsights = highlights.filter((event) => Object.keys(chapterReviews[event.story.key]?.insightReviews || {}).length > 0).length;
+  const confirmedChapters = highlights.filter((event) => chapterReviews[event.story.key]?.stage === "human_confirmed").length;
+  const displayedWorkflow = workflow ? withHumanReviewProgress(workflow, confirmedChapters, highlights.length) : null;
   const phaseSectionRef = (index:number,node:HTMLElement|null) => {
     if(node) phaseSectionRefs.current.set(index,node);
     else phaseSectionRefs.current.delete(index);
@@ -340,6 +358,7 @@ export function InlineWorkspace() {
       <div className="brand"><span className="brandMark">O₂</span> Oxygen</div>
       <span className="topTitle">{labels.title}</span>
       <span className="localState"><i /> {labels.local}</span>
+      <button className="workflowButton" onClick={() => { void loadWorkflow(); setWorkflowOpen(true); }}>{labels.workflow}</button>
       <div className="languageToggle" aria-label="Story language">
         <button className={language==="en"?"active":""} onClick={() => setLanguage("en")} aria-pressed={language==="en"}>EN</button>
         <span>|</span>
@@ -390,6 +409,7 @@ export function InlineWorkspace() {
                   <p>{projectStorySummary}</p>
                   <div className="storyStats"><span><b>{highlights.length}</b> {labels.milestones}</span><span><b>{phaseGroups.length}</b> {labels.phases}</span><span><b>{reviewedInsights}/{highlights.length}</b> {labels.reviewed}</span><span><b>{docs.length}</b> {labels.retained}</span></div>
                   <small>{docs.length} {language==="zh"?"条已审阅来源记录": "reviewed source records"} · {projectCount(selectedProject || primaryProject).toLocaleString()} {labels.events} · {language==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
+                  <p className="storyNextStep">{labels.nextStep}</p>
                 </header>
                 {phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
                   <header className="phaseHeading"><span>{String(phaseIndex+1).padStart(2,"0")}</span><div><h2>{group.name}</h2><p>{group.events.length} {language==="zh"?"个章节":`milestone${group.events.length===1?"":"s"}`}</p></div></header>
@@ -460,5 +480,6 @@ export function InlineWorkspace() {
         </>}
       </section>
     </div>
+    {workflowOpen && <WorkflowProgress workflow={displayedWorkflow} status={status} error={error} language={language} onClose={() => setWorkflowOpen(false)} />}
   </main>;
 }

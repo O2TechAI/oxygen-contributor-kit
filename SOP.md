@@ -235,6 +235,11 @@ Final Release Memory; it does not publish, package automatically, or set
 `publication_approved=true`. After Story review, continue through the existing Release preview,
 Preferences, and ZIP flow below.
 
+Use the Viewer workflow-progress surface for user-facing execution status. Update it only at safe
+workflow boundaries with sanitized stage/state, real counts where a denominator exists, blocker
+codes, timestamps, and human-action state. Do not expose chain-of-thought, prompts, raw model/tool
+output, private messages, Story/Evidence content, or removed material through progress.
+
 ## 7. Launch and show the Viewer
 
 Start the local review server:

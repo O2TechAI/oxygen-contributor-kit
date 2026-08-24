@@ -33,7 +33,7 @@ test("a non-Golden synthetic project exercises dynamic Story shapes", () => {
   }
 });
 
-test("the reusable narrative contract separates full-history derivation from concise copy", async () => {
+test("the reusable narrative contract separates a scan-first homepage from context-sufficient Chapter memory", async () => {
   const [product, data, bilingual, validation] = await Promise.all([
     read("../../skills/oxygen-storytelling-review/references/product-contract.md"),
     read("../../skills/oxygen-storytelling-review/references/story-data-contract.md"),
@@ -42,12 +42,16 @@ test("the reusable narrative contract separates full-history derivation from con
   ]);
   for (const contract of [
     "Every reviewed historical record", "2–3 concise sentences", "one or two scannable English words",
-    "Narrative coherence without fictionalization", "What mattered is normally one concise sentence",
-    "one or two short, project-specific sentences",
+    "Rich context without fictionalization", "durable project memory for humans and future Agents",
+    "problem,", "constraints", "rejected approaches", "private[\\s\\n]+latent model reasoning",
   ]) assert.match(product, new RegExp(contract));
   assert.match(data, /canonical narrative-compression and voice rules/);
+  assert.match(data, /context-sufficient coherent article/);
+  assert.match(data, /passage context for every Story-content block/);
   assert.match(bilingual, /same start, turn, and current boundary/);
+  assert.match(bilingual, /Chapter depth remains semantically equivalent/);
   assert.match(validation, /visible copy compresses routine history/);
+  assert.match(validation, /## Workflow progress/);
   assert.doesNotMatch([product, data, bilingual, validation].join("\n"), /BOM Sourcing Benchmark|127\.0\.0\.1:326[14]/);
 
   const sentences = syntheticStoryProject.overview.en.match(/[^.!?]+[.!?]+/g) || [];
@@ -101,9 +105,14 @@ test("the normal workflow delegates to the canonical repository Story runtime", 
   assert.match(sop, /Prepare Storytelling Review[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
   assert.match(organizer, /Delegate Storytelling after the reviewed boundary/);
   assert.match(organizer, /does not need to know or manually name the delegated Skill/);
+  assert.match(agents, /sanitized stage\/state/);
+  assert.match(sop, /workflow-progress surface/);
+  assert.match(organizer, /Never expose chain-of-thought/);
   assert.match(skill, /Canonical Toolkit runtime/);
   assert.match(skill, /viewer\/app\/workspace\.tsx[\s\S]*InlineWorkspace/);
   assert.match(skill, /viewer\/app\/story-chapter-editor\.tsx[\s\S]*StoryChapterEditor/);
+  assert.match(skill, /passage-context/);
+  assert.match(skill, /private latent reasoning/);
   assert.match(workspace, /export function InlineWorkspace/);
   assert.match(editor, /export function StoryChapterEditor/);
   for (const contract of ["storyOrientation", "storyCanvasGrid", "phaseHeading", "milestoneList", "transition", "phaseDirectory"]) {

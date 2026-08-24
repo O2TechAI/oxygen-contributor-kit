@@ -21,6 +21,16 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Every Privacy candidate declares stable release targets; every target resolves in both language presentations, and an intentionally local-only candidate declares an explicit empty target set.
 - [ ] Package/publication behavior is unchanged.
 
+## Workflow progress
+
+- [ ] Existing centered loading treatment is reused for workflow progress rather than replaced by a developer dashboard.
+- [ ] Stages match the real contributor workflow and expose completed/current/next plus waiting, blocked, and human-action state.
+- [ ] Determinate progress appears only when backed by a real denominator; no fake percentage is shown.
+- [ ] Refresh hydrates the same persisted operational stage and a quiet shell action can reopen it.
+- [ ] Progress data contains only allowlisted stage/status codes, counts, timestamps, blocker codes,
+      and human-action state; it contains no reasoning, prompts, raw model/tool output, private
+      messages, Story/Evidence payload, removed content, or free-form private status text.
+
 ## Productization and workflow
 
 - [ ] Root contributor instructions and the organize/review workflow explicitly delegate the
@@ -67,22 +77,36 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Chapter has exactly unnumbered People, Story, Privacy primary sections.
 - [ ] No numbered markers, tabs, stepper, standalone Highlights, or Release/Original card pair.
 - [ ] Boxes are limited to interaction; Story/People remain typography-first.
+- [ ] Project Story homepage retains the approved hierarchy/rhythm; the only product addition is a
+      subtle localized instruction to read a Chapter for the full Story, Evidence, and lessons.
 
 ## People and Story
 
 - [ ] People markers use one centered non-wrapping size and AI aligns with humans.
 - [ ] Roles/descriptions are compact and evidence-supported.
 - [ ] Local/release identity distinction is clear; no fabricated name.
-- [ ] Story is a structured article with clear causal progression and uncertainty.
-- [ ] Chapter prose answers setup → change → cause → consequence → significance using concrete active language rather than procedure/audit-log narration.
-- [ ] What mattered is normally one concise sentence built from the strongest supported facts; deviations have a content reason.
-- [ ] The single reviewable AI insight and reusable lesson appear inside Story and are labeled as interpretation; no multi-insight fallback UI exists.
-- [ ] AI insight copy is one or two short, concrete, project-specific sentences and avoids generic summary formulas.
+- [ ] Story is a structured, context-sufficient article with clear causal progression and uncertainty.
+- [ ] Chapter prose preserves supported problem/purpose, constraints, prior attempts, failures or
+      rejected approaches, directional evidence, decision/rationale, action/outcome, uncertainty,
+      and reusable learning without becoming a raw log or audit report.
+- [ ] Final reviewed Chapters are explicitly reusable human/future-Agent project memory, with no
+      hidden model reasoning or unsupported retrospective causality.
+- [ ] Default read mode remains clean; accessible pencil/Edit enters a visibly contained review
+      surface without uncontrolled DOM mutation.
+- [ ] The single reviewable AI insight and reusable lesson appear in one end-of-Story disclosure,
+      collapsed by default and labeled as interpretation; no multi-insight fallback UI exists.
+- [ ] Canonical AI insight copy is concrete, project-specific, evidence-grounded, and avoids generic summary formulas.
 - [ ] Accept/remove/direct edit/human-directed revise work without a full chat UI.
+- [ ] Clicking/selecting different Story blocks changes a secondary sticky contextual panel using
+      the correct stable block key; passage context is precomputed local assistance, not another
+      reviewable Insight or a browser model call.
+- [ ] Passage-context key sets exactly cover rendered Story blocks in both languages and the release
+      projection excludes all passage-context copy.
 
 ## Text annotations
 
 - [ ] Toolbar is absent until meaningful Story text is selected.
+- [ ] Toolbar is unavailable in default read mode and becomes available only in explicit Story Edit Mode.
 - [ ] Toolbar has accessible Delete, Revise, Add, and visible compact Close actions.
 - [ ] Close and Escape immediately clear only transient selection/toolbar state; saved annotations remain.
 - [ ] Exact block ID, start, end, selected text, language, base revision, type, instruction, and resolution persist.
@@ -95,6 +119,10 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Stale/mismatched/cross-language literal ranges fail closed.
 - [ ] Cross-block/cross-paragraph selection is rejected when not safely supported.
 - [ ] Exact Evidence cannot be annotated or mutated.
+- [ ] Each annotation has one restrained block-associated margin note on wide screens; clicking it
+      focuses the exact range, and narrow screens use an inline fallback without horizontal overflow.
+- [ ] Leaving Edit Mode clears only transient selection/toolbar state; saved pending/applied review state remains.
+- [ ] Annotation notes and their UI metadata are absent from release/export.
 
 ## Iterative lifecycle
 
@@ -157,6 +185,8 @@ Also verify:
 - [ ] One shell-level `EN | 中文` control is compact and remains discoverable on Project Story, Chapter, and Exact Evidence; it is not duplicated as unrelated page-local controls.
 - [ ] Chinese changes Timeline Story labels and full Chapter presentation.
 - [ ] Chinese localizes inline insight title/observation/lesson, participant identity explanations, status/annotation copy, and review blockers; nontechnical English placeholder sentences do not remain.
+- [ ] Chinese localizes Story read/Edit guidance, margin notes, passage context, and collapsed
+      canonical-Insight controls while sharing one semantic/review state.
 - [ ] Switching back restores equivalent English.
 - [ ] Every declared shared semantic anchor/technical identifier is present in reader-facing EN and 中文 copy (or has an explicit alignment); missing and one-language-only anchors fail closed.
 - [ ] Annotation/Privacy/revision/All set state survives language switching.
@@ -191,14 +221,19 @@ Use the actual local Viewer. Capture and inspect at least:
 
 1. Project Story opening;
 2. Chapter opening with retained rail and People;
-3. Story with inline AI insight;
-4. exact-range annotation and contextual input;
-5. Privacy available mode;
-6. Privacy unavailable mode;
-7. gated completion and clean revision-ready state;
-8. Final Release Memory and Reopen review;
-9. exact Evidence with Back to chapter;
-10. Chinese Chapter with shared review state.
+3. Chapter default read mode;
+4. contained Story Edit Mode;
+5. exact-range annotation with left-margin note and contextual input;
+6. first passage-context panel state;
+7. second passage/context switch;
+8. canonical AI Insight collapsed and expanded;
+9. Privacy available mode;
+10. Privacy unavailable mode;
+11. gated completion and clean revision-ready state;
+12. Final Release Memory and Reopen review;
+13. exact Evidence with Back to chapter;
+14. Chinese Chapter with shared review state;
+15. narrow Chapter fallback for notes and contextual assistance.
 
 Check console errors and responsive layout. Preserve the user's visible review state or reset prototype-only QA edits before handoff.
 

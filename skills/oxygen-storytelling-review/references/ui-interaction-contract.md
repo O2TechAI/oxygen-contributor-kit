@@ -95,22 +95,44 @@ Keep AI aligned with human rows. On narrow screens, preserve marker integrity be
 
 ## Story layout
 
-Use a readable article measure and stable semantic blocks. A useful editorial progression is:
+Use a readable article measure and stable semantic blocks. The default is a clean read mode. Add a
+compact accessible pencil/Edit control in the Story heading; it enters a clearly contained review
+surface while leaving the semantic block model and review ledger authoritative. Do not use an
+uncontrolled textarea or `contenteditable` mutation path.
+
+A useful editorial progression is:
 
 ```text
 setup
 → turn
-→ inline AI insight
 → what mattered
 → what followed
 → uncertainty
+→ collapsed canonical AI insight
 ```
 
-This wording may localize or adapt, but the reader must always understand what is being read and what follows. Prefer short paragraphs and bullets over card-per-paragraph layouts.
+This wording may localize or adapt, but the reader must always understand what is being read and
+what follows. Preserve enough causal and technical context for the Chapter to work as durable human
+and future-Agent project memory; do not force a minimum word count or expand into raw logs. Prefer
+coherent paragraphs and selective bullets over card-per-paragraph layouts.
 
-## Inline AI insight
+## Contextual passage assistance
 
-Place the Chapter's single reviewable insight within Story near the relevant passage. Import validation must fail closed on zero or multiple insights; do not build a multi-insight fallback UI. Use a restrained margin/left-border annotation, not a large nested card.
+On wide Chapter layouts, use a small restrained sticky panel to the right of the Story document.
+Clicking or meaningfully selecting a reviewable block updates the panel from that block's precomputed
+`passageContext`. It may naturally present what was happening, why it mattered, what became clearer,
+and a reusable lesson, omitting fields that would be repetitive or unsupported. When no block is
+active, show a Chapter-level preview or a quiet selection instruction.
+
+This panel is local reading assistance, never a second canonical Insight or runtime model call. It
+must not create review state or enter release/export. On narrow screens, fold it into a compact
+inline/collapsible surface without horizontal overflow or loss of access.
+
+## Canonical AI insight
+
+Place the Chapter's single reviewable insight in a disclosure at the end of Story, collapsed by
+default. Import validation must fail closed on zero or multiple insights; do not build a
+multi-insight fallback UI. Use a restrained disclosure, not a large nested card.
 
 Show:
 
@@ -137,6 +159,7 @@ Selection requirements:
 - meaningful length;
 - inside the Story article;
 - both endpoints inside the same reviewable copy element;
+- Story Edit Mode is active;
 - Chapter not human-confirmed.
 
 Reject the selection otherwise. Keep toolbar controls from clearing the native range before the action is recorded. Revise/Add open a small contextual textarea with Save/Cancel; empty instructions cannot save.
@@ -145,9 +168,17 @@ Provide accessible names/tooltips. A focusable Story-block keyboard fallback may
 
 ## Annotation presentation
 
-Style only exact validated inline ranges, for example a restrained wavy underline. A small adjacent annotation note may show type/state, exact quote, instruction, and Cancel.
+Style only exact validated inline ranges, for example a restrained wavy underline. On desktop,
+place a restrained note in the Story's left margin beside the owning stable block. It may show only
+type/state, a short exact quote, instruction, and valid Cancel/review action. Clicking the note
+scrolls/focuses its block and exact range without changing release content. On narrow screens,
+render the same note as a compact block-associated inline strip or drawer.
 
 Do not underline the parent paragraph/list item. Do not fill the page with review cards. Keep multiple independent ranges independent.
+
+Leaving Edit Mode clears only transient selection/toolbar state. Pending, applied, needs-evidence,
+and cancelled ledger entries remain intact. Applied work is not cancellable; changing it requires a
+new annotation/revision.
 
 Exact Evidence view must never expose the Story toolbar or mutation controls.
 
@@ -210,7 +241,10 @@ Material equivalence requires:
 - readable centered article, neither narrow strip nor full-width prose;
 - clear typography/whitespace hierarchy;
 - compact aligned People;
-- inline AI annotation;
+- default read mode plus a compact pencil/Edit control and contained editing surface;
+- left-margin annotations with a compact responsive fallback;
+- secondary sticky passage context on wide layouts and inline/collapsible fallback;
+- one collapsed canonical AI Insight at the end of Story;
 - temporary selection toolbar;
 - one active Privacy interaction;
 - one focused completion area;

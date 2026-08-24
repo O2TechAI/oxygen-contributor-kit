@@ -30,6 +30,26 @@ const languagePresentation = (language, key) => ({
     importantDetails: [language === "zh" ? "失败仍然可见。" : "The failure remained visible."],
     decisionOutcome: language === "zh" ? "采用证据支持的路径。" : "Use the evidence-backed path.",
   },
+  passageContext: {
+    scene: {
+      whatWasHappening: language === "zh" ? "团队正在决定下一步。" : "The team was deciding what came next.",
+      whyItMattered: language === "zh" ? "这个选择会决定后续验证方向。" : "The choice would shape the next validation path.",
+    },
+    "reconstruction-0": {
+      whatWasHappening: language === "zh" ? "比较证据后，方向发生了变化。" : "Comparing the evidence changed the direction.",
+      whyItMattered: language === "zh" ? "判断从猜测转向了共同证据。" : "The decision moved from a guess to shared evidence.",
+      whatWeLearned: language === "zh" ? "共同标准能暴露分歧。" : "A shared standard can expose disagreement.",
+    },
+    "detail-0": {
+      whatWasHappening: language === "zh" ? "失败仍被保留在故事中。" : "The failure remained visible in the Story.",
+      whyItMattered: language === "zh" ? "保留失败能解释为何改变方向。" : "Keeping the failure explains why direction changed.",
+    },
+    outcome: {
+      whatWasHappening: language === "zh" ? "团队采用了证据支持的路径。" : "The team chose the evidence-backed path.",
+      whyItMattered: language === "zh" ? "后续工作有了可验证的依据。" : "The next work had a verifiable basis.",
+      reusableLesson: language === "zh" ? "先定义共同标准，再扩展执行。" : "Define a shared standard before scaling execution.",
+    },
+  },
   highlights: [{
     id: "lesson",
     title: language === "zh" ? "证据形成共识" : "Evidence created alignment",
@@ -270,6 +290,28 @@ test("review schema requires every declared semantic anchor in both language pre
   missingChinese.reviewPresentation.en.overview += " EN_ONLY_TECHNICAL_ANCHOR";
   missingChinese.reviewPresentation.semanticAnchors = ["EN_ONLY_TECHNICAL_ANCHOR"];
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(missingChinese)), null);
+});
+
+test("passage context is keyed to every stable Story block and fails closed on drift", () => {
+  const valid = parseStoryAnnotation(story({ key:"passage-context" }));
+  assert.deepEqual(Object.keys(valid.reviewPresentation.en.passageContext), ["scene", "reconstruction-0", "detail-0", "outcome"]);
+  assert.deepEqual(Object.keys(valid.reviewPresentation.en.passageContext), Object.keys(valid.reviewPresentation.zh.passageContext));
+
+  const missing = JSON.parse(story({ key:"missing-context" }).slice(STORY_PREFIX.length));
+  delete missing.reviewPresentation.en.passageContext.outcome;
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(missing)), null);
+
+  const extra = JSON.parse(story({ key:"extra-context" }).slice(STORY_PREFIX.length));
+  extra.reviewPresentation.en.passageContext["unknown-block"] = extra.reviewPresentation.en.passageContext.scene;
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(extra)), null);
+
+  const localeDrift = JSON.parse(story({ key:"locale-context-drift" }).slice(STORY_PREFIX.length));
+  delete localeDrift.reviewPresentation.zh.passageContext["detail-0"];
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(localeDrift)), null);
+
+  const unsafeField = JSON.parse(story({ key:"unsafe-context-field" }).slice(STORY_PREFIX.length));
+  unsafeField.reviewPresentation.en.passageContext.scene.rawEvidence = "must not survive";
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(unsafeField)), null);
 });
 
 test("Story schema rejects duplicate or malformed evidence references", () => {

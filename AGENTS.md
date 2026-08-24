@@ -17,7 +17,10 @@ When a user asks to collect, organize, review, or package project history:
    `skills/oxygen-storytelling-review/SKILL.md`. Bind validated Story data to the existing
    canonical Viewer runtime; do not create an independent Storytelling frontend. `All set` creates
    Final Release Memory only and never approves publication. Then continue through Release preview,
-   Preferences, and package review.
+   Preferences, and package review. Report workflow progress to the Viewer only at safe stage
+   boundaries using sanitized stage/state, justified counts, blocker codes, timestamps, and human-
+   action state. Never expose model reasoning, prompts, raw tool arguments, private messages,
+   Story/Evidence payloads, or removed content as progress.
 7. Never read credential files, private keys, tokens, cookies, browser profiles, or
    system/developer prompts.
 8. Proactively show the Viewer when a visible browser surface exists, always provide its exact

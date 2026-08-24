@@ -38,6 +38,12 @@ const locale = (language) => ({
     importantDetails: [language === "zh" ? "本地细节。" : "Local detail."],
     decisionOutcome: language === "zh" ? "采用安全路径。" : "Use the safe path.",
   },
+  passageContext: {
+    scene: { whatWasHappening: "LOCAL_PASSAGE_SCENE", whyItMattered: "LOCAL_PASSAGE_WHY" },
+    "reconstruction-0": { whatWasHappening: "LOCAL_PASSAGE_RECONSTRUCTION", whyItMattered: "LOCAL_PASSAGE_TURN" },
+    "detail-0": { whatWasHappening: "LOCAL_PASSAGE_DETAIL", whyItMattered: "LOCAL_PASSAGE_LEARNING" },
+    outcome: { whatWasHappening: "LOCAL_PASSAGE_OUTCOME", whyItMattered: "LOCAL_PASSAGE_RESULT", reusableLesson: "LOCAL_PASSAGE_LESSON" },
+  },
   highlights: [{
     id: "lesson", title: language === "zh" ? "共同标准" : "Shared standard",
     noticed: language === "zh" ? "证据形成共识。" : "Evidence created alignment.",
@@ -83,7 +89,7 @@ test("release projection includes only human-confirmed allowlisted Chapter copy"
   });
 
   const serialized = JSON.stringify(release);
-  for (const forbidden of ["local-only", "localIdentityState", "original", "excerpt", "documentId", "eventId", "annotations", "instruction"]) {
+  for (const forbidden of ["local-only", "localIdentityState", "original", "excerpt", "documentId", "eventId", "annotations", "instruction", "LOCAL_PASSAGE_"]) {
     assert.doesNotMatch(serialized, new RegExp(forbidden));
   }
 });

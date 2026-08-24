@@ -97,6 +97,13 @@ export type StoryHighlightItem = {
   lesson: string;
 };
 
+export type StoryPassageContext = {
+  whatWasHappening: string;
+  whyItMattered: string;
+  whatWeLearned?: string;
+  reusableLesson?: string;
+};
+
 export type StoryPrivacyCandidate = {
   id: string;
   title: string;
@@ -125,6 +132,9 @@ export type StoryLanguagePresentation = {
   overview: string;
   people: StoryPerson[];
   story: StoryChapter;
+  /** Precomputed local reading assistance keyed by stable Story block ID. It
+   * is never an additional reviewable Insight or release field. */
+  passageContext?: Record<string, StoryPassageContext>;
   highlights: StoryHighlightItem[];
   privacy: {
     summary: string;
@@ -333,15 +343,38 @@ function validPrivacyCandidate(value: unknown): value is StoryPrivacyCandidate {
       && ["en", "zh"].includes(candidate.original.sourceLanguage));
 }
 
-function semanticBlockIds(value: StoryLanguagePresentation) {
+function storyContentBlockIds(value: StoryLanguagePresentation) {
   return [
-    "phase", "title", "overview", "before", "after",
-    ...value.people.map((person) => `people:${person.id}`),
     "scene",
     ...value.story.reconstruction.map((_, index) => `reconstruction-${index}`),
     ...value.story.importantDetails.map((_, index) => `detail-${index}`),
     "outcome",
     ...(value.story.uncertainty ? ["uncertainty"] : []),
+  ];
+}
+
+function validPassageContext(value: unknown, blockIds: string[]) {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entries = Object.entries(value);
+  return entries.length === blockIds.length
+    && sameOrderedValues(entries.map(([id]) => id).sort(), [...blockIds].sort())
+    && entries.every(([, context]) => {
+      if (!context || typeof context !== "object" || Array.isArray(context)
+        || !onlyKeys(context, ["whatWasHappening", "whyItMattered", "whatWeLearned", "reusableLesson"])) return false;
+      const copy = context as Partial<StoryPassageContext>;
+      return typeof copy.whatWasHappening === "string" && Boolean(copy.whatWasHappening.trim()) && copy.whatWasHappening.length <= 4_000
+        && typeof copy.whyItMattered === "string" && Boolean(copy.whyItMattered.trim()) && copy.whyItMattered.length <= 4_000
+        && (copy.whatWeLearned === undefined || (typeof copy.whatWeLearned === "string" && Boolean(copy.whatWeLearned.trim()) && copy.whatWeLearned.length <= 4_000))
+        && (copy.reusableLesson === undefined || (typeof copy.reusableLesson === "string" && Boolean(copy.reusableLesson.trim()) && copy.reusableLesson.length <= 4_000));
+    });
+}
+
+function semanticBlockIds(value: StoryLanguagePresentation) {
+  return [
+    "phase", "title", "overview", "before", "after",
+    ...value.people.map((person) => `people:${person.id}`),
+    ...storyContentBlockIds(value),
     ...value.highlights.map((highlight) => `insight:${highlight.id}`),
   ];
 }
@@ -367,6 +400,7 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
     && nonEmptyStrings(story.importantDetails) && story.decisionOutcome
     && (story.uncertainty === undefined || story.uncertainty === null
       || (typeof story.uncertainty === "string" && Boolean(story.uncertainty.trim())))
+    && validPassageContext(copy.passageContext, story ? storyContentBlockIds(copy as StoryLanguagePresentation) : [])
     && Array.isArray(highlights) && highlights.length === 1
     && highlights.every((item) => validStableId(item.id)
       && typeof item.title === "string" && Boolean(item.title.trim())
@@ -421,6 +455,7 @@ function validReviewPresentation(value: unknown): value is EpisodeReviewPresenta
     && sameOrderedValues(en.people.map((person) => person.releaseLabel), zh.people.map((person) => person.releaseLabel))
     && sameOrderedValues(en.people.map((person) => person.localIdentityState), zh.people.map((person) => person.localIdentityState))
     && sameOrderedValues(en.highlights.map((highlight) => highlight.id), zh.highlights.map((highlight) => highlight.id))
+    && sameOrderedValues(Object.keys(en.passageContext || {}).sort(), Object.keys(zh.passageContext || {}).sort())
     && sameOrderedValues(en.privacy.candidates.map((candidate) => candidate.id), zh.privacy.candidates.map((candidate) => candidate.id))
     && en.privacy.candidates.every((candidate, index) => {
       const paired = zh.privacy.candidates[index];
