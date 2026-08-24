@@ -26,8 +26,8 @@ Where Story presentation exists, switching language updates:
 - margin-note type/state/action UI;
 - passage-context headings/copy and compact fallback;
 - collapsed canonical AI insight title/observation/lesson/actions;
-- selection toolbar and contextual editors;
-- annotation type/state/cancel UI;
+- direct-selection replacement/deletion behavior and editor controls;
+- direct-edit and compatible legacy-annotation note state/actions;
 - Privacy title/summary/why-flagged/actions;
 - review summary, blockers, Apply, All set, Reopen;
 - Evidence-view chrome and Back labels.
@@ -96,6 +96,14 @@ Annotations preserve:
 - exact source-language offsets/text;
 - one shared base/applied revision history.
 
+Direct-edit transactions preserve the same shared Chapter/block identity plus active-locale
+before/after text and ranges. Editing one locale updates only that locale's working draft and marks
+the paired semantic block stale when the transaction is applied. Track this debt once per semantic
+block/target locale, not once per keystroke or independent range; one complete human review of the
+paired block clears its debt. Do not copy or silently translate the replacement into the other
+Story. Undo/Redo operates on active-locale pending transactions while the revision, evidence,
+Privacy, All set, and Reopen lifecycle remains shared.
+
 Do not pretend an English character range maps exactly to Chinese. When applying cross-language changes, regenerate or conservatively update the equivalent semantic block. The paired result must remain semantically aligned.
 
 ## Language switching with annotations
@@ -110,8 +118,13 @@ Switching language must preserve:
 - Privacy decisions/progress;
 - inline insight review;
 - All set/Reopen state.
+- direct-edit notes, pending/applied/reverted state, redo provenance, and paired-language debt.
 
 If exact selected-range styling cannot be shown in the other language because no safe alignment exists, keep the annotation visible as shared pending review metadata without inventing offsets. Never broaden to a whole paragraph solely to simulate alignment.
+
+Keep pending and applied review notes inspectable after language switching. Label each note's source
+language and restrict exact inline styling or editor selection to its owning locale; do not hide
+shared blockers merely because the other presentation is active.
 
 ## Evidence language rule
 
@@ -133,3 +146,6 @@ Story can switch language; Evidence remains source-language. Localize only the s
 12. Chinese inline insights and identity/review explanations contain natural Chinese rather than English placeholder copy.
 13. Read/Edit, margin-note, passage-context, and collapsed canonical-Insight controls localize while
     sharing one underlying semantic/review state.
+14. direct editing one locale changes only that working draft, creates paired-locale debt on Apply,
+    and Undo/Redo in either locale never forks revision or confirmation history.
+15. passage Previous/Next position follows the same stable Story-block sequence in both languages.

@@ -28,11 +28,16 @@ Use stable identities for:
 - inline AI insight;
 - Privacy candidate;
 - primary/supporting evidence;
-- human annotation.
+- human annotation;
+- direct Story-edit transaction.
 
 Do not use rendered English text as the sole identity. Stable IDs are required for language switching, revision provenance, navigation restoration, and exact evidence linkage.
 
 IDs must be nonempty bounded primitive strings and unique within their Chapter and semantic collection. A Chapter key is always a primitive stable string; reject numeric or otherwise coercible substitutes. Reject duplicate participant, insight, Privacy-candidate, annotation, or evidence-reference IDs rather than allowing keyed maps/decision records to collapse distinct objects into one review action. Validate uniqueness using the same exact string representation used by decision/provenance maps so mixed values such as numeric `1` and string `"1"` cannot pass validation and later coerce to one key. Encode composite Privacy-decision identity injectively as a tuple (for example `JSON.stringify([chapterKey, candidateId])`), never by delimiter concatenation. Paired English/Chinese presentations use the same ordered semantic IDs.
+
+Every direct-edit transaction also stores the exact owning Chapter key. Import, Apply Review, final
+confirmation, and release projection must reject a transaction ledger containing a different key;
+do not trust a Chapter-scoped map alone to prove transaction ownership.
 
 ## Recommended Story envelope
 
@@ -163,7 +168,7 @@ outcome
 uncertainty
 ```
 
-The paired language presentations map to the same semantic block IDs, even when text lengths and literal offsets differ. An annotation preserves the language and exact offsets of the selection plus the shared semantic block ID.
+The paired language presentations map to the same semantic block IDs, even when text lengths and literal offsets differ. An annotation or direct-edit transaction preserves its language, stable block, base revision, and exact range rather than using rendered English as identity.
 
 When passage-context assistance is present, its key set must equal the Chapter's complete rendered
 Story-content block set (`scene`, every reconstruction/detail block, `outcome`, and optional
@@ -189,7 +194,8 @@ Do not invent a source link merely to satisfy a schema. If evidence cannot be re
 ## Chapter-generation rules
 
 Apply the canonical narrative-compression and voice rules in
-[product-contract.md](product-contract.md) before generating fields. The structures below carry
+[product-contract.md](product-contract.md) and the role/mapping rules in
+[narrative-writing-contract.md](narrative-writing-contract.md) before generating fields. The structures below carry
 that narrative; they do not justify field-by-field or log-style prose.
 
 For each Chapter:
@@ -206,11 +212,14 @@ For each Chapter:
 7. Generate exactly one canonical AI insight/lesson explicitly typed as interpretation.
 8. Generate People only when supported.
 9. Generate contextual Privacy candidates only from permitted reviewed information.
-10. When useful, generate local passage context for every Story-content block without creating
-    additional release insights or unsupported lessons.
+10. Generate local passage context for every Story-content block as an ordered mini-story sequence
+    without creating additional release insights or unsupported lessons.
 11. Generate natural Chinese with the same facts, transition semantics, scan chips, passage-context
     meaning, and technical anchors.
 12. End the sequence with an honest current-state Chapter.
+13. Make the title express supported tension plus decisive reframing/result; make Story carry
+    Background, the minimum evidence thread, the turn, and result; make the single canonical Insight
+    carry direct learning, a bounded reusable principle, and open tension when supported.
 
 At project level, generate a natural semantically equivalent EN/中文 summary of roughly 2–3
 sentences. Prefer one- or two-word English Phase labels and equivalently compact natural Chinese.

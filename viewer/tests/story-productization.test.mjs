@@ -33,12 +33,15 @@ test("a non-Golden synthetic project exercises dynamic Story shapes", () => {
   }
 });
 
-test("the reusable narrative contract separates a scan-first homepage from context-sufficient Chapter memory", async () => {
-  const [product, data, bilingual, validation] = await Promise.all([
+test("the reusable narrative contract separates a scan-first homepage from evidence-driven Chapter memory", async () => {
+  const [product, data, bilingual, validation, narrative, lifecycle, interaction] = await Promise.all([
     read("../../skills/oxygen-storytelling-review/references/product-contract.md"),
     read("../../skills/oxygen-storytelling-review/references/story-data-contract.md"),
     read("../../skills/oxygen-storytelling-review/references/bilingual-contract.md"),
     read("../../skills/oxygen-storytelling-review/references/validation-checklist.md"),
+    read("../../skills/oxygen-storytelling-review/references/narrative-writing-contract.md"),
+    read("../../skills/oxygen-storytelling-review/references/chapter-review-lifecycle.md"),
+    read("../../skills/oxygen-storytelling-review/references/ui-interaction-contract.md"),
   ]);
   for (const contract of [
     "Every reviewed historical record", "2–3 concise sentences", "one or two scannable English words",
@@ -52,7 +55,16 @@ test("the reusable narrative contract separates a scan-first homepage from conte
   assert.match(bilingual, /Chapter depth remains semantically equivalent/);
   assert.match(validation, /visible copy compresses routine history/);
   assert.match(validation, /## Workflow progress/);
-  assert.doesNotMatch([product, data, bilingual, validation].join("\n"), /BOM Sourcing Benchmark|127\.0\.0\.1:326[14]/);
+  for (const contract of ["Background", "Evidence thread", "The turn", "Direct learning", "Reusable principle", "Open tension", "Show the conflict, the turn, the result, and the reusable principle"]) {
+    assert.match(narrative, new RegExp(contract));
+  }
+  assert.match(narrative, /three to five concise sentences/);
+  assert.match(narrative, /exactly one reviewable canonical Insight/);
+  assert.match(lifecycle, /## Direct-edit transaction model/);
+  assert.match(lifecycle, /Undo marks the most recently changed active-locale pending transaction reverted/);
+  assert.match(interaction, /current\/total position plus[\s\S]*Previous\/Next controls/);
+  assert.match(validation, /## Direct Story editing/);
+  assert.doesNotMatch([product, data, bilingual, validation, narrative, lifecycle, interaction].join("\n"), /BOM Sourcing Benchmark|127\.0\.0\.1:326[14]/);
 
   const sentences = syntheticStoryProject.overview.en.match(/[^.!?]+[.!?]+/g) || [];
   assert.ok(sentences.length >= 2 && sentences.length <= 3);
@@ -68,6 +80,7 @@ test("the synthetic project completes through the shared review and release runt
       candidate.id === "removed-demo-metric" ? "redact" : "keep",
     ]));
     const context = {
+      storyKey: milestone.story.key,
       privacyCandidates: presentation.privacy.candidates,
       privacyDecisions,
       reviewableInsightIds: presentation.highlights.map((highlight) => highlight.id),
@@ -112,6 +125,8 @@ test("the normal workflow delegates to the canonical repository Story runtime", 
   assert.match(skill, /viewer\/app\/workspace\.tsx[\s\S]*InlineWorkspace/);
   assert.match(skill, /viewer\/app\/story-chapter-editor\.tsx[\s\S]*StoryChapterEditor/);
   assert.match(skill, /passage-context/);
+  assert.match(skill, /narrative-writing-contract\.md/);
+  assert.match(skill, /Direct typing, caret insertion, selection replacement\/deletion/);
   assert.match(skill, /private latent reasoning/);
   assert.match(workspace, /export function InlineWorkspace/);
   assert.match(editor, /export function StoryChapterEditor/);

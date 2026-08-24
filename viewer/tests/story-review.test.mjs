@@ -4,18 +4,30 @@ import {
   addStoryAnnotation,
   applyAnnotationsToBlock,
   applyChapterReview,
+  applyStoryReviewToBlock,
+  canRedoStoryEdit,
   canMarkChapterReady,
+  canUndoStoryEdit,
   cancelStoryAnnotation,
   chapterReviewSummary,
   createStoryAnnotation,
+  directStoryEditNeedsEvidence,
+  discardStoryEdit,
   emptyChapterReview,
   hasStoryAnnotationConflict,
   markChapterReady,
   privacyReviewState,
   privacyDecisionKey,
+  recordStoryEdit,
+  redoStoryEdit,
+  revertAppliedStoryEdit,
   returnChapterToReview,
   reviseHighlight,
   storyAnnotationSegments,
+  storyEditSegments,
+  storyWorkingBlock,
+  sanitizeStoryPaste,
+  undoStoryEdit,
   updateInsightReview,
 } from "../lib/story-review.ts";
 
@@ -24,10 +36,12 @@ const reviewableInsightId = "shared-lesson";
 const context = (privacyCandidates = [], privacyDecisions = {}, chapterEvidence = [evidence], overrides = {}) => {
   const reviewedBlocks = overrides.reviewedBlocks || { en: {}, zh: {} };
   return {
+    storyKey: overrides.storyKey || "chapter",
     privacyCandidates, privacyDecisions, chapterEvidence,
     reviewableInsightIds: overrides.reviewableInsightIds || [reviewableInsightId],
     evidenceResolved: overrides.evidenceResolved ?? true,
     supportedAddIds: overrides.supportedAddIds || [],
+    supportedEditIds: overrides.supportedEditIds || [],
     sourceBlocks: overrides.sourceBlocks || reviewedBlocks,
     reviewedBlocks,
   };
@@ -500,4 +514,337 @@ test("range styling rejects stale, mismatched, cross-language, and cross-block o
   assert.deepEqual(storyAnnotationSegments(source, "scene", "en", 1, [mismatched]), [{ text: source, annotationIds: [] }]);
   assert.deepEqual(storyAnnotationSegments(source, "scene", "zh", 1, [mismatched]), [{ text: source, annotationIds: [] }]);
   assert.deepEqual(storyAnnotationSegments(source, "other-block", "en", 1, [mismatched]), [{ text: source, annotationIds: [] }]);
+});
+
+test("direct Story typing is a controlled coalesced block-local transaction", () => {
+  const source = "The draft changed.";
+  let state = emptyChapterReview();
+  let result = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "The xdraft changed.", now: 100,
+  });
+  assert.equal(result.blockedReason, undefined);
+  state = result.state;
+  assert.equal(state.editTransactions.length, 1);
+  assert.equal(state.editTransactions[0].operation, "insert");
+  assert.equal(storyWorkingBlock(source, "chapter", "scene", "en", state), "The xdraft changed.");
+
+  result = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "The xydraft changed.", now: 120,
+  });
+  state = result.state;
+  assert.equal(state.editTransactions.length, 1);
+  assert.equal(state.editTransactions[0].afterText, "xy");
+  assert.equal(storyWorkingBlock(source, "chapter", "scene", "en", state), "The xydraft changed.");
+  assert.deepEqual(storyEditSegments(source, "chapter", "scene", "en", state), [
+    { text: "The ", transactionIds: [] },
+    { text: "xy", transactionIds: [state.editTransactions[0].id] },
+    { text: "draft changed.", transactionIds: [] },
+  ]);
+});
+
+test("selection replacement, keyboard deletion, and independent Discard preserve unrelated edits", () => {
+  const source = "Alpha beta gamma.";
+  let state = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "Omega beta gamma.", workingRange: { start: 0, end: 5 }, insertedText: "Omega", now: 100,
+  }).state;
+  const firstId = state.editTransactions[0].id;
+  state = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "Omega beta delta.", workingRange: { start: 11, end: 16 }, insertedText: "delta", now: 5_000,
+  }).state;
+  assert.equal(state.editTransactions.length, 2);
+  const secondId = state.editTransactions[1].id;
+  assert.notEqual(firstId, secondId);
+  assert.equal(storyWorkingBlock(source, "chapter", "scene", "en", state), "Omega beta delta.");
+
+  state = discardStoryEdit(state, firstId);
+  assert.equal(storyWorkingBlock(source, "chapter", "scene", "en", state), "Alpha beta delta.");
+  assert.equal(state.editTransactions.find((transaction) => transaction.id === firstId).resolution, "reverted");
+  assert.equal(state.editTransactions.find((transaction) => transaction.id === secondId).resolution, "pending");
+
+  state = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "Alpha beta .", workingRange: { start: 11, end: 16 }, insertedText: "", now: 6_000,
+  }).state;
+  assert.equal(storyWorkingBlock(source, "chapter", "scene", "en", state), "Alpha beta .");
+  assert.equal(state.editTransactions.at(-1).operation, "delete");
+});
+
+test("transaction-synchronized Undo and Redo restore the draft and note identity", () => {
+  const source = "One useful sentence.";
+  let state = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "One precise sentence.", now: 100,
+  }).state;
+  const transactionId = state.editTransactions[0].id;
+  assert.equal(canUndoStoryEdit(state, "en"), true);
+  assert.equal(canRedoStoryEdit(state, "en"), false);
+
+  state = undoStoryEdit(state, "en");
+  assert.equal(storyWorkingBlock(source, "chapter", "scene", "en", state), source);
+  assert.equal(canUndoStoryEdit(state, "en"), false);
+  assert.equal(canRedoStoryEdit(state, "en"), true);
+
+  state = redoStoryEdit(state, "en");
+  assert.equal(storyWorkingBlock(source, "chapter", "scene", "en", state), "One precise sentence.");
+  assert.equal(state.editTransactions[0].id, transactionId);
+  assert.equal(state.editTransactions.length, 1);
+});
+
+test("Undo targets the most recently changed transaction after coalescing", () => {
+  const source = "Alpha beta gamma.";
+  let state = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "Omega beta gamma.", workingRange: { start: 0, end: 5 }, insertedText: "Omega", now: 100,
+  }).state;
+  state = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "Omega beta delta.", workingRange: { start: 11, end: 16 }, insertedText: "delta", now: 200,
+  }).state;
+  state = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "Omegax beta delta.", workingRange: { start: 5, end: 5 }, insertedText: "x", now: 300,
+  }).state;
+
+  assert.equal(state.editTransactions.length, 2);
+  assert.equal(state.editTransactions[0].updatedAt, 300);
+  state = undoStoryEdit(state, "en");
+  assert.equal(storyWorkingBlock(source, "chapter", "scene", "en", state), "Alpha beta delta.");
+  assert.equal(state.editTransactions[0].resolution, "reverted");
+  assert.equal(state.editTransactions[1].resolution, "pending");
+});
+
+test("plain-text paste strips markup and preserves safe paragraph breaks", () => {
+  assert.equal(
+    sanitizeStoryPaste("<b>Useful</b>\r\n<script>alert(1)</script>Second\u0000 line"),
+    "Useful\nSecond line",
+  );
+});
+
+test("material standalone direct additions fail visibly until reviewed Evidence supports them", () => {
+  const source = "The benchmark remained provisional.";
+  const next = `${source} Internal score 42.`;
+  assert.equal(directStoryEditNeedsEvidence("insert", "", " Internal score 42.", { start: source.length, end: source.length }, source.length), true);
+  let state = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: next, supportingEvidence: [evidence], now: 100,
+  }).state;
+  const transactionId = state.editTransactions[0].id;
+  const sourceBlocks = { en: { scene: source }, zh: { scene: "基准仍是临时方案。" } };
+  const blocked = applyChapterReview(state, context([], {}, [evidence], {
+    sourceBlocks, reviewedBlocks: sourceBlocks,
+  }));
+  assert.equal(blocked.blockedReason, "direct_evidence");
+  assert.equal(blocked.state.revision, 1);
+  assert.equal(blocked.state.editTransactions[0].resolution, "needs_evidence");
+
+  const applied = applyChapterReview(blocked.state, context([], {}, [evidence], {
+    sourceBlocks, reviewedBlocks: sourceBlocks, supportedEditIds: [transactionId],
+  }));
+  assert.equal(applied.blockedReason, undefined);
+  assert.equal(applied.state.revision, 2);
+  assert.equal(applied.state.editTransactions[0].resolution, "applied");
+  assert.deepEqual(applied.state.revisionHistory[0].editTransactionIds, [transactionId]);
+  assert.equal(applyStoryReviewToBlock(source, "scene", "en", applied.state), next);
+  assert.deepEqual(applied.state.staleTranslations, [{ subject: "story:scene", language: "zh", count: 1 }]);
+});
+
+test("applied direct history cannot be undone and Revert creates a new pending revision transaction", () => {
+  const source = "The draft changed.";
+  const next = "The chapter changed.";
+  let state = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: next, now: 100,
+  }).state;
+  const sourceBlocks = { en: { scene: source }, zh: { scene: "草稿发生了变化。" } };
+  state = applyChapterReview(state, context([], {}, [evidence], { sourceBlocks, reviewedBlocks: sourceBlocks })).state;
+  const appliedId = state.editTransactions[0].id;
+  assert.equal(undoStoryEdit(state, "en"), state);
+
+  const reverted = revertAppliedStoryEdit(state, appliedId, source, 200);
+  assert.equal(reverted.blockedReason, undefined);
+  assert.equal(reverted.state.revision, 2);
+  assert.equal(reverted.state.stage, "reviewing");
+  assert.equal(reverted.state.editTransactions[0].resolution, "applied");
+  assert.equal(reverted.state.editTransactions[1].resolution, "pending");
+  assert.equal(reverted.state.editTransactions[1].requiresEvidence, false);
+  assert.equal(reverted.state.editTransactions[1].supportingEvidence, undefined);
+  assert.equal(reverted.state.editTransactions[1].revertsTransactionId, appliedId);
+  assert.equal(storyWorkingBlock(source, "chapter", "scene", "en", reverted.state), source);
+});
+
+test("Revert cannot coalesce with or clear evidence debt from an unrelated pending addition", () => {
+  const source = "Internal claim.";
+  const deleted = " claim.";
+  const sourceBlocks = { en: { scene: source }, zh: { scene: "内部主张。" } };
+  let state = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: deleted, workingRange: { start: 0, end: 8 }, insertedText: "", now: 100,
+  }).state;
+  state = applyChapterReview(state, context([], {}, [evidence], { sourceBlocks, reviewedBlocks: sourceBlocks })).state;
+  const appliedDeleteId = state.editTransactions[0].id;
+  state = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: deleted, nextText: "Score 42.  claim.", workingRange: { start: 0, end: 0 }, insertedText: "Score 42. ", now: 200,
+  }).state;
+  const unsupportedId = state.editTransactions[1].id;
+  assert.equal(state.editTransactions[1].requiresEvidence, true);
+
+  const reverted = revertAppliedStoryEdit(state, appliedDeleteId, source, 300);
+  assert.equal(reverted.blockedReason, "overlap");
+  assert.equal(reverted.state, state);
+  assert.equal(state.editTransactions.find((transaction) => transaction.id === unsupportedId).requiresEvidence, true);
+  assert.equal(applyChapterReview(state, context([], {}, [evidence], {
+    sourceBlocks, reviewedBlocks: { en: { scene: deleted }, zh: sourceBlocks.zh },
+  })).blockedReason, "direct_evidence");
+});
+
+test("direct editing fails closed when a pending semantic annotation owns the same block", () => {
+  const source = "One paragraph.";
+  const annotation = createStoryAnnotation({
+    blockId: "scene", type: "delete", sourceLanguage: "en", baseRevision: 1,
+    selection: { start: 0, end: 3, text: "One" },
+  });
+  const state = addStoryAnnotation(emptyChapterReview(), annotation);
+  const result = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "A paragraph.", now: 100,
+  });
+  assert.equal(result.blockedReason, "annotation");
+  assert.equal(result.state, state);
+});
+
+test("forged duplicate, overlapping, and malformed applied direct-edit ledgers fail closed", () => {
+  const source = "Alpha beta gamma.";
+  const sourceBlocks = { en: { scene: source }, zh: { scene: "甲乙丙。" } };
+  const reviewContext = context([], {}, [evidence], { sourceBlocks, reviewedBlocks: sourceBlocks });
+  const legitimate = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "Omega beta gamma.",
+    workingRange: { start: 0, end: 5 }, insertedText: "Omega", now: 100,
+  }).state;
+
+  const duplicate = {
+    ...legitimate,
+    editTransactions: [...legitimate.editTransactions, { ...legitimate.editTransactions[0] }],
+  };
+  assert.equal(applyChapterReview(duplicate, reviewContext).blockedReason, "annotations");
+
+  const overlapping = {
+    ...legitimate,
+    editTransactions: [...legitimate.editTransactions, {
+      ...legitimate.editTransactions[0],
+      id: "scene:edit:101:other",
+      beforeText: source.slice(2, 6),
+      afterText: "XYZ",
+      beforeRange: { start: 2, end: 6 },
+      afterRange: { start: 2, end: 5 },
+      createdAt: 101,
+      updatedAt: 101,
+    }],
+  };
+  assert.equal(applyChapterReview(overlapping, reviewContext).blockedReason, "annotations");
+
+  const wrongChapter = structuredClone(legitimate);
+  wrongChapter.editTransactions[0].storyKey = "different-chapter";
+  assert.equal(applyChapterReview(wrongChapter, reviewContext).blockedReason, "annotations");
+
+  const applied = applyChapterReview(legitimate, reviewContext).state;
+  const malformedRange = structuredClone(applied);
+  malformedRange.editTransactions[0].afterRange.end += 1;
+  assert.equal(applyChapterReview(malformedRange, {
+    ...reviewContext,
+    reviewedBlocks: { en: { scene: "Omega beta gamma." }, zh: sourceBlocks.zh },
+  }).blockedReason, "annotations");
+
+  const missingRevisionOwnership = structuredClone(applied);
+  missingRevisionOwnership.revisionHistory[0].editTransactionIds = [];
+  assert.equal(applyChapterReview(missingRevisionOwnership, {
+    ...reviewContext,
+    reviewedBlocks: { en: { scene: "Omega beta gamma." }, zh: sourceBlocks.zh },
+  }).blockedReason, "annotations");
+});
+
+test("English and Chinese share Undo, Redo, repeated Apply, and one completion lifecycle", () => {
+  const sourceBlocks = { en: { scene: "Draft chapter." }, zh: { scene: "章节草稿。" } };
+  let state = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: sourceBlocks.en.scene, nextText: "Reviewed chapter.", now: 100,
+  }).state;
+  state = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "zh",
+    baseText: sourceBlocks.zh.scene, nextText: "已审阅章节。", now: 200,
+  }).state;
+  const sharedRevision = state.revision;
+  state = undoStoryEdit(state, "en");
+  assert.equal(state.revision, sharedRevision);
+  assert.equal(storyWorkingBlock(sourceBlocks.en.scene, "chapter", "scene", "en", state), sourceBlocks.en.scene);
+  assert.equal(storyWorkingBlock(sourceBlocks.zh.scene, "chapter", "scene", "zh", state), "已审阅章节。");
+  state = redoStoryEdit(state, "en");
+  assert.equal(state.revision, sharedRevision);
+
+  const firstContext = context([], {}, [evidence], { sourceBlocks, reviewedBlocks: sourceBlocks });
+  state = applyChapterReview(state, firstContext).state;
+  assert.equal(state.stage, "revision_ready");
+  assert.equal(state.revision, 2);
+  assert.equal(canMarkChapterReady(state, {
+    ...firstContext,
+    reviewedBlocks: { en: { scene: "Reviewed chapter." }, zh: { scene: "已审阅章节。" } },
+  }), true);
+
+  state = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: "Reviewed chapter.", nextText: "Final reviewed chapter.", now: 300,
+  }).state;
+  assert.equal(state.stage, "reviewing");
+  assert.equal(canMarkChapterReady(state, firstContext), false);
+  state = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "zh",
+    baseText: "已审阅章节。", nextText: "最终审阅章节。", now: 400,
+  }).state;
+
+  const secondContext = context([], {}, [evidence], {
+    sourceBlocks,
+    reviewedBlocks: { en: { scene: "Reviewed chapter." }, zh: { scene: "已审阅章节。" } },
+  });
+  state = applyChapterReview(state, secondContext).state;
+  assert.equal(state.stage, "revision_ready");
+  assert.equal(state.revision, 3);
+  assert.deepEqual(state.staleTranslations, []);
+  const finalContext = {
+    ...secondContext,
+    reviewedBlocks: { en: { scene: "Final reviewed chapter." }, zh: { scene: "最终审阅章节。" } },
+  };
+  assert.equal(canMarkChapterReady(state, finalContext), true);
+  state = markChapterReady(state, finalContext);
+  assert.equal(state.stage, "human_confirmed");
+  assert.equal(state.publicationApproved, false);
+});
+
+test("translation debt is block-scoped and one paired-block review clears multiple source edits", () => {
+  const sourceBlocks = { en: { scene: "Alpha beta gamma." }, zh: { scene: "甲乙丙。" } };
+  let state = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: sourceBlocks.en.scene, nextText: "Omega beta gamma.", workingRange: { start: 0, end: 5 }, insertedText: "Omega", now: 100,
+  }).state;
+  state = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: sourceBlocks.en.scene, nextText: "Omega beta delta.", workingRange: { start: 11, end: 16 }, insertedText: "delta", now: 200,
+  }).state;
+  state = applyChapterReview(state, context([], {}, [evidence], { sourceBlocks, reviewedBlocks: sourceBlocks })).state;
+  assert.deepEqual(state.staleTranslations, [{ subject: "story:scene", language: "zh", count: 1 }]);
+
+  const reviewedEnglish = "Omega beta delta.";
+  state = recordStoryEdit(state, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "zh",
+    baseText: sourceBlocks.zh.scene, nextText: "已对齐译文。", now: 300,
+  }).state;
+  state = applyChapterReview(state, context([], {}, [evidence], {
+    sourceBlocks,
+    reviewedBlocks: { en: { scene: reviewedEnglish }, zh: sourceBlocks.zh },
+  })).state;
+  assert.deepEqual(state.staleTranslations, []);
 });

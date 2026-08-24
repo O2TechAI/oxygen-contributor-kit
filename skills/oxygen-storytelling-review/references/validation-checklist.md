@@ -17,6 +17,8 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
       and the exact derived redacted-target set; forged browser state fails closed.
 - [ ] No identity/evidence/fact was fabricated.
 - [ ] Project-specific copy/excerpts do not appear in reusable generic source/Skill.
+- [ ] Direct-edit transaction IDs/ranges/revisions replay from immutable Story sources; pending,
+      reverted, needs-evidence, and malformed applied records cannot enter release output.
 - [ ] No unavailable Privacy candidate contains anything beyond its unavailable discriminator (no excerpt, language, removed value, or raw field).
 - [ ] Every Privacy candidate declares stable release targets; every target resolves in both language presentations, and an intentionally local-only candidate declares an explicit empty target set.
 - [ ] Package/publication behavior is unchanged.
@@ -74,11 +76,15 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Active Chapter is highlighted and programmatic next/previous keeps it visible.
 - [ ] Source records remain usable below.
 - [ ] Article is moderately wide, responsive, centered, readable, and has no horizontal overflow.
+- [ ] Chapter chrome, Hero/title, People, complete Story grid, Privacy, Evidence, and completion use
+      one shared responsive outer-canvas contract and visibly align at desktop widths.
 - [ ] Chapter has exactly unnumbered People, Story, Privacy primary sections.
 - [ ] No numbered markers, tabs, stepper, standalone Highlights, or Release/Original card pair.
 - [ ] Boxes are limited to interaction; Story/People remain typography-first.
 - [ ] Project Story homepage retains the approved hierarchy/rhythm; the only product addition is a
       subtle localized instruction to read a Chapter for the full Story, Evidence, and lessons.
+- [ ] That instruction is structurally after Project orientation/metrics and immediately before the
+      first Phase, not inside the Hero and not rendered as a card/banner.
 
 ## People and Story
 
@@ -89,6 +95,9 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Chapter prose preserves supported problem/purpose, constraints, prior attempts, failures or
       rejected approaches, directional evidence, decision/rationale, action/outcome, uncertainty,
       and reusable learning without becoming a raw log or audit report.
+- [ ] Evidence-driven narrative validation covers title tension/outcome, Background, minimum
+      evidence thread, the turn, result, direct learning, bounded reusable principle, and open
+      tension when supported; every factual step retains declared Evidence identity.
 - [ ] Final reviewed Chapters are explicitly reusable human/future-Agent project memory, with no
       hidden model reasoning or unsupported retrospective causality.
 - [ ] Default read mode remains clean; accessible pencil/Edit enters a visibly contained review
@@ -97,19 +106,24 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
       collapsed by default and labeled as interpretation; no multi-insight fallback UI exists.
 - [ ] Canonical AI insight copy is concrete, project-specific, evidence-grounded, and avoids generic summary formulas.
 - [ ] Accept/remove/direct edit/human-directed revise work without a full chat UI.
-- [ ] Clicking/selecting different Story blocks changes a secondary sticky contextual panel using
+- [ ] Clicking/focusing different Story blocks changes a secondary sticky contextual panel using
       the correct stable block key; passage context is precomputed local assistance, not another
       reviewable Insight or a browser model call.
+- [ ] Passage assistance forms one complete Story-ordered sequence with current/total,
+      Previous/Next, disabled boundaries, owning-block scroll/highlight, Story click/focus
+      synchronization, reduced-motion behavior, and narrow-layout access.
+- [ ] Passage copy reads as a concise evidence-grounded mini-narrative rather than repetitive field
+      labels, and the bottom Insight synthesizes learning/principle/open tension instead of
+      concatenating passage assistance.
 - [ ] Passage-context key sets exactly cover rendered Story blocks in both languages and the release
       projection excludes all passage-context copy.
 
-## Text annotations
+## Direct selection and legacy annotation compatibility
 
-- [ ] Toolbar is absent until meaningful Story text is selected.
-- [ ] Toolbar is unavailable in default read mode and becomes available only in explicit Story Edit Mode.
-- [ ] Toolbar has accessible Delete, Revise, Add, and visible compact Close actions.
-- [ ] Close and Escape immediately clear only transient selection/toolbar state; saved annotations remain.
-- [ ] Exact block ID, start, end, selected text, language, base revision, type, instruction, and resolution persist.
+- [ ] Selecting Story text never opens a Delete/Revise/Add action window in read or Edit mode.
+- [ ] In Story Edit Mode, typing replaces the native selection and Backspace/Delete removes it through the controlled direct-edit ledger.
+- [ ] Text selection preserves the native range without causing a rerender; block focus may synchronize local passage assistance without creating review state.
+- [ ] Existing imported exact-range annotations retain block ID, start, end, selected text, language, base revision, type, instruction, and resolution.
 - [ ] Only the exact range is styled; parent paragraph/list item is not.
 - [ ] Pending quote equals `source.slice(start,end)`.
 - [ ] Two non-overlapping annotations in one paragraph render independently.
@@ -121,20 +135,59 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Exact Evidence cannot be annotated or mutated.
 - [ ] Each annotation has one restrained block-associated margin note on wide screens; clicking it
       focuses the exact range, and narrow screens use an inline fallback without horizontal overflow.
-- [ ] Leaving Edit Mode clears only transient selection/toolbar state; saved pending/applied review state remains.
+- [ ] Leaving Edit Mode clears only transient editor state; saved pending/applied review state remains.
 - [ ] Annotation notes and their UI metadata are absent from release/export.
+
+## Direct Story editing
+
+- [ ] Default read mode is clean; Edit mode visibly says `Editing Story`, explains direct typing,
+      and exposes labeled Undo, Redo, and Finish editing controls.
+- [ ] No floating Delete/Revise/Add popover appears when direct-editor text is selected.
+- [ ] Caret insertion, selection replacement, Backspace/Delete, ordinary navigation, and plain-text
+      paste update a controlled working draft rather than bypassing review state.
+- [ ] Paste strips markup/scripts/embeds, preserves safe text/paragraph breaks, and adds no rich-text dependency.
+- [ ] One contiguous typing burst in one block coalesces; independent non-overlapping block/ranges
+      retain distinct transaction/note identities.
+- [ ] Each transaction stores stable Chapter/block/language/base-revision identity, operation,
+      before/after text/ranges, resolution, and applied revision/evidence linkage when required.
+- [ ] Apply, All set, and release reject any transaction whose Story key differs from the owning
+      primitive Chapter key.
+- [ ] Ctrl/Cmd+Z, Ctrl/Cmd+Y, Ctrl/Cmd+Shift+Z, and visible buttons synchronize working copy,
+      transaction state, and notes; disabled states have accessible explanations.
+- [ ] Undo targets the most recently changed pending transaction after coalescing, not merely the
+      most recently created ledger entry.
+- [ ] Pending Discard restores only that effect and keeps unrelated edits. Applied history exposes
+      Revert in a new revision and is never destructively undone.
+- [ ] Applied Revert creates a distinct exact-inverse transaction, rejects overlap, and cannot clear
+      reviewed-Evidence debt from an unrelated factual addition.
+- [ ] A new direct edit after revision-ready returns the Chapter to reviewing and disables All set.
+- [ ] Inline wording edits inherit the owning block only when they add no unsupported factual claim;
+      new standalone sentences/numbers/paths/paragraphs fail visibly as `needs_evidence` until exact
+      reviewed support resolves.
+- [ ] Cross-block or overlapping mutations are atomic or visibly rejected with every passage unchanged.
+- [ ] Active-locale direct edits create paired-language debt without copying replacement prose into
+      the other locale; one shared revision/confirmation history remains authoritative.
+- [ ] Paired-language debt is one blocker per semantic block/target locale and one complete paired
+      block review clears it even when several source-locale ranges changed.
+- [ ] Notes show readable operation/state/language and concise before→after, not offsets, IDs, or JSON.
+- [ ] Language switching keeps both locales' pending notes inspectable while exact inline range
+      styling and editor selection remain active-locale only.
+- [ ] Note click focuses/highlights the affected passage/range; narrow layouts keep notes accessible
+      without shrinking Story or causing horizontal overflow.
+- [ ] Pending/applied/reverted transactions, redo state, notes, passage assistance, and selection
+      metadata are absent from actual reviewed JSON, HTML, and ZIP serialization.
 
 ## Iterative lifecycle
 
 Demonstrate this complete sequence in tests and browser QA:
 
 1. [ ] Initial AI draft, revision 1, reviewing, publication false.
-2. [ ] Create first Delete or Revise annotation.
+2. [ ] Create a first controlled direct edit.
 3. [ ] All set unavailable while pending.
 4. [ ] Resolve required Privacy.
 5. [ ] Apply review produces revision 2.
-6. [ ] Revision 2 Story remains annotatable.
-7. [ ] Create a second annotation on revision 2.
+6. [ ] Revision 2 Story remains directly editable.
+7. [ ] Create a second direct edit on revision 2.
 8. [ ] All set becomes unavailable again.
 9. [ ] Second Apply produces revision 3.
 10. [ ] Clean revision 3 plus complete Privacy enables All set.
@@ -222,18 +275,20 @@ Use the actual local Viewer. Capture and inspect at least:
 1. Project Story opening;
 2. Chapter opening with retained rail and People;
 3. Chapter default read mode;
-4. contained Story Edit Mode;
-5. exact-range annotation with left-margin note and contextual input;
-6. first passage-context panel state;
-7. second passage/context switch;
-8. canonical AI Insight collapsed and expanded;
-9. Privacy available mode;
-10. Privacy unavailable mode;
-11. gated completion and clean revision-ready state;
-12. Final Release Memory and Reopen review;
-13. exact Evidence with Back to chapter;
-14. Chinese Chapter with shared review state;
-15. narrow Chapter fallback for notes and contextual assistance.
+4. contained direct Story Edit Mode with zero-guesswork guidance;
+5. caret insertion, selection replacement/deletion, Undo/Redo, and multiple left-margin notes;
+6. pending Discard plus applied Revert-in-a-new-revision;
+7. native selection replacement/deletion with no floating action window;
+8. first passage-context sequence state;
+9. Next/Previous with owning-block scroll/highlight and Story focus synchronization;
+10. canonical AI Insight collapsed and expanded;
+11. Privacy available mode;
+12. Privacy unavailable mode;
+13. gated completion and clean revision-ready state;
+14. Final Release Memory and Reopen review;
+15. exact Evidence with Back to chapter;
+16. Chinese Chapter with shared review state/debt;
+17. narrow Chapter fallback for notes and contextual assistance.
 
 Check console errors and responsive layout. Preserve the user's visible review state or reset prototype-only QA edits before handoff.
 
@@ -245,7 +300,9 @@ Two implementations need not be pixel-identical. They are materially equivalent 
 - reading hierarchy and density;
 - retained application context;
 - direct Chapter/evidence navigation;
-- exact-range document annotation;
+- controlled direct document editing with no redundant selection-action popover;
+- synchronized Undo/Redo, Discard, and revision-based applied Revert;
+- complete passage-context sequence and local-only boundary;
 - iterative Apply/All set/Reopen semantics;
 - one-at-a-time contextual Privacy with no Suggested Release;
 - evidence and identity safety boundaries;

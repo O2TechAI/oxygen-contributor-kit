@@ -28,6 +28,51 @@ export type StoryAnnotationSegment = {
   annotationIds: string[];
 };
 
+export type StoryEditOperation = "insert" | "delete" | "replace";
+export type StoryEditResolution = "pending" | "applied" | "reverted" | "needs_evidence";
+export type StoryEditRange = { start: number; end: number };
+
+/** A direct edit is a reversible plain-text patch anchored to one stable Story
+ * block in one applied Chapter revision. Patch ranges are relative to the
+ * applied block at `baseRevision`; browser selection state never becomes its
+ * identity. */
+export type StoryEditTransaction = {
+  id: string;
+  storyKey: string;
+  blockId: string;
+  sourceLanguage: StoryLanguage;
+  baseRevision: number;
+  operation: StoryEditOperation;
+  beforeText: string;
+  afterText: string;
+  beforeRange: StoryEditRange;
+  afterRange: StoryEditRange;
+  resolution: StoryEditResolution;
+  requiresEvidence: boolean;
+  supportingEvidence?: EvidenceReference[];
+  appliedRevision?: number;
+  revertsTransactionId?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type StoryEditSegment = {
+  text: string;
+  transactionIds: string[];
+};
+
+export type RecordStoryEditInput = {
+  storyKey: string;
+  blockId: string;
+  sourceLanguage: StoryLanguage;
+  baseText: string;
+  nextText: string;
+  workingRange?: StoryEditRange;
+  insertedText?: string;
+  supportingEvidence?: EvidenceReference[];
+  now?: number;
+};
+
 export type InsightReviewStatus = "accepted" | "needs_changes" | "rejected" | "overridden";
 export type InsightReview = {
   status: InsightReviewStatus;
@@ -48,6 +93,7 @@ export type TranslationStaleness = {
 export type ChapterRevisionRecord = {
   revision: number;
   annotationIds: string[];
+  editTransactionIds?: string[];
   insightIds: string[];
   privacyDecisions: Record<string, PrivacyDecision>;
 };
@@ -58,6 +104,8 @@ export type ChapterReviewState = {
   stage: ChapterReviewStage;
   revision: number;
   annotations: StoryReviewAnnotation[];
+  editTransactions: StoryEditTransaction[];
+  redoTransactionIds: string[];
   insightReviews: Record<string, InsightReview>;
   appliedPrivacyDecisions: Record<string, PrivacyDecision>;
   redactedBlocks: string[];
@@ -70,6 +118,7 @@ export type ChapterReviewState = {
 type StoryBlockCollection = Record<StoryLanguage, Record<string, string>>;
 
 export type ChapterReviewCompletionContext = {
+  storyKey: string;
   privacyCandidates: StoryPrivacyCandidate[];
   privacyDecisions: Record<string, PrivacyDecision>;
   reviewableInsightIds: string[];
@@ -81,12 +130,15 @@ export type ApplyReviewContext = ChapterReviewCompletionContext & {
   chapterEvidence: EvidenceReference[];
   evidenceResolved: boolean;
   supportedAddIds: string[];
+  supportedEditIds?: string[];
 };
 
 export const emptyChapterReview = (): ChapterReviewState => ({
   stage: "reviewing",
   revision: 1,
   annotations: [],
+  editTransactions: [],
+  redoTransactionIds: [],
   insightReviews: {},
   appliedPrivacyDecisions: {},
   redactedBlocks: [],
@@ -135,6 +187,334 @@ export function cancelStoryAnnotation(state: ChapterReviewState, annotationId: s
     ? { ...annotation, resolution: "cancelled" as const }
     : annotation);
   return { ...state, stage: "reviewing", annotations };
+}
+
+const activeEditResolution = (resolution: StoryEditResolution) => resolution === "pending" || resolution === "needs_evidence";
+
+const editRangesConflict = (left: StoryEditTransaction, right: StoryEditTransaction) => {
+  const leftEmpty = left.beforeRange.start === left.beforeRange.end;
+  const rightEmpty = right.beforeRange.start === right.beforeRange.end;
+  if (leftEmpty && rightEmpty) return left.beforeRange.start === right.beforeRange.start;
+  if (leftEmpty) return left.beforeRange.start >= right.beforeRange.start && left.beforeRange.start <= right.beforeRange.end;
+  if (rightEmpty) return right.beforeRange.start >= left.beforeRange.start && right.beforeRange.start <= left.beforeRange.end;
+  return left.beforeRange.start < right.beforeRange.end && right.beforeRange.start < left.beforeRange.end;
+};
+
+type EditProjection = {
+  transaction: StoryEditTransaction;
+  workStart: number;
+  workEnd: number;
+};
+
+function projectDirectEditGroup(source: string, transactions: StoryEditTransaction[]) {
+  const ordered = [...transactions].sort((left, right) => left.beforeRange.start - right.beforeRange.start
+    || left.beforeRange.end - right.beforeRange.end);
+  if (ordered.some((transaction, index) => ordered.slice(index + 1).some((other) => editRangesConflict(transaction, other)))) {
+    return null;
+  }
+  let sourceCursor = 0;
+  let result = "";
+  const projections: EditProjection[] = [];
+  for (const transaction of ordered) {
+    const { start, end } = transaction.beforeRange;
+    if (start < sourceCursor || start < 0 || end < start || end > source.length
+      || source.slice(start, end) !== transaction.beforeText) return null;
+    result += source.slice(sourceCursor, start);
+    const workStart = result.length;
+    result += transaction.afterText;
+    projections.push({ transaction, workStart, workEnd: result.length });
+    sourceCursor = end;
+  }
+  result += source.slice(sourceCursor);
+  return { text: result, projections };
+}
+
+function applyDirectEditGroup(source: string, transactions: StoryEditTransaction[]) {
+  return projectDirectEditGroup(source, transactions)?.text ?? null;
+}
+
+function editOperation(beforeText: string, afterText: string): StoryEditOperation {
+  if (!beforeText) return "insert";
+  if (!afterText) return "delete";
+  return "replace";
+}
+
+function plainTextDiff(before: string, after: string) {
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
+  let beforeEnd = before.length;
+  let afterEnd = after.length;
+  while (beforeEnd > start && afterEnd > start && before[beforeEnd - 1] === after[afterEnd - 1]) {
+    beforeEnd -= 1;
+    afterEnd -= 1;
+  }
+  return {
+    start,
+    beforeEnd,
+    afterEnd,
+    beforeText: before.slice(start, beforeEnd),
+    afterText: after.slice(start, afterEnd),
+  };
+}
+
+/** Paste remains editorial plain text. Markup, script/style bodies, NUL bytes,
+ * and browser-specific CR line endings are removed while paragraph breaks are
+ * preserved. */
+export function sanitizeStoryPaste(value: string) {
+  return value
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\u0000/g, "");
+}
+
+/** Conservative evidence gate for new standalone claims. Inline wording edits
+ * remain ordinary revisions, while new sentences, numbers, links/paths, or
+ * paragraph-level additions require exact reviewed support before Apply. */
+export function directStoryEditNeedsEvidence(
+  operation: StoryEditOperation,
+  beforeText: string,
+  afterText: string,
+  range: StoryEditRange,
+  blockLength: number,
+) {
+  if (operation === "delete" || !afterText.trim()) return false;
+  const introducesNumber = /\d/u.test(afterText) && !/\d/u.test(beforeText);
+  const introducesLocator = /https?:\/\/|[A-Za-z]:\\|\/(?:[^\s/]+\/){2,}/u.test(afterText);
+  const introducesParagraph = /\n/u.test(afterText) && !/\n/u.test(beforeText);
+  const newSentenceCount = (afterText.match(/[.!?。！？](?:\s|$)/gu) || []).length
+    - (beforeText.match(/[.!?。！？](?:\s|$)/gu) || []).length;
+  const standaloneBoundary = (range.start === 0 || range.end === blockLength)
+    && afterText.trim().length >= 32
+    && /[.!?。！？]$/u.test(afterText.trim());
+  return introducesNumber || introducesLocator || introducesParagraph || newSentenceCount > 0 || standaloneBoundary;
+}
+
+function activeDirectEdits(
+  state: ChapterReviewState,
+  storyKey: string,
+  blockId: string,
+  language: StoryLanguage,
+) {
+  return state.editTransactions.filter((transaction) => transaction.storyKey === storyKey
+    && transaction.blockId === blockId
+    && transaction.sourceLanguage === language
+    && transaction.baseRevision === state.revision
+    && activeEditResolution(transaction.resolution));
+}
+
+function normalizeCurrentEditRanges(state: ChapterReviewState, baseText: string, storyKey: string, blockId: string, language: StoryLanguage) {
+  const active = activeDirectEdits(state, storyKey, blockId, language);
+  const projection = projectDirectEditGroup(baseText, active);
+  if (!projection) return null;
+  const projectedRanges = new Map(projection.projections.map(({ transaction, workStart, workEnd }) => (
+    [transaction.id, { start: workStart, end: workEnd }] as const
+  )));
+  return {
+    ...state,
+    editTransactions: state.editTransactions.map((transaction) => projectedRanges.has(transaction.id)
+      ? { ...transaction, afterRange: projectedRanges.get(transaction.id)! }
+      : transaction),
+  };
+}
+
+function unchangedProjectionGaps(baseText: string, projection: NonNullable<ReturnType<typeof projectDirectEditGroup>>) {
+  const ordered = projection.projections;
+  let baseCursor = 0;
+  let workCursor = 0;
+  const gaps: Array<{ baseStart: number; baseEnd: number; workStart: number; workEnd: number }> = [];
+  for (const item of ordered) {
+    const baseStart = item.transaction.beforeRange.start;
+    const length = baseStart - baseCursor;
+    gaps.push({ baseStart: baseCursor, baseEnd: baseStart, workStart: workCursor, workEnd: workCursor + length });
+    baseCursor = item.transaction.beforeRange.end;
+    workCursor = item.workEnd;
+  }
+  gaps.push({ baseStart: baseCursor, baseEnd: baseText.length, workStart: workCursor, workEnd: projection.text.length });
+  return gaps;
+}
+
+function transactionResult(
+  transaction: StoryEditTransaction,
+  afterText: string,
+  baseText: string,
+  now: number,
+  supportingEvidence?: EvidenceReference[],
+): StoryEditTransaction {
+  const operation = editOperation(transaction.beforeText, afterText);
+  const requiresEvidence = directStoryEditNeedsEvidence(
+    operation,
+    transaction.beforeText,
+    afterText,
+    transaction.beforeRange,
+    baseText.length,
+  );
+  return {
+    ...transaction,
+    operation,
+    afterText,
+    resolution: afterText === transaction.beforeText ? "reverted" : "pending",
+    requiresEvidence,
+    ...(requiresEvidence && supportingEvidence?.length ? { supportingEvidence } : { supportingEvidence: undefined }),
+    appliedRevision: undefined,
+    updatedAt: now,
+  };
+}
+
+export type RecordStoryEditResult = {
+  state: ChapterReviewState;
+  transactionId?: string;
+  blockedReason?: "invalid" | "overlap" | "annotation" | "confirmed";
+};
+
+/** Record one browser mutation as a controlled, block-local patch. Existing
+ * changes inside the same replacement are coalesced; independent base ranges
+ * remain independent notes and can be discarded without rebasing one another. */
+export function recordStoryEdit(state: ChapterReviewState, input: RecordStoryEditInput): RecordStoryEditResult {
+  if (state.stage === "human_confirmed") return { state, blockedReason: "confirmed" };
+  if (!validStableId(input.storyKey) || !validStableId(input.blockId)
+    || (input.sourceLanguage !== "en" && input.sourceLanguage !== "zh")
+    || typeof input.baseText !== "string" || typeof input.nextText !== "string"
+    || input.baseText.length > 20_000 || input.nextText.length > 20_000
+    || /\u0000/u.test(input.nextText)) return { state, blockedReason: "invalid" };
+  if (state.annotations.some((annotation) => annotation.blockId === input.blockId
+    && annotation.sourceLanguage === input.sourceLanguage
+    && annotation.baseRevision === state.revision
+    && (annotation.resolution === "pending" || annotation.resolution === "needs_evidence"))) {
+    return { state, blockedReason: "annotation" };
+  }
+
+  const active = activeDirectEdits(state, input.storyKey, input.blockId, input.sourceLanguage);
+  const projection = projectDirectEditGroup(input.baseText, active);
+  if (!projection) return { state, blockedReason: "overlap" };
+  if (projection.text === input.nextText) return { state };
+  const explicitRange = input.workingRange;
+  const explicitInsertedText = input.insertedText ?? "";
+  const explicitMutationValid = Boolean(explicitRange)
+    && Number.isInteger(explicitRange!.start) && Number.isInteger(explicitRange!.end)
+    && explicitRange!.start >= 0 && explicitRange!.end >= explicitRange!.start
+    && explicitRange!.end <= projection.text.length
+    && `${projection.text.slice(0, explicitRange!.start)}${explicitInsertedText}${projection.text.slice(explicitRange!.end)}` === input.nextText;
+  const diff = explicitMutationValid ? {
+    start: explicitRange!.start,
+    beforeEnd: explicitRange!.end,
+    afterEnd: explicitRange!.start + explicitInsertedText.length,
+    beforeText: projection.text.slice(explicitRange!.start, explicitRange!.end),
+    afterText: explicitInsertedText,
+  } : plainTextDiff(projection.text, input.nextText);
+  const now = input.now ?? Date.now();
+
+  const touched = projection.projections.filter(({ workStart, workEnd }) => diff.beforeEnd === diff.start
+    ? diff.start >= workStart && diff.start <= workEnd
+    : diff.start >= workStart && diff.beforeEnd <= workEnd);
+  if (touched.length === 1) {
+    const target = touched[0];
+    const localStart = diff.start - target.workStart;
+    const localEnd = diff.beforeEnd - target.workStart;
+    const afterText = `${target.transaction.afterText.slice(0, localStart)}${diff.afterText}${target.transaction.afterText.slice(localEnd)}`;
+    const updated = transactionResult(target.transaction, afterText, input.baseText, now, input.supportingEvidence);
+    const next = {
+      ...state,
+      stage: "reviewing" as const,
+      editTransactions: state.editTransactions.map((transaction) => transaction.id === updated.id ? updated : transaction),
+      redoTransactionIds: state.redoTransactionIds.filter((id) => state.editTransactions.find((item) => item.id === id)?.sourceLanguage !== input.sourceLanguage),
+    };
+    return { state: normalizeCurrentEditRanges(next, input.baseText, input.storyKey, input.blockId, input.sourceLanguage) || state, transactionId: updated.id };
+  }
+  if (touched.length > 1) return { state, blockedReason: "overlap" };
+
+  const gap = unchangedProjectionGaps(input.baseText, projection).find((candidate) => (
+    diff.start >= candidate.workStart && diff.beforeEnd <= candidate.workEnd
+  ));
+  if (!gap) return { state, blockedReason: "overlap" };
+  const start = gap.baseStart + diff.start - gap.workStart;
+  const end = gap.baseStart + diff.beforeEnd - gap.workStart;
+  if (input.baseText.slice(start, end) !== diff.beforeText) return { state, blockedReason: "overlap" };
+  const beforeRange = { start, end };
+  const operation = editOperation(diff.beforeText, diff.afterText);
+  const requiresEvidence = directStoryEditNeedsEvidence(operation, diff.beforeText, diff.afterText, beforeRange, input.baseText.length);
+  const transaction: StoryEditTransaction = {
+    id: `${input.blockId}:edit:${now}:${Math.random().toString(36).slice(2, 7)}`,
+    storyKey: input.storyKey,
+    blockId: input.blockId,
+    sourceLanguage: input.sourceLanguage,
+    baseRevision: state.revision,
+    operation,
+    beforeText: diff.beforeText,
+    afterText: diff.afterText,
+    beforeRange,
+    afterRange: { start, end: start + diff.afterText.length },
+    resolution: "pending",
+    requiresEvidence,
+    ...(requiresEvidence && input.supportingEvidence?.length ? { supportingEvidence: input.supportingEvidence } : {}),
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (active.some((candidate) => editRangesConflict(candidate, transaction))) return { state, blockedReason: "overlap" };
+  const next = {
+    ...state,
+    stage: "reviewing" as const,
+    editTransactions: [...state.editTransactions, transaction],
+    redoTransactionIds: state.redoTransactionIds.filter((id) => state.editTransactions.find((item) => item.id === id)?.sourceLanguage !== input.sourceLanguage),
+  };
+  return { state: normalizeCurrentEditRanges(next, input.baseText, input.storyKey, input.blockId, input.sourceLanguage) || state, transactionId: transaction.id };
+}
+
+export function canUndoStoryEdit(state: ChapterReviewState, language: StoryLanguage) {
+  return state.editTransactions.some((transaction) => transaction.sourceLanguage === language && activeEditResolution(transaction.resolution));
+}
+
+export function canRedoStoryEdit(state: ChapterReviewState, language: StoryLanguage) {
+  return [...state.redoTransactionIds].reverse().some((id) => state.editTransactions.some((transaction) => (
+    transaction.id === id && transaction.sourceLanguage === language && transaction.resolution === "reverted"
+  )));
+}
+
+export function undoStoryEdit(state: ChapterReviewState, language: StoryLanguage): ChapterReviewState {
+  if (state.stage === "human_confirmed") return state;
+  const target = state.editTransactions
+    .map((transaction, index) => ({ transaction, index }))
+    .filter(({ transaction }) => transaction.sourceLanguage === language && activeEditResolution(transaction.resolution))
+    .sort((left, right) => right.transaction.updatedAt - left.transaction.updatedAt || right.index - left.index)[0]?.transaction;
+  if (!target) return state;
+  return {
+    ...state,
+    stage: "reviewing",
+    editTransactions: state.editTransactions.map((transaction) => transaction.id === target.id
+      ? { ...transaction, resolution: "reverted" as const, appliedRevision: undefined }
+      : transaction),
+    redoTransactionIds: [...state.redoTransactionIds.filter((id) => id !== target.id), target.id],
+  };
+}
+
+export function redoStoryEdit(state: ChapterReviewState, language: StoryLanguage): ChapterReviewState {
+  if (state.stage === "human_confirmed") return state;
+  const targetId = [...state.redoTransactionIds].reverse().find((id) => state.editTransactions.some((transaction) => (
+    transaction.id === id && transaction.sourceLanguage === language && transaction.resolution === "reverted"
+  )));
+  if (!targetId) return state;
+  return {
+    ...state,
+    stage: "reviewing",
+    editTransactions: state.editTransactions.map((transaction) => transaction.id === targetId
+      ? { ...transaction, resolution: "pending" as const }
+      : transaction),
+    redoTransactionIds: state.redoTransactionIds.filter((id) => id !== targetId),
+  };
+}
+
+export function discardStoryEdit(state: ChapterReviewState, transactionId: string): ChapterReviewState {
+  const target = state.editTransactions.find((transaction) => transaction.id === transactionId);
+  if (!target || !activeEditResolution(target.resolution) || state.stage === "human_confirmed") return state;
+  return {
+    ...state,
+    stage: "reviewing",
+    editTransactions: state.editTransactions.map((transaction) => transaction.id === transactionId
+      ? { ...transaction, resolution: "reverted" as const, appliedRevision: undefined }
+      : transaction),
+    redoTransactionIds: state.redoTransactionIds.filter((id) => id !== transactionId),
+  };
 }
 
 export function updateInsightReview(
@@ -202,15 +582,21 @@ export function storyAnnotationSegments(
 export function chapterReviewSummary(state: ChapterReviewState) {
   const active = state.annotations.filter((annotation) => annotation.resolution !== "cancelled");
   const pendingAnnotations = active.filter((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence");
+  const activeEdits = state.editTransactions.filter((transaction) => transaction.resolution !== "reverted");
+  const pendingEdits = activeEdits.filter((transaction) => activeEditResolution(transaction.resolution));
   const pendingInsights = Object.values(state.insightReviews).filter((review) => review.resolution === "pending").length;
   return {
-    delete: active.filter((annotation) => annotation.type === "delete").length,
-    revise: active.filter((annotation) => annotation.type === "revise").length,
-    add: active.filter((annotation) => annotation.type === "add").length,
-    pendingAnnotations: pendingAnnotations.length,
-    needsEvidenceAdd: pendingAnnotations.filter((annotation) => annotation.type === "add" && annotation.resolution === "needs_evidence").length,
+    delete: active.filter((annotation) => annotation.type === "delete").length
+      + activeEdits.filter((transaction) => transaction.operation === "delete").length,
+    revise: active.filter((annotation) => annotation.type === "revise").length
+      + activeEdits.filter((transaction) => transaction.operation === "replace").length,
+    add: active.filter((annotation) => annotation.type === "add").length
+      + activeEdits.filter((transaction) => transaction.operation === "insert").length,
+    pendingAnnotations: pendingAnnotations.length + pendingEdits.length,
+    needsEvidenceAdd: pendingAnnotations.filter((annotation) => annotation.type === "add" && annotation.resolution === "needs_evidence").length
+      + pendingEdits.filter((transaction) => transaction.resolution === "needs_evidence").length,
     pendingInsights,
-    unresolved: pendingAnnotations.length + pendingInsights + state.staleTranslations.length,
+    unresolved: pendingAnnotations.length + pendingEdits.length + pendingInsights + state.staleTranslations.length,
   };
 }
 
@@ -236,12 +622,10 @@ function updateTranslationStaleness(
   sourceLanguage: StoryLanguage,
 ) {
   const resolvesPairedLocale = current.some((item) => item.subject === subject && item.language === sourceLanguage);
-  if (resolvesPairedLocale) return current.flatMap((item) => item.subject === subject && item.language === sourceLanguage
-    ? item.count > 1 ? [{ ...item, count: item.count - 1 }] : []
-    : [item]);
+  if (resolvesPairedLocale) return current.filter((item) => !(item.subject === subject && item.language === sourceLanguage));
   const target = oppositeLanguage(sourceLanguage);
   return current.some((item) => item.subject === subject && item.language === target)
-    ? current.map((item) => item.subject === subject && item.language === target ? { ...item, count: item.count + 1 } : item)
+    ? current
     : [...current, { subject, language: target, count: 1 }];
 }
 
@@ -304,21 +688,31 @@ function applyAnnotationGroup(source: string, annotations: StoryReviewAnnotation
   return result;
 }
 
-function annotationSnapshots(state: ChapterReviewState, sourceBlocks: StoryBlockCollection) {
+function reviewSnapshots(state: ChapterReviewState, sourceBlocks: StoryBlockCollection) {
   const snapshots = new Map<number, StoryBlockCollection>([[1, cloneBlocks(sourceBlocks)]]);
   for (let revision = 2; revision <= state.revision; revision += 1) {
     const previous = snapshots.get(revision - 1);
     if (!previous) return null;
     const next = cloneBlocks(previous);
-    const applied = state.annotations.filter((annotation) => annotation.resolution === "applied"
+    const appliedAnnotations = state.annotations.filter((annotation) => annotation.resolution === "applied"
       && annotation.appliedRevision === revision);
-    const groupKeys = [...new Set(applied.map((annotation) => `${annotation.sourceLanguage}\u0000${annotation.blockId}`))];
+    const appliedEdits = state.editTransactions.filter((transaction) => transaction.resolution === "applied"
+      && transaction.appliedRevision === revision);
+    const groupKeys = [...new Set([
+      ...appliedAnnotations.map((annotation) => JSON.stringify([annotation.sourceLanguage, annotation.blockId])),
+      ...appliedEdits.map((transaction) => JSON.stringify([transaction.sourceLanguage, transaction.blockId])),
+    ])];
     for (const key of groupKeys) {
-      const [language, blockId] = key.split("\u0000") as [StoryLanguage, string];
+      const [language, blockId] = JSON.parse(key) as [StoryLanguage, string];
       const source = next[language]?.[blockId];
-      const group = applied.filter((annotation) => annotation.sourceLanguage === language && annotation.blockId === blockId);
-      if (typeof source !== "string" || group.some((annotation) => annotation.baseRevision !== revision - 1)) return null;
-      const projected = applyAnnotationGroup(source, group);
+      const annotationGroup = appliedAnnotations.filter((annotation) => annotation.sourceLanguage === language && annotation.blockId === blockId);
+      const editGroup = appliedEdits.filter((transaction) => transaction.sourceLanguage === language && transaction.blockId === blockId);
+      if (typeof source !== "string" || (annotationGroup.length > 0 && editGroup.length > 0)
+        || annotationGroup.some((annotation) => annotation.baseRevision !== revision - 1)
+        || editGroup.some((transaction) => transaction.baseRevision !== revision - 1)) return null;
+      const projected = annotationGroup.length
+        ? applyAnnotationGroup(source, annotationGroup)
+        : applyDirectEditGroup(source, editGroup);
       if (projected === null) return null;
       next[language][blockId] = projected;
     }
@@ -332,14 +726,24 @@ function annotationSnapshots(state: ChapterReviewState, sourceBlocks: StoryBlock
  * collide across resolutions from being silently skipped at final release. */
 export function validateChapterReviewLedger(
   state: ChapterReviewState,
+  storyKey: string,
   sourceBlocks: StoryBlockCollection,
   reviewedBlocks: StoryBlockCollection = sourceBlocks,
 ) {
-  if (!Number.isInteger(state.revision) || state.revision < 1
-    || !Array.isArray(state.annotations) || !Array.isArray(state.revisionHistory)
+  if (!validStableId(storyKey)
+    || !Number.isInteger(state.revision) || state.revision < 1
+    || !Array.isArray(state.annotations) || !Array.isArray(state.editTransactions)
+    || !Array.isArray(state.redoTransactionIds) || !Array.isArray(state.revisionHistory)
     || state.publicationApproved !== false) return false;
-  const ids = state.annotations.map((annotation) => annotation?.id);
-  if (!ids.every(validStableId) || new Set(ids).size !== ids.length) return false;
+  const annotationIds = state.annotations.map((annotation) => annotation?.id);
+  const editIds = state.editTransactions.map((transaction) => transaction?.id);
+  const allIds = [...annotationIds, ...editIds];
+  if (!allIds.every(validStableId) || new Set(allIds).size !== allIds.length
+    || !state.redoTransactionIds.every(validStableId)
+    || new Set(state.redoTransactionIds).size !== state.redoTransactionIds.length
+    || state.redoTransactionIds.some((id) => !state.editTransactions.some((transaction) => (
+      transaction.id === id && transaction.resolution === "reverted"
+    )))) return false;
 
   const allowedTypes: StoryAnnotationType[] = ["delete", "revise", "add"];
   const allowedResolutions: StoryAnnotationResolution[] = ["pending", "applied", "needs_evidence", "cancelled"];
@@ -370,13 +774,66 @@ export function validateChapterReviewLedger(
   });
   if (!baseShapeValid) return false;
 
+  const allowedEditOperations: StoryEditOperation[] = ["insert", "delete", "replace"];
+  const allowedEditResolutions: StoryEditResolution[] = ["pending", "applied", "reverted", "needs_evidence"];
+  const editShapeValid = state.editTransactions.every((transaction) => {
+    const before = transaction?.beforeRange;
+    const after = transaction?.afterRange;
+    const evidenceValid = transaction?.supportingEvidence === undefined
+      || (Array.isArray(transaction.supportingEvidence) && transaction.supportingEvidence.every(validEvidenceReference));
+    return transaction?.storyKey === storyKey
+      && validStableId(transaction?.blockId)
+      && (transaction?.sourceLanguage === "en" || transaction?.sourceLanguage === "zh")
+      && allowedEditOperations.includes(transaction?.operation)
+      && allowedEditResolutions.includes(transaction?.resolution)
+      && Number.isInteger(transaction?.baseRevision)
+      && transaction.baseRevision >= 1 && transaction.baseRevision <= state.revision
+      && Boolean(before) && Number.isInteger(before.start) && Number.isInteger(before.end)
+      && before.start >= 0 && before.end >= before.start
+      && Boolean(after) && Number.isInteger(after.start) && Number.isInteger(after.end)
+      && after.start >= 0 && after.end >= after.start
+      && typeof transaction.beforeText === "string" && transaction.beforeText.length === before.end - before.start
+      && typeof transaction.afterText === "string" && transaction.afterText.length <= 20_000
+      && (transaction.beforeText !== transaction.afterText || transaction.resolution === "reverted")
+      && editOperation(transaction.beforeText, transaction.afterText) === transaction.operation
+      && typeof transaction.requiresEvidence === "boolean"
+      && evidenceValid
+      && Number.isFinite(transaction.createdAt) && Number.isFinite(transaction.updatedAt)
+      && transaction.createdAt >= 0 && transaction.updatedAt >= transaction.createdAt
+      && (transaction.revertsTransactionId === undefined || validStableId(transaction.revertsTransactionId))
+      && (transaction.resolution === "applied"
+        ? Number.isInteger(transaction.appliedRevision)
+          && transaction.appliedRevision! >= 2
+          && transaction.appliedRevision! <= state.revision
+          && transaction.baseRevision === transaction.appliedRevision! - 1
+        : transaction.appliedRevision === undefined)
+      && (transaction.resolution !== "needs_evidence" || transaction.requiresEvidence)
+      && (!activeEditResolution(transaction.resolution) || transaction.baseRevision === state.revision);
+  });
+  if (!editShapeValid) return false;
+
+  const currentActiveEdits = state.editTransactions.filter((transaction) => activeEditResolution(transaction.resolution));
+  if (currentActiveEdits.some((transaction, index) => currentActiveEdits.slice(index + 1).some((other) => (
+    transaction.storyKey === other.storyKey
+      && transaction.blockId === other.blockId
+      && transaction.sourceLanguage === other.sourceLanguage
+      && editRangesConflict(transaction, other)
+  ))) || state.annotations.some((annotation) => (annotation.resolution === "pending" || annotation.resolution === "needs_evidence")
+    && currentActiveEdits.some((transaction) => transaction.blockId === annotation.blockId
+      && transaction.sourceLanguage === annotation.sourceLanguage
+      && transaction.baseRevision === annotation.baseRevision))) return false;
+
   if (state.revisionHistory.length !== state.revision - 1) return false;
   const recordedAnnotationIds: string[] = [];
+  const recordedEditIds: string[] = [];
   for (let index = 0; index < state.revisionHistory.length; index += 1) {
     const record = state.revisionHistory[index];
+    const recordEditIds = record.editTransactionIds ?? [];
     if (record.revision !== index + 2
       || !Array.isArray(record.annotationIds) || !record.annotationIds.every(validStableId)
       || new Set(record.annotationIds).size !== record.annotationIds.length
+      || !Array.isArray(recordEditIds) || !recordEditIds.every(validStableId)
+      || new Set(recordEditIds).size !== recordEditIds.length
       || !Array.isArray(record.insightIds) || !record.insightIds.every(validStableId)
       || new Set(record.insightIds).size !== record.insightIds.length
       || !record.privacyDecisions || typeof record.privacyDecisions !== "object"
@@ -384,6 +841,7 @@ export function validateChapterReviewLedger(
       return false;
     }
     recordedAnnotationIds.push(...record.annotationIds);
+    recordedEditIds.push(...recordEditIds);
   }
   if (new Set(recordedAnnotationIds).size !== recordedAnnotationIds.length) return false;
   const appliedAnnotations = state.annotations.filter((annotation) => annotation.resolution === "applied");
@@ -392,16 +850,51 @@ export function validateChapterReviewLedger(
       record.revision === annotation.appliedRevision && record.annotationIds.includes(annotation.id)
     )))) return false;
 
-  const snapshots = annotationSnapshots(state, sourceBlocks);
+  if (new Set(recordedEditIds).size !== recordedEditIds.length) return false;
+  const appliedEdits = state.editTransactions.filter((transaction) => transaction.resolution === "applied");
+  if (recordedEditIds.length !== appliedEdits.length
+    || appliedEdits.some((transaction) => !state.revisionHistory.some((record) => (
+      record.revision === transaction.appliedRevision && (record.editTransactionIds || []).includes(transaction.id)
+    )))) return false;
+
+  const snapshots = reviewSnapshots(state, sourceBlocks);
   if (!snapshots) return false;
-  return state.annotations.every((annotation) => {
+  if (!state.annotations.every((annotation) => {
     const source = annotation.resolution === "pending"
-      ? reviewedBlocks[annotation.sourceLanguage]?.[annotation.blockId]
+      ? snapshots.get(state.revision)?.[annotation.sourceLanguage]?.[annotation.blockId]
       : snapshots.get(annotation.baseRevision)?.[annotation.sourceLanguage]?.[annotation.blockId];
     return typeof source === "string"
       && annotation.selection.end <= source.length
       && source.slice(annotation.selection.start, annotation.selection.end) === annotation.selection.text;
-  });
+  })) return false;
+
+  if (!state.editTransactions.every((transaction) => {
+    const source = snapshots.get(transaction.baseRevision)?.[transaction.sourceLanguage]?.[transaction.blockId];
+    return typeof source === "string"
+      && transaction.beforeRange.end <= source.length
+      && source.slice(transaction.beforeRange.start, transaction.beforeRange.end) === transaction.beforeText;
+  })) return false;
+
+  for (const revision of snapshots.keys()) {
+    if (revision === 1) continue;
+    const edits = state.editTransactions.filter((transaction) => transaction.resolution === "applied" && transaction.appliedRevision === revision);
+    const groups = [...new Set(edits.map((transaction) => JSON.stringify([transaction.sourceLanguage, transaction.blockId])))];
+    for (const key of groups) {
+      const [language, blockId] = JSON.parse(key) as [StoryLanguage, string];
+      const before = snapshots.get(revision - 1)?.[language]?.[blockId];
+      const group = edits.filter((transaction) => transaction.sourceLanguage === language && transaction.blockId === blockId);
+      const projection = typeof before === "string" ? projectDirectEditGroup(before, group) : null;
+      if (!projection || projection.projections.some(({ transaction, workStart, workEnd }) => (
+        transaction.afterRange.start !== workStart || transaction.afterRange.end !== workEnd
+      ))) return false;
+    }
+  }
+
+  // `reviewedBlocks` remains part of the public completion context for callers
+  // that precompute the current projection. Ledger validity itself is derived
+  // from immutable sources plus recorded revisions, never trusted browser copy.
+  void reviewedBlocks;
+  return true;
 }
 
 const insightStatuses: InsightReviewStatus[] = ["accepted", "needs_changes", "rejected", "overridden"];
@@ -484,12 +977,14 @@ export function validateChapterReviewCompletion(
   state: ChapterReviewState,
   context: ChapterReviewCompletionContext,
 ) {
-  if (!privacyComplete(context)
-    || !validateChapterReviewLedger(state, context.sourceBlocks, context.reviewedBlocks)
+  if (!validStableId(context.storyKey)
+    || !privacyComplete(context)
+    || !validateChapterReviewLedger(state, context.storyKey, context.sourceBlocks, context.reviewedBlocks)
     || !validateInsightReviewLedger(state, context.reviewableInsightIds)
     || !state.evidenceVerified
     || !Array.isArray(state.staleTranslations) || state.staleTranslations.length > 0
     || state.annotations.some((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence")
+    || state.editTransactions.some((transaction) => activeEditResolution(transaction.resolution))
     || Object.values(state.insightReviews).some((review) => review.resolution === "pending")
     || !sameDecisions(state.appliedPrivacyDecisions, currentPrivacyDecisions(context))) return false;
   const latest = state.revisionHistory[state.revisionHistory.length - 1];
@@ -502,16 +997,39 @@ export function validateChapterReviewCompletion(
 export function applyChapterReview(
   state: ChapterReviewState,
   context: ApplyReviewContext,
-): { state: ChapterReviewState; blockedReason?: "privacy" | "evidence" | "annotations" } {
+): { state: ChapterReviewState; blockedReason?: "privacy" | "evidence" | "annotations" | "direct_evidence" } {
+  if (!validStableId(context.storyKey)
+    || state.editTransactions.some((transaction) => transaction.storyKey !== context.storyKey)) {
+    return { state, blockedReason: "annotations" };
+  }
   if (!privacyComplete(context)) return { state, blockedReason: "privacy" };
   if (!context.evidenceResolved) return { state, blockedReason: "evidence" };
-  if (!validateChapterReviewLedger(state, context.sourceBlocks, context.reviewedBlocks)
+  if (!validateChapterReviewLedger(state, context.storyKey, context.sourceBlocks, context.reviewedBlocks)
     || !validateInsightReviewLedger(state, context.reviewableInsightIds)) {
     return { state, blockedReason: "annotations" };
   }
-  const revision = state.revision + 1;
   const availableEvidence = new Set(context.chapterEvidence.map(evidenceKey));
   const supportedAddIds = new Set(context.supportedAddIds);
+  const supportedEditIds = new Set(context.supportedEditIds || []);
+  const unsupportedDirectEdits = state.editTransactions.filter((transaction) => activeEditResolution(transaction.resolution)
+    && transaction.requiresEvidence
+    && !(supportedEditIds.has(transaction.id)
+      && transaction.supportingEvidence?.length
+      && transaction.supportingEvidence.every((evidence) => availableEvidence.has(evidenceKey(evidence)))));
+  if (unsupportedDirectEdits.length) {
+    const unsupportedIds = new Set(unsupportedDirectEdits.map((transaction) => transaction.id));
+    return {
+      state: {
+        ...state,
+        stage: "reviewing",
+        editTransactions: state.editTransactions.map((transaction) => unsupportedIds.has(transaction.id)
+          ? { ...transaction, resolution: "needs_evidence" as const }
+          : transaction),
+      },
+      blockedReason: "direct_evidence",
+    };
+  }
+  const revision = state.revision + 1;
   const appliedAnnotationIds: string[] = [];
   let staleTranslations = [...state.staleTranslations];
   const annotations = state.annotations.map((annotation) => {
@@ -528,6 +1046,51 @@ export function applyChapterReview(
       annotation.sourceLanguage,
     );
     return { ...annotation, resolution: "applied" as const, appliedRevision: revision };
+  });
+
+  const normalizedRangeById = new Map<string, StoryEditRange>();
+  const pendingEditGroups = [...new Set(state.editTransactions
+    .filter((transaction) => activeEditResolution(transaction.resolution))
+    .map((transaction) => JSON.stringify([transaction.storyKey, transaction.sourceLanguage, transaction.blockId])))];
+  for (const key of pendingEditGroups) {
+    const [storyKey, sourceLanguage, blockId] = JSON.parse(key) as [string, StoryLanguage, string];
+    const group = state.editTransactions.filter((transaction) => transaction.storyKey === storyKey
+      && transaction.sourceLanguage === sourceLanguage
+      && transaction.blockId === blockId
+      && activeEditResolution(transaction.resolution));
+    const source = context.reviewedBlocks[sourceLanguage]?.[blockId];
+    const projection = typeof source === "string" ? projectDirectEditGroup(source, group) : null;
+    if (!projection) return { state, blockedReason: "annotations" };
+    for (const item of projection.projections) {
+      normalizedRangeById.set(item.transaction.id, { start: item.workStart, end: item.workEnd });
+    }
+  }
+
+  const appliedEditIds: string[] = [];
+  const editTransactions = state.editTransactions.map((transaction) => {
+    if (!activeEditResolution(transaction.resolution)) return transaction;
+    const supported = !transaction.requiresEvidence || Boolean(
+      supportedEditIds.has(transaction.id)
+      && transaction.supportingEvidence?.length
+      && transaction.supportingEvidence.every((evidence) => availableEvidence.has(evidenceKey(evidence))),
+    );
+    if (!supported) return {
+      ...transaction,
+      afterRange: normalizedRangeById.get(transaction.id) || transaction.afterRange,
+      resolution: "needs_evidence" as const,
+    };
+    appliedEditIds.push(transaction.id);
+    staleTranslations = updateTranslationStaleness(
+      staleTranslations,
+      `story:${transaction.blockId}`,
+      transaction.sourceLanguage,
+    );
+    return {
+      ...transaction,
+      afterRange: normalizedRangeById.get(transaction.id) || transaction.afterRange,
+      resolution: "applied" as const,
+      appliedRevision: revision,
+    };
   });
 
   const appliedInsightIds: string[] = [];
@@ -560,6 +1123,8 @@ export function applyChapterReview(
     stage: "revision_ready",
     revision,
     annotations,
+    editTransactions,
+    redoTransactionIds: [],
     insightReviews,
     appliedPrivacyDecisions,
     redactedBlocks,
@@ -568,11 +1133,12 @@ export function applyChapterReview(
     revisionHistory: [...state.revisionHistory, {
       revision,
       annotationIds: appliedAnnotationIds,
+      editTransactionIds: appliedEditIds,
       insightIds: appliedInsightIds,
       privacyDecisions: appliedPrivacyDecisions,
     }],
   };
-  return validateChapterReviewLedger(nextState, context.sourceBlocks, context.reviewedBlocks)
+  return validateChapterReviewLedger(nextState, context.storyKey, context.sourceBlocks, context.reviewedBlocks)
     ? { state: nextState }
     : { state, blockedReason: "annotations" };
 }
@@ -608,6 +1174,134 @@ export function applyAnnotationsToBlock(
     result = projected;
   }
   return result;
+}
+
+/** Replay every applied review revision for one block. This is the canonical
+ * Chapter/Release projection; pending edits remain a local working draft. */
+export function applyStoryReviewToBlock(
+  source: string,
+  blockId: string,
+  language: StoryLanguage,
+  state: ChapterReviewState,
+) {
+  let result = source;
+  for (let revision = 2; revision <= state.revision; revision += 1) {
+    const annotations = state.annotations.filter((annotation) => annotation.blockId === blockId
+      && annotation.sourceLanguage === language
+      && annotation.resolution === "applied"
+      && annotation.appliedRevision === revision);
+    const transactions = state.editTransactions.filter((transaction) => transaction.blockId === blockId
+      && transaction.sourceLanguage === language
+      && transaction.resolution === "applied"
+      && transaction.appliedRevision === revision);
+    if (annotations.length && transactions.length) return source;
+    const projected = annotations.length
+      ? applyAnnotationGroup(result, annotations)
+      : transactions.length ? applyDirectEditGroup(result, transactions) : result;
+    if (projected === null) return source;
+    result = projected;
+  }
+  return result;
+}
+
+/** Current editable copy for one Story block: immutable source + applied
+ * revisions + active current-revision direct patches. */
+export function storyWorkingBlock(
+  source: string,
+  storyKey: string,
+  blockId: string,
+  language: StoryLanguage,
+  state: ChapterReviewState,
+) {
+  const reviewed = applyStoryReviewToBlock(source, blockId, language, state);
+  const pending = activeDirectEdits(state, storyKey, blockId, language);
+  return applyDirectEditGroup(reviewed, pending) ?? reviewed;
+}
+
+export function storyEditSegments(
+  source: string,
+  storyKey: string,
+  blockId: string,
+  language: StoryLanguage,
+  state: ChapterReviewState,
+): StoryEditSegment[] {
+  const reviewed = applyStoryReviewToBlock(source, blockId, language, state);
+  const pending = activeDirectEdits(state, storyKey, blockId, language);
+  const projection = projectDirectEditGroup(reviewed, pending);
+  if (!projection || !pending.length) return [{ text: reviewed, transactionIds: [] }];
+  const segments: StoryEditSegment[] = [];
+  let cursor = 0;
+  for (const item of projection.projections) {
+    if (item.workStart > cursor) segments.push({ text: projection.text.slice(cursor, item.workStart), transactionIds: [] });
+    if (item.workEnd > item.workStart) segments.push({
+      text: projection.text.slice(item.workStart, item.workEnd),
+      transactionIds: [item.transaction.id],
+    });
+    cursor = item.workEnd;
+  }
+  if (cursor < projection.text.length) segments.push({ text: projection.text.slice(cursor), transactionIds: [] });
+  return segments.length ? segments : [{ text: projection.text, transactionIds: [] }];
+}
+
+/** Reverse an applied edit without mutating its historical revision. Reversal
+ * is available only while that transaction is the latest applied change to its
+ * block; otherwise the UI must ask the reviewer to make an explicit new edit. */
+export function revertAppliedStoryEdit(
+  state: ChapterReviewState,
+  transactionId: string,
+  originalSource: string,
+  now = Date.now(),
+): RecordStoryEditResult {
+  if (state.stage === "human_confirmed") return { state, blockedReason: "confirmed" };
+  const target = state.editTransactions.find((transaction) => transaction.id === transactionId);
+  if (!target || target.resolution !== "applied" || !target.appliedRevision) return { state, blockedReason: "invalid" };
+  const laterApplied = state.editTransactions.some((transaction) => transaction.id !== target.id
+    && transaction.blockId === target.blockId
+    && transaction.sourceLanguage === target.sourceLanguage
+    && transaction.resolution === "applied"
+    && (transaction.appliedRevision || 0) > target.appliedRevision!);
+  const laterAnnotation = state.annotations.some((annotation) => annotation.blockId === target.blockId
+    && annotation.sourceLanguage === target.sourceLanguage
+    && annotation.resolution === "applied"
+    && (annotation.appliedRevision || 0) > target.appliedRevision!);
+  if (laterApplied || laterAnnotation) return { state, blockedReason: "overlap" };
+
+  const baseText = applyStoryReviewToBlock(originalSource, target.blockId, target.sourceLanguage, state);
+  const pending = activeDirectEdits(state, target.storyKey, target.blockId, target.sourceLanguage);
+  if (baseText.slice(target.afterRange.start, target.afterRange.end) !== target.afterText) {
+    return { state, blockedReason: "overlap" };
+  }
+  const inverse: StoryEditTransaction = {
+    id: `${target.blockId}:revert:${now}:${Math.random().toString(36).slice(2, 7)}`,
+    storyKey: target.storyKey,
+    blockId: target.blockId,
+    sourceLanguage: target.sourceLanguage,
+    baseRevision: state.revision,
+    operation: editOperation(target.afterText, target.beforeText),
+    beforeText: target.afterText,
+    afterText: target.beforeText,
+    beforeRange: { ...target.afterRange },
+    afterRange: { start: target.afterRange.start, end: target.afterRange.start + target.beforeText.length },
+    resolution: "pending",
+    requiresEvidence: false,
+    revertsTransactionId: target.id,
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (pending.some((transaction) => editRangesConflict(transaction, inverse))) {
+    return { state, blockedReason: "overlap" };
+  }
+  const nextState = normalizeCurrentEditRanges({
+    ...state,
+    stage: "reviewing",
+    editTransactions: [...state.editTransactions, inverse],
+    redoTransactionIds: state.redoTransactionIds.filter((id) => state.editTransactions.find((item) => item.id === id)?.sourceLanguage !== target.sourceLanguage),
+  }, baseText, target.storyKey, target.blockId, target.sourceLanguage);
+  if (!nextState) return { state, blockedReason: "overlap" };
+  return {
+    state: nextState,
+    transactionId: inverse.id,
+  };
 }
 
 export function reviseHighlight(

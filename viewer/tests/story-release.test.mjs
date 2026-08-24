@@ -4,6 +4,7 @@ import {
   applyChapterReview,
   emptyChapterReview,
   markChapterReady,
+  recordStoryEdit,
 } from "../lib/story-review.ts";
 import {
   buildReviewedStoryRelease,
@@ -62,6 +63,7 @@ const milestone = {
 
 const evidence = { documentId: "doc", eventId: "event" };
 const reviewContext = (privacyDecision) => ({
+  storyKey: milestone.story.key,
   privacyCandidates: [candidate],
   privacyDecisions: { "local-detail": privacyDecision },
   reviewableInsightIds: ["lesson"],
@@ -92,6 +94,63 @@ test("release projection includes only human-confirmed allowlisted Chapter copy"
   for (const forbidden of ["local-only", "localIdentityState", "original", "excerpt", "documentId", "eventId", "annotations", "instruction", "LOCAL_PASSAGE_"]) {
     assert.doesNotMatch(serialized, new RegExp(forbidden));
   }
+});
+
+test("applied direct Story edits reach serialized release copy while the edit ledger and local passage assistance do not", async () => {
+  const sourceBlocks = {
+    en: {
+      scene: locale("en").story.scene,
+      "reconstruction-0": locale("en").story.reconstruction[0],
+      "detail-0": locale("en").story.importantDetails[0],
+      outcome: locale("en").story.decisionOutcome,
+    },
+    zh: {
+      scene: locale("zh").story.scene,
+      "reconstruction-0": locale("zh").story.reconstruction[0],
+      "detail-0": locale("zh").story.importantDetails[0],
+      outcome: locale("zh").story.decisionOutcome,
+    },
+  };
+  let review = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en", baseText: sourceBlocks.en.scene,
+    nextText: "The group needed to decide.", workingRange: { start: 4, end: 8 }, insertedText: "group", now: 100,
+  }).state;
+  review = recordStoryEdit(review, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "zh", baseText: sourceBlocks.zh.scene,
+    nextText: "小组需要决定。", workingRange: { start: 0, end: 2 }, insertedText: "小组", now: 200,
+  }).state;
+  const context = { ...reviewContext("keep"), sourceBlocks, reviewedBlocks: sourceBlocks };
+  review = applyChapterReview(review, context).state;
+  assert.deepEqual(review.staleTranslations, []);
+  review = markChapterReady(review, context);
+  assert.equal(review.stage, "human_confirmed");
+
+  const release = buildReviewedStoryRelease([milestone], { chapter: review });
+  assert.equal(release.chapters[0].en.story.scene, "The group needed to decide.");
+  assert.equal(release.chapters[0].zh.story.scene, "小组需要决定。");
+  assert.doesNotMatch(JSON.stringify(release), /editTransactions|beforeText|afterText|Passage|LOCAL_PASSAGE_/);
+
+  const wrongChapter = structuredClone(review);
+  wrongChapter.editTransactions[0].storyKey = "different-chapter";
+  assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: wrongChapter }).chapters, []);
+
+  const untrusted = structuredClone(release);
+  untrusted.chapters[0].editTransactions = [{ beforeText: "LEDGER_SENTINEL", afterText: "LEDGER_SENTINEL" }];
+  untrusted.chapters[0].passageContext = { scene: "PASSAGE_SENTINEL" };
+  const packageEntry = reviewedStoryPackageEntry(untrusted);
+  assert.match(packageEntry.data, /The group needed to decide\./);
+  assert.match(packageEntry.data, /小组需要决定。/);
+  assert.doesNotMatch(packageEntry.data, /LEDGER_SENTINEL|PASSAGE_SENTINEL|editTransactions|passageContext/);
+
+  const response = await exportReviewedHtml(new Request("http://localhost/api/organization/export", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reviewedStory: untrusted }),
+  }));
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /The group needed to decide\./);
+  assert.doesNotMatch(html, /LEDGER_SENTINEL|PASSAGE_SENTINEL|editTransactions|passageContext/);
 });
 
 test("server sanitizer reconstructs the reviewed Story from an explicit allowlist", () => {

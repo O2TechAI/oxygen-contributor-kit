@@ -18,7 +18,7 @@ The input is reviewed history, never unrestricted raw history. The output is a h
 
 ## Required references
 
-Read these references before the corresponding work. For end-to-end generation, adaptation, or validation, read all seven completely before editing:
+Read these references before the corresponding work. For end-to-end generation, adaptation, or validation, read all eight completely before editing:
 
 1. [product-contract.md](references/product-contract.md) — read before selecting Chapters or adapting the Project Story/Chapter experience.
 2. [story-data-contract.md](references/story-data-contract.md) — read before generating Story data or changing frontend types/import validation.
@@ -27,6 +27,7 @@ Read these references before the corresponding work. For end-to-end generation, 
 5. [privacy-evidence-boundary.md](references/privacy-evidence-boundary.md) — read before opening input data, presenting local originals, or linking exact evidence.
 6. [bilingual-contract.md](references/bilingual-contract.md) — read before generating localized Story copy or review state.
 7. [validation-checklist.md](references/validation-checklist.md) — read before writing tests and again before handoff.
+8. [narrative-writing-contract.md](references/narrative-writing-contract.md) — read before generating or revising titles, Story prose, passage assistance, or the canonical Chapter Insight.
 
 ## Non-negotiable boundaries
 
@@ -77,7 +78,8 @@ Select Chapters by meaningful state transition, not time or activity volume. Pre
 Build one coherent, evidence-grounded story of why the project began, what changed, what surprised people, where work failed, what decision followed, what was learned, and where the project now stands. Compress procedure and repeated status while retaining causal transitions, technical precision, failure, disagreement, and uncertainty.
 
 Apply the canonical narrative-compression and voice rules in
-[product-contract.md](references/product-contract.md): consider the complete reviewed history at
+[product-contract.md](references/product-contract.md) and the evidence-driven roles in
+[narrative-writing-contract.md](references/narrative-writing-contract.md): consider the complete reviewed history at
 the approved boundary, then write a concise 2–3 sentence project arc, compact evidence-derived
 Phase names, and context-sufficient causal Chapter prose. A Chapter may use several substantial
 paragraphs when needed to preserve the problem, constraints, attempts, failures, evidence, decision,
@@ -143,25 +145,45 @@ Review status / completion
 AI Highlights live inside Story as restrained interpretations with reusable lessons. Do not create a standalone Highlights section, a wizard, numbered section markers, a Release/Original card pair, or a dashboard of schema fields.
 
 Default to a clean read mode. A compact accessible pencil/Edit control enters a visually contained
-Story Edit Mode without using uncontrolled `contenteditable`; stable semantic blocks and the review
-ledger remain authoritative. Show exact-range annotations as restrained Word/Docs-like notes in the
-left Story margin on wide screens and as compact block-associated inline notes on narrow screens.
+Story Edit Mode. Direct typing, caret insertion, selection replacement/deletion, and safe plain-text
+paste are the primary interaction, but every mutation must become a controlled block-local review
+transaction; never let uncontrolled `contenteditable` or browser-native history bypass the review
+state. Expose synchronized Undo/Redo and readable margin notes with pending Discard and applied
+Revert-in-a-new-revision. Do not add a second text-selection action toolbar: native selection is
+used directly for replacement or deletion inside Story Edit Mode.
+On narrow screens, fold notes into compact block-associated surfaces without reducing Story width.
 
-On wide screens, a secondary sticky passage-context panel follows the Story block the reader clicks
-or selects. It may explain what was happening, why the moment mattered, what became clearer, and a
-grounded reusable lesson, but only from precomputed evidence-backed `passageContext`. Collapse it
-inline on narrower screens. Keep exactly one canonical reviewable Chapter Insight, collapsed by
-default at the end of Story; its existing review lifecycle remains unchanged.
+On wide screens, a secondary sticky passage-context panel exposes the complete Story-block sequence
+with position and Previous/Next controls. Navigation scrolls/highlights the stable owning block;
+clicking or focusing a Story block synchronizes the panel. It may explain what was happening, why the
+moment mattered, what became clearer, and a grounded reusable lesson, but only from precomputed
+evidence-backed `passageContext`. Collapse it inline on narrower screens. Keep exactly one canonical
+reviewable Chapter Insight, collapsed by default at the end of Story; its existing review lifecycle
+remains unchanged.
 
 Follow the rule:
 
 > Typography for reading. Boxes for interaction.
 
-### 6. Preserve exact Story annotations
+### 6. Preserve direct edits and compatible Story annotations
 
-Selecting generated Story text opens a temporary Delete / Revise / Add / Close toolbar. Store semantic block ID, exact start/end offsets, selected text, type, instruction, source language, base revision, resolution, and applied revision.
+Direct edits store Chapter/story key, stable block, language, base revision, operation, before/after
+text and ranges, pending/applied/reverted/needs-evidence state, evidence references when required,
+and applied revision. Bind every transaction to the primitive owning Chapter key and reject a
+cross-Chapter ledger at Apply, confirmation, and release. Coalesce a contiguous typing burst rather
+than recording each character. Undo targets the most recently changed pending transaction, not
+merely the last-created array entry. Undo/Redo changes the pending transaction state and working
+draft together; it never rewrites an applied revision. Discard removes one pending effect while
+keeping unrelated edits. Reversing an applied edit creates a distinct exact-inverse pending
+transaction; never coalesce it with other work or let its evidence exemption clear an unrelated
+addition. New standalone factual claims retain the reviewed-evidence gate. If safe cross-block
+mutation is unavailable, reject it visibly and preserve all text.
 
-Style only the exact validated inline range. Reject unsafe cross-block selections. Multiple non-overlapping ranges in one paragraph remain independent. Cancel removes only its annotation. Exact evidence is never annotatable or mutated.
+Do not open Delete / Revise / Add windows when Story text is selected. The controlled editor already
+supports those mutations directly and records them as transactions. If an existing imported review
+contains legacy exact-range annotations, validate and render them without broadening their range;
+pending legacy entries may retain their safe cancellation path. Exact evidence is never editable,
+annotatable, or mutated.
 
 ### 7. Preserve iterative review
 
@@ -196,7 +218,7 @@ There is no Suggested Release field or AI-prescribed decision. When permitted re
 
 ### 9. Validate behavior, safety, and visual language
 
-Write behavioral/model tests and perform browser verification from [validation-checklist.md](references/validation-checklist.md). Demonstrate at least two consecutive annotation → Apply review cycles before All set. Verify safe progress hydration, read/Edit mode, margin notes, contextual passage changes, the collapsed canonical Insight, exact-range styling, available/unavailable Privacy, bilingual shared lifecycle, both Back routes, independent Chapter-list scrolling, unaffected Release preview/Preferences, and no publication side effect.
+Write behavioral/model tests and perform browser verification from [validation-checklist.md](references/validation-checklist.md). Demonstrate direct typing → Apply → another direct edit → Apply before All set. Verify safe progress hydration, read/Edit mode, synchronized Undo/Redo, Discard/applied Revert, margin notes, complete contextual passage navigation, the collapsed canonical Insight, exact-range fallback styling, available/unavailable Privacy, bilingual shared lifecycle/debt, both Back routes, independent Chapter-list scrolling, release exclusion, unaffected Release preview/Preferences, and no publication side effect.
 
 Do not require browser-independent pixel identity. Require bounded Golden-v1 fidelity: the retained three-region desktop composition, editorial hierarchy, restrained palette/card usage, responsive article width, Chapter reading order, and mandatory interactions remain recognizable. Project content, counts, wrapping, and minor spacing may vary. Reject a new visual system or information hierarchy when the canonical components can render the validated data.
 

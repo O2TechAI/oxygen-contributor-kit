@@ -1,5 +1,5 @@
 import type { ChapterReviewState } from "./story-review.ts";
-import { applyAnnotationsToBlock, validateChapterReviewCompletion } from "./story-review.ts";
+import { applyStoryReviewToBlock, validateChapterReviewCompletion } from "./story-review.ts";
 import {
   LEGACY_STORY_PREFIX,
   STORY_PREFIX,
@@ -62,7 +62,7 @@ const blockCopy = (
   state: ChapterReviewState,
 ) => state.redactedBlocks.includes(blockId)
   ? ""
-  : applyAnnotationsToBlock(source, blockId, language, state.annotations);
+  : applyStoryReviewToBlock(source, blockId, language, state);
 
 function localeProjection(
   milestone: TimelineMilestone,
@@ -119,6 +119,7 @@ export function buildReviewedStoryRelease(
     const sources = sourceBlocks(milestone);
     if (!state || state.stage !== "human_confirmed" || !enPresentation
       || !validateChapterReviewCompletion(state, {
+        storyKey: milestone.story.key,
         privacyCandidates: enPresentation.privacy.candidates,
         privacyDecisions: state.appliedPrivacyDecisions,
         reviewableInsightIds: enPresentation.highlights.map((highlight) => highlight.id),

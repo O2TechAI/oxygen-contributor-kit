@@ -26,6 +26,10 @@ The right directory exists only when meaningful phases exist and space permits. 
 
 Keep project identity and orientation compact at the top of the center canvas. Preserve project name, overview, milestone count, phase count, reviewed-Highlight progress, and useful source/evidence context. Do not repeat that orientation inside a second giant project card.
 
+Place the short localized “Read a Chapter…” direction inside the Story stream after orientation and
+immediately before the first Phase. Give it a restrained accent/directional cue, not a card, banner,
+Hero paragraph, or new section. The rest of the approved homepage composition remains unchanged.
+
 Each phase heading is a clear narrative boundary. Each milestone card is a scan object with mandatory date, milestone type, visible AI-selected Highlight signal, concise title, unmistakable Before → After, intentional high-signal chips, then quiet evidence/read metadata. Do not render a paragraph-like Timeline summary when title + transition + chips already communicate the Chapter. Long explanation remains in the Chapter.
 
 Before/After should read as two short states separated by a clear directional cue. Chips use the existing accent color and remain compact; they are not decorative tags or a substitute for unsupported facts.
@@ -67,6 +71,11 @@ Show:
 
 Back restores stored Timeline scroll and focus to the originating Read chapter action.
 
+Use one responsive Chapter outer-canvas token/class for chrome, Hero/title, People, Story grid,
+Privacy, local Evidence, and completion. Those surfaces share visible left/right boundaries. Margin
+notes + document + passage panel form an internal Story grid inside that canvas; prose keeps a
+comfortable reading measure. Collapse consistently without horizontal overflow.
+
 ## Chapter sections
 
 Render exactly three primary content sections:
@@ -97,8 +106,17 @@ Keep AI aligned with human rows. On narrow screens, preserve marker integrity be
 
 Use a readable article measure and stable semantic blocks. The default is a clean read mode. Add a
 compact accessible pencil/Edit control in the Story heading; it enters a clearly contained review
-surface while leaving the semantic block model and review ledger authoritative. Do not use an
-uncontrolled textarea or `contenteditable` mutation path.
+surface while leaving the semantic block model and review ledger authoritative. The editing frame
+must explicitly say that the user can click and type, select to replace/delete, and that each change
+becomes a note. Show visible labeled Undo, Redo, and Finish editing controls with accessible disabled
+reasons. Direct editing is the sole user-facing Story mutation path; do not open Delete/Revise/Add
+windows from a text selection. Do not use an uncontrolled textarea or `contenteditable` mutation path.
+
+Use a controlled plain-text editor per stable Story block or an equivalent controlled document
+surface. Support caret insertion, selection replacement, Backspace/Delete, ordinary keyboard
+navigation, and paste that strips markup/scripts/embeds while preserving safe text and paragraph
+breaks. Synchronize every mutation and Ctrl/Cmd+Z, Ctrl/Cmd+Y, and Ctrl/Cmd+Shift+Z with the review
+transaction ledger. Reject unsafe cross-block mutation visibly without partially applying it.
 
 A useful editorial progression is:
 
@@ -119,10 +137,15 @@ coherent paragraphs and selective bullets over card-per-paragraph layouts.
 ## Contextual passage assistance
 
 On wide Chapter layouts, use a small restrained sticky panel to the right of the Story document.
-Clicking or meaningfully selecting a reviewable block updates the panel from that block's precomputed
-`passageContext`. It may naturally present what was happening, why it mattered, what became clearer,
-and a reusable lesson, omitting fields that would be repetitive or unsupported. When no block is
-active, show a Chapter-level preview or a quiet selection instruction.
+Order every valid `passageContext` by rendered Story-block order. Show current/total position plus
+accessible Previous/Next controls; disable the unavailable boundary direction and do not wrap by
+default. Arrow navigation updates the context, scrolls the stable owning block to a useful position,
+highlights it, and clears the former highlight. Respect reduced-motion preference.
+
+Clicking or focusing a reviewable block updates the same sequence position. It may
+naturally present what was happening, the consequential tension/constraint, why the team acted,
+what changed, and a grounded reusable principle as a concise mini-story rather than a mechanical
+field dump. Do not generate a new Insight from arbitrary selected text.
 
 This panel is local reading assistance, never a second canonical Insight or runtime model call. It
 must not create review state or enter release/export. On narrow screens, fold it into a compact
@@ -146,41 +169,39 @@ Show:
 
 Direct edit may expose title/observation/lesson. Human-directed revise asks how it should change and updates the local representation. Do not build a full chat app.
 
-## Text selection toolbar
+## Text selection behavior
 
-The toolbar is temporary and anchored near the selected generated Story range. It contains
-accessible Delete, Revise, Add, and compact Close (×) actions. Close immediately clears only the
-transient browser selection/toolbar state; it never cancels or deletes a saved annotation. Escape
-does the same, and click-outside may remain as an additional path.
+Selecting text in Story Edit Mode is a native editor operation. Typing replaces the selection and
+Backspace/Delete removes it; both routes create the same controlled block-local transaction and note
+as other direct edits. Focusing the owning block may synchronize passage assistance, but selection
+itself must not trigger a re-render or open a floating Delete/Revise/Add action window. Default read
+mode remains non-mutating.
 
-Selection requirements:
+If a safe direct mutation would cross semantic Story blocks, reject it visibly and preserve every
+block. Existing valid legacy annotation records may still render for compatibility, but the Chapter
+does not expose a creation toolbar for them.
 
-- exactly one noncollapsed selection;
-- meaningful length;
-- inside the Story article;
-- both endpoints inside the same reviewable copy element;
-- Story Edit Mode is active;
-- Chapter not human-confirmed.
+## Review-note presentation
 
-Reject the selection otherwise. Keep toolbar controls from clearing the native range before the action is recorded. Revise/Add open a small contextual textarea with Save/Cancel; empty instructions cannot save.
+Style only exact validated annotation/direct-edit ranges, for example a restrained wavy underline.
+On desktop, place one restrained note per meaningful transaction in the Story's left margin beside
+the owning stable block. It may show only operation/state/language, concise before→after or quote,
+human instruction, and valid Discard/Revert/review action. Never show offsets, raw IDs/JSON, or
+implementation metadata. Clicking the note scrolls/focuses its block and exact range without
+changing release content. On narrow screens, render the same note as a compact block-associated
+inline strip or drawer without narrowing the Story or causing horizontal overflow.
 
-Provide accessible names/tooltips. A focusable Story-block keyboard fallback may select the whole block when precise keyboard selection is not available; label it clearly and preserve exact whole-block offsets.
-
-## Annotation presentation
-
-Style only exact validated inline ranges, for example a restrained wavy underline. On desktop,
-place a restrained note in the Story's left margin beside the owning stable block. It may show only
-type/state, a short exact quote, instruction, and valid Cancel/review action. Clicking the note
-scrolls/focuses its block and exact range without changing release content. On narrow screens,
-render the same note as a compact block-associated inline strip or drawer.
+Language switching keeps notes from both locales inspectable and labels their source locale. Exact
+range styling and editor selection remain active-locale only; an opposite-locale note may focus its
+stable semantic block but must not select an unrelated translated range.
 
 Do not underline the parent paragraph/list item. Do not fill the page with review cards. Keep multiple independent ranges independent.
 
-Leaving Edit Mode clears only transient selection/toolbar state. Pending, applied, needs-evidence,
-and cancelled ledger entries remain intact. Applied work is not cancellable; changing it requires a
-new annotation/revision.
+Leaving Edit Mode clears only transient editor state. Pending, applied, needs-evidence,
+reverted, and cancelled ledger entries remain intact. Pending direct work exposes Discard; applied
+work exposes Revert in a new revision, never destructive cancellation.
 
-Exact Evidence view must never expose the Story toolbar or mutation controls.
+Exact Evidence view must never expose Story mutation controls.
 
 ## Privacy decision surface
 
@@ -241,11 +262,11 @@ Material equivalence requires:
 - readable centered article, neither narrow strip nor full-width prose;
 - clear typography/whitespace hierarchy;
 - compact aligned People;
-- default read mode plus a compact pencil/Edit control and contained editing surface;
-- left-margin annotations with a compact responsive fallback;
-- secondary sticky passage context on wide layouts and inline/collapsible fallback;
+- default read mode plus a compact pencil/Edit control and zero-guesswork controlled editing surface;
+- synchronized Undo/Redo and left-margin edit/annotation notes with a compact responsive fallback;
+- secondary sticky ordered passage-context sequence on wide layouts and inline/collapsible fallback;
 - one collapsed canonical AI Insight at the end of Story;
-- temporary selection toolbar;
+- native selection replacement/deletion without a redundant action popover;
 - one active Privacy interaction;
 - one focused completion area;
 - no numbered Chapter sections, separate Highlights, Release/Original cards, fake steppers, or nested dashboard cards.

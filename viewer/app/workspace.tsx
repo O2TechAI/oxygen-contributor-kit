@@ -409,8 +409,8 @@ export function InlineWorkspace() {
                   <p>{projectStorySummary}</p>
                   <div className="storyStats"><span><b>{highlights.length}</b> {labels.milestones}</span><span><b>{phaseGroups.length}</b> {labels.phases}</span><span><b>{reviewedInsights}/{highlights.length}</b> {labels.reviewed}</span><span><b>{docs.length}</b> {labels.retained}</span></div>
                   <small>{docs.length} {language==="zh"?"条已审阅来源记录": "reviewed source records"} · {projectCount(selectedProject || primaryProject).toLocaleString()} {labels.events} · {language==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
-                  <p className="storyNextStep">{labels.nextStep}</p>
                 </header>
+                <p className="storyNextStep" data-story-stream-instruction>↘ {labels.nextStep}</p>
                 {phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
                   <header className="phaseHeading"><span>{String(phaseIndex+1).padStart(2,"0")}</span><div><h2>{group.name}</h2><p>{group.events.length} {language==="zh"?"个章节":`milestone${group.events.length===1?"":"s"}`}</p></div></header>
                   <div className="milestoneList">{group.events.map((event) => { const copy=localized(event); return <article className="milestone" data-kind={event.story.kind} data-story-key={event.story.key} key={event.story.key} aria-labelledby={`milestone-${event.id}`}>

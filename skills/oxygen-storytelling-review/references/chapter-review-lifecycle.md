@@ -6,10 +6,10 @@ The review loop is iterative, never one-shot:
 
 ```text
 initial AI draft (revision 1, reviewing)
-  → human adds annotations
+  → human directly edits or adds annotations
   → Apply review
   → revision 2 (revision_ready)
-  → human reviews and may add annotations
+  → human reviews and may edit again
   → reviewing
   → Apply review
   → revision 3 (revision_ready)
@@ -49,6 +49,8 @@ type ChapterReviewState = {
   stage: ChapterReviewStage;
   revision: number;
   annotations: StoryAnnotation[];
+  editTransactions: StoryEditTransaction[];
+  redoTransactionIds: string[];
   evidenceVerified: boolean;
   publicationApproved: false;
 };
@@ -57,7 +59,59 @@ type ChapterReviewState = {
 The annotation identity is semantic block + exact source-language selection + revision context, not English text alone.
 Annotation IDs are nonempty primitive strings and globally unique within the Chapter across every resolution, including pending, applied, needs-evidence, and cancelled. Pending ranges in the same block, language, and base revision must not overlap; reject a conflicting annotation instead of allowing one revision record to claim that both were applied.
 
-## Exact-range invariant
+## Direct-edit transaction model
+
+Direct typing is the primary Story interaction. Store every meaningful mutation in an app-controlled
+ledger equivalent to:
+
+```ts
+type StoryEditTransaction = {
+  id: string;
+  storyKey: string;
+  blockId: string;
+  sourceLanguage: "en" | "zh";
+  baseRevision: number;
+  operation: "insert" | "delete" | "replace";
+  beforeText: string;
+  afterText: string;
+  beforeRange: { start: number; end: number };
+  afterRange: { start: number; end: number };
+  resolution: "pending" | "applied" | "reverted" | "needs_evidence";
+  supportingEvidence?: EvidenceReference[];
+  appliedRevision?: number;
+  revertsTransactionId?: string;
+};
+```
+
+Ranges are block-local and anchored to the applied `baseRevision`. Apply non-overlapping patches
+deterministically from immutable source/revision snapshots. A continuous contiguous typing burst in
+one block becomes one human-readable transaction, not one record per character. An incompatible or
+overlapping mutation fails visibly. Cross-block mutation must be atomic or rejected without changing
+any text; never truncate it into separate accidental edits.
+
+Deleting existing draft text is a safe delete transaction. Replacing or inserting wording inside an
+existing semantic passage is a controlled revision when it does not introduce a new unsupported
+claim. A materially new sentence, number, path/link, paragraph, or standalone factual assertion must
+pass reviewed-Evidence support; otherwise mark it `needs_evidence` without pretending it was applied.
+
+Undo marks the most recently changed active-locale pending transaction reverted and restores its
+draft effect and note together, including when an older transaction was just coalesced. Redo
+reactivates the same transaction ID; it never creates a duplicate. A new
+incompatible edit clears that locale's redo path. Pending Discard removes only that effect while
+preserving independent transactions. Applied revision history is immutable: `Revert in a new
+revision` creates a distinct exact-inverse pending transaction and records the prior transaction
+identity. Reject the Revert when it overlaps other pending work; never coalesce it into another
+transaction or clear that transaction's reviewed-Evidence requirement.
+
+Direct-edit transaction and redo state are local review metadata. They never enter Final Release
+Memory, HTML, ZIP, exact Evidence, passage assistance, or publication state.
+
+## Legacy exact-range annotation compatibility (no new selection UI)
+
+Do not expose a Delete/Revise/Add creation window. The rules below apply only when safely importing
+or rendering an already-valid legacy exact-range annotation record.
+
+### Exact-range invariant
 
 Render pending styling only when every condition holds:
 
@@ -75,7 +129,7 @@ Build inline segments from all unique valid boundaries. This permits multiple no
 
 Reject a selection when both endpoints do not belong to the same reviewable semantic copy element. Do not expand a cross-paragraph selection to whole blocks.
 
-## Delete
+### Delete
 
 Delete means: remove the selected generated Story text from the next release draft.
 
@@ -84,9 +138,9 @@ Delete means: remove the selected generated Story text from the next release dra
 - Do not delete or alter source evidence.
 - On Apply, remove the exact source-language span. For a paired language without safe literal alignment, conservatively suppress or regenerate the equivalent semantic block; do not invent an offset.
 
-## Revise
+### Revise
 
-Revise opens a contextual instruction input such as `What should be corrected here?`.
+A compatible legacy Revise record contains a contextual instruction such as `What should be corrected here?`.
 
 - Require a nonempty trimmed instruction.
 - Store it with the exact span.
@@ -94,9 +148,9 @@ Revise opens a contextual instruction input such as `What should be corrected he
 - Preserve uncertainty and surrounding useful detail.
 - In a deterministic local prototype, the human instruction may appear directly as the corrected wording if no safe model integration exists. Do not pretend an external AI ran when it did not.
 
-## Add
+### Add
 
-Add opens a contextual input such as `What is missing here?`.
+A compatible legacy Add record contains a contextual instruction such as `What is missing here?`.
 
 - Anchor the instruction to the selected semantic Story position.
 - Incorporate it only when support exists in permitted reviewed evidence/context.
@@ -104,7 +158,7 @@ Add opens a contextual input such as `What is missing here?`.
 - When support cannot be proven, set `needs_evidence`; do not add the factual claim.
 - `needs_evidence` remains visible and blocks All set until resolved or cancelled.
 
-## Pending visibility and cancellation
+### Pending visibility and cancellation
 
 Unresolved work should be visible but restrained:
 
@@ -119,30 +173,32 @@ and as a compact block-associated inline note on narrow screens. Selecting a not
 validated range. The note is presentation metadata only: it does not duplicate, replace, or bypass
 the annotation ledger, and it never enters release output.
 
-Cancellation is available only for `pending` or `needs_evidence` work and changes only that unresolved annotation to cancelled. Cancelling still returns/stays in reviewing until another Apply presents the resulting revision. Never expose Cancel for an applied annotation: reversing applied content must be represented as a new pending operation and pass through another Apply.
+Cancellation is available only for `pending` or `needs_evidence` annotation work and changes only that unresolved annotation to cancelled. Direct transactions use Discard with the same independent-effect guarantee. Cancelling/Discarding still returns or stays in reviewing until another Apply presents the resulting revision. Never expose Cancel/Discard for applied history: reversal must be a new pending operation and pass through another Apply.
 
-Story Read/Edit mode is also presentation state only. Leaving Edit clears transient selection and
-toolbar state but never deletes pending/applied annotations or revision provenance. Precomputed
+Story Read/Edit mode is also presentation state only. Leaving Edit clears transient editor state
+but never deletes pending/applied annotations or revision provenance. Precomputed
 passage context does not create annotations, insight-review state, or lifecycle transitions.
 
 ## Apply review contract
 
-Apply review means only: apply currently pending human annotations and present another draft.
+Apply review means only: apply currently pending human edits/annotations and present another draft.
 
 It must:
 
 - require complete required Privacy decisions;
 - require every unique Chapter evidence reference to resolve to exactly one actual reviewed item;
-- replay the complete stored annotation ledger from immutable revision-1 Story blocks and validate every applied/cancelled/needs-evidence record, ID, base/applied revision, exact quote, and revision-history link before any mutation;
+- replay the complete stored annotation/direct-edit ledgers from immutable revision-1 Story blocks and validate every record, ID, base/applied revision, range, before/after text, and revision-history link before any mutation;
 - validate every pending annotation against the current block, language, revision, offsets, and exact selected quote before applying any annotation;
-- reject an overlapping, stale, mismatched, duplicated-ID, malformed non-pending record, or otherwise invalid collection atomically without incrementing the revision or marking any annotation applied;
+- validate every pending direct patch against the current applied block and reject mixed annotation/direct ownership of the same block/revision;
+- reject an overlapping, stale, mismatched, duplicated-ID, malformed non-pending record, or otherwise invalid collection atomically without incrementing the revision or marking any work applied;
 - increment the revision;
-- apply Delete, Revise, and evidence-supported Add in revision order;
+- apply any already-persisted compatible Delete, Revise, and evidence-supported Add annotations in revision order, without recreating the retired selection-action window;
+- apply safe direct insert/delete/replace transactions and evidence-supported factual additions in revision order;
 - preserve unaffected useful detail, failures, disagreement, uncertainty, and causal relationships;
 - preserve evidence semantics and Privacy decisions;
 - keep the resulting Story fully annotatable;
 - record `appliedRevision` for applied work;
-- surface unsupported Add as `needs_evidence`.
+- surface unsupported Add/direct factual additions as `needs_evidence` without incrementing a falsely successful revision.
 
 It must not:
 
@@ -177,7 +233,7 @@ When an insight edit creates paired-language review debt, a later status-only ac
 
 ## Review summary
 
-Derive compact counts from non-cancelled annotations:
+Derive compact counts from non-cancelled annotations and non-reverted direct transactions:
 
 - revisions;
 - additions;
@@ -197,6 +253,7 @@ Enable it only when:
 - latest AI/local revision has been presented for human inspection;
 - no pending annotation remains;
 - no `needs_evidence` annotation remains;
+- no pending or `needs_evidence` direct transaction remains;
 - every required Privacy candidate has a Keep/Redact decision.
 - no paired locale remains stale/unresolved;
 - no inline-insight operation remains pending;
@@ -205,7 +262,7 @@ Enable it only when:
 
 Clicking it sets stage to human_confirmed without changing the revision or publication state. Show `Final Release Memory` plus a note that confirmation is local and not publication approval.
 
-Creating another annotation after a revision returns the Chapter to reviewing and removes All set until the new work is applied.
+Creating another direct edit or annotation after a revision returns the Chapter to reviewing and removes All set until the new work is applied.
 
 ## Reopen review
 
@@ -256,3 +313,10 @@ Test at minimum:
 16. localized insight edit followed by Accept still creates paired-language review debt;
 17. forged pending/applied insight state, Privacy history disagreement, or redacted-target mismatch blocks All set and release;
 18. Reject → Apply → All set → Reopen → Accept/override → Apply restores the insight through a new revision while preserving provenance.
+19. caret insertion, selection replacement, keyboard deletion, and safe plain-text paste create exact controlled transactions;
+20. a contiguous typing burst coalesces while independent block/ranges stay independently discardable;
+21. toolbar and keyboard Undo/Redo restore the same transaction/note identity, and disabled states are exposed;
+22. an applied edit cannot be silently undone; Revert creates a new pending transaction and revision provenance;
+23. cross-block/overlapping mutations fail visibly and preserve every block;
+24. one-locale direct edit creates paired-locale debt and shares revision/confirmation history;
+25. pending/applied/reverted/needs-evidence transaction metadata and redo state are absent from actual release serialization.
