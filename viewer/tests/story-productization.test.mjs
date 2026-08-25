@@ -190,10 +190,14 @@ test("the Story Skill progressively loads stage-local references", async () => {
   ]) assert.doesNotMatch(build, new RegExp(deferred.replace(".", "\\.")));
   assert.match(build, /context-complete writing support keeps Build active/);
 
-  const review = rows.get("**Human Review or review-UI work**")?.join(" ") ?? "";
-  assert.match(review, /chapter-review-lifecycle\.md/);
-  assert.match(review, /ui-interaction-contract\.md/);
-  assert.match(review, /ready_for_human_review/);
+  const lifecycle = rows.get("**Human Review begins**")?.join(" ") ?? "";
+  assert.match(lifecycle, /chapter-review-lifecycle\.md/);
+  assert.match(lifecycle, /ready_for_human_review/);
+  assert.doesNotMatch(lifecycle, /diagnosing, auditing, or implementing review UI/);
+
+  const reviewUi = rows.get("**Human Review or review-UI work**")?.join(" ") ?? "";
+  assert.match(reviewUi, /ui-interaction-contract\.md/);
+  assert.doesNotMatch(reviewUi, /chapter-review-lifecycle\.md/);
 
   const localization = rows.get("**Localization requested or present**")?.join(" ") ?? "";
   assert.match(localization, /bilingual-contract\.md/);
