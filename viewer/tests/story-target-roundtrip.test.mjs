@@ -12,7 +12,12 @@ import {
   hydrateStoryReviewSession,
 } from "../lib/story-review-session.ts";
 import { buildReviewedStoryRelease } from "../lib/story-release.ts";
-import { STORY_PREFIX, parseStoryAnnotation, selectProjectTimeline } from "../lib/timeline.ts";
+import {
+  STORY_PREFIX,
+  parseStoryAnnotation,
+  selectProjectTimeline,
+  storyReleaseTargetCatalog,
+} from "../lib/timeline.ts";
 
 const WORKFLOW_RUN_ID = "st14-target-roundtrip-run";
 const UPDATED_AT = "2032-01-02T03:04:05.000Z";
@@ -296,6 +301,7 @@ function reviewContext(milestone, decision = "redact") {
     storyKey: milestone.story.key,
     privacyCandidates: en.privacy.candidates,
     privacyDecisions: { "target-candidate": decision },
+    targetCatalog: storyReleaseTargetCatalog(en),
     reviewableInsightIds: en.highlights.map((highlight) => highlight.id),
     chapterEvidence: [milestone.story.evidence.primary, ...milestone.story.evidence.supporting],
     evidenceResolved: true,
@@ -548,8 +554,9 @@ for (const matrixCase of INVALID_TARGET_CASES.filter((item) => item.boundary ===
     const result = applyChapterReview(initial, context);
     const confirmed = markChapterReady(result.state, context);
     const immediate = buildReviewedStoryRelease([milestone], { [milestone.story.key]: confirmed });
-    const keepReview = applyAndConfirm(milestone, "keep").review;
-    const unchangedRelease = buildReviewedStoryRelease([milestone], { [milestone.story.key]: keepReview });
+    const keepMilestone = parsedMilestone(["scene"]);
+    const keepReview = applyAndConfirm(keepMilestone, "keep").review;
+    const unchangedRelease = buildReviewedStoryRelease([keepMilestone], { [keepMilestone.story.key]: keepReview });
     const session = result.blockedReason ? null : canonicalJsonRoundTrip(milestone, confirmed);
     const hydrated = session ? hydrateStoryReviewSession(session, WORKFLOW_RUN_ID, [milestone]) : { chapterReviews: {} };
     const hydratedRelease = buildReviewedStoryRelease([milestone], hydrated.chapterReviews);
@@ -620,7 +627,9 @@ test("schema-1 valid non-body targets remain readable with exact release effects
 
 test("schema-1 nonexistent targets fail closed instead of hydrating a forged Chapter", () => {
   const milestone = parsedMilestone(["people:ghost"]);
-  const { review } = applyAndConfirm(milestone);
+  const validMilestone = parsedMilestone(["people:person-alpha"]);
+  const review = structuredClone(applyAndConfirm(validMilestone).review);
+  review.redactedBlocks = ["people:ghost"];
   const transported = JSON.parse(JSON.stringify({
     schema: "oxygen.story-review-session/1",
     workflowRunId: WORKFLOW_RUN_ID,

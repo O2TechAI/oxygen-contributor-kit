@@ -4,7 +4,13 @@ import { access, readFile } from "node:fs/promises";
 import { syntheticStoryEvents, syntheticStoryProject } from "./fixtures/synthetic-story-project.mjs";
 import { buildReviewedStoryRelease } from "../lib/story-release.ts";
 import { applyChapterReview, emptyChapterReview, markChapterReady } from "../lib/story-review.ts";
-import { STORY_PREFIX, parseStoryAnnotation, resolveEvidenceTarget, selectProjectTimeline } from "../lib/timeline.ts";
+import {
+  STORY_PREFIX,
+  parseStoryAnnotation,
+  resolveEvidenceTarget,
+  selectProjectTimeline,
+  storyReleaseTargetCatalog,
+} from "../lib/timeline.ts";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
@@ -138,6 +144,7 @@ test("the synthetic project completes through the shared review and release runt
       storyKey: milestone.story.key,
       privacyCandidates: presentation.privacy.candidates,
       privacyDecisions,
+      targetCatalog: storyReleaseTargetCatalog(presentation),
       reviewableInsightIds: presentation.highlights.map((highlight) => highlight.id),
       chapterEvidence: [milestone.story.evidence.primary],
       evidenceResolved: true,

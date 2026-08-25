@@ -36,11 +36,16 @@ import {
 
 const evidence = { documentId: "doc", eventId: "event" };
 const reviewableInsightId = "shared-lesson";
+const targetCatalog = new Map([
+  ["scene", { target: "scene", kind: "scalar", field: "scene" }],
+  [`insight:${reviewableInsightId}`, { target: `insight:${reviewableInsightId}`, kind: "insight", id: reviewableInsightId }],
+]);
 const context = (privacyCandidates = [], privacyDecisions = {}, chapterEvidence = [evidence], overrides = {}) => {
   const reviewedBlocks = overrides.reviewedBlocks || { en: {}, zh: {} };
   return {
     storyKey: overrides.storyKey || "chapter",
     privacyCandidates, privacyDecisions, chapterEvidence,
+    targetCatalog: overrides.targetCatalog || targetCatalog,
     reviewableInsightIds: overrides.reviewableInsightIds || [reviewableInsightId],
     evidenceResolved: overrides.evidenceResolved ?? true,
     supportedAddIds: overrides.supportedAddIds || [],

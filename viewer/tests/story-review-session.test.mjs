@@ -14,7 +14,7 @@ import {
   createStoryReviewSession,
   hydrateStoryReviewSession,
 } from "../lib/story-review-session.ts";
-import { selectProjectTimeline } from "../lib/timeline.ts";
+import { selectProjectTimeline, storyReleaseTargetCatalog } from "../lib/timeline.ts";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
@@ -37,6 +37,7 @@ function confirmedReview(milestone) {
     storyKey: milestone.story.key,
     privacyCandidates: presentation.privacy.candidates,
     privacyDecisions: decisions,
+    targetCatalog: storyReleaseTargetCatalog(presentation),
     reviewableInsightIds: presentation.highlights.map((highlight) => highlight.id),
     chapterEvidence: [milestone.story.evidence.primary, ...milestone.story.evidence.supporting],
     evidenceResolved: true,

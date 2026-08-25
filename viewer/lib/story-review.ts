@@ -3,6 +3,7 @@ import type {
   StoryHighlightItem,
   StoryLanguage,
   StoryPrivacyCandidate,
+  StoryReleaseTargetCatalog,
 } from "./timeline";
 
 export type PrivacyDecision = "keep" | "redact";
@@ -140,6 +141,7 @@ export type ChapterReviewCompletionContext = {
   storyKey: string;
   privacyCandidates: StoryPrivacyCandidate[];
   privacyDecisions: Record<string, PrivacyDecision>;
+  targetCatalog: StoryReleaseTargetCatalog;
   reviewableInsightIds: string[];
   sourceBlocks: StoryBlockCollection;
   reviewedBlocks: StoryBlockCollection;
@@ -774,14 +776,15 @@ function updateTranslationStaleness(
 
 function privacyComplete(context: ChapterReviewCompletionContext) {
   if (!Array.isArray(context.privacyCandidates)
-    || !context.privacyDecisions || typeof context.privacyDecisions !== "object" || Array.isArray(context.privacyDecisions)) return false;
+    || !context.privacyDecisions || typeof context.privacyDecisions !== "object" || Array.isArray(context.privacyDecisions)
+    || !context.targetCatalog || typeof context.targetCatalog.has !== "function") return false;
   const ids = context.privacyCandidates.map((candidate) => candidate.id);
   return ids.every(validStableId)
     && new Set(ids).size === ids.length
     && context.privacyCandidates.every((candidate) => {
       const decision = context.privacyDecisions[candidate.id];
       return Array.isArray(candidate.releaseTargets)
-        && candidate.releaseTargets.every(validStableId)
+        && candidate.releaseTargets.every((target) => validStableId(target) && context.targetCatalog.has(target))
         && new Set(candidate.releaseTargets).size === candidate.releaseTargets.length
         && validPrivacyDecision(decision);
     });

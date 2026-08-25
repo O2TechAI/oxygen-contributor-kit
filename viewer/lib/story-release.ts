@@ -3,7 +3,11 @@ import { applyStoryReviewToBlock, validateChapterReviewCompletion } from "./stor
 import {
   LEGACY_STORY_PREFIX,
   STORY_PREFIX,
+  storyReleaseTargetCatalog,
   type StoryLanguage,
+  type StoryReleaseTarget,
+  type StoryReleaseTargetCatalog,
+  type StoryReleaseTargetDescriptor,
   type TimelineMilestone,
 } from "./timeline.ts";
 
@@ -57,12 +61,45 @@ export type ReviewedStoryRelease = {
   chapters: ReviewedReleaseChapter[];
 };
 
+type ScalarReleaseField = Extract<StoryReleaseTargetDescriptor, { kind: "scalar" }>["field"];
+type ReleaseTargetSelection = {
+  scalars: Set<ScalarReleaseField>;
+  reconstruction: Set<number>;
+  details: Set<number>;
+  people: Set<string>;
+  insights: Set<string>;
+};
+
+function releaseTargetSelection(
+  catalog: StoryReleaseTargetCatalog,
+  targets: string[],
+): ReleaseTargetSelection | null {
+  const selection: ReleaseTargetSelection = {
+    scalars: new Set(),
+    reconstruction: new Set(),
+    details: new Set(),
+    people: new Set(),
+    insights: new Set(),
+  };
+  for (const target of targets) {
+    const descriptor = catalog.get(target as StoryReleaseTarget);
+    if (!descriptor) return null;
+    if (descriptor.kind === "scalar") selection.scalars.add(descriptor.field);
+    else if (descriptor.kind === "reconstruction") selection.reconstruction.add(descriptor.index);
+    else if (descriptor.kind === "detail") selection.details.add(descriptor.index);
+    else if (descriptor.kind === "person") selection.people.add(descriptor.id);
+    else selection.insights.add(descriptor.id);
+  }
+  return selection;
+}
+
 const blockCopy = (
   source: string,
   blockId: string,
+  redacted: boolean,
   language: StoryLanguage,
   state: ChapterReviewState,
-) => state.redactedBlocks.includes(blockId)
+) => redacted
   ? ""
   : applyStoryReviewToBlock(source, blockId, language, state);
 
@@ -70,37 +107,38 @@ function localeProjection(
   milestone: TimelineMilestone,
   state: ChapterReviewState,
   language: StoryLanguage,
+  selection: ReleaseTargetSelection,
 ): ReleaseLocale | null {
   const presentation = milestone.story.reviewPresentation?.[language];
   if (!presentation || presentation.highlights.length !== 1) return null;
   const insightReviews = state.insightReviews;
   return {
-    phase: blockCopy(presentation.phase, "phase", language, state),
-    title: blockCopy(presentation.title, "title", language, state),
-    overview: blockCopy(presentation.overview, "overview", language, state),
-    before: blockCopy(presentation.before, "before", language, state),
-    after: blockCopy(presentation.after, "after", language, state),
-    people: presentation.people.filter((person) => !state.redactedBlocks.includes(`people:${person.id}`)).map((person) => ({
+    phase: blockCopy(presentation.phase, "phase", selection.scalars.has("phase"), language, state),
+    title: blockCopy(presentation.title, "title", selection.scalars.has("title"), language, state),
+    overview: blockCopy(presentation.overview, "overview", selection.scalars.has("overview"), language, state),
+    before: blockCopy(presentation.before, "before", selection.scalars.has("before"), language, state),
+    after: blockCopy(presentation.after, "after", selection.scalars.has("after"), language, state),
+    people: presentation.people.filter((person) => !selection.people.has(person.id)).map((person) => ({
       releaseLabel: person.releaseLabel,
       role: person.role,
       description: person.description,
     })),
     story: {
-      scene: blockCopy(presentation.story.scene, "scene", language, state),
+      scene: blockCopy(presentation.story.scene, "scene", selection.scalars.has("scene"), language, state),
       reconstruction: presentation.story.reconstruction
-        .map((copy, index) => blockCopy(copy, `reconstruction-${index}`, language, state))
+        .map((copy, index) => blockCopy(copy, `reconstruction-${index}`, selection.reconstruction.has(index), language, state))
         .filter(Boolean),
       importantDetails: presentation.story.importantDetails
-        .map((copy, index) => blockCopy(copy, `detail-${index}`, language, state))
+        .map((copy, index) => blockCopy(copy, `detail-${index}`, selection.details.has(index), language, state))
         .filter(Boolean),
-      decisionOutcome: blockCopy(presentation.story.decisionOutcome, "outcome", language, state),
+      decisionOutcome: blockCopy(presentation.story.decisionOutcome, "outcome", selection.scalars.has("decisionOutcome"), language, state),
       ...(presentation.story.uncertainty
-        ? { uncertainty: blockCopy(presentation.story.uncertainty, "uncertainty", language, state) }
+        ? { uncertainty: blockCopy(presentation.story.uncertainty, "uncertainty", selection.scalars.has("uncertainty"), language, state) }
         : {}),
     },
     insights: presentation.highlights.flatMap((highlight) => {
       const review = insightReviews[highlight.id];
-      if (state.redactedBlocks.includes(`insight:${highlight.id}`)
+      if (selection.insights.has(highlight.id)
         || (review?.status === "rejected" && review.resolution === "applied")) return [];
       const localized = review?.localized[language] || highlight;
       return [{ id: localized.id, title: localized.title, noticed: localized.noticed, lesson: localized.lesson }];
@@ -119,18 +157,22 @@ export function buildReviewedStoryRelease(
     const state = reviews[milestone.story.key];
     const enPresentation = milestone.story.reviewPresentation?.en;
     const sources = sourceBlocks(milestone);
+    const targetCatalog = enPresentation ? storyReleaseTargetCatalog(enPresentation) : null;
+    const selection = targetCatalog && state ? releaseTargetSelection(targetCatalog, state.redactedBlocks) : null;
     if (!state || state.stage !== "human_confirmed" || !enPresentation
+      || !targetCatalog || !selection
       || !validateChapterReviewCompletion(state, {
         storyKey: milestone.story.key,
         privacyCandidates: enPresentation.privacy.candidates,
         privacyDecisions: state.appliedPrivacyDecisions,
+        targetCatalog,
         reviewableInsightIds: enPresentation.highlights.map((highlight) => highlight.id),
         sourceBlocks: sources,
         reviewedBlocks: sources,
       })) return [];
-    const en = localeProjection(milestone, state, "en");
+    const en = localeProjection(milestone, state, "en", selection);
     if (!en) return [];
-    const zh = state.staleTranslations.length > 0 ? null : localeProjection(milestone, state, "zh");
+    const zh = state.staleTranslations.length > 0 ? null : localeProjection(milestone, state, "zh", selection);
     return [{
       key: milestone.story.key,
       kind: milestone.story.kind,

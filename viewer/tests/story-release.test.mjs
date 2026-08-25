@@ -13,7 +13,7 @@ import {
   sanitizeReviewedStoryRelease,
 } from "../lib/story-release.ts";
 import { POST as exportReviewedHtml } from "../app/api/organization/export/route.ts";
-import { STORY_PREFIX } from "../lib/timeline.ts";
+import { STORY_PREFIX, storyReleaseTargetCatalog } from "../lib/timeline.ts";
 
 const candidate = {
   id: "local-detail", title: "Local detail", explanation: "Review it", recommendation: "redact",
@@ -67,6 +67,7 @@ const reviewContext = (privacyDecision) => ({
   storyKey: milestone.story.key,
   privacyCandidates: [candidate],
   privacyDecisions: { "local-detail": privacyDecision },
+  targetCatalog: storyReleaseTargetCatalog(milestone.story.reviewPresentation.en),
   reviewableInsightIds: ["lesson"],
   chapterEvidence: [evidence],
   evidenceResolved: true,

@@ -6,7 +6,12 @@ import {
   type ChapterReviewState,
   type PrivacyDecision,
 } from "./story-review.ts";
-import type { StoryLanguage, TimelineMilestone } from "./timeline.ts";
+import {
+  storyReleaseTargetCatalog,
+  type StoryLanguage,
+  type StoryReleaseTarget,
+  type TimelineMilestone,
+} from "./timeline.ts";
 import { isWorkflowRunId } from "./workflow-progress.ts";
 
 export const STORY_REVIEW_SESSION_SCHEMA = "oxygen.story-review-session/1" as const;
@@ -244,7 +249,9 @@ function sourceBlocks(milestone: TimelineMilestone) {
 function validPersistedReview(state: ChapterReviewState, milestone: TimelineMilestone) {
   const storyKey = milestone.story.key;
   const presentation = milestone.story.reviewPresentation?.en;
+  const targetCatalog = presentation ? storyReleaseTargetCatalog(presentation) : null;
   if (!presentation
+    || !targetCatalog
     || !["reviewing", "revision_ready", "human_confirmed"].includes(state.stage)
     || typeof state.evidenceVerified !== "boolean"
     || state.publicationApproved !== false
@@ -256,7 +263,7 @@ function validPersistedReview(state: ChapterReviewState, milestone: TimelineMile
   const blockIds = new Set(Object.keys(sources.en));
   const insightIds = presentation.highlights.map((highlight) => highlight.id);
   if (!Array.isArray(state.redactedBlocks)
-    || state.redactedBlocks.some((id) => !blockIds.has(id))
+    || state.redactedBlocks.some((id) => !targetCatalog.has(id as StoryReleaseTarget))
     || new Set(state.redactedBlocks).size !== state.redactedBlocks.length
     || !Array.isArray(state.staleTranslations)
     || state.staleTranslations.some((item) => !item
@@ -273,6 +280,7 @@ function validPersistedReview(state: ChapterReviewState, milestone: TimelineMile
       storyKey,
       privacyCandidates: presentation.privacy.candidates,
       privacyDecisions: state.appliedPrivacyDecisions,
+      targetCatalog,
       reviewableInsightIds: insightIds,
       sourceBlocks: sources,
       reviewedBlocks: sources,
