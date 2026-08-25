@@ -2,10 +2,10 @@
 
 ## Goal
 
-Collect only the contributor's in-scope project history, separate mixed-project content, build a
-concise chronological account of the primary project, prepare a best-effort privacy-reviewed
-candidate, recover confirmed working preferences, show the local review surface, and finish with
-one downloadable ZIP. Nothing is uploaded automatically.
+Collect only the contributor's in-scope project history, separate mixed-project content, prepare a
+best-effort privacy-reviewed candidate, build and human-review Project Story, then review
+Preferences and Release Preview before finishing with one downloadable ZIP. Nothing is uploaded
+automatically.
 
 ## Completion criteria
 
@@ -13,8 +13,8 @@ The workflow is complete only when all of the following are true:
 
 1. The contributor has been shown the local Viewer whenever a browser-visible frontend is
    available. The exact localhost URL is also provided, and no password is required.
-2. The contributor has seen the collection counts, project classification, redaction summary,
-   preference questions, exclusions, and unresolved warnings.
+2. The contributor has completed the human Project Story review, then seen the redaction summary,
+   preference questions, Release Preview, exclusions, and unresolved warnings.
 3. The contributor can download one verified `oxygen-contribution.zip`.
 4. `publication_approved` remains `false` unless the contributor separately and explicitly
    approves publication.
@@ -121,9 +121,8 @@ Read and follow `skills/oxygen-organize-review-export/SKILL.md`.
 - Create `work/<run>/project-map.json` while preserving source event IDs and timestamps.
 - Build one combined chronological timeline per project across all matching trajectories. Never
   create one timeline per trajectory.
-- Distill the primary-project timeline to 10-40 meaningful milestones. Use the agent to rewrite
-  each milestone as a short, one-idea description while retaining the original timestamp and
-  evidence IDs.
+- Distill the primary-project timeline into evidence-derived milestones and Chapters. Apply no
+  numeric quota; every selected Chapter must form one coherent, supported project-change arc.
 
 Report how many source records and events were assigned to each project, what was excluded, and
 which classification decisions remain uncertain.
@@ -145,6 +144,9 @@ Use the contributor's configured AI model for redaction. The mandatory notice is
 
 > Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review is
 > required before release.
+
+Use the canonical worker contract at `tools/llm_redact/REDACTION_PROMPT.md`; do not search for a
+prompt by basename.
 
 First create the AI review boundary from the organized raw run:
 
@@ -203,51 +205,7 @@ Important boundaries:
 - If model access is unavailable or a fail-closed check fails, report the blocker and do not
   claim the release candidate is safe.
 
-## 5. Elicit confirmed preferences
-
-Read and follow
-`skills/oxygen-elicit-contributor-preferences/SKILL.md` after project organization and after unsafe
-content has been excluded from the review copy.
-
-1. Work on the primary-project events unless the contributor asks to include other projects.
-2. Report the exact automatic-removal counts from the privacy pass.
-3. For judgement-call content such as named-person criticism, ask one bulk question per category:
-   remove, keep, or inspect. Default to keep when unanswered.
-4. Find friction signals such as repeated corrections, long exchanges, late rejection, decision
-   reversal, explicit rules, or sustained meeting disagreement.
-5. Merge duplicate signals and produce at most 12 probes by default, with a hard limit of 20.
-   Report how many qualifying moments were set aside.
-6. For each probe, provide a self-contained recap of at most three sentences and two or three
-   mutually exclusive, evidence-grounded choices, plus “Something else” and “Nothing worth
-   recording here.”
-7. Present all probes as one batch. Do not interrupt the contributor once per event.
-8. Write `work/<run>-review/preference-probes.json` and validate it:
-
-```bash
-python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py \
-  work/<run>-review
-```
-
-Only explicit answers become checklist preferences. Unanswered and skipped probes produce no
-preference. Every confirmed preference retains its source evidence IDs. A preference answer is
-not publication approval.
-
-The Viewer implements probe-answer controls in its `Preferences` tab. Generate the batch, push it
-with `tools/llm_redact/push_probes.py`, and let the contributor answer in the browser:
-
-```bash
-python3 tools/llm_redact/push_probes.py \
-  --probes work/<run>-probes --dialogue work/<run>-dialogue \
-  --summary work/<run>-review/preference-probes.json --limit 12
-```
-
-Each probe shows its recap, its offered options, `Nothing worth recording here`, a free-text
-`Something else`, and its source evidence IDs. Every recorded answer displays what was stored and
-offers `clear`, which returns the probe to unanswered rather than recording a refusal. A probe with
-no answer produces no preference. Answers live in the `probes` table and are exported with the run;
-`preference-probes.json` remains the interchange format for anything outside the Viewer.
-
-## 6. Prepare Storytelling Review
+## 5. Build Project Story and Review Story
 
 Once `work/<run>-review` is organized and has passed the required privacy preparation, read and
 follow `skills/oxygen-storytelling-review/SKILL.md`. Derive project-specific Story data only from
@@ -260,15 +218,15 @@ The contributor reviews the Project Story, Chapters, inline insight, Privacy can
 evidence through the iterative direct edit → Apply review loop. Compatible imported
 Delete/Revise/Add records remain reviewable legacy provenance, not the primary current UI. `All set` creates a human-confirmed
 Final Release Memory; it does not publish, package automatically, or set
-`publication_approved=true`. After Story review, continue through the existing Release preview,
-Preferences, and ZIP flow below.
+`publication_approved=true`. The Agent pauses as soon as Stage 5 Review Story activates and waits
+for the contributor before continuing to Preferences, Release Preview, or ZIP handoff.
 
 Use the Viewer workflow-progress surface for user-facing execution status. Update it only at safe
 workflow boundaries with sanitized stage/state, real counts where a denominator exists, blocker
 codes, timestamps, and human-action state. Do not expose chain-of-thought, prompts, raw model/tool
 output, private messages, Story/Evidence content, or removed material through progress.
 
-## 7. Continue and show the Viewer
+## 6. Continue and show the Viewer
 
 The progress-first Viewer from §1 is still running. Attach the safe reviewed run to that same
 origin and workflow run ID:
@@ -302,7 +260,6 @@ $Review = "work\repo-run-review"
 $Dialogue = "work\repo-run-dialogue"
 $Findings = "work\repo-run-findings"
 $Redaction = "work\repo-run-redaction"
-$Probes = "work\repo-run-probes"
 $Viewer = "http://127.0.0.1:<port>" # exact value printed by §1
 $WorkflowRun = "<run-id>"           # exact value printed by §1
 
@@ -317,20 +274,13 @@ python .\tools\llm_redact\verify_coverage.py `
   --dialogue "$Dialogue" --findings "$Findings"
 python .\tools\llm_redact\merge_and_apply.py `
   --dialogue "$Dialogue" --findings "$Findings" --out "$Redaction"
-python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
-  "$Review"
-
 # Reattach the reviewed boundary to the Viewer already running from §1.
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
-# Push only validated findings and probes to that exact Viewer.
+# Push only validated findings to that exact Viewer.
 python .\tools\llm_redact\push_redactions.py `
   --redacted "$Redaction\redacted" `
-  --base-url "$Viewer"
-python .\tools\llm_redact\push_probes.py `
-  --probes "$Probes" --dialogue "$Dialogue" `
-  --summary "$Review\preference-probes.json" --limit 12 `
   --base-url "$Viewer"
 ```
 
@@ -354,8 +304,8 @@ validation the correct terminal state is `WAITING_FOR_HUMAN_STORY_REVIEW`, not a
 handoff. Resume release/package work only after the contributor says the review is complete.
 
 The Viewer must show organization progress, project groups, the primary project, one combined
-timeline per project, 10-40 concise primary-project milestones, source-event evidence, and visible
-HTML/ZIP download actions. Do not describe unsupported annotation controls as available.
+timeline per project, evidence-derived primary-project milestones, source-event evidence, and
+visible HTML/ZIP download actions. Do not describe unsupported annotation controls as available.
 
 Two further tabs are available once their passes have run:
 
@@ -364,13 +314,55 @@ Two further tabs are available once their passes have run:
   version; the rest show the single text that would be published. Each span carries its category,
   the reason it was marked, and controls to change the category or delete the decision. Deleting is
   a soft delete: the span stops applying but the record stays auditable.
-- `Preferences` presents the probe batch and records answers (§5).
+- `Preferences` presents the probe batch and records answers (§7).
 
 Both tabs report `running` with live progress while their pass is in flight, so an empty result is
 never mistaken for a finished one. Redactions are stored as offsets and applied at render time —
 `items.content` holds the untouched original, which is what makes a decision reversible. Because of
 that, a Viewer serving a run is serving unredacted text over its API; never expose it beyond
 localhost without an authenticating proxy in front.
+
+## 7. Prepare Preferences and Release Preview
+
+After the contributor completes Story review, read and follow
+`skills/oxygen-elicit-contributor-preferences/SKILL.md` on the same privacy-prepared reviewed input.
+Do not reopen raw project history or independently run another redaction workflow.
+
+1. Work on the primary-project events unless the contributor asks to include other projects.
+2. Reuse the validated privacy summary and reviewed exclusions already attached to the input.
+3. Find friction signals such as repeated corrections, long exchanges, late rejection, decision
+   reversal, explicit rules, or sustained meeting disagreement.
+4. Merge duplicate signals and produce at most 12 probes by default, with a hard limit of 20.
+   Report how many qualifying moments were set aside.
+5. For each probe, provide a self-contained recap of at most three sentences and two or three
+   mutually exclusive, evidence-grounded choices, plus “Something else” and “Nothing worth
+   recording here.”
+6. Present all probes as one batch. Do not interrupt the contributor once per event.
+7. Write `work/<run>-review/preference-probes.json` and validate it:
+
+```bash
+python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py \
+  work/<run>-review
+```
+
+Only explicit answers become checklist preferences. Unanswered and skipped probes produce no
+preference. Every confirmed preference retains its source evidence IDs. A preference answer is
+not publication approval.
+
+The Viewer implements probe-answer controls in its `Preferences` tab. Generate the batch, push it
+with `tools/llm_redact/push_probes.py`, and let the contributor answer in the browser:
+
+```bash
+python3 tools/llm_redact/push_probes.py \
+  --probes work/<run>-probes --dialogue work/<run>-dialogue \
+  --summary work/<run>-review/preference-probes.json --limit 12
+```
+
+Each probe shows its recap, its offered options, `Nothing worth recording here`, a free-text
+`Something else`, and its source evidence IDs. Every recorded answer displays what was stored and
+offers `clear`, which returns the probe to unanswered rather than recording a refusal. A probe with
+no answer produces no preference. Answers live in the `probes` table and are exported with the run;
+`preference-probes.json` remains the interchange format for anything outside the Viewer.
 
 ## 8. Review and build the ZIP
 

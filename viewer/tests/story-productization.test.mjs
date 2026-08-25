@@ -170,7 +170,7 @@ test("the normal workflow delegates to the canonical repository Story runtime", 
     read("../app/story-chapter-editor.tsx"),
   ]);
   assert.match(agents, /delegate Project[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
-  assert.match(sop, /Prepare Storytelling Review[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
+  assert.match(sop, /Build Project Story and Review Story[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
   assert.match(organizer, /Delegate Storytelling after the reviewed boundary/);
   assert.match(organizer, /does not need to know or manually name the delegated Skill/);
   assert.match(agents, /sanitized stage\/state/);
