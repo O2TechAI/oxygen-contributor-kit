@@ -48,7 +48,7 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(episode,/original\.availability/);assert.match(episode,/Original content unavailable in the reviewed artifact/);
   assert.match(episode,/privacyState\.active\.whyFlagged/);assert.doesNotMatch(episode,/Suggested release|建议发布表述|labels\.suggestedRelease/);
   assert.match(episode,/publication approval/);
-  assert.match(episode,/insightReview\?\.status === "rejected"[\s\S]*chapterReview\.stage !== "reviewing"/);
+  assert.match(episode,/const insightSuppressed = chapterReview\.redactedBlocks\.includes\(`insight:\$\{visibleHighlight\.id\}`\);/);
   assert.match(episode,/role="region"/);assert.doesNotMatch(episode,/aria-modal/);
   assert.match(episode,/supportingEvidence/);assert.match(episode,/staleTranslations/);
   assert.match(episode,/fetch\("\/api\/evidence"/);assert.match(episode,/supportedAddIds/);assert.match(episode,/evidenceResolved/);
@@ -109,6 +109,8 @@ test("Chapter Story defaults to read mode and uses controlled direct editing plu
   assert.match(episode,/data-story-editor=\{blockId\}/);
   assert.equal((episode.match(/data-inline-insight=/g) || []).length, 1);
   assert.match(episode,/<details className=\{`canonicalInsightDisclosure/);
+  assert.doesNotMatch(episode, /const insightSuppressed =[^;]*insightReview\?\.status === "rejected"/);
+  assert.match(episode, /rejected_applied[\s\S]*labels\.rejectedApplied[\s\S]*aria-live="polite"/);
   assert.match(css,/\.storyReviewWorkspace\.editing \.storyDocument\{border:/);
   assert.match(css,/\.storyBlockRow\{display:grid;grid-template-columns:160px minmax\(0,1fr\)/);
   assert.match(css,/\.passageInsightPanel\{position:sticky/);
@@ -117,8 +119,8 @@ test("Chapter Story defaults to read mode and uses controlled direct editing plu
   assert.match(css,/@media\(max-width:760px\)[\s\S]*\.storyMarginNotes\{display:flex;overflow-x:auto/);
   assert.match(timeline,/passageContext: Record<string, StoryPassageContext>/);
   assert.doesNotMatch(release,/passageContext/);
-  assert.match(workspace,/Read a Chapter to review the full story, evidence, and lessons\./);
-  assert.match(workspace,/阅读任一章节，完整审阅故事、证据与可复用经验/);
+  assert.match(workspace,/Read a Chapter to review the full story, evidence, direct learning, and reusable rules\./);
+  assert.match(workspace,/阅读任一章节，完整审阅故事、证据、直接经验与可复用规则/);
   assert.match(workspace,/setWorkflowOpen\(true\)/);
   assert.match(progress,/private Agent reasoning is never shown here/);
   assert.doesNotMatch(workflowRoute,/original_json|SELECT\s+content|reasoning|prompt/i);
@@ -156,7 +158,8 @@ test("Chapter completion renders unsupported-Add copy only for a needs-evidence 
   const episode=await read("../app/story-chapter-editor.tsx");
   assert.match(episode,/summary\.needsEvidenceAdd > 0 && <p className="completionBlocker">\{labels\.addBlocked\}/);
   assert.match(episode,/summary\.pendingInsights > 0 \? labels\.insightBlocked/);
-  assert.match(episode,/chapterReview\.staleTranslations\.length > 0 \? labels\.translationBlocked/);
+  assert.match(episode,/chapterReview\.staleTranslations\.length > 0 && <p className="completionNotice">\{labels\.translationBlocked\}/);
+  assert.doesNotMatch(episode,/staleTranslations\.length > 0 \? labels\.translationBlocked/);
   assert.doesNotMatch(episode,/summary\.unresolved[^\n]*labels\.addBlocked/);
 });
 test("final package is explicitly unapproved and excludes runtime database", async () => {
@@ -182,11 +185,14 @@ test("organizer labels projects and preserves concise summaries", async () => {
   assert.match(organizer,/primary_project/);assert.match(organizer,/organization_category/);assert.match(organizer,/highlights/);
   assert.match(skill,/at most 18 English words or 32 Chinese characters/);assert.match(skill,/proactively open/);assert.match(skill,/Download ZIP/);
   assert.match(skill,/Never create one timeline per trajectory/);
-  assert.match(skill,/10–40 high-impact milestones/);
+  assert.match(skill,/evidence-supported meaningful milestones without using a numeric quota/);
+  assert.match(skill,/durable\s+progress, substantive iterations/);
   const launcher=await read("../../skills/oxygen-organize-review-export/scripts/run_local_review.py");
   assert.match(launcher,/trajectory_id}:\{event_id/);
   const timeline=await read("../lib/timeline.ts");
-  assert.match(timeline,/maximum = 40/);
+  assert.match(timeline,/maximum\?: number/);
+  assert.match(timeline,/maximum \?\? Number\.POSITIVE_INFINITY/);
+  assert.match(timeline,/slice\(0, maximum \?\? 40\)/);
   assert.match(timeline,/oxygen\.story-highlight\/2/);
   assert.match(timeline,/oxygen\.story-milestone\/1/);
   assert.match(timeline,/releaseEpisode/);

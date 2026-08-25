@@ -1,6 +1,6 @@
 ---
 name: oxygen-storytelling-review
-description: Continue an already-reviewed project history through Oxygen's canonical evidence-grounded Project Story and iterative bilingual Chapter review. Use after organization and privacy preparation; reuse the repository Viewer/runtime rather than creating an independent frontend. Do not collect raw history, rerun redaction, or approve publication.
+description: Continue an already-reviewed project history through Oxygen's canonical evidence-grounded Project Story and iterative Chapter review, with optional non-blocking localization. Use after organization and privacy preparation; reuse the repository Viewer/runtime rather than creating an independent frontend. Do not collect raw history, rerun redaction, or approve publication.
 ---
 
 # Oxygen Storytelling Review
@@ -86,48 +86,130 @@ never treat partially written Phases, milestones, or Chapters as the active Proj
 real subprogress may use `--story-event progress --story-completed <n> --story-total <n>` only when
 the denominator is known.
 
-Select Chapters by meaningful state transition, not time or activity volume. Prefer problem discovery, baseline, surprising result, failure, root cause, decision, direction change, architecture change, quantitative shift, validation, freeze, handoff, and current state. Deduplicate repeated discussion and keep Chapters chronological.
+Select Chapters across the full set of meaningful project developments. Decisions and direction
+changes are two eligible categories among several.
+Eligible milestones include the supported beginning, problem discovery, a baseline, durable
+progress or capability, a substantive iteration that changed quality, coverage, or understanding,
+a surprising result, failure or diagnostic case that affected later work, root cause, decision,
+direction or architecture change, quantitative result, validation, recovery, freeze, handoff, and
+current state. Keep separate milestones when each establishes a distinct durable state that a
+future reader needs. Combine events only when they form one connected causal arc. Deduplicate
+repeated discussion and omit execution/status noise that adds no new result, constraint, or
+understanding. Keep Chapters chronological and never select to satisfy a fixed count.
 
-Build one coherent, evidence-grounded story of why the project began, what changed, what surprised people, where work failed, what decision followed, what was learned, and where the project now stands. Compress procedure and repeated status while retaining causal transitions, technical precision, failure, disagreement, and uncertainty.
+Build one coherent, evidence-grounded story of why the project began, what changed, what surprised people, where work failed, what decision followed, what was learned, and where the project now stands. Within a Chapter, brevity is never a selection, generation, revision, or validation objective. Retain every reviewed-Evidence-supported unit that materially explains the current milestone's background, causal or temporal relationship, participant interaction, judgment, failed attempt, progress or iteration, or result.
 
-Apply the canonical narrative-compression and voice rules in
+Apply the canonical context-retention and voice rules in
 [product-contract.md](references/product-contract.md) and the evidence-driven roles in
 [narrative-writing-contract.md](references/narrative-writing-contract.md): consider the complete reviewed history at
 the approved boundary, then write a concise 2–3 sentence project arc, compact evidence-derived
-Phase names, and context-sufficient causal Chapter prose. A Chapter may use several substantial
-paragraphs when needed to preserve the problem, constraints, attempts, failures, evidence, decision,
-action, outcome, uncertainty, and reusable lesson. Compression never permits fictionalization,
-hidden model reasoning, or unsupported causality.
+Phase names, and context-complete causal Chapter prose. Determine Chapter length from the reviewed
+Evidence needed to reconstruct the meaningful change. Do not apply a global word, paragraph, or
+sentence maximum. A Chapter may use several substantial paragraphs when needed to preserve the
+participants, starting position, alternatives, objections, corrections, failures, directional
+Evidence, decision, action, outcome, and uncertainty. Omit only duplicated or routine material that
+contributes none of those meanings, material outside the current milestone boundary, and content
+withheld by Privacy. Readability may reorganize retained context but may not delete it. Never add
+hidden model reasoning or unsupported causality.
 
-Before accepting the Chapter set, perform a narrative-coverage audit: when reviewed evidence contains the initiating problem, goal, or baseline assumptions, the opening Chapter/overview must establish that supported beginning rather than start at a midstream command, import-path, test-collection, or other routine setup failure. Keep such operational incidents only when they caused a durable contract, architecture, or direction change.
+Write a distinct, localized Chapter overview beneath each title. It is a short summary of that
+Chapter's supported background, consequential participant turn or judgment, and result or open
+boundary. It is never a navigation instruction such as `Open the Chapter…`, and two Chapters may
+not reuse the same boilerplate. Bind its factual claims to Chapter Evidence. Use concrete nouns,
+active verbs, specific constraints, and varied sentence rhythm so the preview and full Chapter feel
+lively and engaging. Engagement never authorizes jokes, invented color, dialogue, emotion, motive,
+metaphor, anthropomorphism, or unsupported causality.
+
+Integrate People into the Decision process with evidence-supported actions. Show which safe role
+raised or framed the issue, which role acted, and which role questioned, corrected, approved, or
+responded when the reviewed record contains those turns. Preserve the action → response → revision
+or result sequence across paragraphs without converting the Chapter into a transcript. Do not
+manufacture an objection, reply, consensus, or second actor when Evidence contains none. Avoid
+generic `the team` wording when a supported functional role is available.
+
+Determine the actual supported relationship before choosing its wording. Express that relationship
+with the most natural sentence construction; a connective adverb is optional. Sequence, cause,
+response, contrast, correction, evidence, uncertainty, and continuation require different
+Evidence. The examples in [narrative-writing-contract.md](references/narrative-writing-contract.md)
+are an open vocabulary, not an allowlist. Do not require a transition word in every sentence or
+paragraph, force lexical novelty, or substitute one stock connector for another. Prefer clear
+syntax, explicit roles, and direct verbs. Never claim a stronger relationship than Evidence supports.
+
+Before accepting the Chapter set, perform a narrative-coverage audit. Confirm that the selected
+milestones retain supported progress, substantive iterations, and failures as well as judgment
+moments. When reviewed evidence contains the initiating problem, goal, or baseline assumptions,
+the opening Chapter/overview must establish that supported beginning. A midstream command,
+import-path, test-collection, or other routine setup failure cannot replace that orientation. Keep an
+operational incident when it produced a durable diagnostic result, recovery rule, contract,
+capability, architecture, evaluation boundary, or direction change.
 
 ### 3. Generate project-local Story data
 
 Create stable Chapter, participant, Story-block, passage-context, inline-insight, Privacy-candidate,
 and evidence identities using [story-data-contract.md](references/story-data-contract.md). Generate
-English as canonical default and natural semantically equivalent Chinese. Keep evidence IDs and
+English as the canonical Story and readiness surface. Chinese is an optional localized sidecar,
+never an activation requirement. When it is generated, keep it natural and preserve shared safe
+identities; discard an unsafe sidecar without rejecting the English Story. Keep evidence IDs and
 source text language-independent. Passage context is precomputed local review assistance keyed by
 stable Story block; it is not a second release insight and is excluded from release/export.
 
-Attach Story metadata to reviewed evidence without replacing source content. Validate source hash, chronology, unique keys, bilingual structure, evidence resolution, and the final current-state Chapter.
+Attach Story metadata to reviewed evidence without replacing source content. Validate source hash,
+chronology, unique keys, the canonical English structure, any present localized sidecar's safe
+identity boundary, evidence resolution, and the final current-state Chapter.
 
-The staged package is ready only when its bilingual Project Summary is complete; every selected
+Establish the project context and functional role table before writing Chapters. For every selected
+human, user, Agent, reviewer, speaker, owner, or operator action, generate a neutral release-safe
+Person with reviewed Evidence references. Preserve role uncertainty and never infer a name,
+employer, title, identity, or relationship. If no participant can be supported, keep the event in
+Timeline or Exact Evidence and do not generate or activate a Chapter. Routine machine-only events
+cannot stand alone; they may support a Chapter only when reviewed Evidence also identifies an actor
+who diagnosed, decided, executed, reviewed, approved, or responded.
+
+At generation time, write every primary, supporting, and Person Evidence `eventId` as the exact
+fully qualified imported item ID. A bare event suffix is ineligible even when it currently resolves
+once. Reject that candidate before staging. Regeneration after ambiguity wastes completed work.
+
+The staged package is ready only when its English Project Summary is complete; every selected
 milestone is an explicit ordered Phase member with one complete Chapter; every required Story block
-has matching EN/中文 `passageContext`; every Chapter has exactly one canonical Insight; evidence and
+has complete English `passageContext`; every Chapter has exactly one canonical Insight; evidence and
 Privacy structures resolve; and no placeholder, fallback milestone, partial job, or validation debt
-remains. Do not require a fixed number of Phases, milestones, or Chapters.
+remains. Missing, incomplete, or semantically stale Chinese copy never blocks Stage 5. Do not
+require a fixed number of Phases, milestones, or Chapters.
 
 Before activation, write and validate the structured Stage-4 narrative self-review defined in the
-data and narrative contracts. Map Background, evidence thread, turn, result, direct learning,
-reusable principle, and supported open tension to stable Story/Insight block IDs; confirm that the
-title names tension plus outcome; confirm each Phase assignment and each adjacent boundary; and
-confirm that every Passage Insight adds interpretation rather than repeating its Story block. Use a
-concise evidence-derived Phase rationale, not hidden chain-of-thought. If any check fails, keep the
+data and narrative contracts. Map Background, Decision process, Result, Open questions, Direct
+learning, and Reusable rule to stable Story/Insight block IDs; confirm at least one supported
+participant and complete actor coverage; confirm standard neutral terminology, Evidence-bound facts, separated
+interpretation, preserved uncertainty, and the absence of prohibited style; confirm each Phase
+assignment and adjacent boundary; and confirm that every inline AI Insight adds an Evidence-grounded
+participant interaction and narrative explanation plus a bounded Reusable rule, without numbering
+semantic passages or repeating its Story block. Confirm that every listed Person's English
+functional role is used in Decision process so the participant interaction is understandable. If a
+Chinese sidecar exists, validate its safe shared participant/Privacy identities, but do not make its
+prose quality or semantic alignment a Story-readiness gate.
+Classify every Chapter coverage-ledger element as represented or unsupported by the reviewed
+Evidence. The historical `supporting_detail` state remains parser-compatible, but a staged candidate
+that uses it cannot enter human review because supported explanatory context belongs in the Chapter. Create one
+claim-traceability entry per material factual claim and explicit Evidence inputs for the canonical
+Insight. Represent every supported unit that explains background, causal or temporal relationships,
+participant interaction, judgment, failure, progress or iteration, or result. Omit a source unit only
+when it contributes none of those meanings, lies outside the milestone boundary, duplicates retained
+meaning, or is withheld by Privacy. An arbitrary Chapter count is never a justification.
+Persist one privacy-safe context-retention row for every classified source unit in the complete
+milestone Evidence cluster. A source unit is a reviewed conversational turn or independently
+meaningful nested reviewed turn, not merely an Evidence-event ID. The row stores a stable digest
+identity, unit kind, owning Evidence reference, and either its Story block IDs or one fixed exclusion
+reason; it never stores source copy. Several units may share one Evidence reference, and repeating
+that reference across claim traces does not prove context coverage. Activation fails unless every
+represented unit is linked through `unitIds` to the factual claim and Story block that carries it.
+Use a concise evidence-derived Phase rationale without hidden
+chain-of-thought. If any check fails, keep the
 workflow on Build Project Story and improve the staged candidate or disclose the evidence
 limitation. Never activate a merely structural package.
 
-After reattaching the fully generated candidate and restoring a complete privacy pass, request the
-single atomic activation:
+After reattaching the fully generated candidate, confirm that the existing complete Privacy pass
+was preserved for source-equivalent data. If source-bearing data changed, complete Privacy again.
+Then request the single atomic activation:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
@@ -186,7 +268,7 @@ Privacy
 Review status / completion
 ```
 
-AI Highlights live inside Story as restrained interpretations with reusable lessons. Do not create a standalone Highlights section, a wizard, numbered section markers, a Release/Original card pair, or a dashboard of schema fields.
+AI Highlights live inside Story as restrained interpretations with reusable rules. Do not create a standalone Highlights section, a wizard, numbered section markers, a Release/Original card pair, or a dashboard of schema fields.
 
 Default to a clean read mode. A compact accessible pencil/Edit control enters a visually contained
 Story Edit Mode. Direct typing, caret insertion, selection replacement/deletion, and safe plain-text
@@ -195,20 +277,31 @@ transaction; never let uncontrolled `contenteditable` or browser-native history 
 state. Expose synchronized Undo/Redo and readable margin notes with pending Discard and applied
 Revert-in-a-new-revision. Do not add a second text-selection action toolbar: native selection is
 used directly for replacement or deletion inside Story Edit Mode.
+Treat `beforeinput` as optional metadata: type-check unknown event fields, derive one minimal
+previous/next-text mutation when metadata is incomplete, deduplicate `beforeinput` + `change`, and
+commit IME composition only after its stable result.
 On narrow screens, fold notes into compact block-associated surfaces without reducing Story width.
 
 On wide screens, a secondary sticky passage-context panel exposes the complete Story-block sequence
 with position and Previous/Next controls. Navigation scrolls/highlights the stable owning block;
 clicking or focusing a Story block synchronizes the panel. It may explain what was happening, why the
-moment mattered, what became clearer, and a grounded reusable lesson, but only from precomputed
+moment mattered, what became clearer, and a grounded reusable rule, but only from precomputed
 evidence-backed `passageContext`. Collapse it inline on narrower screens. Keep exactly one canonical
 reviewable Chapter Insight, collapsed by default at the end of Story; its existing review lifecycle
 remains unchanged.
 
-Every complete Chapter must supply `passageContext` for the exact rendered Story-block set in both
-English and Chinese with identical stable keys. Missing or unsupported context makes that Chapter
-incomplete; do not use an empty panel, generic copy, or an optional import fallback. Passage context
-is local non-reviewable reading assistance and never enters Final Release Memory, HTML, or ZIP.
+Use the neutral localized Story headings Background, Decision process, Result, and Open questions.
+Keep supporting evidence/factors inside Decision process and omit empty or generic-filler-only
+headings. Label canonical Insight meanings Direct learning and Reusable rule. Accept and Do not
+preserve must provide immediate accessible pending feedback; after Apply, show the applied revision
+without implying Saved, Final, Published, or publication approval.
+
+Every complete canonical English Chapter must supply `passageContext` for its exact rendered
+Story-block set. Missing or unsupported English context makes that Chapter incomplete; do not use
+an empty panel, generic copy, or optional import fallback. When a Chinese sidecar exists, its own
+rendered blocks require safe matching context or the sidecar is omitted. Missing Chinese never
+blocks English readiness. Passage context is local non-reviewable reading assistance and never
+enters Final Release Memory, HTML, or ZIP.
 
 Follow the rule:
 
@@ -256,9 +349,10 @@ revision provenance.
 
 Only All set creates human-confirmed Final Release Memory, and only after the latest revision was
 presented, all required Privacy decisions are complete, no pending or needs-evidence direct
-transaction remains, no unresolved compatible legacy work remains, paired-language debt is clear,
-the canonical Insight is settled, and evidence plus complete provenance validate. Reopen review
-resumes the same shared lifecycle.
+transaction remains, no unresolved compatible legacy work remains, the canonical Insight is
+settled, and evidence plus complete provenance validate. Paired-language debt remains visible but
+never blocks All set; omit stale localized copy from release. Reopen review resumes the same shared
+lifecycle.
 
 ### 8. Preserve contextual Privacy
 
@@ -280,7 +374,7 @@ Do not require browser-independent pixel identity. Require bounded Golden-v1 fid
 
 ## Completion standard
 
-The result is complete only when a fresh reviewer can understand what to read and what to do without learning Oxygen's internal schema, every Story claim remains traceable to reviewed evidence, the Chapter is useful reusable project memory for humans and future Agents, the iterative review loop works in both languages, and Final Release Memory remains explicitly separate from publication. Reusable memory may preserve evidence-backed user-visible rationale, mistakes, decisions, corrections, rejected approaches, and outcomes; it never records private latent reasoning.
+The result is complete only when a fresh reviewer can understand what to read and what to do without learning Oxygen's internal schema, every Story claim remains traceable to reviewed evidence, the Chapter is useful reusable project memory for humans and future Agents, the canonical English review loop works, any available localization remains non-blocking, and Final Release Memory remains explicitly separate from publication. Reusable memory may preserve evidence-backed user-visible rationale, mistakes, decisions, corrections, rejected approaches, and outcomes; it never records private latent reasoning.
 
 Completion also requires a new clean clone and a completely fresh, contextless Agent to receive only
 the normal public Oxygen workflow request and independently reach the same integrated canonical

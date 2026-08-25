@@ -10,6 +10,13 @@ EN | 中文
 
 English is the canonical fresh-session default. Mount one compact control in the retained application shell/top-right navigation so it remains globally discoverable across Project Story, Chapter, and Exact Evidence instead of creating separate page-local language controls. Local persistence is optional when straightforward, but a fresh/reset session must still have a clear English default.
 
+English is also the sole Story-readiness and human-review gate. Chinese is an optional localized
+sidecar. Its absence, incomplete prose, semantic drift, or outstanding translation debt cannot
+block Stage 5, Apply review, All set, or an English-only release. Hide the Chinese control when no
+complete safe sidecar is available. If supplied Chinese breaks shared participant, Privacy,
+Evidence, or semantic-block identity, discard that sidecar and continue with the validated English
+Story. Never weaken the English, Privacy, or Evidence gates to preserve a localization.
+
 ## What localizes
 
 Where Story presentation exists, switching language updates:
@@ -34,7 +41,7 @@ Where Story presentation exists, switching language updates:
 
 Exact source evidence and technical identifiers do not translate as original content.
 
-## Semantic equivalence
+## Optional semantic equivalence
 
 English and Chinese are two presentations of one Chapter, not independent Stories. They share:
 
@@ -49,16 +56,24 @@ English and Chinese are two presentations of one Chapter, not independent Storie
 - annotations and provenance;
 - Final Release Memory confirmation.
 
-The language versions must preserve the same factual claims, causal relationships, failures, uncertainty, decisions, and lessons. Chinese should be natural editorial Chinese rather than literal word-for-word translation.
+When Chinese is present, it should preserve the same factual claims, causal relationships,
+failures, uncertainty, decisions, and lessons. Chinese should be natural editorial Chinese rather
+than literal word-for-word translation. These are localization quality goals, not activation gates.
 
-Apply the narrative-compression and voice rules from
+Apply the context-retention and voice rules from
 [product-contract.md](product-contract.md) to both presentations. The English project summary is
 normally 2–3 concise sentences; Chinese conveys the same start, turn, and current boundary in
 equally economical natural prose rather than mirroring English sentence structure. Prefer one- or
 two-word English Phase names and compact Chinese book-part labels without changing Phase semantics.
-Chapter depth remains semantically equivalent in both languages: problem, constraints, attempts,
-failures, evidence, decision/rationale, action/outcome, uncertainty, and reusable learning may use
-different natural sentence structures but cannot diverge in claims. The canonical AI insight stays
+Each Chapter overview is a distinct localized summary of that Chapter's supported background,
+participant turn or judgment, and result/open boundary. English and Chinese may use different
+sentence rhythm, but both remain concrete, engaging, Evidence-traced, and free of repeated
+navigation boilerplate.
+Chapter depth remains semantically equivalent in both languages: participants, problem,
+constraints, alternatives, disagreement, corrections, attempts, failures, directional Evidence,
+decision/rationale, action/outcome, uncertainty, and reusable learning may use different natural
+sentence structures but cannot diverge in claims. Shared coverage-ledger and claim-traceability
+identities prove the same semantic material even when sentence boundaries differ. The canonical AI insight stays
 concrete and project-specific in both languages rather than being forced to an arbitrary sentence
 count.
 
@@ -68,23 +83,26 @@ Preserve exact benchmark/product names, metrics, code identifiers, versions, and
 
 ## Presentation-data validation
 
-Use stable shared keys and validate:
+Validate the English presentation independently. For an optional Chinese sidecar, use stable shared
+keys and validate the following safety identities before displaying or exporting it:
 
 - exact Chapter-key set match;
 - matching Chapter order;
-- matching phase membership and Before/After transition semantics;
-- matching evidence-backed chip facts, with natural localized wording around preserved technical anchors;
 - matching participant/insight/privacy IDs;
 - matching reconstruction and important-detail semantic block counts, or an explicit alignment map;
-- mandatory passage context in both presentations, with key sets exactly matching every rendered
-  Story-content block and equivalent evidence-grounded meaning; a missing map or key is incomplete;
-- presence of every declared selected technical/semantic anchor in reader-facing fields of both language presentations, or an explicit bilingual alignment for a non-literal semantic anchor; reject absent and one-locale-only anchors;
+- complete passage context for every rendered Chinese Story-content block;
+- one shared complete Chapter coverage ledger, context-retention ledger, and claim/Evidence
+  traceability map; source-unit identities and Story block mappings are language-independent;
+- presence of every required technical/semantic anchor in canonical English; matching Chinese
+  anchors are desirable but do not gate the English package;
 - one shared evidence set;
 - unavailable Privacy candidates have no excerpt in either language;
 - available excerpts have one original source-language value, not separate translated originals.
 - nontechnical Chinese Story/insight/identity/status fields are actually localized rather than copied wholesale from English.
 
-An implementation may store English core Story plus a Chinese presentation sidecar or one combined bilingual object. Project-specific bilingual copy stays local, not hardcoded in generic frontend source.
+Store English core Story plus an optional Chinese presentation sidecar. Project-specific localized
+copy stays local, not hardcoded in generic frontend source. A malformed sidecar is omitted; it does
+not invalidate the English core.
 
 ## Shared review state
 
@@ -98,12 +116,12 @@ Annotations preserve:
 - one shared base/applied revision history.
 
 Direct-edit transactions preserve the same shared Chapter/block identity plus active-locale
-before/after text and ranges. Editing one locale updates only that locale's working draft and marks
-the paired semantic block stale when the transaction is applied. Track this debt once per semantic
-block/target locale, not once per keystroke or independent range; one complete human review of the
-paired block clears its debt. Do not copy or silently translate the replacement into the other
-Story. Undo/Redo operates on active-locale pending transactions while the revision, evidence,
-Privacy, All set, and Reopen lifecycle remains shared.
+before/after text and ranges. Editing one locale updates only that locale's working draft and may
+mark the paired semantic block stale when a sidecar exists. Track this as informational debt once
+per semantic block/target locale. It never blocks the canonical review. Omit a stale localized
+sidecar from release instead of silently translating or exporting divergent copy. Undo/Redo
+operates on active-locale pending transactions while the revision, evidence, Privacy, All set, and
+Reopen lifecycle remains shared.
 
 Do not pretend an English character range maps exactly to Chinese. When applying cross-language changes, regenerate or conservatively update the equivalent semantic block. The paired result must remain semantically aligned.
 
@@ -147,6 +165,8 @@ Story can switch language; Evidence remains source-language. Localize only the s
 12. Chinese inline insights and identity/review explanations contain natural Chinese rather than English placeholder copy.
 13. Read/Edit, margin-note, passage-context, and collapsed canonical-Insight controls localize while
     sharing one underlying semantic/review state.
-14. direct editing one locale changes only that working draft, creates paired-locale debt on Apply,
-    and Undo/Redo in either locale never forks revision or confirmation history.
+14. direct editing one locale changes only that working draft; any paired-locale debt is visible but
+    non-blocking, and Undo/Redo never forks revision or confirmation history.
 15. passage Previous/Next position follows the same stable Story-block sequence in both languages.
+16. an English-only Chapter activates, completes review, and exports without a Chinese sidecar.
+17. an unsafe Chinese sidecar is omitted while the validated English Story remains reviewable.

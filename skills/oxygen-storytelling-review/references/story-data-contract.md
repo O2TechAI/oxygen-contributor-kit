@@ -56,6 +56,7 @@ type StoryPerson = {
   role: string;
   description: string;
   localIdentityState: "not_identified" | "local_only";
+  evidence: EvidenceReference[];
 };
 
 type StoryChapterCopy = {
@@ -82,6 +83,60 @@ type StoryPassageContext = {
   reusableLesson?: string;
 };
 
+type StoryCoverageKey =
+  | "mainProblem"
+  | "participants"
+  | "startingPosition"
+  | "alternatives"
+  | "objectionOrDisagreement"
+  | "failedAttempt"
+  | "correction"
+  | "decisionChangingEvidence"
+  | "quantitativeResult"
+  | "finalAction"
+  | "result"
+  | "remainingUncertainty";
+
+type StoryCoverageItem =
+  | { state: "not_supported" }
+  | { state: "represented"; blockIds: StoryBlockId[]; evidence: EvidenceReference[] }
+  | { state: "supporting_detail"; evidence: EvidenceReference[]; justification: string };
+
+type StoryClaimTrace = {
+  id: string;
+  kind: "factual_claim" | "insight_input";
+  blockId: StoryBlockId;
+  evidence: EvidenceReference[];
+  unitIds?: string[];
+};
+
+type StoryContextRetentionUnit =
+  | {
+      id: string;
+      kind: "instruction" | "response" | "decision" | "failure" | "correction" |
+        "progress" | "result" | "uncertainty";
+      evidence: EvidenceReference;
+      state: "represented";
+      blockIds: StoryBlockId[];
+    }
+  | {
+      id: string;
+      kind: "instruction" | "response" | "decision" | "failure" | "correction" |
+        "progress" | "result" | "uncertainty";
+      evidence: EvidenceReference;
+      state: "excluded";
+      reason: "duplicate" | "routine_status" | "outside_milestone" | "privacy_withheld";
+    };
+
+type StoryContextRetention = {
+  schema: "oxygen.story-context-retention/1";
+  sourceScope: EvidenceReference[];
+  sourceUnitCount: number;
+  representedUnitCount: number;
+  excludedUnitCount: number;
+  units: StoryContextRetentionUnit[];
+};
+
 type StoryNarrativeReview = {
   schema: "oxygen.story-narrative-review/1";
   status: "passed";
@@ -104,6 +159,18 @@ type StoryNarrativeReview = {
     adjacentBoundaryReviewed: true;
   };
   passageInsightsDistinct: true;
+  actorCoverage: { state: "people_present"; personIds: string[] };
+  editorial: {
+    standardTerminology: true;
+    neutralStructure: true;
+    factualClaimsEvidenceBound: true;
+    interpretationSeparated: true;
+    uncertaintyPreserved: true;
+    prohibitedStyleChecked: true;
+  };
+  coverageLedger: Record<StoryCoverageKey, StoryCoverageItem>;
+  claimTraceability: StoryClaimTrace[];
+  contextRetention: StoryContextRetention;
 };
 
 type PrivacyOriginal =
@@ -167,17 +234,25 @@ type ChapterStory = {
     originalState: "local_evidence_only";
     releaseState: "ai_prepared_draft";
   };
-  presentation: { en: LanguagePresentation; zh: LanguagePresentation };
+  presentation: { en: LanguagePresentation; zh?: LanguagePresentation };
   semanticAnchors: string[];
   narrativeReview: StoryNarrativeReview;
 };
 ```
 
-Every imported Chapter has exactly one reviewable AI insight in each language presentation, with the same stable insight ID. Reject zero or multiple reviewable insights rather than rendering only the first. A final release projection may contain zero insights only when the human explicitly chose not to preserve the one reviewed insight; release sanitization rejects any projection containing more than one.
+Every imported Chapter has exactly one reviewable AI insight in canonical English. An optional
+Chinese sidecar uses the same stable insight ID. Reject zero or multiple English reviewable insights
+rather than rendering only the first. A final release projection may contain zero insights only when
+the human explicitly chose not to preserve the one reviewed insight; release sanitization rejects
+any projection containing more than one.
 
 Internal compatibility fields such as a privacy recommendation or former suggested-release copy may exist in legacy data. They are not approved visible UI and must not drive the human decision panel.
 
-`releaseTargets` binds a candidate to stable semantic release blocks so a Redact decision changes the release projection rather than only completion state. Require the field even when empty: an empty array explicitly means the reviewed sensitive material is local-only/already absent from generated release copy. Reject targets that do not resolve to a block or inline-insight identity in both language presentations.
+`releaseTargets` binds a candidate to stable semantic release blocks so a Redact decision changes
+the release projection rather than only completion state. Require the field even when empty: an
+empty array explicitly means the reviewed sensitive material is local-only/already absent from
+generated release copy. Every target must resolve in English. If a Chinese sidecar cannot preserve
+the same safe target identity, omit the sidecar instead of blocking English.
 
 ## Semantic Story blocks
 
@@ -195,18 +270,32 @@ uncertainty
 
 The paired language presentations map to the same semantic block IDs, even when text lengths and literal offsets differ. An annotation or direct-edit transaction preserves its language, stable block, base revision, and exact range rather than using rendered English as identity.
 
-Every complete canonical Chapter requires passage-context assistance. Its key set must equal the
-Chapter's complete rendered Story-content block set (`scene`, every reconstruction/detail block,
-`outcome`, and optional `uncertainty`) in each language. A missing map, missing key, or extra key
-makes the Chapter incomplete and fails import; there is no valid empty or silent fallback. Each
+Render the compatible fields with standard reader-facing terms:
+
+```text
+scene → Background
+reconstruction + importantDetails → Decision process
+decisionOutcome → Result
+uncertainty → Open questions
+Insight observation → Direct learning
+Insight lesson → Reusable rule
+```
+
+Do not expose internal field names as presentation terminology. Omit optional empty sections and reject generic filler before activation.
+
+Every complete canonical Chapter requires English passage-context assistance. Its key set must equal
+the complete rendered English Story-content block set (`scene`, every reconstruction/detail block,
+`outcome`, and optional `uncertainty`). A missing map, missing key, or extra key makes the English
+Chapter incomplete and fails import; there is no valid empty or silent fallback. Each
 value contains only bounded reader-facing contextual copy:
 what was happening, why it mattered, and optional grounded learning/lesson. It is precomputed local
 review assistance, not a reviewable insight, semantic anchor, evidence record, or release field.
-English and Chinese use the same keys and equivalent supported meaning.
+When Chinese exists, it uses the same safe block identities and complete local passage-context keys;
+an unsafe Chinese map is dropped as a sidecar rather than becoming a readiness failure.
 
 ## Evidence linkage
 
-Every explicit Chapter must have one primary evidence reference anchored to an existing reviewed event. Supporting references may expand causal context. References must be unique and all references must resolve to exactly one real item in the permitted reviewed artifact before Apply or human confirmation; a syntactically plausible document/event ID is not proof of resolution.
+Every explicit Chapter must have one primary evidence reference anchored to an existing reviewed event. Supporting references may expand causal context. New generated primary, supporting, and Person references use the exact fully qualified imported item ID in `eventId`; a bare event suffix is not an activation-safe identity. References must be unique and all references must resolve to exactly one real item in the permitted reviewed artifact before Apply or human confirmation; a syntactically plausible document/event ID is not proof of resolution.
 
 Preserve:
 
@@ -218,38 +307,70 @@ Preserve:
 
 Do not invent a source link merely to satisfy a schema. If evidence cannot be resolved, omit or block the Chapter.
 
+Every generated Person attaches one or more reviewed references from that Chapter. Derive a stable functional role from explicit event role or repeated reviewed content. Preserve uncertainty, use a release-safe alias, and do not infer a real name, employer, title, identity, or relationship without direct permitted Evidence. English and Chinese share the same ordered Person IDs, release labels, identity states, and Evidence identities.
+
+Every selected Chapter must contain at least one supported human, user, Agent, reviewer, speaker, owner, or operator actor. People must be nonempty and collectively cover those actor identities. Tool metadata alone never authorizes a fabricated participant. A routine machine-only event remains Timeline or Exact Evidence data and cannot become a standalone Chapter. A machine failure may support a Chapter when reviewed Evidence also identifies the actor who diagnosed, decided, executed, reviewed, approved, or responded.
+
 ## Chapter-generation rules
 
-Apply the canonical narrative-compression and voice rules in
+Apply the canonical context-retention and voice rules in
 [product-contract.md](product-contract.md) and the role/mapping rules in
 [narrative-writing-contract.md](narrative-writing-contract.md) before generating fields. The structures below carry
 that narrative; they do not justify field-by-field or log-style prose.
 
 For each Chapter:
 
-1. Define one consequential transition and stable key.
-2. Choose primary evidence and only necessary supporting evidence.
+1. Define one meaningful project-development unit and stable key. It may be a consequential change,
+   durable progress, substantive iteration, failure/diagnostic case, validation, recovery, or
+   current-state boundary.
+2. Choose primary Evidence and every supporting Evidence unit needed to preserve the milestone's
+   supported background, causal or temporal relationships, participant interaction, judgment,
+   failed attempts, progress or iteration, and result.
 3. Write a concise Timeline summary.
 4. Write short Timeline Before/After states and select only evidence-backed high-signal chips; keep long explanation out of the card.
-5. Reconstruct a context-sufficient coherent article that preserves the problem, purpose,
+5. Write a distinct localized Chapter `overview` that briefly previews this Chapter's supported
+   background, consequential participant turn or judgment, and result or open boundary. Reject
+   navigation instructions and repeated boilerplate; add exact Chapter Evidence traceability.
+6. Reconstruct a context-complete coherent article that preserves the problem, purpose,
    constraints, attempts, failures/rejected approaches, directional evidence, decision/rationale,
    resulting action/outcome, uncertainty, and reusable learning when those elements are supported.
-   Several substantial paragraphs are acceptable; raw logs and repeated operational noise are not.
-6. Record what was retained, what routine material was compressed, and what sensitive material remains unavailable.
-7. Generate exactly one canonical AI insight/lesson explicitly typed as interpretation.
-8. Generate People only when supported.
-9. Generate contextual Privacy candidates only from permitted reviewed information.
-10. Generate local passage context for every Story-content block as an ordered mini-story sequence
-    without creating additional release insights or unsupported lessons.
-11. Generate natural Chinese with the same facts, transition semantics, scan chips, passage-context
-    meaning, and technical anchors.
-12. End the sequence with an honest current-state Chapter.
-13. Make the title express supported tension plus decisive reframing/result; make Story carry
-    Background, the minimum evidence thread, the turn, and result; make the single canonical Insight
-    carry direct learning, a bounded reusable principle, and open tension when supported.
+   Use as many substantial paragraphs as the supported context requires. Raw logs remain outside the
+   Story, but any operational unit that explains the milestone must be represented in readable prose.
+7. Record what was retained, what non-explanatory duplicate or routine material was omitted, and what
+   sensitive material remains unavailable.
+8. Generate exactly one canonical AI insight/lesson explicitly typed as interpretation.
+9. Generate evidence-supported People for every supported actor; if none can be supported, do not promote the event cluster into a Chapter.
+   Use every listed Person's localized functional role in Decision process and attribute only the
+   actions, questions, corrections, approvals, or responses supported by that Person's Evidence.
+   Express the supported relationship with natural syntax and an optional localized relation marker.
+   Do not require a marker, count connectors, or use one to invent an interaction or causal claim.
+10. Generate contextual Privacy candidates only from permitted reviewed information.
+11. Generate local passage context for every Story-content block as an ordered inline AI Insight
+    sequence. Each entry connects supported participant interaction with narrative explanation and a
+    bounded Reusable rule. Do not number semantic passages or expose block/schema metadata, and do
+    not create additional release insights or unsupported lessons.
+12. Optionally generate natural Chinese with the same facts, transition semantics, scan chips,
+    passage-context meaning, and technical anchors. Its absence never blocks the English Story.
+13. End the sequence with an honest current-state Chapter.
+14. Make the title express the supported problem and decisive result. Make Story carry Background,
+    Decision process, Result, and Open questions. Make the single canonical Insight carry Direct
+    learning and a bounded Reusable rule.
+15. Apply the neutral editorial rules and complete the bounded actor/editorial self-review before activation.
+16. Classify every coverage-ledger element. Represent all supported explanatory material. Keep the
+    historical `supporting_detail` value parser-compatible, but reject it during readiness because
+    supported background, relationship, interaction, judgment, failure, progress, and result belong
+    in traceable Chapter blocks.
+17. Add one traceability record per material factual claim, including the Chapter overview, and explicit input Evidence for the
+    canonical Insight. Multiple material claims in one block require multiple records.
+18. Extract every reviewed conversational turn or independently meaningful nested reviewed turn in
+    the complete milestone Evidence cluster as a stable privacy-safe source unit. Record no source
+    copy. Classify each unit as represented in exact Story blocks or excluded with one fixed reason.
+    Several units may share an Evidence reference; represented units must appear in the owning
+    factual claim's `unitIds`.
 
-At project level, generate a natural semantically equivalent EN/中文 summary of roughly 2–3
-sentences. Prefer one- or two-word English Phase labels and equivalently compact natural Chinese.
+At project level, generate a natural English summary of roughly 2–3 sentences. A semantically
+equivalent Chinese summary and compact Chinese Phase labels are optional sidecar content. Prefer
+one- or two-word English Phase labels.
 Treat `importantDetails` as high-signal support within the coherent Chapter, not an invitation to
 repeat the Chapter as a fact list or compress material causal context into one sentence.
 
@@ -263,7 +384,8 @@ Fail closed when any of these conditions is false:
 - Story source hash matches the reviewed artifact;
 - Chapter keys are present and unique;
 - Chapters are chronological;
-- Chapter count is within the applicable product envelope;
+- Chapter selection retains supported meaningful progress, substantive iterations, consequential
+  failures, judgment moments, and the current boundary without enforcing a numeric quota;
 - required Story fields are nonempty;
 - project orientation can derive milestone count, meaningful phase count, reviewed-Highlight progress, and source/evidence context;
 - every Timeline milestone has a date, visible selected-Highlight status, short before/after states, and only supported scan chips;
@@ -271,18 +393,42 @@ Fail closed when any of these conditions is false:
 - milestone kind/state is allowed;
 - primary evidence matches the annotation anchor where that representation is used;
 - all unique primary/supporting evidence resolves to exactly one reviewed item;
-- exactly one paired AI insight starts as an AI proposal; zero or multiple reviewable insights fail closed;
+- every Person has unique resolvable reviewed Evidence contained in the Chapter Evidence set;
+- every Chapter has at least one Person, and actor-bearing Chapter Evidence has complete
+  non-overlapping People coverage;
+- every English Person role appears in Decision process; interaction copy links supported actor
+  actions and responses without inventing disagreement, reply, or consensus;
+- English Decision process forms a connected Evidence-bound account through natural syntax and
+  explicit supported roles; no fixed connective, connector count, or lexical allowlist is required;
+- exactly one canonical English AI insight starts as an AI proposal; zero or multiple reviewable insights fail closed;
 - release draft is the default Story view;
-- bilingual key sets and semantic block structures align;
-- passage context is present in both language presentations, contains only the allowlisted bounded
-  fields, covers exactly every rendered Story-content block, and has an identical paired key set;
+- English passage context contains only the allowlisted bounded fields and covers exactly every
+  rendered English Story-content block; an optional Chinese sidecar is displayed only when its
+  shared identities and own rendered-block context are structurally safe;
 - the structured narrative self-review passed, every required narrative role resolves to an owning
-  Story/Insight block, every Passage Insight contains all four grounded meanings without copying
+  Story/Insight block, every inline AI Insight contains all four grounded meanings, connects
+  supported participant interaction to the narrative, exposes no semantic-passage ordinal or other
+  implementation metadata, and does not copy
   its Story block, and the canonical Insight supplies distinct synthesis rather than repeated copy;
+- the complete coverage ledger exists; main problem, participants, final action, and result are
+  represented; optional unsupported elements remain explicitly `not_supported`; every supported
+  explanatory unit, including judgment moments, durable progress milestones, substantive
+  iterations, and consequential failures, is represented in a traceable Story block;
+- the context-retention ledger covers every classified source unit in every Evidence event inside
+  the declared milestone scope; its counts reconcile; every represented unit maps through a factual
+  claim `unitIds` entry to exact Story blocks and Evidence; exclusions use only the fixed privacy-safe
+  reasons; repeated citations of one Evidence event never substitute for distinct unit identities;
+- every People and Story block has exact Chapter-contained factual-claim traceability, every
+  material factual claim has its own entry, the canonical Insight has explicit Evidence inputs, and
+  local traceability metadata is absent from release/export;
+- the editorial self-review passed and visible copy contains standard terminology, neutral
+  structure, Evidence-bound facts, separated interpretation, preserved uncertainty, and no
+  prohibited style;
 - Phase labels reject generic fallbacks, each Phase has one consistent evidence-derived rationale,
   adjacent Phases have distinct rationales, and one coherent Phase remains valid without a fixed
   minimum count;
-- every declared required technical/semantic anchor appears in reader-facing fields of both presentations (or resolves through an explicit bilingual alignment map); a merely nonempty anchor list is not validation;
+- every declared required technical/semantic anchor appears in reader-facing English fields; a
+  merely nonempty anchor list is not validation, while Chinese anchor alignment is non-gating;
 - available Privacy original has an excerpt and source language;
 - unavailable Privacy original contains only its unavailable discriminator and no excerpt, source language, removed value, raw field, or compatibility payload;
 - the last Chapter is current state.

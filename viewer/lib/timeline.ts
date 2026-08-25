@@ -80,6 +80,9 @@ export type StoryPerson = {
   role: string;
   description: string;
   localIdentityState: "not_identified" | "local_only";
+  /** Reviewed references supporting this functional role. Historical review
+   * artifacts may omit this field; newly activated candidates require it. */
+  evidence?: EvidenceReference[];
 };
 
 export type StoryChapter = {
@@ -144,9 +147,86 @@ export type StoryLanguagePresentation = {
 
 export type EpisodeReviewPresentation = {
   en: StoryLanguagePresentation;
-  zh: StoryLanguagePresentation;
-  projectSummary?: Record<StoryLanguage, string>;
+  /** Optional localized sidecar. English is the canonical Story/readiness
+   * surface; a missing or unsafe localized sidecar never blocks activation. */
+  zh?: StoryLanguagePresentation;
+  projectSummary?: { en: string; zh?: string };
   semanticAnchors: string[];
+};
+
+export const STORY_COVERAGE_KEYS = [
+  "mainProblem",
+  "participants",
+  "startingPosition",
+  "alternatives",
+  "objectionOrDisagreement",
+  "failedAttempt",
+  "correction",
+  "decisionChangingEvidence",
+  "quantitativeResult",
+  "finalAction",
+  "result",
+  "remainingUncertainty",
+] as const;
+
+export type StoryCoverageKey = typeof STORY_COVERAGE_KEYS[number];
+
+export type StoryCoverageItem =
+  | { state: "not_supported" }
+  | { state: "represented"; blockIds: string[]; evidence: EvidenceReference[] }
+  | { state: "supporting_detail"; evidence: EvidenceReference[]; justification: string };
+
+export type StoryClaimTrace = {
+  id: string;
+  kind: "factual_claim" | "insight_input";
+  blockId: string;
+  evidence: EvidenceReference[];
+  /** Stable extracted source units carried by this claim. Historical records
+   * may omit these; new context-complete activation validates them. */
+  unitIds?: string[];
+};
+
+export const STORY_CONTEXT_EXCLUSION_REASONS = [
+  "duplicate",
+  "routine_status",
+  "outside_milestone",
+  "privacy_withheld",
+] as const;
+
+export type StoryContextExclusionReason = typeof STORY_CONTEXT_EXCLUSION_REASONS[number];
+export type StoryContextUnitKind =
+  | "instruction"
+  | "response"
+  | "decision"
+  | "failure"
+  | "correction"
+  | "progress"
+  | "result"
+  | "uncertainty";
+
+export type StoryContextRetentionUnit =
+  | {
+      id: string;
+      kind: StoryContextUnitKind;
+      evidence: EvidenceReference;
+      state: "represented";
+      blockIds: string[];
+    }
+  | {
+      id: string;
+      kind: StoryContextUnitKind;
+      evidence: EvidenceReference;
+      state: "excluded";
+      reason: StoryContextExclusionReason;
+    };
+
+export type StoryContextRetention = {
+  schema: "oxygen.story-context-retention/1";
+  sourceScope: EvidenceReference[];
+  sourceUnitCount: number;
+  representedUnitCount: number;
+  excludedUnitCount: number;
+  units: StoryContextRetentionUnit[];
 };
 
 export type StoryNarrativeReview = {
@@ -171,6 +251,32 @@ export type StoryNarrativeReview = {
     adjacentBoundaryReviewed: true;
   };
   passageInsightsDistinct: true;
+  /** Local Stage-4 proof. Kept optional so historical reviewed artifacts remain
+   * readable; activation requires one of these explicit actor boundaries. */
+  actorCoverage?: {
+    state: "people_present";
+    personIds: string[];
+  };
+  /** Bounded editorial self-check. This records results, never model reasoning. */
+  editorial?: {
+    standardTerminology: true;
+    neutralStructure: true;
+    factualClaimsEvidenceBound: true;
+    interpretationSeparated: true;
+    uncertaintyPreserved: true;
+    prohibitedStyleChecked: true;
+  };
+  /** Bounded Stage-4 coverage record. Every possible element is classified;
+   * supported material is either represented or explicitly retained only as
+   * supporting detail. This is validation metadata, never model reasoning. */
+  coverageLedger?: Record<StoryCoverageKey, StoryCoverageItem>;
+  /** One entry per material factual claim plus explicit Evidence inputs for
+   * the canonical Insight. Multiple claims may own the same stable block. */
+  claimTraceability?: StoryClaimTrace[];
+  /** Every extracted explanatory source unit is either mapped to Story blocks
+   * or assigned one fixed exclusion reason. This stores decisions and hashes,
+   * never source copy or model reasoning. */
+  contextRetention?: StoryContextRetention;
 };
 
 export type StoryAnnotation = {
@@ -299,6 +405,9 @@ const TRANSITION_TERMS: Array<[string, number, MilestoneKind]> = [
   ["frozen", 8, "freeze"], ["sealed", 8, "freeze"], ["final acceptance", 10, "validation"],
   ["handoff", 7, "handoff"], ["ready for review", 8, "handoff"],
   ["current state", 9, "current_state"], ["where things stand", 9, "current_state"],
+  ["first complete", 8, "breakthrough"], ["completed milestone", 8, "breakthrough"],
+  ["iteration improved", 7, "quantitative_change"], ["iteration established", 7, "breakthrough"],
+  ["recovered after", 8, "validation"], ["became available", 6, "breakthrough"],
   ["→", 5, "quantitative_change"], ["increased", 6, "quantitative_change"], ["decreased", 6, "quantitative_change"],
 ];
 
@@ -428,6 +537,10 @@ function validReviewLanguage(value: unknown): value is StoryLanguagePresentation
       && typeof person.role === "string" && Boolean(person.role.trim())
       && typeof person.description === "string" && Boolean(person.description.trim())
       && ["not_identified", "local_only"].includes(person.localIdentityState)
+      && (person.evidence === undefined || (Array.isArray(person.evidence)
+        && person.evidence.length > 0
+        && person.evidence.every(validEvidence)
+        && uniqueValues(person.evidence.map(evidenceKey))))
     ))
     && nonEmptyString(story?.scene) && nonEmptyStrings(story.reconstruction)
     && nonEmptyStrings(story.importantDetails) && nonEmptyString(story.decisionOutcome)
@@ -462,31 +575,19 @@ function readerFacingPresentationText(value: StoryLanguagePresentation) {
   ].join("\n");
 }
 
-function validReviewPresentation(value: unknown): value is EpisodeReviewPresentation {
-  if (!value || typeof value !== "object") return false;
-  const presentation = value as Partial<EpisodeReviewPresentation>;
-  if (!validReviewLanguage(presentation.en)
-      || !validReviewLanguage(presentation.zh)
-      || (presentation.projectSummary !== undefined
-        && (!presentation.projectSummary
-          || typeof presentation.projectSummary !== "object"
-          || !(typeof presentation.projectSummary.en === "string" && presentation.projectSummary.en.trim())
-          || !(typeof presentation.projectSummary.zh === "string" && presentation.projectSummary.zh.trim())
-          || presentation.projectSummary.en.length > 20_000
-          || presentation.projectSummary.zh.length > 20_000))
-      || !nonEmptyStrings(presentation.semanticAnchors)
-      || !uniqueValues(presentation.semanticAnchors)
-      || presentation.semanticAnchors.some((anchor) => anchor.length > 500)) return false;
-  const en = presentation.en;
-  const zh = presentation.zh;
-  const enText = readerFacingPresentationText(en);
-  const zhText = readerFacingPresentationText(zh);
+function localizedSidecarIsSafe(
+  en: StoryLanguagePresentation,
+  zh: StoryLanguagePresentation,
+) {
   const enBlocks = semanticBlockIds(en);
   const zhBlocks = semanticBlockIds(zh);
-  return presentation.semanticAnchors.every((anchor) => enText.includes(anchor) && zhText.includes(anchor))
-    && sameOrderedValues(en.people.map((person) => person.id), zh.people.map((person) => person.id))
+  return sameOrderedValues(en.people.map((person) => person.id), zh.people.map((person) => person.id))
     && sameOrderedValues(en.people.map((person) => person.releaseLabel), zh.people.map((person) => person.releaseLabel))
     && sameOrderedValues(en.people.map((person) => person.localIdentityState), zh.people.map((person) => person.localIdentityState))
+    && en.people.every((person, index) => sameOrderedValues(
+      (person.evidence || []).map(evidenceKey),
+      (zh.people[index].evidence || []).map(evidenceKey),
+    ))
     && sameOrderedValues(en.highlights.map((highlight) => highlight.id), zh.highlights.map((highlight) => highlight.id))
     && sameOrderedValues(Object.keys(en.passageContext).sort(), Object.keys(zh.passageContext).sort())
     && sameOrderedValues(en.privacy.candidates.map((candidate) => candidate.id), zh.privacy.candidates.map((candidate) => candidate.id))
@@ -503,12 +604,56 @@ function validReviewPresentation(value: unknown): value is EpisodeReviewPresenta
     && sameOrderedValues(enBlocks, zhBlocks);
 }
 
+/** Treat Chinese as a non-blocking presentation sidecar. If supplied copy is
+ * structurally unsafe or breaks shared Privacy/review identity, discard only
+ * that sidecar and continue validating the canonical English Story. */
+function normalizeOptionalLocalizedPresentation(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const presentation = value as Partial<EpisodeReviewPresentation>;
+  if (presentation.zh !== undefined && (!validReviewLanguage(presentation.en)
+    || !validReviewLanguage(presentation.zh)
+    || !localizedSidecarIsSafe(presentation.en, presentation.zh))) {
+    delete presentation.zh;
+  }
+  if (presentation.projectSummary && typeof presentation.projectSummary === "object") {
+    const summary = presentation.projectSummary;
+    if (summary.zh !== undefined && (typeof summary.zh !== "string"
+      || !summary.zh.trim() || summary.zh.length > 20_000 || !presentation.zh)) {
+      delete summary.zh;
+    }
+  }
+}
+
+function validReviewPresentation(value: unknown): value is EpisodeReviewPresentation {
+  if (!value || typeof value !== "object") return false;
+  const presentation = value as Partial<EpisodeReviewPresentation>;
+  if (!validReviewLanguage(presentation.en)
+      || (presentation.zh !== undefined && (!validReviewLanguage(presentation.zh)
+        || !localizedSidecarIsSafe(presentation.en, presentation.zh)))
+      || (presentation.projectSummary !== undefined
+        && (!presentation.projectSummary
+          || typeof presentation.projectSummary !== "object"
+          || !(typeof presentation.projectSummary.en === "string" && presentation.projectSummary.en.trim())
+          || presentation.projectSummary.en.length > 20_000
+          || (presentation.projectSummary.zh !== undefined
+            && (!(typeof presentation.projectSummary.zh === "string" && presentation.projectSummary.zh.trim())
+              || presentation.projectSummary.zh.length > 20_000))))
+      || !nonEmptyStrings(presentation.semanticAnchors)
+      || !uniqueValues(presentation.semanticAnchors)
+      || presentation.semanticAnchors.some((anchor) => anchor.length > 500)) return false;
+  const enText = readerFacingPresentationText(presentation.en);
+  return presentation.semanticAnchors.every((anchor) => enText.includes(anchor));
+}
+
 function validNarrativeReview(
   value: unknown,
   presentation: EpisodeReviewPresentation,
 ): value is StoryNarrativeReview {
   if (!value || typeof value !== "object" || Array.isArray(value)
-    || !onlyKeys(value, ["schema", "status", "title", "roles", "phase", "passageInsightsDistinct"])) return false;
+    || !onlyKeys(value, [
+      "schema", "status", "title", "roles", "phase", "passageInsightsDistinct",
+      "actorCoverage", "editorial", "coverageLedger", "claimTraceability", "contextRetention",
+    ])) return false;
   const review = value as Partial<StoryNarrativeReview>;
   if (review.schema !== "oxygen.story-narrative-review/1"
     || review.status !== "passed"
@@ -522,8 +667,110 @@ function validNarrativeReview(
     || !review.phase || !onlyKeys(review.phase, [
       "rationale", "assignmentCoherent", "adjacentBoundaryReviewed",
     ])) return false;
+  if (review.actorCoverage !== undefined) {
+    if (!review.actorCoverage || typeof review.actorCoverage !== "object" || Array.isArray(review.actorCoverage)) return false;
+    if (review.actorCoverage.state === "people_present") {
+      if (!onlyKeys(review.actorCoverage, ["state", "personIds"])
+        || !Array.isArray(review.actorCoverage.personIds)
+        || review.actorCoverage.personIds.length === 0
+        || !review.actorCoverage.personIds.every(validStableId)
+        || !uniqueValues(review.actorCoverage.personIds)) return false;
+    } else return false;
+  }
+  if (review.editorial !== undefined && (!review.editorial
+    || typeof review.editorial !== "object" || Array.isArray(review.editorial)
+    || !onlyKeys(review.editorial, [
+      "standardTerminology", "neutralStructure", "factualClaimsEvidenceBound",
+      "interpretationSeparated", "uncertaintyPreserved", "prohibitedStyleChecked",
+    ])
+    || review.editorial.standardTerminology !== true
+    || review.editorial.neutralStructure !== true
+    || review.editorial.factualClaimsEvidenceBound !== true
+    || review.editorial.interpretationSeparated !== true
+    || review.editorial.uncertaintyPreserved !== true
+    || review.editorial.prohibitedStyleChecked !== true)) return false;
   const storyBlocks = storyContentBlockIds(presentation.en);
+  const peopleBlocks = presentation.en.people.map((person) => `people:${person.id}`);
   const insightBlocks = presentation.en.highlights.map((highlight) => `insight:${highlight.id}`);
+  const traceableBlocks = ["overview", ...peopleBlocks, ...storyBlocks, ...insightBlocks];
+  if (review.coverageLedger !== undefined) {
+    if (!review.coverageLedger || typeof review.coverageLedger !== "object"
+      || Array.isArray(review.coverageLedger)
+      || !onlyKeys(review.coverageLedger, [...STORY_COVERAGE_KEYS])
+      || Object.keys(review.coverageLedger).length !== STORY_COVERAGE_KEYS.length) return false;
+    for (const key of STORY_COVERAGE_KEYS) {
+      const item = review.coverageLedger[key];
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+      if (item.state === "not_supported") {
+        if (!onlyKeys(item, ["state"])) return false;
+      } else if (item.state === "represented") {
+        if (!onlyKeys(item, ["state", "blockIds", "evidence"])
+          || !Array.isArray(item.blockIds) || item.blockIds.length === 0
+          || !item.blockIds.every((blockId) => typeof blockId === "string" && traceableBlocks.includes(blockId))
+          || !uniqueValues(item.blockIds)
+          || !Array.isArray(item.evidence) || item.evidence.length === 0
+          || !item.evidence.every(validEvidence) || !uniqueValues(item.evidence.map(evidenceKey))) return false;
+      } else if (item.state === "supporting_detail") {
+        if (!onlyKeys(item, ["state", "evidence", "justification"])
+          || !Array.isArray(item.evidence) || item.evidence.length === 0
+          || !item.evidence.every(validEvidence) || !uniqueValues(item.evidence.map(evidenceKey))
+          || typeof item.justification !== "string" || item.justification.trim().length < 12
+          || item.justification.length > 2_000) return false;
+      } else return false;
+    }
+  }
+  if (review.claimTraceability !== undefined) {
+    if (!Array.isArray(review.claimTraceability) || review.claimTraceability.length === 0
+      || !review.claimTraceability.every((claim) => Boolean(claim && typeof claim === "object" && !Array.isArray(claim)
+        && onlyKeys(claim, ["id", "kind", "blockId", "evidence", "unitIds"])
+        && validStableId(claim.id)
+        && (claim.kind === "factual_claim" || claim.kind === "insight_input")
+        && typeof claim.blockId === "string" && traceableBlocks.includes(claim.blockId)
+        && Array.isArray(claim.evidence) && claim.evidence.length > 0
+        && claim.evidence.every(validEvidence) && uniqueValues(claim.evidence.map(evidenceKey))
+        && (claim.unitIds === undefined || (Array.isArray(claim.unitIds)
+          && claim.unitIds.length > 0 && claim.unitIds.every(validStableId)
+          && uniqueValues(claim.unitIds)))))
+      || !uniqueValues(review.claimTraceability.map((claim) => claim.id))) return false;
+  }
+  if (review.contextRetention !== undefined) {
+    const retention = review.contextRetention;
+    if (!retention || typeof retention !== "object" || Array.isArray(retention)
+      || !onlyKeys(retention, [
+        "schema", "sourceScope", "sourceUnitCount", "representedUnitCount",
+        "excludedUnitCount", "units",
+      ])
+      || retention.schema !== "oxygen.story-context-retention/1"
+      || !Array.isArray(retention.sourceScope) || retention.sourceScope.length === 0
+      || !retention.sourceScope.every(validEvidence)
+      || !uniqueValues(retention.sourceScope.map(evidenceKey))
+      || !Number.isInteger(retention.sourceUnitCount) || retention.sourceUnitCount <= 0
+      || !Number.isInteger(retention.representedUnitCount) || retention.representedUnitCount <= 0
+      || !Number.isInteger(retention.excludedUnitCount) || retention.excludedUnitCount < 0
+      || !Array.isArray(retention.units) || retention.units.length !== retention.sourceUnitCount
+      || retention.representedUnitCount + retention.excludedUnitCount !== retention.sourceUnitCount
+      || !retention.units.every((unit) => {
+        if (!unit || typeof unit !== "object" || Array.isArray(unit)
+          || !validStableId(unit.id)
+          || !["instruction", "response", "decision", "failure", "correction", "progress", "result", "uncertainty"].includes(unit.kind)
+          || !validEvidence(unit.evidence)) return false;
+        if (unit.state === "represented") {
+          return onlyKeys(unit, ["id", "kind", "evidence", "state", "blockIds"])
+            && Array.isArray(unit.blockIds) && unit.blockIds.length > 0
+            && unit.blockIds.every((blockId) => typeof blockId === "string" && storyBlocks.includes(blockId))
+            && uniqueValues(unit.blockIds);
+        }
+        return unit.state === "excluded"
+          && onlyKeys(unit, ["id", "kind", "evidence", "state", "reason"])
+          && STORY_CONTEXT_EXCLUSION_REASONS.includes(unit.reason);
+      })
+      || !uniqueValues(retention.units.map((unit) => unit.id))
+      || retention.units.filter((unit) => unit.state === "represented").length !== retention.representedUnitCount
+      || retention.units.filter((unit) => unit.state === "excluded").length !== retention.excludedUnitCount) return false;
+    const scope = new Set(retention.sourceScope.map(evidenceKey));
+    if (retention.units.some((unit) => !scope.has(evidenceKey(unit.evidence)))
+      || retention.sourceScope.some((reference) => !retention.units.some((unit) => evidenceKey(unit.evidence) === evidenceKey(reference)))) return false;
+  }
   const validRole = (blockIds: unknown, allowed: string[]) => Array.isArray(blockIds)
     && blockIds.length > 0
     && blockIds.every((blockId) => typeof blockId === "string" && allowed.includes(blockId))
@@ -583,6 +830,7 @@ export function parseStoryAnnotation(summary?: string): StoryAnnotation | Legacy
       return nonEmptyString(value.narrative) ? value as LegacyStoryAnnotation : null;
     }
     if (value.schema !== "oxygen.story-highlight/2") return null;
+    normalizeOptionalLocalizedPresentation(value.reviewPresentation);
     const episode = value.releaseEpisode;
     const evidence = value.evidence;
     if (
@@ -616,8 +864,9 @@ export function parseStoryAnnotation(summary?: string): StoryAnnotation | Legacy
         && !validNarrativeReview(value.narrativeReview, value.reviewPresentation))
     ) return null;
     const annotation = value as StoryAnnotation;
-    for (const language of ["en", "zh"] as const) {
-      const chapter = annotation.reviewPresentation[language].story as StoryChapter & { uncertainty?: string | null };
+    for (const presentation of [annotation.reviewPresentation.en, annotation.reviewPresentation.zh]) {
+      if (!presentation) continue;
+      const chapter = presentation.story as StoryChapter & { uncertainty?: string | null };
       if (chapter.uncertainty === null) delete chapter.uncertainty;
     }
     return annotation;
@@ -726,14 +975,15 @@ function explicitMilestones<T extends TimelineCandidate>(events: T[], maximum: n
 }
 
 /**
- * Select meaningful project state transitions without distributing picks into
- * time or volume buckets. Explicit reviewed story annotations win; otherwise
- * candidates are ranked globally, routine updates are penalized, and repeated
- * summaries collapse to one milestone.
+ * Select meaningful project developments without distributing picks into time,
+ * volume, or count buckets. Eligible developments include durable progress,
+ * substantive iterations, failures, and consequential state transitions.
+ * Explicit reviewed story annotations win; otherwise candidates are ranked
+ * globally, routine updates are penalized, and repeated summaries collapse.
  */
-export function selectProjectTimeline<T extends TimelineCandidate>(events: T[], maximum = 40): Array<TimelineMilestone<T>> {
+export function selectProjectTimeline<T extends TimelineCandidate>(events: T[], maximum?: number): Array<TimelineMilestone<T>> {
   const ordered = [...events].sort(eventOrder);
-  const explicit = explicitMilestones(ordered, maximum);
+  const explicit = explicitMilestones(ordered, maximum ?? Number.POSITIVE_INFINITY);
   if (explicit.length) return explicit;
 
   const unique = new Map<string, { event: T; score: number }>();
@@ -749,7 +999,7 @@ export function selectProjectTimeline<T extends TimelineCandidate>(events: T[], 
 
   return [...unique.values()]
     .sort((a, b) => b.score - a.score || eventOrder(a.event, b.event))
-    .slice(0, maximum)
+    .slice(0, maximum ?? 40)
     .map(({ event, score }) => {
       const text = `${clean(event.summary)} ${clean(event.content)}`.toLowerCase();
       const title = inferredTitle(event);

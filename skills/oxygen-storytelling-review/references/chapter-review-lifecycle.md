@@ -30,9 +30,10 @@ The initial draft is revision 1. Each successful Apply review increments the rev
 
 Direct editing is the primary current lifecycle. Imported Delete/Revise/Add annotations are
 compatibility records only; they may be validated and resolved without becoming a creation toolbar.
-All set remains unavailable while any direct transaction is pending or needs evidence, any compatible
-legacy work is unresolved, Privacy is incomplete, a paired locale is stale, the canonical Insight is
-pending, or evidence/ledger provenance fails validation.
+All set remains unavailable while any direct transaction is pending or needs evidence, any
+compatible legacy work is unresolved, Privacy is incomplete, the canonical Insight is pending, or
+evidence/ledger provenance fails validation. A stale paired locale remains visible as informational
+localization debt and never blocks canonical English review.
 
 ## Annotation model
 
@@ -235,7 +236,10 @@ Never trust a browser-supplied `human_confirmed` stage, rejected insight flag, P
 redacted-block array without this provenance check. A mismatch blocks confirmation/release rather
 than exporting an approximation.
 
-When an insight edit creates paired-language review debt, a later status-only action such as Accept must preserve that pending-language provenance. Status changes cannot erase bilingual debt without reviewing/applying the paired representation.
+When an insight edit creates paired-language review debt, a later status-only action such as Accept
+must preserve that pending-language provenance. Status changes cannot erase localization debt
+without reviewing/applying the paired representation. The debt is informational and never blocks
+the canonical English review; omit a stale localized sidecar from release.
 
 ## Review summary
 
@@ -261,7 +265,7 @@ Enable it only when:
 - no `needs_evidence` annotation remains;
 - no pending or `needs_evidence` direct transaction remains;
 - every required Privacy candidate has a Keep/Redact decision.
-- no paired locale remains stale/unresolved;
+- paired-locale debt, when present, remains visible and non-blocking;
 - no inline-insight operation remains pending;
 - the current Privacy decisions are the same typed decisions applied in the presented revision.
 - the latest successful Apply verified the Chapter's actual evidence references.

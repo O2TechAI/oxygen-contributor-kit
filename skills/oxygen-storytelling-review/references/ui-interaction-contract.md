@@ -67,7 +67,8 @@ Show:
 - timestamp/range;
 - approximate reading time;
 - title;
-- one-sentence overview.
+- a short Chapter-specific summary that previews supported background, participant turn or judgment,
+  and result/open boundary; repeated navigation boilerplate is invalid.
 
 Back restores stored Timeline scroll and focus to the originating Read chapter action.
 
@@ -98,6 +99,7 @@ Use compact rows, not cards:
 - centered non-wrapping release label;
 - role/name on a clean scan line;
 - one short description;
+- one or more reviewed Evidence references in local review data;
 - quiet local-identity/export note.
 
 Keep AI aligned with human rows. On narrow screens, preserve marker integrity before compressing text.
@@ -118,36 +120,53 @@ navigation, and paste that strips markup/scripts/embeds while preserving safe te
 breaks. Synchronize every mutation and Ctrl/Cmd+Z, Ctrl/Cmd+Y, and Ctrl/Cmd+Shift+Z with the review
 transaction ledger. Reject unsafe cross-block mutation visibly without partially applying it.
 
+Treat `beforeinput` as an optimization. Type-check every native event field before using it. When
+`inputType`, `data`, or selection metadata is missing, derive one minimal mutation from the
+controlled previous/next text and selection state. Commit composition/IME input once after the
+composition result is stable, and never duplicate a transaction across `beforeinput` and `change`.
+
 A useful editorial progression is:
 
 ```text
-setup
-→ turn
-→ what mattered
-→ what followed
-→ uncertainty
+Background
+→ Decision process
+→ Result
+→ Open questions
 → collapsed canonical AI insight
 ```
 
-This wording may localize or adapt, but the reader must always understand what is being read and
-what follows. Preserve enough causal and technical context for the Chapter to work as durable human
-and future-Agent project memory; do not force a minimum word count or expand into raw logs. Prefer
+Use these standard localized terms. Keep supporting evidence/factors inside Decision process. Do
+not render an empty heading or a heading whose only content is generic filler. Preserve enough causal and technical context for the Chapter to work as durable human
+and future-Agent project memory; determine length from decision-relevant Evidence and do not impose
+a global minimum or maximum. Keep long connected decision arcs in the same readable Story flow and
+do not expand into raw logs. Prefer
 coherent paragraphs and selective bullets over card-per-paragraph layouts.
 
-## Contextual passage assistance
+## Inline AI Insight
 
 On wide Chapter layouts, use a small restrained sticky panel to the right of the Story document.
-Every complete Chapter supplies one valid `passageContext` for every rendered Story block in both
-languages; missing support makes the Chapter incomplete rather than producing an empty panel.
+Label it `AI insight` / `AI 洞察`; `Passage insight` and `段落洞察` are not reader-facing names.
+Every complete canonical English Chapter supplies one valid `passageContext` for every rendered
+English Story block. When Chinese exists, it supplies safe matching context for its rendered blocks
+or the sidecar is omitted; missing Chinese never makes the English Chapter incomplete.
 Order the exact complete key set by rendered Story-block order. Show current/total position plus
 accessible Previous/Next controls; disable the unavailable boundary direction and do not wrap by
 default. Arrow navigation updates the context, scrolls the stable owning block to a useful position,
 highlights it, and clears the former highlight. Respect reduced-motion preference.
+The explanation connects supported participant actions, responses, judgments, and consequences.
+It never opens with a semantic-passage number or exposes block/schema metadata. End with the bounded
+Reusable rule when supported.
+
+Long Chapters must keep the Story column readable, the passage panel useful during scrolling, the
+canonical Insight reachable, margin notes aligned to their owning blocks, the left Chapter
+navigation independently scrollable, and the layout free of horizontal overflow. Preserve the same
+access on narrow screens through the existing inline/collapsible treatment.
 
 Clicking or focusing a reviewable block updates the same sequence position. It may
-naturally present what was happening, the consequential tension/constraint, why the team acted,
-what changed, and a grounded reusable principle as a concise mini-story rather than a mechanical
-field dump. Do not generate a new Insight from arbitrary selected text.
+naturally present what was happening, the consequential tension/constraint, why a supported role acted,
+what changed, and a grounded reusable principle as a coherent evidence-grounded explanation. Do not
+truncate supported explanatory context to make this assistance concise, and do not generate a new
+Insight from arbitrary selected text.
 
 This panel is local reading assistance, never a second canonical Insight or runtime model call. It
 must not create review state or enter release/export. On narrow screens, fold it into a compact
@@ -162,14 +181,16 @@ multi-insight fallback UI. Use a restrained disclosure, not a large nested card.
 Show:
 
 - AI insight label;
-- `AI interpretation · not historical fact`;
+- an explicit AI-interpretation label separated from historical fact;
 - title;
-- observation;
-- reusable lesson;
+- Direct learning;
+- Reusable rule;
 - Edit and Revise controls;
 - quiet Accept and Do not preserve actions.
 
 Direct edit may expose title/observation/lesson. Human-directed revise asks how it should change and updates the local representation. Do not build a full chat app.
+
+After Accept, immediately replace or visibly change the selected action to `Accepted — pending Apply review` and announce the status accessibly. Give Do not preserve an equivalent pending state. Keep the alternate decision available until Apply. After Apply, state that the decision was applied in the current revision. Never imply Saved, Final, or Published before those states exist. Feedback and pending counts must hydrate from the shared persisted review state in both languages.
 
 ## Text selection behavior
 
@@ -266,7 +287,7 @@ Material equivalence requires:
 - compact aligned People;
 - default read mode plus a compact pencil/Edit control and zero-guesswork controlled editing surface;
 - synchronized Undo/Redo and left-margin edit/annotation notes with a compact responsive fallback;
-- secondary sticky ordered passage-context sequence on wide layouts and inline/collapsible fallback;
+- secondary sticky ordered inline-AI-Insight sequence on wide layouts and inline/collapsible fallback;
 - one collapsed canonical AI Insight at the end of Story;
 - native selection replacement/deletion without a redundant action popover;
 - one active Privacy interaction;

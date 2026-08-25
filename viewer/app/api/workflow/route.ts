@@ -122,7 +122,8 @@ export async function POST(request: Request) {
         WHERE organization_reason LIKE ? OR organization_reason LIKE ?
         ORDER BY COALESCE(timestamp,''),document_id,sequence`)
         .bind(`${STORY_PREFIX}%`, `${LEGACY_STORY_PREFIX}%`).all<StoryCandidateRow>(),
-      db.prepare("SELECT id,document_id AS documentId FROM items ORDER BY document_id,sequence")
+      db.prepare(`SELECT id,document_id AS documentId,event_type AS eventType,
+        actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`)
         .all<StoryEvidenceRow>(),
     ]);
     const validation = validateStoryCandidatePackage(candidateRows, evidenceRows);

@@ -525,6 +525,14 @@ def main(argv=None) -> int:
     parser.add_argument("--out", type=Path, help="output dir (default tools/out/repo-<name>-<ts>)")
     parser.add_argument("--home", type=Path, default=Path.home())
     parser.add_argument(
+        "--source-home",
+        type=Path,
+        help=(
+            "home path used only to mask source paths during extraction "
+            "(default: --home; set explicitly when discovery uses an isolated home)"
+        ),
+    )
+    parser.add_argument(
         "--codex-session-root",
         type=Path,
         help=(
@@ -570,6 +578,9 @@ def main(argv=None) -> int:
     )
     out.mkdir(parents=True, exist_ok=True)
     home = args.home.expanduser().resolve()
+    source_home = (args.source_home or home).expanduser().resolve()
+    if args.source_home and not source_home.is_dir():
+        raise fail(f"source home not found: {source_home}")
     codex_root = (
         args.codex_session_root.expanduser().resolve()
         if args.codex_session_root
@@ -610,7 +621,7 @@ def main(argv=None) -> int:
     done = 0
     for system, sessions in (("claude", claude_sessions), ("codex", codex_sessions)):
         for session in sessions:
-            entry = extract(session, system, out / "trajectories", home, args.user)
+            entry = extract(session, system, out / "trajectories", source_home, args.user)
             trajectories.append(entry)
             done += 1
             pct = 10 + 75 * done / max(1, total)

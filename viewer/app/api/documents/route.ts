@@ -1,4 +1,5 @@
 import { getD1 } from "../../../db";
+import { sourceImportMatchesExisting } from "../../../lib/redaction-pass.mjs";
 
 export async function GET() {
   const db = await getD1();
@@ -34,6 +35,21 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid import payload" }, { status: 400 });
   }
   const now = new Date().toISOString();
+  const latestRedaction = await db.prepare(
+    "SELECT status FROM redaction_jobs ORDER BY started_at DESC LIMIT 1",
+  ).first<{ status: string }>();
+  let sourceChanged = false;
+  if (latestRedaction && latestRedaction.status !== "stale" && body.items.length > 0) {
+    const existing = await db.batch(body.items.map((item) => db.prepare(
+      `SELECT document_id,id,sequence,event_type,actor_id,actor_type,timestamp,content
+         FROM items WHERE id=?`,
+    ).bind(item.id)));
+    sourceChanged = !sourceImportMatchesExisting(
+      existing.map((result) => result.results?.[0]).filter(Boolean),
+      document.id,
+      body.items,
+    );
+  }
   await db.batch([
     db.prepare(
       `INSERT INTO documents
@@ -52,14 +68,15 @@ export async function POST(request: Request) {
       document.itemCount ?? body.items.length, JSON.stringify(document.metadata || {}),
       JSON.stringify(document.envelope || {}), now, now,
     ),
-    // Any import invalidates both derived organization state and the source
-    // identity captured by a prior redaction pass before item writes begin.
+    // Any import invalidates derived organization state before item writes.
     db.prepare("DELETE FROM organization_jobs"),
-    db.prepare(
+    // Preserve a completed Privacy pass for a source-equivalent Story or
+    // organization reattach. Any source-bearing change fails closed as stale.
+    ...(sourceChanged ? [db.prepare(
       `UPDATE redaction_jobs
           SET status='stale',stage='source_changed',completed_at=NULL,updated_at=?
         WHERE status!='stale'`
-    ).bind(now),
+    ).bind(now)] : []),
     // Imports stage new organization/Story data. Invalidate any activated Story
     // before item writes so the shell returns to persisted Workflow Progress.
     db.prepare(`UPDATE workflow_runs

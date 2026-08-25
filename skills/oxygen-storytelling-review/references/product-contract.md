@@ -49,25 +49,48 @@ boundary.
 
 ## Story selection
 
-Select Chapters by consequential state transition. Suitable signals include:
+Select Chapters by meaningful project development. A milestone may record a consequential change,
+durable progress, a substantive iteration, or a failure that established a useful project state.
+Judgment moments are important causal units inside many Chapters. Other eligible milestones include
+durable progress, substantive iteration, and consequential failure. Suitable signals include:
 
+- supported project foundation or first usable capability;
 - problem discovery or clarified goal;
 - baseline or measurement contract;
+- verifiable progress that created a durable capability, artifact, or coverage boundary;
+- a substantive iteration that changed quality, coverage, implementation, or understanding;
 - surprising result;
-- failure or blocked attempt;
+- failure or blocked attempt that changed the diagnosis, next action, or retained constraints;
 - root cause;
 - major decision or changed direction;
 - architecture or execution-envelope change;
 - quantitative change that altered interpretation;
-- validation, freeze, handoff, or current-state conclusion.
+- validation, recovery, freeze, handoff, or current-state conclusion.
 
-Do not select by equal time, equal event count, equal message volume, one per conversation, or one per trajectory. Several Chapters may occur in a short period; quiet periods may have none. Deduplicate repeated discussion of the same durable transition.
+Do not select by equal time, equal event count, equal message volume, one per conversation, one per
+trajectory, or a target Chapter count. Several Chapters may occur in a short period; quiet periods
+may have none. Keep separate milestones when each establishes a distinct durable state needed to
+understand the project's progress. Combine them only when they belong to one connected causal arc.
+Deduplicate repeated discussion of the same state or result.
 
-Explicit reviewed Story annotations, when present and valid, outrank heuristic selection. A heuristic fallback should rank candidates globally for transition value, penalize routine status/procedure, deduplicate normalized meaning, then restore chronology.
+Explicit reviewed Story annotations, when present and valid, outrank heuristic selection. A
+heuristic fallback should rank candidates globally for development value, penalize routine
+status/procedure, deduplicate normalized meaning, then restore chronology. A message that merely
+says work is continuing is routine status. A completed capability, evidence-backed improvement,
+substantive iteration, diagnostic failure, or recovery is meaningful progress.
 
-Use 10–40 primary-project Chapters as the repository's normal envelope when enough reviewed history exists. Do not invent low-value Chapters merely to reach a count. The last Chapter must honestly describe the latest supported current state; if the evidence ends mid-investigation, say so.
+Do not invent low-value Chapters to reach a count or discard supported milestones to stay below one.
+Use the number required by the reviewed history and reviewability. The last Chapter must honestly
+describe the latest supported current state; if the evidence ends mid-investigation, say so.
 
-Audit both ends of the narrative before accepting the selection. When reviewed evidence supports the initiating problem, goal, or baseline assumptions, the opening Chapter and Project Story overview must establish that beginning. Do not start a mature project Story at a midstream command failure, import-path fix, test-collection issue, or other routine setup incident merely because it is easy to summarize. Retain an operational failure only when the evidence shows that it changed a durable policy, measurement contract, architecture, execution envelope, or project direction.
+Audit the full milestone set before accepting the selection. When reviewed evidence supports the
+initiating problem, goal, or baseline assumptions, the opening Chapter and Project Story overview
+must establish that beginning. Do not start a mature project Story at a midstream command failure,
+import-path fix, test-collection issue, or other routine setup incident merely because it is easy
+to summarize. Retain an operational failure when it produced a durable diagnostic result, recovery
+rule, policy, measurement contract, capability, architecture, execution envelope, or direction
+change. Confirm that meaningful progress and substantive iterations have not been removed merely
+because they contain no disagreement or pivot.
 
 ## Narrative construction
 
@@ -87,14 +110,42 @@ Prioritize causal transitions and consequential moments. Compress routine comman
 
 Never turn a small remark into a turning point without evidence. Never rewrite uncertainty or a blocked round into a successful conclusion.
 
-### Narrative compression and voice
+### Context retention and voice
+
+Use this product hierarchy:
+
+```text
+Project Story = scan-first navigation
+Chapter Story = context-complete durable project memory
+Exact Evidence = verification
+AI Insight = learning and bounded reusable rules
+```
+
+For Chapter Story, apply these requirements:
+
+1. decision-relevant context coverage;
+2. factual and Evidence fidelity;
+3. readability;
+
+Brevity is not a Chapter objective. Retain every reviewed-Evidence-supported unit that materially
+explains the current milestone's background, causal or temporal relationships, participant
+interaction, judgment, failed attempt, progress or iteration, or result.
 
 Every reviewed historical record available at the approved input boundary must be considered
 during Story derivation, but not every record belongs in visible copy. Do not claim full-history
-coverage unless that derivation actually considered the complete reviewed input. Keep routine
-commands, repeated validation, status chatter, and low-impact implementation detail available
-through Evidence while compressing the presentation around meaningful phases, causal turns,
-failures, decisions, outcomes, and the current state.
+coverage unless that derivation actually considered the complete reviewed input. Omit a reviewed
+unit from Chapter copy only when it duplicates retained meaning, lies outside the current milestone
+boundary, is withheld by Privacy, or contributes no explanation of background, relationship,
+interaction, judgment, failure, progress, or result. Routine commands, repeated validation, status
+chatter, and implementation detail must remain when they explain one of those dimensions.
+
+Prove this classification at source-unit granularity. Extract reviewed conversational turns and
+independently meaningful nested reviewed turns from every Evidence event in the milestone boundary.
+Give each unit a stable digest identity without retaining its text in validation metadata. Map each
+represented unit to the factual claim and Story block that carries it; otherwise record exactly one
+fixed exclusion reason: duplicate meaning, routine status with no explanatory contribution, outside
+the milestone, or Privacy withheld. One Evidence event can contain several distinct units, so a
+large claim-trace count that repeatedly cites the same event is not context coverage.
 
 The Project Story summary normally uses 2–3 concise sentences. It should establish where the
 project began, name the major transformation or turn, and explain where the reviewed history ends.
@@ -118,13 +169,46 @@ remaining uncertainty, and what should be remembered. Not every Chapter needs a 
 every element, but material elements present in the evidence must not disappear merely to minimize
 word count.
 
-Setup / attempt / problem / turn / what followed / what mattered are useful editorial cues, not
-mandatory schema headings. Use coherent paragraphs, concrete nouns, active voice, important
+Chapter length is determined by the Evidence required to reconstruct the meaningful project
+change. Do not impose a global word, character, paragraph, or sentence maximum. A Chapter is shorter
+only when the reviewed Evidence genuinely contains fewer explanatory relationships. A connected arc containing alternatives, disagreement,
+failure, diagnosis, correction, implementation, validation, and uncertainty may require several
+substantial paragraphs. Keep connected judgment moments together when they address the same
+problem and causal sequence. Keep unrelated decisions in separate Chapters.
+
+Preserve all supported participants, starting positions, alternatives, objections, corrections, failed
+attempts, decision-changing Evidence, owner or reviewer interventions, constraints, numerical
+results, architecture and scope decisions, approvals or rejections, implementation consequences,
+later results, and unresolved questions. Repeated commands, routine tool activity, status chatter,
+duplicate confirmations, and reruns may be omitted only when they add no explanatory background,
+relationship, interaction, judgment, failure, progress, or result. The governing distinction is the
+unit's explanatory contribution to the current milestone.
+
+Decision process must connect supported People to the causal sequence. Use functional roles to show
+who raised or framed the issue, who performed the action, who questioned or corrected it when
+supported, who approved or accepted a result when supported, and what changed afterward. A useful
+interaction may be an owner instruction followed by an implementation report; it need not contain
+disagreement. When Evidence contains proposal → objection → revision → agreement, preserve that
+sequence. When it does not, omit the missing turn. Never invent a reply or consensus to make the
+Chapter feel interactive, and do not substitute generic `the team` for a supported role.
+
+Determine the actual semantic relationship first, then express it with the most natural sentence
+construction. A connective adverb is optional. Do not require a transition word in each sentence
+or paragraph, and do not validate the prose against a canonical connector list. Sequence, cause,
+response, contrast, correction, evidence, limitation, and continuation wording must not claim a
+stronger relationship than the reviewed Evidence supports. Prefer syntactic clarity over mechanical
+thesaurus substitution. Repeated sentence-opening connectives are an editorial concern, not a
+brittle readiness rule. This does not relax the separate prohibition on `X, not Y` and equivalent
+contrast formulas or the requirement that every Chapter overview be distinct.
+
+Use setup, attempt, problem, turn, consequence, and significance only as internal coverage cues.
+The visible schema headings remain Background, Decision process, Result, and Open questions. Use coherent paragraphs, concrete nouns, active voice, important
 technical facts, and material numbers. A Chapter may contain several substantial paragraphs when
 the evidence requires them. Remove audit-report voice, command-by-command narration, mechanical
 field enumeration, generic summary filler, and repeated test/status noise that adds no learning.
 
-The canonical AI insight remains interpretation, not history. Its observation and reusable lesson
+The canonical AI Insight is explicitly labeled interpretation. Historical facts remain in Story and
+Exact Evidence. Its Direct learning and Reusable rule
 may be fuller when needed to preserve a grounded pattern, but must stay project-specific and avoid
 formulaic openings or abstract advice that could describe any project. Final reviewed Chapters may
 carry evidence-backed visible rationale, mistakes, corrections, human overrides, rejected
@@ -133,7 +217,7 @@ latent model reasoning as Story.
 
 The governing standard is:
 
-> Rich context without fictionalization.
+> Context-complete project memory without fictionalization.
 
 Never invent dialogue, emotion, motivation, certainty, causality, or retrospective outcomes that
 the reviewed evidence does not support.
@@ -197,7 +281,12 @@ Review status / completion
 
 These are natural document sections, not sequential steps. Use headings, whitespace, and restrained dividers. Do not show numeric section markers, tabs, a wizard, or a stepper.
 
-The Chapter header includes conventional Project Story Back, Chapter position, previous/next, review stage, phase, time/range, reading time, title, and a short why-read overview.
+The Chapter header includes conventional Project Story Back, Chapter position, previous/next,
+review stage, phase, time/range, reading time, title, and a short Chapter-specific summary. The
+summary previews the supported background, consequential participant turn or judgment, and result
+or open boundary. It must differ across Chapters, avoid generic navigation instructions, and remain
+Evidence-traced. Concrete nouns, active verbs, specific constraints, and varied sentence rhythm make
+it engaging without invented wit, dialogue, emotion, motive, metaphor, or causal certainty.
 
 The default is a clean reading view of the AI-prepared release draft. Original/local evidence is a
 secondary disclosure, not an equal reading mode. Do not render large Release/Original comparison
@@ -237,7 +326,7 @@ Participant records use stable IDs, safe release labels (`A`, `B`, `C`, `AI`, or
 
 Real/local identity may be used only when supported and permitted for local review. It never automatically becomes release identity. If identity is uncertain, keep it generic. Never fabricate a person or name.
 
-## Story, passage context, and canonical AI insight
+## Story, inline AI insight, and canonical AI insight
 
 Render Story as one coherent article with readable paragraphs, meaningful subheadings, bullets where
 scanning improves, and explicit uncertainty where supported. Internal fields such as scene,
@@ -252,11 +341,15 @@ block-associated inline treatment on narrow screens. Notes are local review meta
 enter release output.
 
 Mandatory precomputed evidence-grounded `passageContext`, keyed by every stable rendered Story
-block, drives a small sticky right-side reading companion. English and Chinese require the exact
-same complete key set. A Chapter with any unsupported or missing passage context is incomplete;
-never render it through a silent empty or generic fallback. Clicking or selecting a passage changes
-that local panel. It may
-explain what was happening, why the moment mattered, what became clearer, and a reusable lesson,
+block, drives a small sticky right-side reading companion labeled `AI insight` / `AI 洞察`. The
+canonical English Chapter requires the exact complete key set. When Chinese exists, its safe
+rendered blocks require their matching context or the sidecar is omitted; Chinese absence never
+blocks English readiness. A canonical Chapter with unsupported or missing English passage context
+is incomplete; never render it through a silent empty or generic fallback. Clicking or selecting a
+passage changes that local panel. It may
+explain what was happening through supported participant interaction, why the moment mattered,
+what became clearer, and a reusable rule. It never begins with a passage ordinal, `semantic passage`,
+block ID, schema name, or other implementation metadata,
 conservatively omitting claims the reviewed context cannot support. It is not another reviewable or
 release Insight and is excluded from export by default.
 
@@ -268,7 +361,7 @@ includes:
 - a label such as AI insight or Turning point;
 - explicit `AI interpretation · not historical fact` status;
 - observation;
-- reusable lesson;
+- reusable rule;
 - lightweight accept/remove/direct-edit/human-directed revision affordances.
 
 There is no standalone top-level Highlights section.

@@ -46,7 +46,9 @@ export type ReviewedReleaseChapter = {
   kind: string;
   revision: number;
   en: ReleaseLocale;
-  zh: ReleaseLocale;
+  /** Optional non-canonical localization. It is omitted whenever unavailable
+   * or carrying unresolved cross-language review debt. */
+  zh?: ReleaseLocale;
 };
 
 export type ReviewedStoryRelease = {
@@ -127,9 +129,15 @@ export function buildReviewedStoryRelease(
         reviewedBlocks: sources,
       })) return [];
     const en = localeProjection(milestone, state, "en");
-    const zh = localeProjection(milestone, state, "zh");
-    if (!en || !zh) return [];
-    return [{ key: milestone.story.key, kind: milestone.story.kind, revision: state.revision, en, zh }];
+    if (!en) return [];
+    const zh = state.staleTranslations.length > 0 ? null : localeProjection(milestone, state, "zh");
+    return [{
+      key: milestone.story.key,
+      kind: milestone.story.kind,
+      revision: state.revision,
+      en,
+      ...(zh ? { zh } : {}),
+    }];
   });
   return { schema_version: "oxygen.reviewed-story/1", publication_approved: false, chapters };
 }
@@ -189,17 +197,23 @@ export function sanitizeReviewedStoryRelease(value: unknown): ReviewedStoryRelea
     if (!requiredString(chapter?.key, 300) || !requiredString(chapter?.kind, 100)
       || !Number.isInteger(chapter?.revision) || chapter.revision < 2 || seen.has(chapter.key)) return null;
     const en = sanitizeLocale(chapter.en);
-    const zh = sanitizeLocale(chapter.zh);
-    if (!en || !zh) return null;
-    if (en.people.length !== zh.people.length
+    const zh = chapter.zh === undefined ? null : sanitizeLocale(chapter.zh);
+    if (!en || (chapter.zh !== undefined && !zh)) return null;
+    if (zh && (en.people.length !== zh.people.length
       || en.people.some((person, index) => person.releaseLabel !== zh.people[index].releaseLabel)
       || en.story.reconstruction.length !== zh.story.reconstruction.length
       || en.story.importantDetails.length !== zh.story.importantDetails.length
       || Boolean(en.story.uncertainty) !== Boolean(zh.story.uncertainty)
       || en.insights.length !== zh.insights.length
-      || en.insights.some((insight, index) => insight.id !== zh.insights[index].id)) return null;
+      || en.insights.some((insight, index) => insight.id !== zh.insights[index].id))) return null;
     seen.add(chapter.key);
-    chapters.push({ key: chapter.key, kind: chapter.kind, revision: chapter.revision, en, zh });
+    chapters.push({
+      key: chapter.key,
+      kind: chapter.kind,
+      revision: chapter.revision,
+      en,
+      ...(zh ? { zh } : {}),
+    });
   }
   return { schema_version: "oxygen.reviewed-story/1", publication_approved: false, chapters };
 }

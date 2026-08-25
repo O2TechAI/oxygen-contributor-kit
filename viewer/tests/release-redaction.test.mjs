@@ -14,6 +14,7 @@ import {
   finalRedactionStatus,
   partitionPersistableRedactions,
   redactionReleaseError,
+  sourceImportMatchesExisting,
 } from "../lib/redaction-pass.mjs";
 
 test("AI offsets use Unicode code points for Chinese text after emoji", () => {
@@ -109,6 +110,38 @@ test("prepared safe action labels remain distinct without consulting raw payload
     content: "[tool call] arbitrary command text",
   }, [], "event-unsafe", "document-1").content, "[action]");
   assert.doesNotMatch(JSON.stringify(released), /DO NOT RELEASE|private\/synthetic|artifact-payload/);
+});
+
+test("source-equivalent Story reattach preserves Privacy while source changes do not", () => {
+  const existing = [{
+    document_id: "document-1",
+    id: "document-1:event-1",
+    sequence: 1,
+    event_type: "message",
+    actor_id: "source-actor",
+    actor_type: "human",
+    timestamp: null,
+    content: "Synthetic reviewed source",
+  }];
+  const storyOnly = [{
+    id: "document-1:event-1",
+    sequence: 1,
+    eventType: "message",
+    actorId: "source-actor",
+    actorType: "human",
+    content: "Synthetic reviewed source",
+    organizationReason: "A staged Story annotation that is outside source identity",
+    original: { ignored: "outside source identity" },
+  }];
+  assert.equal(sourceImportMatchesExisting(existing, "document-1", storyOnly), true);
+  assert.equal(sourceImportMatchesExisting(existing, "document-1", [{
+    ...storyOnly[0], content: "Changed source",
+  }]), false);
+  assert.equal(sourceImportMatchesExisting(existing, "document-1", [{
+    ...storyOnly[0], actorId: "changed-source-actor",
+  }]), false);
+  assert.equal(sourceImportMatchesExisting(existing, "other-document", storyOnly), false);
+  assert.equal(sourceImportMatchesExisting([], "document-1", storyOnly), false);
 });
 
 test("only internally consistent completed redaction passes are releasable", () => {
@@ -218,6 +251,8 @@ test("package route is gated and never selects original event JSON", async () =>
   assert.doesNotMatch(route, /original_json/);
   assert.match(redactions, /'running','validating'/);
   assert.match(redactions, /source_digest/);
+  assert.match(documents, /sourceImportMatchesExisting/);
+  assert.match(documents, /\.\.\.\(sourceChanged/);
   assert.match(documents, /source_changed/);
   assert.match(compare, /const items = allItems/);
   assert.match(compare, /Redaction pass is not releasable/);

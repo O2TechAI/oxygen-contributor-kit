@@ -30,10 +30,13 @@ not standalone projects. Then write `<run>/project-map.json` using
 - Keep trajectory/document IDs on every timeline event so **Open source event** can return to
   the exact evidence.
 - Order each project timeline globally by source timestamp, then source sequence for ties.
-- Distill each project to 10–40 high-impact milestones. Never show hundreds of raw conversation
-  turns as timeline cards; retain every omitted turn in source evidence.
-- Cover the project's full time range. Prefer decisions, changes, questions, outcomes, failures,
-  and validations over greetings, repeated status updates, or routine tool narration.
+- Distill each project into evidence-supported meaningful milestones without using a numeric quota.
+  Never show hundreds of raw conversation turns as timeline cards; retain every omitted turn in
+  source evidence.
+- Cover the project's full time range. Include consequential decisions and changes, durable
+  progress, substantive iterations, failures or diagnostic cases that affected later work,
+  validations, handoffs, and the current state. Exclude greetings, repeated status updates, routine
+  tool narration, and reruns that add no new result or understanding.
 - The default Viewer selection is the primary project's combined timeline.
 - Source trajectories may be listed for evidence inspection, but they must not look like
   separate project timelines.
@@ -95,6 +98,9 @@ Attach mode verifies ownership of the exact workflow run, imports the project ma
 records, and advances organization in the existing Viewer. Reattach the prepared reviewed run
 after privacy-boundary preparation, and reattach again when validated Story metadata changes;
 these are idempotent updates to the same canonical runtime, not new Viewers.
+When the reattach changes only organization or staged Story metadata, the Viewer preserves the
+completed Privacy pass because its reviewed source identity is unchanged. Any source-bearing item
+change marks that pass stale and requires Privacy to complete again before Story activation.
 
 For a downstream reviewed-artifact resume or a compatibility-only manual review, the launcher
 still accepts a run directly and starts a fresh Viewer:

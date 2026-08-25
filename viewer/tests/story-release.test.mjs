@@ -32,6 +32,7 @@ const locale = (language) => ({
   people: [{
     id: "local-person", releaseLabel: "A", role: language === "zh" ? "负责人" : "Owner",
     description: language === "zh" ? "定义边界。" : "Defined the boundary.", localIdentityState: "local_only",
+    evidence: [{ documentId: "doc", eventId: "event" }],
   }],
   story: {
     scene: language === "zh" ? "团队需要决定。" : "The team needed to decide.",
@@ -91,9 +92,48 @@ test("release projection includes only human-confirmed allowlisted Chapter copy"
   });
 
   const serialized = JSON.stringify(release);
-  for (const forbidden of ["local-only", "localIdentityState", "original", "excerpt", "documentId", "eventId", "annotations", "instruction", "LOCAL_PASSAGE_"]) {
+  for (const forbidden of [
+    "local-only", "localIdentityState", "original", "excerpt", "documentId", "eventId",
+    "annotations", "instruction", "LOCAL_PASSAGE_", "coverageLedger", "claimTraceability",
+  ]) {
     assert.doesNotMatch(serialized, new RegExp(forbidden));
   }
+});
+
+test("canonical English review and release do not require a Chinese sidecar", () => {
+  const englishOnly = structuredClone(milestone);
+  delete englishOnly.story.reviewPresentation.zh;
+  const context = reviewContext("keep");
+  let review = applyChapterReview(emptyChapterReview(), context).state;
+  review = markChapterReady(review, context);
+
+  const release = buildReviewedStoryRelease([englishOnly], { chapter: review });
+  assert.equal(release.chapters.length, 1);
+  assert.ok(release.chapters[0].en);
+  assert.equal(release.chapters[0].zh, undefined);
+  assert.ok(sanitizeReviewedStoryRelease(release));
+  assert.ok(reviewedStoryPackageEntry(release));
+});
+
+test("localization debt is non-blocking and omits the stale sidecar from release", () => {
+  const sourceBlocks = {
+    en: { scene: locale("en").story.scene },
+    zh: { scene: locale("zh").story.scene },
+  };
+  let review = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: sourceBlocks.en.scene, nextText: "The group needed to decide.",
+    workingRange: { start: 4, end: 8 }, insertedText: "group", now: 100,
+  }).state;
+  const context = { ...reviewContext("keep"), sourceBlocks, reviewedBlocks: sourceBlocks };
+  review = applyChapterReview(review, context).state;
+  assert.deepEqual(review.staleTranslations, [{ subject: "story:scene", language: "zh", count: 1 }]);
+  review = markChapterReady(review, context);
+  assert.equal(review.stage, "human_confirmed");
+
+  const release = buildReviewedStoryRelease([milestone], { chapter: review });
+  assert.equal(release.chapters[0].en.story.scene, "The group needed to decide.");
+  assert.equal(release.chapters[0].zh, undefined);
 });
 
 test("applied direct Story edits reach serialized release copy while the edit ledger and local passage assistance do not", async () => {
@@ -278,6 +318,30 @@ test("release projection derives Privacy redaction from the latest recorded deci
 
   const forgedTarget = { ...structuredClone(review), redactedBlocks: ["detail-0", "outcome"] };
   assert.deepEqual(buildReviewedStoryRelease([milestone], { chapter: forgedTarget }).chapters, []);
+});
+
+test("evidence-supported People can be redacted later without leaking role Evidence", () => {
+  const personCandidate = {
+    ...candidate,
+    id: "local-person-privacy",
+    releaseTargets: ["people:local-person"],
+  };
+  const personMilestone = structuredClone(milestone);
+  for (const language of ["en", "zh"]) {
+    personMilestone.story.reviewPresentation[language].privacy.candidates = [personCandidate];
+  }
+  const context = {
+    ...reviewContext("redact"),
+    storyKey: personMilestone.story.key,
+    privacyCandidates: [personCandidate],
+    privacyDecisions: { "local-person-privacy": "redact" },
+  };
+  let review = applyChapterReview(emptyChapterReview(), context).state;
+  review = markChapterReady(review, context);
+  const release = buildReviewedStoryRelease([personMilestone], { chapter: review });
+  assert.deepEqual(release.chapters[0].en.people, []);
+  assert.deepEqual(release.chapters[0].zh.people, []);
+  assert.doesNotMatch(JSON.stringify(release), /documentId|eventId|local-person/);
 });
 
 test("package organization summaries strip Story review metadata before serialization", () => {

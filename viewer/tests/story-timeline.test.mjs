@@ -23,6 +23,7 @@ const languagePresentation = (language, key) => ({
     role: language === "zh" ? "基准负责人" : "Benchmark owner",
     description: language === "zh" ? "定义成功边界。" : "Defined the boundary for success.",
     localIdentityState: "not_identified",
+    evidence: [{ documentId: "doc", eventId: "event" }],
   }],
   story: {
     scene: language === "zh" ? "团队需要决定下一步。" : "The team needed to decide what came next.",
@@ -139,6 +140,20 @@ test("explicit reviewed annotations define the story without time buckets", () =
   assert.deepEqual(selected[1].story.reviewPresentation.zh.timelineChips, ["3 项证据"]);
 });
 
+test("explicit milestones retain progress, iteration, failure, and judgment without a change-only filter", () => {
+  const selected = selectProjectTimeline([
+    { id:"foundation", timestamp:"2026-08-01T00:00:00Z", summary:story({ key:"foundation", kind:"foundation", title:"First usable capability" }) },
+    { id:"discovery", timestamp:"2026-08-02T00:00:00Z", summary:story({ key:"discovery", kind:"discovery", title:"Coverage expanded" }) },
+    { id:"baseline", timestamp:"2026-08-03T00:00:00Z", summary:story({ key:"baseline", kind:"baseline", title:"Iteration established a baseline" }) },
+    { id:"failure", timestamp:"2026-08-04T00:00:00Z", summary:story({ key:"failure", kind:"failure", title:"Failed case changed the next test" }) },
+    { id:"decision", timestamp:"2026-08-05T00:00:00Z", summary:story({ key:"decision", kind:"decision", title:"Review boundary approved" }) },
+    { id:"handoff", timestamp:"2026-08-06T00:00:00Z", summary:story({ key:"handoff", kind:"handoff", title:"Review package became available" }) },
+  ]);
+  assert.deepEqual(selected.map((event) => event.id), [
+    "foundation", "discovery", "baseline", "failure", "decision", "handoff",
+  ]);
+});
+
 test("repeated conversations cannot create duplicate milestones", () => {
   const repeated = story({ key:"one-decision", title:"One durable decision" });
   const parsed = JSON.parse(repeated.slice(STORY_PREFIX.length));
@@ -167,6 +182,15 @@ test("explicit maximum keeps the most important milestones and restores chronolo
   assert.deepEqual(selected.map((event) => event.id), ["middle", "latest"]);
 });
 
+test("reviewed explicit milestones are not silently capped by the heuristic display limit", () => {
+  const selected = selectProjectTimeline(Array.from({ length: 45 }, (_, index) => ({
+    id:`reviewed-${index}`,
+    timestamp:`2026-08-${String((index % 28) + 1).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:00:00Z`,
+    summary:story({ key:`reviewed-${index}`, kind:index === 44 ? "current_state" : "validation" }),
+  })));
+  assert.equal(selected.length, 45);
+});
+
 test("fallback selection suppresses routine activity and deduplicates summaries", () => {
   const selected = selectProjectTimeline([
     { id:"routine", timestamp:"2026-08-01T00:00:00Z", summary:"Reports progress for the current task", content:"Still running; no terminal state yet." },
@@ -176,6 +200,15 @@ test("fallback selection suppresses routine activity and deduplicates summaries"
   ]);
   assert.deepEqual(selected.map((event) => event.id), ["decision", "cause"]);
   assert.ok(selected.every((event) => !event.story.explicit));
+});
+
+test("fallback distinguishes durable progress from a running-status update", () => {
+  const selected = selectProjectTimeline([
+    { id:"status", timestamp:"2026-08-01T00:00:00Z", summary:"Reports progress for the current task", content:"Still running; no terminal state yet." },
+    { id:"capability", timestamp:"2026-08-02T00:00:00Z", summary:"First complete importer became available", content:"The iteration established a reviewable output boundary." },
+    { id:"recovery", timestamp:"2026-08-03T00:00:00Z", summary:"Recovered after the validation failure", content:"The next validation completed with the corrected boundary." },
+  ]);
+  assert.deepEqual(selected.map((event) => event.id), ["capability", "recovery"]);
 });
 
 test("malformed annotations fail closed and kind labels stay human-readable", () => {
@@ -209,7 +242,7 @@ test("bilingual review presentation preserves one evidence set", () => {
   assert.equal(annotation.reviewPresentation.zh.after, "证据改变了方向。");
 });
 
-test("review schema rejects unavailable excerpts and bilingual identity drift", () => {
+test("review schema rejects unsafe English and drops unsafe optional localization", () => {
   const unavailableExcerpt = JSON.parse(story({ key:"unsafe-unavailable" }).slice(STORY_PREFIX.length));
   unavailableExcerpt.reviewPresentation.en.privacy.candidates[0].original.excerpt = "must not survive";
   unavailableExcerpt.reviewPresentation.en.privacy.candidates[0].original.sourceLanguage = "en";
@@ -217,19 +250,23 @@ test("review schema rejects unavailable excerpts and bilingual identity drift", 
 
   const privacyDrift = JSON.parse(story({ key:"privacy-drift" }).slice(STORY_PREFIX.length));
   privacyDrift.reviewPresentation.zh.privacy.candidates[0].id = "different-candidate";
-  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(privacyDrift)), null);
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(privacyDrift)).reviewPresentation.zh, undefined);
 
   const peopleDrift = JSON.parse(story({ key:"people-drift" }).slice(STORY_PREFIX.length));
   peopleDrift.reviewPresentation.zh.people[0].releaseLabel = "B";
-  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(peopleDrift)), null);
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(peopleDrift)).reviewPresentation.zh, undefined);
+
+  const peopleEvidenceDrift = JSON.parse(story({ key:"people-evidence-drift" }).slice(STORY_PREFIX.length));
+  peopleEvidenceDrift.reviewPresentation.zh.people[0].evidence[0].eventId = "other-event";
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(peopleEvidenceDrift)).reviewPresentation.zh, undefined);
 
   const targetDrift = JSON.parse(story({ key:"target-drift" }).slice(STORY_PREFIX.length));
   targetDrift.reviewPresentation.zh.privacy.candidates[0].releaseTargets = ["outcome"];
-  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(targetDrift)), null);
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(targetDrift)).reviewPresentation.zh, undefined);
 
   const evidenceLanguageDrift = JSON.parse(story({ key:"evidence-language-drift" }).slice(STORY_PREFIX.length));
   evidenceLanguageDrift.reviewPresentation.zh.privacy.candidates[1].original.excerpt = "translated local path";
-  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(evidenceLanguageDrift)), null);
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(evidenceLanguageDrift)).reviewPresentation.zh, undefined);
 });
 
 test("review schema rejects duplicate semantic IDs and hidden unavailable-original fields", () => {
@@ -281,7 +318,7 @@ test("review schema rejects duplicate semantic IDs and hidden unavailable-origin
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(hiddenUnavailable)), null);
 });
 
-test("review schema requires every declared semantic anchor in both language presentations", () => {
+test("review schema requires semantic anchors in canonical English only", () => {
   const missingBoth = JSON.parse(story({ key:"missing-anchor" }).slice(STORY_PREFIX.length));
   missingBoth.reviewPresentation.semanticAnchors = ["ABSENT_TECHNICAL_ANCHOR"];
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(missingBoth)), null);
@@ -289,7 +326,7 @@ test("review schema requires every declared semantic anchor in both language pre
   const missingChinese = JSON.parse(story({ key:"one-language-anchor" }).slice(STORY_PREFIX.length));
   missingChinese.reviewPresentation.en.overview += " EN_ONLY_TECHNICAL_ANCHOR";
   missingChinese.reviewPresentation.semanticAnchors = ["EN_ONLY_TECHNICAL_ANCHOR"];
-  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(missingChinese)), null);
+  assert.ok(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(missingChinese)));
 });
 
 test("passage context is keyed to every stable Story block and fails closed on drift", () => {
@@ -312,7 +349,7 @@ test("passage context is keyed to every stable Story block and fails closed on d
 
   const localeDrift = JSON.parse(story({ key:"locale-context-drift" }).slice(STORY_PREFIX.length));
   delete localeDrift.reviewPresentation.zh.passageContext["detail-0"];
-  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(localeDrift)), null);
+  assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(localeDrift)).reviewPresentation.zh, undefined);
 
   const unsafeField = JSON.parse(story({ key:"unsafe-context-field" }).slice(STORY_PREFIX.length));
   unsafeField.reviewPresentation.en.passageContext.scene.rawEvidence = "must not survive";
@@ -329,7 +366,7 @@ test("Story schema rejects duplicate or malformed evidence references", () => {
   assert.equal(parseStoryAnnotation(STORY_PREFIX + JSON.stringify(malformedLabel)), null);
 });
 
-test("valid Chapters may have no supported People and no Privacy candidates", () => {
+test("historical parsing remains compatible with empty People while readiness owns the hard invariant", () => {
   const emptySets = JSON.parse(story({ key:"empty-supported-sets" }).slice(STORY_PREFIX.length));
   for (const language of ["en", "zh"]) {
     emptySets.reviewPresentation[language].people = [];
