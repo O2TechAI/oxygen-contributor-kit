@@ -46,7 +46,7 @@ const statements = [
   // lifecycle. Package/release code never selects this table.
   `CREATE TABLE IF NOT EXISTS story_review_sessions (
     workflow_run_id TEXT PRIMARY KEY, state_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL, server_version INTEGER NOT NULL DEFAULT 0
   )`,
   // One row per redacted span. Offsets address items.content, which stays the
   // untouched original -- the tag is applied at render time so a reviewer can
@@ -130,6 +130,13 @@ export async function getD1() {
       ] as const;
       for (const [name, sql] of workflowMigrations) {
         if (!workflowNames.has(name)) await env.DB.prepare(sql).run();
+      }
+      const sessionColumns = await env.DB.prepare("PRAGMA table_info(story_review_sessions)")
+        .all<{ name: string }>();
+      if (!sessionColumns.results.some((column: { name: string }) => column.name === "server_version")) {
+        await env.DB.prepare(
+          "ALTER TABLE story_review_sessions ADD COLUMN server_version INTEGER NOT NULL DEFAULT 0",
+        ).run();
       }
       initialized = true;
     })().catch((error) => {

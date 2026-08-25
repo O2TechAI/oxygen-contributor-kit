@@ -67,4 +67,5 @@ export const storyReviewSessions = sqliteTable("story_review_sessions", {
   workflowRunId: text("workflow_run_id").primaryKey(),
   stateJson: text("state_json").notNull(),
   updatedAt: text("updated_at").notNull(),
+  serverVersion: integer("server_version").notNull().default(0),
 });

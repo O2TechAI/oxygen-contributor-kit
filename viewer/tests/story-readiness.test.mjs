@@ -928,12 +928,13 @@ test("ordered explicit Phases and one complete canonical English Chapter per mil
 });
 
 test("refresh, direct navigation, activation, and progress remain persisted and fail closed", async () => {
-  const [workspace, page, workflowRoute, workflowLoader, sessionRoute, database] = await Promise.all([
+  const [workspace, page, workflowRoute, workflowLoader, sessionRoute, sessionServer, database] = await Promise.all([
     read("../app/workspace.tsx"),
     read("../app/page.tsx"),
     read("../app/api/workflow/route.ts"),
     read("../lib/workflow-progress-server.ts"),
     read("../app/api/story-review-session/route.ts"),
+    read("../lib/story-review-session-server.ts"),
     read("../db/index.ts"),
   ]);
   assert.match(workspace, /const storyReviewReady = isStoryReviewReady\(workflow\)/);
@@ -965,7 +966,7 @@ test("refresh, direct navigation, activation, and progress remain persisted and 
   assert.match(workflowRoute, /story_generation_status='ready_for_human_review'/);
   assert.match(workflowRoute, /Cache-Control": "no-store, max-age=0"/);
   assert.match(workflowRoute, /loadWorkflowProgress\(requestedRunId \|\| undefined\)/);
-  assert.match(sessionRoute, /story_generation_status/);
+  assert.match(sessionServer, /story_generation_status/);
   assert.match(sessionRoute, /Story review is not ready/);
   assert.doesNotMatch(workflowRoute, /SELECT\s+content|original_json|reasoning|prompt|tool.?arg|private.?message/i);
   assert.match(workspace, /const loadActivatedStory = async/);

@@ -231,6 +231,20 @@ export function createStoryReviewSession(
   });
 }
 
+function stableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort()
+    .map((key) => [key, stableJsonValue(value[key])]));
+}
+
+/** Compare the canonical schema-1 review meaning while excluding only the
+ * top-level compatibility timestamp, which is server-owned at persistence. */
+export function storyReviewSessionSemanticJson(value: unknown) {
+  const session = canonicalizeStoryReviewSession(value);
+  return session ? JSON.stringify(stableJsonValue({ ...session, updatedAt: "" })) : null;
+}
+
 function sourceBlocks(milestone: TimelineMilestone) {
   return (["en", "zh"] as const).reduce<Record<StoryLanguage, Record<string, string>>>((result, language) => {
     const presentation = milestone.story.reviewPresentation?.[language];

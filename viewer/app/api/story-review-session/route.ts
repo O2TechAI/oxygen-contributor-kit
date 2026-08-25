@@ -3,6 +3,13 @@ import {
   MAX_STORY_REVIEW_SESSION_BYTES,
   canonicalizeStoryReviewSession,
 } from "../../../lib/story-review-session";
+import {
+  STORY_SESSION_ERROR,
+  persistStoryReviewSessionCas,
+  readActiveStoryReviewSource,
+  readStoryReviewSessionRecord,
+  type StorySessionErrorCode,
+} from "../../../lib/story-review-session-server";
 import { isWorkflowRunId } from "../../../lib/workflow-progress";
 import {
   WORKFLOW_RUN_AUTHORITY,
@@ -10,60 +17,111 @@ import {
   workflowRunErrorResponse,
 } from "../../../lib/workflow-run-server";
 
-type SessionRow = { state_json?: string };
+const MAX_STORY_REVIEW_SESSION_REQUEST_BYTES = MAX_STORY_REVIEW_SESSION_BYTES + 10_000;
 
-async function reviewReady(db: Awaited<ReturnType<typeof getD1>>, workflowRunId: string) {
-  const row = await db.prepare(
-    "SELECT story_generation_status FROM workflow_runs WHERE id=?",
-  ).bind(workflowRunId).first<{ story_generation_status: string }>();
-  return row?.story_generation_status === "ready_for_human_review";
+const messages: Record<StorySessionErrorCode, string> = {
+  [STORY_SESSION_ERROR.versionRequired]: "Story review session version is required",
+  [STORY_SESSION_ERROR.versionInvalid]: "Story review session version is invalid",
+  [STORY_SESSION_ERROR.versionConflict]: "Story review session changed; reload before saving",
+  [STORY_SESSION_ERROR.sourceConflict]: "Story review source changed; reload before saving",
+  [STORY_SESSION_ERROR.notReady]: "Story review is not ready",
+  [STORY_SESSION_ERROR.stateInvalid]: "Invalid Story review session",
+};
+
+function sessionErrorResponse(
+  code: StorySessionErrorCode,
+  metadata: { serverVersion?: number; sourceRevision?: number } = {},
+) {
+  const status = code === STORY_SESSION_ERROR.versionRequired
+    || code === STORY_SESSION_ERROR.versionInvalid
+    || code === STORY_SESSION_ERROR.stateInvalid
+    ? 400
+    : 409;
+  return Response.json({ error: messages[code], code, ...metadata }, { status });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export async function GET(request: Request) {
   const workflowRunId = new URL(request.url).searchParams.get("workflowRunId");
-  if (!isWorkflowRunId(workflowRunId)) return Response.json({ error: "A valid workflow run is required" }, { status: 400 });
+  if (!isWorkflowRunId(workflowRunId)) {
+    return Response.json({ error: "A valid workflow run is required" }, { status: 400 });
+  }
   const db = await getD1();
   const authority = await requireExactWorkflowRun(db, workflowRunId);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
   }
-  if (!await reviewReady(db, workflowRunId)) {
-    return Response.json({ error: "Story review is not ready" }, { status: 409 });
+  const [active, record] = await Promise.all([
+    readActiveStoryReviewSource(db, workflowRunId),
+    readStoryReviewSessionRecord(db, workflowRunId),
+  ]);
+  if (!active.ready || active.sourceRevision === null) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.notReady);
   }
-  const row = await db.prepare("SELECT state_json FROM story_review_sessions WHERE workflow_run_id = ?")
-    .bind(workflowRunId).first<SessionRow>();
-  if (!row?.state_json) return Response.json({ session: null });
-  try {
-    return Response.json({ session: canonicalizeStoryReviewSession(JSON.parse(row.state_json)) });
-  } catch {
-    return Response.json({ session: null });
-  }
+  const session = record.sourceRevision === null || record.sourceRevision === active.sourceRevision
+    ? record.session
+    : null;
+  return Response.json({
+    session,
+    serverVersion: record.serverVersion,
+    sourceRevision: active.sourceRevision,
+    persistedAt: record.persistedAt,
+  }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }
 
 export async function POST(request: Request) {
   const raw = await request.text();
-  if (new TextEncoder().encode(raw).byteLength > MAX_STORY_REVIEW_SESSION_BYTES) {
+  if (new TextEncoder().encode(raw).byteLength > MAX_STORY_REVIEW_SESSION_REQUEST_BYTES) {
     return Response.json({ error: "Story review session is too large" }, { status: 413 });
   }
-  let session;
+  let body: unknown;
   try {
-    session = canonicalizeStoryReviewSession(JSON.parse(raw));
+    body = JSON.parse(raw);
   } catch {
-    session = null;
+    return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
-  if (!session) return Response.json({ error: "Invalid Story review session" }, { status: 400 });
+  if (!isRecord(body)) return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
+  if (!("expectedVersion" in body)) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.versionRequired);
+  }
+  if (!Number.isSafeInteger(body.expectedVersion) || Number(body.expectedVersion) < 0) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.versionInvalid);
+  }
+  const workflowRunId = typeof body.workflowRunId === "string" ? body.workflowRunId : "";
+  if (!isWorkflowRunId(workflowRunId)
+    || !Number.isSafeInteger(body.sourceRevision) || Number(body.sourceRevision) < 0) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
+  }
+  const session = canonicalizeStoryReviewSession(body.session);
+  if (!session || session.workflowRunId !== workflowRunId) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
+  }
+
   const db = await getD1();
-  const authority = await requireExactWorkflowRun(db, session.workflowRunId);
+  const authority = await requireExactWorkflowRun(db, workflowRunId);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
   }
-  if (!await reviewReady(db, session.workflowRunId)) {
-    return Response.json({ error: "Story review is not ready" }, { status: 409 });
+  const result = await persistStoryReviewSessionCas(db, {
+    workflowRunId,
+    expectedVersion: Number(body.expectedVersion),
+    sourceRevision: Number(body.sourceRevision),
+    session,
+  }, new Date().toISOString());
+  if (!result.ok) {
+    return sessionErrorResponse(result.code, {
+      ...(result.serverVersion === undefined ? {} : { serverVersion: result.serverVersion }),
+      ...(result.sourceRevision === undefined ? {} : { sourceRevision: result.sourceRevision }),
+    });
   }
-  await db.prepare(`INSERT INTO story_review_sessions (workflow_run_id,state_json,updated_at)
-    VALUES (?,?,?)
-    ON CONFLICT(workflow_run_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at
-    WHERE excluded.updated_at >= story_review_sessions.updated_at`)
-    .bind(session.workflowRunId, JSON.stringify(session), session.updatedAt).run();
-  return Response.json({ saved: true, updatedAt: session.updatedAt });
+  return Response.json({
+    saved: result.saved,
+    noChange: result.noChange,
+    serverVersion: result.serverVersion,
+    sourceRevision: result.sourceRevision,
+    persistedAt: result.persistedAt,
+  });
 }

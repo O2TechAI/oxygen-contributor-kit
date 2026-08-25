@@ -83,16 +83,23 @@ test("session canonicalization strips unknown payloads and hydration rejects for
   assert.equal(createStoryReviewSession("r".repeat(129), {}, {}), null);
 });
 
-test("Story session API is bounded, local, and excluded from workflow progress and package reads", async () => {
-  const [route, workflowRoute, packageRoute, database] = await Promise.all([
+test("Story session API is bounded, CAS-owned, local, and excluded from workflow progress and package reads", async () => {
+  const [route, server, workflowRoute, packageRoute, database] = await Promise.all([
     read("../app/api/story-review-session/route.ts"),
+    read("../lib/story-review-session-server.ts"),
     read("../app/api/workflow/route.ts"),
     read("../app/api/package/route.ts"),
     read("../db/index.ts"),
   ]);
   assert.match(route, /MAX_STORY_REVIEW_SESSION_BYTES/);
   assert.match(route, /canonicalizeStoryReviewSession/);
-  assert.match(route, /ON CONFLICT\(workflow_run_id\)/);
+  assert.match(route, /persistStoryReviewSessionCas/);
+  assert.match(route, /STORY_SESSION_ERROR\.versionRequired/);
+  assert.match(server, /STORY_SESSION_VERSION_REQUIRED/);
+  assert.doesNotMatch(route, /excluded\.updated_at|saved:\s*true,\s*updatedAt/);
+  assert.match(server, /server_version=server_version\+1/);
+  assert.match(server, /story_source_revision=\?/);
+  assert.match(server, /Number\(result\.meta\?\.changes \|\| 0\)/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS story_review_sessions/);
   assert.doesNotMatch(workflowRoute, /story_review_sessions|state_json/);
   assert.doesNotMatch(packageRoute, /story_review_sessions|state_json/);

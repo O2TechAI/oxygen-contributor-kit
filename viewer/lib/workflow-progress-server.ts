@@ -1,6 +1,10 @@
 import { getD1 } from "../db";
 import { selectReviewableStoryTimeline } from "./story-readiness";
 import { hydrateStoryReviewSession } from "./story-review-session";
+import {
+  readActiveStoryReviewSource,
+  readStoryReviewSessionRecord,
+} from "./story-review-session-server";
 import { deriveWorkflowProgress, isStoryReviewReady } from "./workflow-progress";
 import {
   WORKFLOW_RUN_AUTHORITY,
@@ -113,7 +117,7 @@ export async function loadWorkspaceBootstrap() {
   }
 
   const db = await getD1();
-  const [items, documentCount, organization, documentRows, session] = await Promise.all([
+  const [items, documentCount, organization, documentRows, session, activeSource] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN organization_category IS NOT NULL THEN 1 ELSE 0 END) AS completed
       FROM items`).first<CountRow>(),
@@ -123,8 +127,8 @@ export async function loadWorkspaceBootstrap() {
     db.prepare(`SELECT id,kind,title,source_user,source_system,source_timestamp,item_count,
       updated_at,organization_status,formatted_summary_json
       FROM documents ORDER BY source_timestamp,title`).all<WorkspaceDocumentRow>(),
-    db.prepare("SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?")
-      .bind(workflow.workflowRunId).first<{ state_json?: string }>(),
+    readStoryReviewSessionRecord(db, workflow.workflowRunId),
+    readActiveStoryReviewSource(db, workflow.workflowRunId),
   ]);
   const total = Number(items?.total || 0);
   const completed = Number(items?.completed || 0);
@@ -148,7 +152,10 @@ export async function loadWorkspaceBootstrap() {
     .map((event) => ({ ...event, documentId: document.id })))
     .sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || "")));
   const milestones = selectReviewableStoryTimeline(events);
-  const persistedSession = parseStoredJson<unknown>(session?.state_json, null);
+  const persistedSession = session.sourceRevision === null
+    || session.sourceRevision === activeSource.sourceRevision
+    ? session.session
+    : null;
   const hydrated = hydrateStoryReviewSession(persistedSession, workflow.workflowRunId, milestones);
   const ready = documents.length > 0
     && status.status === "complete"
