@@ -14,6 +14,11 @@ repository guidance files. User-global `CLAUDE.md` / `AGENTS.md` require the exp
 and child cwd sessions are eligible; parent, sibling, and body-mention-only sessions are excluded.
 Credential-like filenames are excluded.
 
+Discovery home and source-path masking home are separate inputs. `--home` chooses default discovery
+locations. `--source-home` overrides only the local path-masking root and is required when an
+isolated discovery home is paired with an explicitly approved session root. It never expands the
+session boundary and is never sent through Workflow Progress.
+
 The normal workflow starts the canonical Viewer before collection. The repo collector accepts
 `--progress-url` plus `--workflow-run-id` only as a pair and sends fixed collection lifecycle
 events with nonnegative counts to that exact loopback Viewer. It never sends the working-folder

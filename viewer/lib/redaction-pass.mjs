@@ -23,6 +23,34 @@ export async function computeSourceDigest(rows) {
     .join("");
 }
 
+/** Compare one import batch with the source-bearing fields already reviewed.
+ * Organization labels, Story metadata, and original envelopes are deliberately
+ * outside the redaction source identity, so a source-equivalent reattach can
+ * retain a completed Privacy pass. */
+export function sourceImportMatchesExisting(existingRows, documentId, incomingItems) {
+  if (!Array.isArray(existingRows) || !Array.isArray(incomingItems)
+      || existingRows.length !== incomingItems.length) return false;
+  const incomingRows = incomingItems.map((item) => ({
+    document_id: documentId,
+    id: item?.id,
+    sequence: item?.sequence,
+    event_type: item?.eventType,
+    actor_id: item?.actorId,
+    actor_type: item?.actorType,
+    timestamp: item?.timestamp,
+    content: item?.content,
+  }));
+  const expected = canonicalSourceRows(incomingRows);
+  const actual = canonicalSourceRows(existingRows);
+  const actorIdentity = (rows) => rows.map((row) => ({
+    document_id: text(row.document_id),
+    id: text(row.id),
+    actor_id: text(row.actor_id),
+  })).sort((a, b) => a.document_id.localeCompare(b.document_id) || a.id.localeCompare(b.id));
+  return JSON.stringify(actual) === JSON.stringify(expected)
+    && JSON.stringify(actorIdentity(existingRows)) === JSON.stringify(actorIdentity(incomingRows));
+}
+
 export function finalRedactionStatus({ requestedStatus, completed, total, rejected, sourceDigest }) {
   const complete = requestedStatus === "complete"
     && Number.isInteger(completed) && completed >= 0

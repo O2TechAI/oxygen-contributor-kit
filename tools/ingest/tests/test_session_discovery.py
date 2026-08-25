@@ -284,6 +284,7 @@ class CollectorMainBoundaryTest(unittest.TestCase):
 
             self.assertEqual(result, 0)
             self.assertEqual([call.args[0] for call in extracted.call_args_list], [exact.resolve()])
+            self.assertEqual([call.args[3] for call in extracted.call_args_list], [home.resolve()])
             index = json.loads((out / "index.json").read_text(encoding="utf-8"))
             discovery = index["session_discovery"]["codex"]
             self.assertEqual(discovery["files_scanned"], 2)
@@ -294,6 +295,70 @@ class CollectorMainBoundaryTest(unittest.TestCase):
                 [entry["source"] for entry in index["memory"]],
                 [str((repo / "AGENTS.md").resolve())],
             )
+
+    def test_explicit_source_home_is_independent_from_isolated_discovery_home(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            discovery_home = root / "isolated-discovery-home"
+            source_home = root / "source-home"
+            repo = root / "target"
+            session_root = root / "approved-sessions"
+            out = root / "out"
+            repo.mkdir()
+            source_home.mkdir()
+            session = session_root / "approved.jsonl"
+            write_jsonl(session, [codex_session_meta(str(repo), "approved")])
+
+            def fake_extract(session_path, system, out_root, masking_home, user):
+                return {
+                    "trajectory_id": session_path.stem,
+                    "system": system,
+                    "source_session": str(session_path),
+                    "source_sha256_prefix": "synthetic",
+                    "ok": True,
+                }
+
+            with (
+                mock.patch.object(MODULE, "extract", side_effect=fake_extract) as extracted,
+                mock.patch("builtins.print"),
+            ):
+                result = MODULE.main([
+                    str(repo), "--home", str(discovery_home),
+                    "--source-home", str(source_home),
+                    "--codex-session-root", str(session_root),
+                    "--out", str(out), "--agents", "codex", "--user", "synthetic",
+                ])
+
+            self.assertEqual(result, 0)
+            self.assertEqual([call.args[0] for call in extracted.call_args_list], [session.resolve()])
+            self.assertEqual([call.args[3] for call in extracted.call_args_list], [source_home.resolve()])
+
+    def test_missing_explicit_source_home_fails_before_session_extraction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "target"
+            session_root = root / "approved-sessions"
+            out = root / "out"
+            repo.mkdir()
+            write_jsonl(
+                session_root / "approved.jsonl",
+                [codex_session_meta(str(repo), "approved")],
+            )
+
+            with (
+                mock.patch.object(MODULE, "extract") as extracted,
+                mock.patch("builtins.print"),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                MODULE.main([
+                    str(repo), "--home", str(root / "isolated-discovery-home"),
+                    "--source-home", str(root / "missing-source-home"),
+                    "--codex-session-root", str(session_root),
+                    "--out", str(out), "--agents", "codex", "--user", "synthetic",
+                ])
+
+            self.assertEqual(raised.exception.code, 1)
+            extracted.assert_not_called()
 
 
 class WorkflowProgressReporterTest(unittest.TestCase):

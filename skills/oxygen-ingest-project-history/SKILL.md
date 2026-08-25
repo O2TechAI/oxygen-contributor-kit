@@ -65,6 +65,13 @@ boundary: every valid Codex session JSONL below it is eligible without reapplyin
 matching. Point only at the audited `sessions` child, never a mixed `.codex` parent, and never
 widen to a parent cwd or another session store without separate approval.
 
+`--home` controls discovery. If a validation deliberately supplies an isolated task-local `--home`
+while using an approved `--codex-session-root`, also pass
+`--source-home <contributor-home-used-by-the-source>` so path masking remains stable. This second
+path is used only by the local extractor; it does not widen collection and must never enter a
+browser progress payload. Run a cheap path preflight before extraction and fail clearly if the
+approved masking path is unavailable.
+
 Repository guidance and matched Claude project memory remain in scope by default. User-global
 `~/.codex/AGENTS.md` and `~/.claude/CLAUDE.md` are not collected automatically; include them only
 after separate approval with `--include-global-memory`.
