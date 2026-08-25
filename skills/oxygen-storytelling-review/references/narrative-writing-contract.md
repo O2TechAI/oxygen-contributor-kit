@@ -4,9 +4,22 @@ Use this contract when generating or revising Project Story, Chapter Story, pass
 
 ## Governing rule
 
-> Show the conflict, the turn, the result, and the reusable principle.
+> Record the supported context, decision process, result, and open questions.
 
-Chronology supplies evidence order, not narrative importance. Preserve the minimum evidence thread that explains how the project’s understanding changed. Compress routine commands, repeated status, ordinary test execution, and implementation detail unless they caused a durable decision, constraint, architecture, or evaluation change.
+Chronology supplies evidence order. Narrative importance comes from the complete explanatory
+Evidence thread for the current milestone. Chapter brevity is never a selection, generation,
+revision, or validation objective. Retain every reviewed-Evidence-supported unit that materially
+explains background, causal or temporal relationships, participant interaction, judgment, failed
+attempts, progress or iteration, or results. Do not set a global word, sentence, paragraph, or
+character target. Omit only duplicated or routine material that contributes none of those meanings,
+material outside the milestone boundary, and content withheld by Privacy. Readability may reorganize
+the retained context but may not delete it.
+
+Milestone selection also retains evidence-supported progress, substantive iterations, and failures.
+A Chapter does not need a pivot or disagreement when it establishes a durable capability, artifact,
+validated improvement, diagnostic result, recovery, or review boundary. A message that work is still
+running is status noise; a completed or failed iteration that changes what exists or what happens
+next is project memory.
 
 Never invent dialogue, emotion, motivation, evidence, causal certainty, or a cleaner ending than the reviewed record supports.
 
@@ -36,6 +49,16 @@ tension / disagreement / failed direction
 
 Prefer concrete causal language over generic activity labels. A title should help a reader anticipate what changed without repeating the Timeline type or date.
 
+## Chapter overview
+
+The line beneath the title is a short summary of this Chapter. Preview the supported background,
+the consequential participant interaction or judgment, and the result or open boundary. Do not use
+a navigation instruction, generic why-read prompt, or copy shared with another Chapter. Bind every
+factual claim to Chapter Evidence. Use concrete nouns, active verbs, specific constraints, a natural
+connective, and varied sentence rhythm. These choices can make the summary lively and engaging while
+preserving the neutral factual voice. Do not add jokes, invented color, dialogue, emotion, motive,
+metaphor, anthropomorphism, or causal certainty.
+
 ## Background
 
 Open with only the context required to understand the scene:
@@ -47,9 +70,9 @@ Open with only the context required to understand the scene:
 
 Do not restart the entire project history in every Chapter. Preserve technical names and quantities when they materially define the choice.
 
-## Evidence thread
+## Decision process
 
-Choose the smallest reviewed sequence that demonstrates the change in thinking:
+Choose the complete reviewed sequence needed to reconstruct the change in understanding:
 
 ```text
 initial claim
@@ -59,9 +82,55 @@ initial claim
 → confirmation or remaining disagreement
 ```
 
-Not every Chapter contains every step. Omit unsupported steps rather than manufacturing a complete arc. Every factual claim must remain traceable to declared reviewed Evidence IDs. Exact source text remains in the Evidence surface and in its original language; the Story is faithful compression, not a transcript dump.
+A Chapter can omit any unsupported step. Fabricating a complete arc fails the Evidence contract.
+A Chapter may contain several connected judgment moments when they belong to the same problem
+and causal sequence. Do not split that arc to satisfy a length target, and do not combine unrelated
+decisions to reduce navigation count. Every material factual claim must remain traceable to declared
+reviewed Evidence IDs. Exact source text remains in the Evidence surface and in its original
+language; Story preserves the context required for understanding without reproducing a transcript.
 
-## The turn
+Within the Decision process, make any consequential judgment legible. Judgment moments include a
+choice between options, a rejected proposal, a corrected position, a repeated question, a decision
+with a visible cost, or a failure that changed the next action. For a progress or iteration Chapter,
+state the supported prior state, the action or constraint that defined the iteration, the durable
+result, and the next boundary. Do not manufacture disagreement to make progress seem consequential.
+
+Make participant interaction legible with safe functional roles. Attribute the supported sequence:
+
+```text
+role raises or frames an issue
+→ another role acts, questions, or reports a result
+→ a role responds, corrects, constrains, or approves when supported
+→ the next action or project state changes
+```
+
+Write a connected account whose stated relationships match reviewed Evidence. Keep transcript-style dialogue in Exact Evidence. An owner request followed
+by an implementation agent's action and report is a valid interaction. A proposal, objection, revised position, and
+agreement should appear only when reviewed Evidence contains every turn. Use each listed Person's
+localized functional role in Decision process. Do not invent a response or consensus, and avoid
+generic `the team` when a supported role is available.
+
+Use connective adverbs and conjunctions to express the relationship between supported turns.
+`However` / `但是` or `然而` marks an objection, contradiction, discovered problem, or binding
+constraint. `In response` / `对此` marks an evidence-supported reaction or correction. `Therefore`
+or `As a result` / `因此` or `结果` marks causality or outcome. `Subsequently` / `随后` marks temporal
+consequence when no stronger causal claim is supported. Vary sentence structure and connect the
+turns into coherent paragraphs. Do not attach a connective mechanically to every sentence, and do
+not use one to fabricate disagreement, response, consensus, chronology, or causality.
+
+Preserve the minimum supported thread:
+
+```text
+initial position
+→ objection or failure
+→ revised understanding
+→ decision or action
+→ result or unresolved issue
+```
+
+Include disagreement, concession, and cost only when reviewed Evidence supports them.
+
+### Consequential change
 
 Make the consequential turn legible. It may change:
 
@@ -84,7 +153,7 @@ State the resulting decision, capability, failure, constraint, or next test. Pre
 
 ## Direct learning
 
-Explain what the team could reasonably learn at that time:
+State the bounded learning supported at that time:
 
 - why the earlier disagreement persisted;
 - why the reframe worked or failed;
@@ -94,7 +163,7 @@ Explain what the team could reasonably learn at that time:
 
 This is interpretation and must remain labeled as such. It is not a repetition of event order.
 
-## Reusable principle
+## Reusable rule
 
 Turn the episode into a bounded rule for a future human or Agent:
 
@@ -104,9 +173,9 @@ When a similar situation appears
 → what shortcut or failure mode should be avoided?
 ```
 
-Use analogies only when they clarify the supported lesson. Never generalize beyond what the evidence can bear.
+Use direct standard terminology. Never generalize beyond what the evidence can bear.
 
-## Open tension
+## Open questions
 
 When evidence leaves an issue open, say so directly. Distinguish a clearer boundary from a completed solution, a fixed deadline from resolved decisions, and a promising result from a validated baseline.
 
@@ -122,39 +191,48 @@ Chapter title
 = tension + decisive outcome
 
 Story
-= Background + evidence thread + turn + result
+= Background + Decision process + Result + Open questions
 
-Passage Insight
-= local explanation of one Story moment
+Inline AI Insight
+= participant interaction + narrative explanation + reusable rule for one Story moment
 
 Bottom canonical Insight
-= direct learning + reusable principle + open tension
+= Direct learning + Reusable rule
 ```
 
 Keep the stable Story-block schema. Do not add a new field merely to mirror these labels. The narrative roles guide how existing fields form one coherent article.
 
-## Passage Insight
+## Inline AI Insight
 
-Generate local passage assistance for every rendered Story block. A Chapter without safe support
+Generate local AI assistance for every rendered Story block. Label this surface `AI insight` / `AI 洞察`.
+A Chapter without safe support
 for any required passage is incomplete and must not be presented as conforming; do not omit the map,
-drop the block, or substitute a generic fallback. In roughly three to five concise sentences,
-communicate:
+drop the block, or substitute a generic fallback. Use the amount of copy required to communicate:
 
 1. what was happening;
 2. which tension, choice, or constraint mattered;
-3. why the team acted or reframed the problem;
+3. why the supported participant acted or reframed the problem;
 4. what changed or became clearer;
 5. what a future person or Agent can reuse, when supported.
 
-Write a small narrative, not a field dump. Use specific nouns, consequential constraints, supported numbers, and direct causal language. Omit repetitive or unsupported parts. Passage assistance is local-only, non-reviewable context and never enters release/export.
+Write a small narrative, not a field dump. Connect supported participant actions, responses,
+corrections, consequences, and temporal changes so the moment reads as an interaction. Use specific
+nouns, consequential constraints, supported numbers, and direct causal language. Never open with a
+passage number, `semantic passage`, block ID, schema name, or other implementation metadata. Omit
+repetitive or unsupported parts. Inline AI Insight is local-only, non-reviewable context and never
+enters release/export.
 It must not copy the owning Story sentence into `whatWasHappening` or restate one sentence across
 several fields. Each required block supplies what was happening, why it mattered, what was learned,
-and a bounded reusable lesson; when safe support for one of those meanings is absent, the candidate
+and a bounded reusable rule; when safe support for one of those meanings is absent, the candidate
 remains on Build rather than substituting filler.
 
 ## Canonical Chapter Insight
 
-Generate exactly one reviewable canonical Insight per Chapter. It should synthesize rather than concatenate passage assistance. When the evidence supports the depth, use approximately four to seven concise sentences covering the central change, why it worked or failed, immediate learning, reusable principle, and unresolved tension.
+Generate exactly one reviewable canonical Insight per Chapter. It should synthesize the complete
+Chapter and its inline AI Insights. Cover Direct learning, the Reusable rule, and any source
+limitation needed to bound the interpretation. Do not impose a sentence maximum or pad a simple
+Insight. Preserve supported disagreement, failed attempts, and results when they materially bound
+the learning. The Insight must derive new bounded interpretation. A Story paraphrase fails this requirement.
 
 Keep it collapsed by default and clearly labeled as AI interpretation. Preserve Accept, Edit, human-directed Revise, Do not preserve, bilingual debt, Apply review, All set, and Reopen review. Import and release validation fail closed on multiple reviewable Insights.
 
@@ -167,17 +245,27 @@ Use writing that is:
 - specific;
 - technically faithful;
 - evidence-backed;
-- lightly conversational;
+- neutral;
 - readable by humans and future Agents.
 
-Avoid mechanical summary voice, abstract noun chains, generic project-management prose, raw chronological dumps, motivational filler, invented dialogue, sarcasm, and unsupported retrospective certainty. Avoid generic formulas such as “the key takeaway” when a specific causal statement can carry the meaning.
+Use established standard terminology. Use neutral nouns for headings and classifications. One sentence should normally carry one main claim. Prefer explicit subjects and direct verbs. Preserve uncertainty and source limitations.
 
-Reject generic activity titles equivalent to `Project update`, `Benchmark discussion`, `Project
-evolution`, or `Workflow progress`. Also reject short filler such as “The team needed to…”, “This
-passage shows…”, “This highlights the importance of…”, or “The key takeaway is…” when it supplies
-no concrete causal information.
+Full Chapter prose should be pleasant to read as well as complete. Let supported surprise,
+disagreement, correction, failure, progress, and concrete results supply the interest. Vary sentence
+length and paragraph rhythm, and use natural relation markers. Stylistic energy may organize and
+clarify Evidence; it may not embellish it.
 
-English is the canonical default. Chinese must be natural and semantically equivalent, preserving technical terms, identifiers, claims, uncertainty, and the same conflict/turn/result/principle. Never translate Evidence and present it as original.
+Do not use metaphors, analogies, figurative language, slogans, literary framing, colloquial language, anthropomorphism, vague AI boilerplate, abstract noun chains, or contrast formulas of the form “X, not Y” and localized equivalents. Do not invent alternate terminology for a known concept. Do not invent motives, emotions, dialogue, causes, or outcomes.
+
+Reject phrases including “The team needed to…”, “This passage shows…”, “This highlights the importance of…”, “The key takeaway is…”, “The project learned…”, “The evidence wanted…”, and “The workflow fought back…”, plus localized equivalents. Rewrite each with a supported subject and direct action.
+
+If reviewed Evidence does not determine a cause, write the localized equivalent of `Cause not determined.` Do not fill the gap with a likely explanation.
+
+Reject generic activity titles equivalent to `Project update`, `Benchmark discussion`, `Project evolution`, or `Workflow progress`. Reject prohibited filler regardless of sentence length.
+
+English is canonical and is the sole narrative-readiness surface. Chinese is an optional localized
+sidecar. When present, it should be natural and semantically equivalent, but missing or imperfect
+Chinese cannot block a validated English Story. Never translate Evidence and present it as original.
 
 ## Narrative validation
 
@@ -185,18 +273,61 @@ For every Chapter, verify with safe structured data:
 
 - the title names tension plus change;
 - Background is sufficient but not a project recap;
-- the evidence thread has declared IDs and no invented step;
-- the turn and result are distinguishable;
+- the Decision process has declared IDs and no invented step;
+- the consequential change and Result are distinguishable;
 - direct learning is interpretation rather than fabricated fact;
-- the reusable principle is bounded;
-- open tension appears when supported;
+- the Reusable rule is bounded;
+- Open questions appear when supported;
 - every rendered Story block has passage assistance;
-- EN/中文 preserve the same claims and uncertainty;
+- canonical English preserves every supported claim and uncertainty; optional localization quality
+  is reviewed separately and never gates activation;
 - exactly one canonical Insight exists;
-- passage assistance remains absent from release/export.
+- passage assistance remains absent from release/export;
+- standard terminology and neutral structure are used;
+- factual claims remain Evidence-bound and interpretation stays in AI Insight;
+- prohibited styles and contrast formulas are absent;
+- every Chapter has at least one supported Person and all actor Evidence is represented by supported People roles.
+
+Before activation, persist a Chapter coverage ledger with exactly these semantic checks:
+
+- main problem;
+- participants;
+- starting position;
+- alternatives;
+- objection or disagreement;
+- failed attempt;
+- correction or change of position;
+- decision-changing Evidence;
+- quantitative result;
+- final action;
+- result;
+- remaining uncertainty.
+
+For each element, record whether reviewed Evidence did not support it or the Story represents it. Do
+not require a nonexistent element. Main problem, participants, final action, and result must be
+represented in every reviewable Chapter. The historical `supporting_detail` state remains readable
+for compatibility, but it is not valid for a candidate entering human review. Every supported
+explanatory unit belongs in a traceable Story block.
+
+Also persist claim traceability for every material factual claim. Each entry binds one stable Story
+or People block to exact Chapter Evidence; use multiple entries when one block contains several
+material claims. Record the exact Evidence input set for the canonical Insight separately as
+interpretation input. A block-level mapping does not authorize an unsupported additional sentence.
+Readiness fails when any Story/People block lacks claim support, any reference falls outside the
+Chapter Evidence set, or the Insight has no explicit input set. Keep this metadata local and exclude
+it from release/export.
+
+Persist a separate context-retention ledger for the complete milestone Evidence cluster. Treat a
+reviewed conversational turn or independently meaningful nested reviewed turn as a source unit;
+do not equate an outer Evidence-event ID with one unit. Use a stable digest identity and retain no
+source copy in the ledger. Every unit is either represented, with exact Story block IDs and matching
+claim-trace `unitIds`, or excluded for exactly one fixed reason: duplicate meaning, routine status
+with no explanatory contribution, outside the milestone, or Privacy withheld. Several units may
+share one Evidence reference. Repeating one reference across many claims cannot satisfy this gate.
 
 Persist this result as a bounded structured self-review: passed status, title check, stable block-ID
-mappings for every narrative role, Phase rationale/boundary checks, and passage-distinctness check.
+mappings for every narrative role, Phase rationale/boundary checks, passage-distinctness check,
+coverage ledger, context-retention ledger, and claim traceability.
 This is an activation proof, not model reasoning; never put its free-form contents in Workflow
 Progress. Stage 4 remains current or blocked until the self-review and the complete Story package
 both validate.

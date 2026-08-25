@@ -22,6 +22,10 @@ const candidates = syntheticStoryEvents.map((event) => ({
 const evidence = syntheticStoryEvents.map((event) => ({
   id: `${event.document_id}:${event.id}`,
   documentId: event.document_id,
+  eventType: event.event_type,
+  actorId: event.actor_id,
+  actorType: event.actor_type,
+  sequence: event.sequence,
 }));
 
 function changedCandidate(index, change) {
@@ -30,6 +34,51 @@ function changedCandidate(index, change) {
   change(annotation);
   copy[index].summary = STORY_PREFIX + JSON.stringify(annotation);
   return copy;
+}
+
+function addParticipantProof(annotation, personId, reference) {
+  annotation.narrativeReview.coverageLedger.participants.blockIds.push(`people:${personId}`);
+  annotation.narrativeReview.coverageLedger.participants.evidence.push(reference);
+  annotation.narrativeReview.claimTraceability.push({
+    id: `claim-${annotation.key}-person-${personId}`,
+    kind: "factual_claim",
+    blockId: `people:${personId}`,
+    evidence: [reference],
+  });
+}
+
+function removeParticipantProof(annotation) {
+  delete annotation.narrativeReview.coverageLedger;
+  annotation.narrativeReview.claimTraceability = annotation.narrativeReview.claimTraceability
+    .filter((claim) => !claim.blockId.startsWith("people:"));
+}
+
+function addJudgmentBlock(annotation, english, chinese, evidenceReference, includeTrace = true) {
+  const index = annotation.reviewPresentation.en.story.reconstruction.length;
+  const blockId = `reconstruction-${index}`;
+  annotation.reviewPresentation.en.story.reconstruction.push(english);
+  annotation.reviewPresentation.zh.story.reconstruction.push(chinese);
+  annotation.releaseEpisode.reconstruction.push(english);
+  annotation.reviewPresentation.en.passageContext[blockId] = {
+    whatWasHappening: `A reviewed role recorded the next supported step for ${blockId}.`,
+    whyItMattered: `The step changed the synthetic decision sequence associated with ${blockId}.`,
+    whatWeLearned: `The reviewed comparison preserved a distinct judgment at ${blockId}.`,
+    reusableLesson: `Retain a supported judgment when it changes the action at ${blockId}.`,
+  };
+  annotation.reviewPresentation.zh.passageContext[blockId] = {
+    whatWasHappening: `已审阅角色记录了 ${blockId} 对应的下一项支持步骤。`,
+    whyItMattered: `该步骤改变了 ${blockId} 对应的合成决策顺序。`,
+    whatWeLearned: `已审阅比较保留了 ${blockId} 对应的独立判断。`,
+    reusableLesson: `当支持的判断改变后续行动时，应保留 ${blockId} 对应内容。`,
+  };
+  annotation.narrativeReview.roles.evidenceThread.push(blockId);
+  if (includeTrace) annotation.narrativeReview.claimTraceability.push({
+    id: `claim-${annotation.key}-${blockId}`,
+    kind: "factual_claim",
+    blockId,
+    evidence: [evidenceReference],
+  });
+  return blockId;
 }
 
 const reviewedFacts = (overrides = {}) => ({
@@ -100,6 +149,24 @@ test("the complete package validator rejects partial Chapter structures and unre
   });
 });
 
+test("new Story candidates require fully qualified Evidence identities", () => {
+  const unqualified = changedCandidate(0, (annotation) => {
+    annotation.evidence.primary.eventId = "synthetic-evidence-alpha";
+  });
+  assert.deepEqual(validateStoryCandidatePackage(unqualified, evidence), {
+    ok: false, code: "STORY_EVIDENCE_UNQUALIFIED",
+  });
+
+  const duplicateBareSuffix = evidence.concat({
+    id: "other-reviewed-document:synthetic-evidence-alpha",
+    documentId: "other-reviewed-document",
+    eventType: "message",
+    actorId: "other-speaker",
+    actorType: "human",
+  });
+  assert.equal(validateStoryCandidatePackage(candidates, duplicateBareSuffix).ok, true);
+});
+
 test("malformed truthy Story fields fail closed without throwing", () => {
   const malformedCandidates = [
     changedCandidate(0, (annotation) => { annotation.title = 1; }),
@@ -116,7 +183,7 @@ test("malformed truthy Story fields fail closed without throwing", () => {
   }
 });
 
-test("activation requires a passed narrative self-review with distinct complete passage interpretation", () => {
+test("activation requires a passed canonical-English self-review while localization remains non-blocking", () => {
   const missingReview = changedCandidate(0, (annotation) => {
     delete annotation.narrativeReview;
   });
@@ -135,9 +202,27 @@ test("activation requires a passed narrative self-review with distinct complete 
   const incompleteInterpretation = changedCandidate(0, (annotation) => {
     delete annotation.reviewPresentation.zh.passageContext.scene.whatWeLearned;
   });
-  assert.deepEqual(validateStoryCandidatePackage(incompleteInterpretation, evidence), {
+  assert.equal(validateStoryCandidatePackage(incompleteInterpretation, evidence).ok, true);
+
+  const numberedPassage = changedCandidate(0, (annotation) => {
+    annotation.reviewPresentation.en.passageContext.scene.whatWasHappening =
+      "This is semantic passage 1; it records an implementation detail.";
+  });
+  assert.deepEqual(validateStoryCandidatePackage(numberedPassage, evidence), {
     ok: false, code: "STORY_NARRATIVE_CONTRACT_FAILED",
   });
+
+  const numberedPassageZh = changedCandidate(0, (annotation) => {
+    annotation.reviewPresentation.zh.passageContext.scene.whatWasHappening =
+      "这是本章第 1 个语义段落，记录了一项实现细节。";
+  });
+  assert.equal(validateStoryCandidatePackage(numberedPassageZh, evidence).ok, true);
+
+  const englishOnly = changedCandidate(0, (annotation) => {
+    delete annotation.reviewPresentation.zh;
+    delete annotation.reviewPresentation.projectSummary.zh;
+  });
+  assert.equal(validateStoryCandidatePackage(englishOnly, evidence).ok, true);
 
   const genericTitle = changedCandidate(0, (annotation) => {
     annotation.title = "Project update";
@@ -147,6 +232,459 @@ test("activation requires a passed narrative self-review with distinct complete 
   assert.deepEqual(validateStoryCandidatePackage(genericTitle, evidence), {
     ok: false, code: "STORY_NARRATIVE_CONTRACT_FAILED",
   });
+});
+
+test("actor-bearing Chapters require evidence-supported People and reject fabricated aliases", () => {
+  const missingPeople = changedCandidate(0, (annotation) => {
+    annotation.reviewPresentation.en.people = [];
+    annotation.reviewPresentation.zh.people = [];
+    removeParticipantProof(annotation);
+    annotation.narrativeReview.actorCoverage = {
+      state: "people_present",
+      personIds: ["calibration-owner"],
+    };
+  });
+  assert.deepEqual(validateStoryCandidatePackage(missingPeople, evidence), {
+    ok: false, code: "STORY_VALIDATION_FAILED",
+  });
+
+  const fabricated = changedCandidate(0, (annotation) => {
+    for (const language of ["en", "zh"]) {
+      annotation.reviewPresentation[language].people.push({
+        id: "unsupported-second-person",
+        releaseLabel: "B",
+        role: language === "zh" ? "说话者 B" : "Speaker B",
+        description: language === "zh" ? "没有独立角色证据。" : "Has no independent role evidence.",
+        localIdentityState: "not_identified",
+        evidence: [{
+          documentId: "synthetic-reviewed-document",
+          eventId: "synthetic-reviewed-document:synthetic-evidence-alpha",
+        }],
+      });
+    }
+    annotation.narrativeReview.actorCoverage.personIds.push("unsupported-second-person");
+    addJudgmentBlock(
+      annotation,
+      "Speaker B recorded a second claim without independent actor provenance.",
+      "说话者 B 记录了缺少独立角色来源的第二项主张。",
+      annotation.evidence.primary,
+    );
+  });
+  assert.deepEqual(validateStoryCandidatePackage(fabricated, evidence), {
+    ok: false, code: "STORY_PEOPLE_EVIDENCE_INVALID",
+  });
+
+  const mergedActors = changedCandidate(0, (annotation) => {
+    const secondActor = {
+      documentId: "synthetic-reviewed-document",
+      eventId: "synthetic-reviewed-document:synthetic-evidence-beta",
+    };
+    annotation.evidence.supporting.push(secondActor);
+    for (const language of ["en", "zh"]) {
+      annotation.reviewPresentation[language].people[0].evidence.push(secondActor);
+    }
+  });
+  assert.deepEqual(validateStoryCandidatePackage(mergedActors, evidence), {
+    ok: false, code: "STORY_PEOPLE_EVIDENCE_INVALID",
+  });
+});
+
+test("People must participate in Decision process without invented generic interaction", () => {
+  const missingInteraction = changedCandidate(1, (annotation) => {
+    annotation.reviewPresentation.en.story.reconstruction = [
+      "A controlled trial separated temperature drift from device-to-device noise.",
+    ];
+    annotation.reviewPresentation.zh.story.reconstruction = [
+      "对照试验把温度漂移与设备间噪声区分开来。",
+    ];
+    annotation.releaseEpisode.reconstruction = [...annotation.reviewPresentation.en.story.reconstruction];
+  });
+  assert.deepEqual(validateStoryCandidatePackage(missingInteraction, evidence), {
+    ok: false, code: "STORY_NARRATIVE_CONTRACT_FAILED",
+  });
+});
+
+test("Decision process must express an evidence-supported relation instead of listing actor actions", () => {
+  const sequentialLog = changedCandidate(0, (annotation) => {
+    annotation.reviewPresentation.en.story.reconstruction = [
+      "The calibration owner defined the comparison boundary and recorded the next action.",
+    ];
+    annotation.reviewPresentation.zh.story.reconstruction = [
+      "校准负责人明确了比较边界并记录了下一步行动。",
+    ];
+    annotation.releaseEpisode.reconstruction = [...annotation.reviewPresentation.en.story.reconstruction];
+  });
+  assert.deepEqual(validateStoryCandidatePackage(sequentialLog, evidence), {
+    ok: false, code: "STORY_NARRATIVE_CONTRACT_FAILED",
+  });
+});
+
+test("English participant roles require complete phrase matches in Decision process", () => {
+  const substringOnlyRole = changedCandidate(0, (annotation) => {
+    annotation.reviewPresentation.en.story.reconstruction = [
+      "Calibration ownership established the comparison boundary. Therefore, the next action changed.",
+    ];
+    annotation.releaseEpisode.reconstruction = [...annotation.reviewPresentation.en.story.reconstruction];
+  });
+  assert.deepEqual(validateStoryCandidatePackage(substringOnlyRole, evidence), {
+    ok: false, code: "STORY_NARRATIVE_CONTRACT_FAILED",
+  });
+});
+
+test("meeting and coding trajectories retain supported roles, uncertainty, and safe aliases", () => {
+  assert.equal(validateStoryCandidatePackage(candidates, evidence).ok, true);
+  const codingTrajectory = changedCandidate(0, (annotation) => {
+    const agentReference = {
+      documentId: "synthetic-reviewed-document",
+      eventId: "synthetic-reviewed-document:synthetic-agent-action",
+    };
+    annotation.evidence.supporting.push(agentReference);
+    for (const language of ["en", "zh"]) {
+      annotation.reviewPresentation[language].people[0].releaseLabel = "Speaker A";
+      annotation.reviewPresentation[language].people[0].role = language === "zh" ? "项目负责人" : "Project owner";
+      annotation.reviewPresentation[language].people[0].localIdentityState = "local_only";
+      annotation.reviewPresentation[language].people.push({
+        id: "implementation-agent",
+        releaseLabel: "Implementation agent",
+        role: language === "zh" ? "实施 Agent" : "Implementation agent",
+        description: language === "zh" ? "根据已审阅指令执行更改。" : "Applied changes from the reviewed instruction.",
+        localIdentityState: "not_identified",
+        evidence: [agentReference],
+      });
+    }
+    annotation.narrativeReview.actorCoverage.personIds = ["calibration-owner", "implementation-agent"];
+    addParticipantProof(annotation, "implementation-agent", agentReference);
+    addJudgmentBlock(
+      annotation,
+      "The Project owner defined the reviewed instruction and its boundary.",
+      "项目负责人明确了已审阅指令及其边界。",
+      annotation.evidence.primary,
+    );
+    addJudgmentBlock(
+      annotation,
+      "The Implementation agent applied the reviewed instruction and reported the resulting state.",
+      "实施 Agent 执行了已审阅指令，并报告了结果状态。",
+      agentReference,
+    );
+  });
+  const codingEvidence = evidence.map((row) => row.id.endsWith("synthetic-evidence-alpha") ? {
+    ...row, eventType: "message", actorId: "project-owner", actorType: "user",
+  } : row).concat({
+    id: "synthetic-reviewed-document:synthetic-agent-action",
+    documentId: "synthetic-reviewed-document",
+    eventType: "message",
+    actorId: "implementation-agent",
+    actorType: "assistant",
+  });
+  assert.equal(validateStoryCandidatePackage(codingTrajectory, codingEvidence).ok, true);
+
+  const reviewedCorrection = changedCandidate(2, (annotation) => {
+    const implementationReference = {
+      documentId: "synthetic-reviewed-document",
+      eventId: "synthetic-reviewed-document:synthetic-correction-action",
+    };
+    annotation.evidence.supporting.push(implementationReference);
+    for (const language of ["en", "zh"]) {
+      annotation.reviewPresentation[language].people.push({
+        id: "correction-agent",
+        releaseLabel: "Implementation agent",
+        role: language === "zh" ? "实施 Agent" : "Implementation agent",
+        description: language === "zh" ? "根据审阅意见修正了实现。" : "Corrected the implementation after review.",
+        localIdentityState: "not_identified",
+        evidence: [implementationReference],
+      });
+    }
+    annotation.narrativeReview.actorCoverage.personIds.push("correction-agent");
+    addParticipantProof(annotation, "correction-agent", implementationReference);
+    addJudgmentBlock(
+      annotation,
+      "The Implementation agent corrected the implementation after the Reviewer identified the issue.",
+      "审阅者指出问题后，实施 Agent 修正了实现。",
+      implementationReference,
+    );
+  });
+  const correctionEvidence = evidence.concat({
+    id: "synthetic-reviewed-document:synthetic-correction-action",
+    documentId: "synthetic-reviewed-document",
+    eventType: "message",
+    actorId: "correction-agent",
+    actorType: "assistant",
+  });
+  assert.equal(validateStoryCandidatePackage(reviewedCorrection, correctionEvidence).ok, true);
+});
+
+test("routine machine-only events cannot become Chapters, but actor response may use them as support", () => {
+  const machineOnly = changedCandidate(2, (annotation) => {
+    annotation.reviewPresentation.en.people = [];
+    annotation.reviewPresentation.zh.people = [];
+    removeParticipantProof(annotation);
+    delete annotation.narrativeReview.actorCoverage;
+  });
+  const machineEvidence = evidence.map((row) => row.id.endsWith("synthetic-evidence-gamma") ? {
+    ...row, eventType: "action_label", actorId: "validation-tool", actorType: "tool",
+  } : row);
+  assert.deepEqual(validateStoryCandidatePackage(machineOnly, machineEvidence), {
+    ok: false, code: "STORY_VALIDATION_FAILED",
+  });
+
+  const diagnosedFailure = changedCandidate(2, (annotation) => {
+    annotation.evidence.supporting.push({
+      documentId: "synthetic-reviewed-document",
+      eventId: "synthetic-reviewed-document:synthetic-machine-failure",
+    });
+  });
+  const diagnosisEvidence = evidence.concat({
+    id: "synthetic-reviewed-document:synthetic-machine-failure",
+    documentId: "synthetic-reviewed-document",
+    eventType: "action_label",
+    actorId: "validation-tool",
+    actorType: "tool",
+  });
+  assert.equal(validateStoryCandidatePackage(diagnosedFailure, diagnosisEvidence).ok, true);
+});
+
+test("activation rejects prohibited editorial formulas even when self-review claims success", () => {
+  const contrastFormula = changedCandidate(0, (annotation) => {
+    annotation.reviewPresentation.en.story.scene = "The group repaired the environment, not the reviewed data.";
+    annotation.releaseEpisode.scene = annotation.reviewPresentation.en.story.scene;
+  });
+  assert.deepEqual(validateStoryCandidatePackage(contrastFormula, evidence), {
+    ok: false, code: "STORY_NARRATIVE_CONTRACT_FAILED",
+  });
+
+  const boilerplate = changedCandidate(0, (annotation) => {
+    annotation.reviewPresentation.zh.passageContext.scene.whatWeLearned = "这段文字表明应当检查证据。";
+  });
+  assert.equal(validateStoryCandidatePackage(boilerplate, evidence).ok, true);
+});
+
+test("a complex Chapter can retain several connected judgment moments without a sentence ceiling", () => {
+  const complex = changedCandidate(1, (annotation) => {
+    const primary = annotation.evidence.primary;
+    const alternative = addJudgmentBlock(
+      annotation,
+      "The calibration owner proposed a wider uncontrolled sample as the first option.",
+      "校准负责人首先提出扩大非受控样本。",
+      primary,
+    );
+    const objection = addJudgmentBlock(
+      annotation,
+      "The field technician questioned that option because temperature still varied across readings.",
+      "现场技术员指出，该方案中的温度仍会随读数变化。",
+      primary,
+    );
+    const correction = addJudgmentBlock(
+      annotation,
+      "The calibration owner narrowed the next test to one controlled temperature range.",
+      "校准负责人随后把下一项测试限定在一个受控温度范围内。",
+      primary,
+    );
+    annotation.narrativeReview.coverageLedger.alternatives = {
+      state: "represented", blockIds: [alternative], evidence: [primary],
+    };
+    annotation.narrativeReview.coverageLedger.objectionOrDisagreement = {
+      state: "represented", blockIds: [objection], evidence: [primary],
+    };
+    annotation.narrativeReview.coverageLedger.correction = {
+      state: "represented", blockIds: [correction], evidence: [primary],
+    };
+    annotation.reviewPresentation.en.highlights[0].noticed = [
+      "The initial sample mixed operating temperatures.",
+      "The calibration owner proposed a wider sample.",
+      "The field technician identified the uncontrolled variable.",
+      "A controlled trial isolated temperature.",
+      "The measured swing exceeded the prior assumption.",
+      "The validation plan changed.",
+      "The revised plan retained comparable readings.",
+      "The evidence bounded the conclusion.",
+      "The holdout remained unresolved.",
+    ].join(" ");
+    annotation.reviewPresentation.zh.highlights[0].noticed = [
+      "初始样本混合了不同运行温度。",
+      "校准负责人提出扩大样本。",
+      "现场技术员指出未受控变量。",
+      "对照试验隔离了温度。",
+      "测得波动超过原有假设。",
+      "验证计划因此改变。",
+      "修订后的计划保留了可比较读数。",
+      "证据限定了结论范围。",
+      "留出验证仍未完成。",
+    ].join("");
+  });
+  assert.equal(validateStoryCandidatePackage(complex, evidence).ok, true);
+});
+
+test("supported judgment coverage cannot point to an untraced Story claim", () => {
+  const omittedObjection = changedCandidate(1, (annotation) => {
+    annotation.narrativeReview.coverageLedger.objectionOrDisagreement = {
+      state: "represented",
+      blockIds: ["detail-0"],
+      evidence: [annotation.evidence.supporting[0]],
+    };
+  });
+  assert.deepEqual(validateStoryCandidatePackage(omittedObjection, evidence), {
+    ok: false, code: "STORY_JUDGMENT_COVERAGE_INVALID",
+  });
+});
+
+test("supported explanatory context cannot be hidden as supporting detail", () => {
+  const compressedFailure = changedCandidate(1, (annotation) => {
+    annotation.narrativeReview.coverageLedger.failedAttempt = {
+      state: "supporting_detail",
+      evidence: [annotation.evidence.primary],
+      justification: "The failed attempt was left outside the visible Chapter.",
+    };
+  });
+  assert.deepEqual(validateStoryCandidatePackage(compressedFailure, evidence), {
+    ok: false, code: "STORY_CONTEXT_RETENTION_INVALID",
+  });
+});
+
+test("context retention proves distinct source units even when they share one Evidence event", () => {
+  const annotation = JSON.parse(candidates[0].summary.slice(STORY_PREFIX.length));
+  const retention = annotation.narrativeReview.contextRetention;
+  assert.equal(retention.sourceScope.length, 1);
+  assert.equal(retention.sourceUnitCount, 2);
+  assert.equal(retention.representedUnitCount, 2);
+  assert.equal(new Set(retention.units.map((unit) => unit.id)).size, 2);
+  assert.equal(new Set(retention.units.map((unit) => unit.evidence.eventId)).size, 1);
+  assert.equal(validateStoryCandidatePackage(candidates, evidence).ok, true);
+});
+
+test("context retention is mandatory and every represented unit must own a traced Story block", () => {
+  const missingLedger = changedCandidate(0, (annotation) => {
+    delete annotation.narrativeReview.contextRetention;
+  });
+  assert.deepEqual(validateStoryCandidatePackage(missingLedger, evidence), {
+    ok: false, code: "STORY_CONTEXT_RETENTION_INVALID",
+  });
+
+  const missingUnitTrace = changedCandidate(0, (annotation) => {
+    annotation.narrativeReview.claimTraceability
+      .find((claim) => claim.blockId === "scene").unitIds = [];
+  });
+  assert.deepEqual(validateStoryCandidatePackage(missingUnitTrace, evidence), {
+    ok: false, code: "STORY_CHAPTER_INVALID",
+  });
+
+  const forgedUnitTrace = changedCandidate(0, (annotation) => {
+    annotation.narrativeReview.claimTraceability
+      .find((claim) => claim.blockId === "scene").unitIds = ["source-unit-forged"];
+  });
+  assert.deepEqual(validateStoryCandidatePackage(forgedUnitTrace, evidence), {
+    ok: false, code: "STORY_CONTEXT_RETENTION_INVALID",
+  });
+});
+
+test("only fixed privacy-safe reasons may exclude a classified source unit", () => {
+  const allowedExclusion = changedCandidate(0, (annotation) => {
+    const retention = annotation.narrativeReview.contextRetention;
+    retention.sourceUnitCount += 1;
+    retention.excludedUnitCount += 1;
+    retention.units.push({
+      id: "source-unit-calibration-duplicate",
+      kind: "response",
+      evidence: annotation.evidence.primary,
+      state: "excluded",
+      reason: "duplicate",
+    });
+  });
+  assert.equal(validateStoryCandidatePackage(allowedExclusion, evidence).ok, true);
+
+  const inventedReason = changedCandidate(0, (annotation) => {
+    const retention = annotation.narrativeReview.contextRetention;
+    retention.sourceUnitCount += 1;
+    retention.excludedUnitCount += 1;
+    retention.units.push({
+      id: "source-unit-calibration-concise",
+      kind: "response",
+      evidence: annotation.evidence.primary,
+      state: "excluded",
+      reason: "too_long",
+    });
+  });
+  assert.deepEqual(validateStoryCandidatePackage(inventedReason, evidence), {
+    ok: false, code: "STORY_CHAPTER_INVALID",
+  });
+});
+
+test("Chapter overviews are specific, unique, and Evidence-traced summaries", () => {
+  const navigationPrompt = changedCandidate(0, (annotation) => {
+    annotation.reviewPresentation.en.overview = "Open this Chapter for the complete reviewed decision sequence.";
+    annotation.reviewPresentation.zh.overview = "打开本章可查看完整的已审阅决策过程。";
+  });
+  assert.deepEqual(validateStoryCandidatePackage(navigationPrompt, evidence), {
+    ok: false, code: "STORY_CHAPTER_OVERVIEW_INVALID",
+  });
+
+  const duplicateOverview = changedCandidate(1, (annotation) => {
+    const first = JSON.parse(candidates[0].summary.slice(STORY_PREFIX.length));
+    annotation.reviewPresentation.en.overview = first.reviewPresentation.en.overview;
+    annotation.reviewPresentation.zh.overview = first.reviewPresentation.zh.overview;
+  });
+  assert.deepEqual(validateStoryCandidatePackage(duplicateOverview, evidence), {
+    ok: false, code: "STORY_CHAPTER_OVERVIEW_INVALID",
+  });
+
+  const untracedOverview = changedCandidate(0, (annotation) => {
+    annotation.narrativeReview.claimTraceability = annotation.narrativeReview.claimTraceability
+      .filter((claim) => claim.blockId !== "overview");
+  });
+  assert.deepEqual(validateStoryCandidatePackage(untracedOverview, evidence), {
+    ok: false, code: "STORY_CLAIM_TRACEABILITY_INVALID",
+  });
+});
+
+test("every added factual Story block needs explicit reviewed-Evidence traceability", () => {
+  const unsupportedClaim = changedCandidate(0, (annotation) => {
+    addJudgmentBlock(
+      annotation,
+      "A second unsupported assertion was added to the synthetic decision process.",
+      "合成决策过程新增了第二项未支持断言。",
+      annotation.evidence.primary,
+      false,
+    );
+  });
+  assert.deepEqual(validateStoryCandidatePackage(unsupportedClaim, evidence), {
+    ok: false, code: "STORY_CLAIM_TRACEABILITY_INVALID",
+  });
+});
+
+test("Open questions may be absent, while generic structural filler still fails readiness", () => {
+  const resolved = changedCandidate(0, (annotation) => {
+    for (const language of ["en", "zh"]) {
+      delete annotation.reviewPresentation[language].story.uncertainty;
+      delete annotation.reviewPresentation[language].passageContext.uncertainty;
+    }
+    delete annotation.releaseEpisode.uncertainty;
+    annotation.narrativeReview.roles.openTension = { state: "not_supported", blockIds: [] };
+    annotation.narrativeReview.coverageLedger.remainingUncertainty = { state: "not_supported" };
+    annotation.narrativeReview.claimTraceability = annotation.narrativeReview.claimTraceability
+      .filter((claim) => claim.blockId !== "uncertainty");
+    for (const unit of annotation.narrativeReview.contextRetention.units) {
+      if (unit.state === "represented") {
+        unit.blockIds = unit.blockIds.filter((blockId) => blockId !== "uncertainty");
+      }
+    }
+  });
+  assert.equal(validateStoryCandidatePackage(resolved, evidence).ok, true);
+
+  const filler = changedCandidate(0, (annotation) => {
+    annotation.reviewPresentation.en.story.scene = "The team was working on the project.";
+    annotation.releaseEpisode.scene = annotation.reviewPresentation.en.story.scene;
+  });
+  assert.deepEqual(validateStoryCandidatePackage(filler, evidence), {
+    ok: false, code: "STORY_NARRATIVE_CONTRACT_FAILED",
+  });
+});
+
+test("an unresolved cause remains a supported open question", () => {
+  const unresolved = changedCandidate(2, (annotation) => {
+    annotation.reviewPresentation.en.story.uncertainty = "Cause not determined.";
+    annotation.reviewPresentation.zh.story.uncertainty = "原因尚未确定。";
+    annotation.releaseEpisode.uncertainty = annotation.reviewPresentation.en.story.uncertainty;
+  });
+  assert.equal(validateStoryCandidatePackage(unresolved, evidence).ok, true);
 });
 
 test("Phase activation rejects fallback labels and incoherent grouping without forcing a count", () => {
@@ -180,7 +718,7 @@ test("Phase activation rejects fallback labels and incoherent grouping without f
   assert.equal(validateStoryCandidatePackage(oneCoherentPhase, evidence).ok, true);
 });
 
-test("ordered explicit Phases and one complete bilingual Chapter per milestone activate atomically", () => {
+test("ordered explicit Phases and one complete canonical English Chapter per milestone activate atomically", () => {
   const firstPhase = JSON.parse(candidates[0].summary.slice(STORY_PREFIX.length));
   const finalPhase = JSON.parse(candidates[2].summary.slice(STORY_PREFIX.length));
   const invalidOrder = changedCandidate(1, (annotation) => {
@@ -242,6 +780,14 @@ test("refresh, direct navigation, activation, and progress remain persisted and 
   assert.match(workspace, /const storyReviewReady = isStoryReviewReady\(workflow\)/);
   assert.match(workspace, /const storyWorkspaceReady = isStoryWorkspaceReady\(workflow/);
   assert.match(workspace, /if \(!storyWorkspaceReady\)[\s\S]*return <WorkflowProgress/);
+  assert.match(workspace, /const activatedStoryHighlights = selectReviewableStoryTimeline\(allHighlights\)/);
+  assert.match(workspace, /const storyPackageReloadKeyRef = useRef\(""\)/);
+  assert.match(workspace, /previously loaded organization snapshot can finish after the exact-run/);
+  assert.match(workspace, /const availableProjects = new Set[\s\S]*availableProjects\.has\(currentProject\)/);
+  assert.match(workspace, /view === "timeline"[\s\S]*selectedHydrationHighlights\.length === 0/);
+  assert.match(workspace, /if \(!cancelled && nextHighlights\.length === 0\)/);
+  assert.match(workspace, /if \(!activatedStoryHighlights\.length[\s\S]*view === "timeline" && !highlights\.length/);
+  assert.doesNotMatch(workspace, /if \(!highlights\.length \|\| storySessionReadyRunId !== workflowRunId\)/);
   assert.match(workspace, /selectReviewableStoryTimeline/);
   assert.doesNotMatch(workspace, /if \(!docs\.length \|\| !status/);
   assert.match(workspace, /useState<WorkflowProgressState>\(initialWorkflow\)/);

@@ -36,7 +36,7 @@ Story / release draft
 Local evidence / exact source
 ```
 
-Story is AI-compressed and human-reviewable. Evidence is authoritative local reviewed material. Story annotations never mutate Evidence.
+Story is AI-organized, evidence-grounded, and human-reviewable. Evidence is authoritative local reviewed material. Story annotations never mutate Evidence.
 
 Every Chapter links stable primary/supporting evidence IDs. Evidence remains secondary in the Chapter UI but must be exactly traceable. Opening it reuses the existing release/evidence review surface and focuses the real event.
 
@@ -116,7 +116,8 @@ Do not infer, approximate, hallucinate, reconstruct, recover, or display the rem
 ## Keep and Redact semantics
 
 - **Keep:** preserve the currently available safe release context; never restore unavailable content.
-- **Redact:** suppress every bound semantic release target in both languages and ensure the candidate does not appear in the reviewed release projection.
+- **Redact:** suppress every bound semantic release target in canonical English and every included
+  safe localization, and ensure the candidate does not appear in the reviewed release projection.
 
 Neither decision deletes source evidence. Decisions remain local Chapter review state and feed Apply/All set gating.
 
@@ -149,7 +150,7 @@ Verify:
 - available excerpts are present in permitted reviewed data;
 - unavailable candidates contain no field beyond the unavailable discriminator;
 - why-flagged copy is specific but safe;
-- Suggested Release is absent in both languages;
+- Suggested Release is absent in English and every available localization;
 - Keep/Redact progression works;
 - Redact changes the allowlisted reviewed release projection for every bound target;
 - unresolved required decisions block Apply/All set as specified;

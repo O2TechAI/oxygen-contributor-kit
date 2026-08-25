@@ -9,7 +9,7 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Story data source hash matches the reviewed artifact.
 - [ ] No raw history, private ledger, removed text/value, source envelope, credential material, or forbidden sibling implementation was opened.
 - [ ] Chapter keys are bounded primitive strings, unique/chronological, and the last is honest current state; numeric/string coercion cannot collapse two Chapters.
-- [ ] Every primary/supporting evidence ID is unique and resolves to exactly one actual reviewed item before Apply/All set.
+- [ ] Every newly generated primary/supporting/Person `eventId` is the exact fully qualified imported item ID; each reference is unique and resolves to exactly one actual reviewed item before activation, Apply, or All set.
 - [ ] Participant, insight, Privacy-candidate, and annotation IDs are bounded primitive strings and unique within each Chapter and paired language presentation; numeric/string coercion cannot collapse two identities.
 - [ ] Privacy decisions use an injective Chapter/candidate tuple identity rather than delimiter concatenation; delimiter-shaped IDs cannot collide.
 - [ ] Import accepts exactly one paired reviewable insight per Chapter, the release projection never emits multiple insights, and server sanitization rejects multiple insights.
@@ -20,7 +20,9 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Direct-edit transaction IDs/ranges/revisions replay from immutable Story sources; pending,
       reverted, needs-evidence, and malformed applied records cannot enter release output.
 - [ ] No unavailable Privacy candidate contains anything beyond its unavailable discriminator (no excerpt, language, removed value, or raw field).
-- [ ] Every Privacy candidate declares stable release targets; every target resolves in both language presentations, and an intentionally local-only candidate declares an explicit empty target set.
+- [ ] Every Privacy candidate declares stable release targets; every target resolves in English,
+      any optional localization preserves the same safe identity or is omitted, and an intentionally
+      local-only candidate declares an explicit empty target set.
 - [ ] Package/publication behavior is unchanged.
 
 ## Workflow progress
@@ -61,15 +63,27 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 
 ## Project Story
 
-- [ ] Selection is event-driven, globally consequential, deduplicated, and not time/volume bucketed.
-- [ ] Derivation considered every record in the approved reviewed input boundary while visible copy compresses routine history; no broader/private-history coverage is claimed.
+- [ ] Selection is event-driven, globally meaningful, deduplicated, and not time/volume/count bucketed.
+- [ ] Chapter eligibility includes evidence-supported direction changes, durable progress,
+      substantive iterations, failures/diagnostics that affected later work, validations,
+      recoveries, handoffs, and the current boundary; a judgment moment is not mandatory.
+- [ ] Distinct durable states remain separate milestones. Events are combined only when they form
+      one connected causal arc, and no numeric target silently removes supported milestones.
+- [ ] Derivation considered every record in the approved reviewed input boundary. Chapter copy
+      retains every supported unit that explains the milestone's background, causal or temporal
+      relationships, participant interaction, judgment, failure, progress, or result; no
+      broader/private-history coverage is claimed.
 - [ ] Project Summary is nonempty, normally 2–3 concise sentences, and establishes the supported beginning, major turn, and current boundary without mechanically listing Phases or repeating visible metrics.
 - [ ] Phase labels are evidence-derived and strongly prefer one or two English words plus equivalently compact natural Chinese; selection/grouping was not changed merely for naming.
 - [ ] Each Phase has one consistent evidence-derived rationale, adjacent Phase rationales are
       distinct, generic fallback labels fail activation, and a demonstrated coherent single Phase
       remains valid without a minimum count.
-- [ ] When supported evidence contains the initiating problem/goal/baseline assumptions, the opening Chapter and overview establish that beginning instead of starting at a midstream routine setup/test failure.
-- [ ] Routine command, import-path, test-collection, and ordinary test incidents are compressed unless they demonstrably changed a durable contract, architecture, execution envelope, or direction.
+- [ ] When supported evidence contains the initiating problem/goal/baseline assumptions, the opening
+      Chapter and overview establish that beginning. A midstream routine setup/test failure cannot
+      replace the supported orientation.
+- [ ] Routine command, import-path, test-collection, and ordinary test incidents are omitted only
+      when they contribute no explanatory background, relationship, interaction, judgment, failure,
+      progress, or result to the current milestone.
 - [ ] Timeline remains the narrative table of contents with direct Chapter actions.
 - [ ] Project/source rail, Release preview, Preferences, and existing downloads remain usable.
 - [ ] Compact orientation retains canonical project name, overview, milestone count, phase count, reviewed-Highlight progress, and useful source/evidence context when available; values are derived rather than hardcoded.
@@ -103,20 +117,70 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 ## People and Story
 
 - [ ] People markers use one centered non-wrapping size and AI aligns with humans.
-- [ ] Roles/descriptions are compact and evidence-supported.
+- [ ] Roles/descriptions are compact and each Person has reviewed Evidence contained in the Chapter Evidence set.
 - [ ] Local/release identity distinction is clear; no fabricated name.
+- [ ] Meeting speakers and user/Agent trajectories retain distinct supported functional roles;
+      uncertain roles use safe aliases without inferred names, employers, titles, or relationships.
+- [ ] Decision process uses every listed Person's localized functional role and makes the supported
+      action → response/correction/approval → result sequence understandable. It does not replace
+      known roles with generic `the team`.
+- [ ] Each localized Decision process uses at least one natural relational connective for a
+      supported contradiction, response, consequence, or temporal transition. The prose reads as a
+      connected account, and the connective does not manufacture an unsupported relationship.
+- [ ] Omit a missing objection, reply, second actor, or consensus. Fabrication cannot be used to
+      make the Chapter sound interactive.
+- [ ] Every Chapter has at least one evidence-supported Person. Empty People fails activation with
+      `STORY_VALIDATION_FAILED`. Later human Privacy redaction may hide a supported Person without
+      changing the original activation proof.
+- [ ] Routine machine-only events remain Timeline/Exact Evidence data. A machine failure can support
+      a Chapter only when a supported actor diagnoses, decides, executes, reviews, approves, or responds.
 - [ ] Story is a structured, context-sufficient article with clear causal progression and uncertainty.
+- [ ] Project Story remains scan-first while each Chapter is context-complete durable project memory;
+      Chapter length follows decision-relevant Evidence density and has no global word, sentence,
+      paragraph, or character ceiling.
 - [ ] Chapter prose preserves supported problem/purpose, constraints, prior attempts, failures or
-      rejected approaches, directional evidence, decision/rationale, action/outcome, uncertainty,
-      and reusable learning without becoming a raw log or audit report.
-- [ ] Evidence-driven narrative validation covers title tension/outcome, Background, minimum
-      evidence thread, the turn, result, direct learning, bounded reusable principle, and open
-      tension when supported; every factual step retains declared Evidence identity.
+      rejected approaches, participant interaction, disagreement, correction, directional evidence,
+      owner/reviewer intervention, decision/rationale, action/outcome, quantitative result,
+      uncertainty, and reusable learning without becoming a raw log or audit report.
+- [ ] Evidence-driven narrative validation covers Background, the complete supported Decision process,
+      Result, Open questions, Direct learning, and a bounded Reusable rule; every factual step
+      retains declared Evidence identity.
 - [ ] A bounded structured Stage-4 self-review maps those roles to stable Story/Insight blocks;
       missing/failed review keeps Build Project Story active.
-- [ ] Every Passage Insight supplies what happened, why it mattered, learning, and a bounded reuse
-      rule without copying its owning Story sentence or repeating one field as another.
-- [ ] Generic activity titles and short filler formulations fail Story activation.
+- [ ] Every Chapter has a complete coverage ledger for main problem, participants, starting
+      position, alternatives, objection/disagreement, failed attempt, correction,
+      decision-changing Evidence, quantitative result, final action, result, and remaining
+      uncertainty. Unsupported elements remain explicit and no nonexistent judgment moment is
+      invented.
+- [ ] Main problem, participants, final action, and result are represented. Every supported unit that
+      explains background, causal or temporal relationships, participant interaction, judgment,
+      failure, durable progress, substantive iteration, or result is represented in a traceable
+      Story block. `supporting_detail` fails readiness; an arbitrary Chapter count is never accepted
+      as an omission justification.
+- [ ] A context-retention ledger classifies every reviewed conversational or independently meaningful
+      nested source unit in the complete milestone Evidence cluster. Each represented unit has a
+      stable privacy-safe identity, exact Evidence, Story block IDs, and matching factual-claim
+      `unitIds`; each exclusion uses only duplicate, routine-status, outside-milestone, or
+      Privacy-withheld. Multiple units sharing one Evidence event remain distinct, and no source copy
+      enters the ledger or release.
+- [ ] Every material factual claim has exact Chapter-contained Evidence traceability, every People
+      and Story block has at least one claim record, the canonical Insight has explicit Evidence
+      inputs, and none of this local metadata enters release/export.
+- [ ] Every Chapter title is followed by a distinct localized summary of that Chapter's supported
+      background, consequential participant turn or judgment, and result/open boundary. Navigation
+      instructions, repeated boilerplate, untraced claims, and exact copies of one source field fail
+      readiness. Concrete detail and varied rhythm improve readability without invented color.
+- [ ] Every inline AI Insight is labeled `AI insight` / `AI 洞察` and supplies supported participant
+      interaction, narrative explanation, learning, and a bounded reuse rule without copying its
+      owning Story sentence or repeating one field as another. It never opens with a passage number,
+      `semantic passage`, block ID, schema name, or other implementation metadata.
+- [ ] Generic activity titles and prohibited filler fail Story activation regardless of length.
+- [ ] Visible Story headings are the neutral localized equivalents of Background, Decision process,
+      Result, and Open questions; no empty or generic-filler-only heading renders.
+- [ ] Story, inline AI Insight, and canonical Insight use standard terminology and direct neutral
+      prose with no metaphor, analogy, slogan, literary framing, colloquial phrasing,
+      anthropomorphism, `X, not Y` contrast formula, vague boilerplate, or invented cause/outcome.
+- [ ] Unknown causes use the localized equivalent of `Cause not determined.`
 - [ ] In read mode, double-clicking only reviewable Story copy enters Edit Mode, focuses the owning
       semantic passage, preserves a safe selection/caret when possible, and creates no mutation;
       the pencil remains the primary accessible entry.
@@ -124,23 +188,29 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
       hidden model reasoning or unsupported retrospective causality.
 - [ ] Default read mode remains clean; accessible pencil/Edit enters a visibly contained review
       surface without uncontrolled DOM mutation.
-- [ ] The single reviewable AI insight and reusable lesson appear in one end-of-Story disclosure,
+- [ ] The single reviewable AI Insight carries Direct learning and a Reusable rule in one end-of-Story disclosure,
       collapsed by default and labeled as interpretation; no multi-insight fallback UI exists.
 - [ ] Canonical AI insight copy is concrete, project-specific, evidence-grounded, and avoids generic summary formulas.
 - [ ] Accept/remove/direct edit/human-directed revise work without a full chat UI.
+- [ ] Accept immediately changes to `Accepted — pending Apply review` with a restrained status icon,
+      accessible live announcement, and updated pending count. Do not preserve has equivalent
+      feedback, the decision can change before Apply, and Apply identifies the current revision.
+- [ ] Insight feedback survives refresh and EN/中文 switching, preserves paired-language debt and
+      Reopen, and never changes publication state or claims Saved/Final/Published early.
 - [ ] Clicking/focusing different Story blocks changes a secondary sticky contextual panel using
       the correct stable block key; passage context is precomputed local assistance, not another
       reviewable Insight or a browser model call.
 - [ ] Passage assistance forms one complete Story-ordered sequence with current/total,
       Previous/Next, disabled boundaries, owning-block scroll/highlight, Story click/focus
       synchronization, reduced-motion behavior, and narrow-layout access.
-- [ ] Passage copy reads as a concise evidence-grounded mini-narrative rather than repetitive field
-      labels, and the bottom Insight synthesizes learning/principle/open tension instead of
-      concatenating passage assistance.
-- [ ] Passage-context key sets exactly cover rendered Story blocks in both languages and the release
+- [ ] Passage copy reads as an evidence-grounded mini-narrative and avoids repetitive field labels.
+      The bottom Insight synthesizes learning/principle/open tension and avoids concatenating
+      passage assistance.
+- [ ] English passage-context keys exactly cover rendered English Story blocks and the release
       projection excludes all passage-context copy.
-- [ ] Removing either passage-context map, removing the maps from both locales, omitting any
-      rendered-block key, or adding an extra key fails import; no empty or generic fallback is valid.
+- [ ] Removing the English passage-context map, omitting any rendered English block key, or adding
+      an extra key fails import; Chinese is optional and an unsafe sidecar is omitted without
+      blocking the English Story.
 
 ## Direct selection and legacy annotation compatibility
 
@@ -169,6 +239,11 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] No floating Delete/Revise/Add popover appears when direct-editor text is selected.
 - [ ] Caret insertion, selection replacement, Backspace/Delete, ordinary navigation, and plain-text
       paste update a controlled working draft rather than bypassing review state.
+- [ ] Missing/unknown `inputType`, null/undefined `data`, and reduced SyntheticEvent/nativeEvent
+      shapes never call string methods on unknown fields and never crash.
+- [ ] `beforeinput` is optional metadata: incomplete events fall back to one minimal controlled
+      previous→next mutation, `beforeinput` + `change` create one transaction, and IME composition
+      commits only the stable result.
 - [ ] Paste strips markup/scripts/embeds, preserves safe text/paragraph breaks, and adds no rich-text dependency.
 - [ ] One contiguous typing burst in one block coalesces; independent non-overlapping block/ranges
       retain distinct transaction/note identities.
@@ -191,8 +266,9 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Cross-block or overlapping mutations are atomic or visibly rejected with every passage unchanged.
 - [ ] Active-locale direct edits create paired-language debt without copying replacement prose into
       the other locale; one shared revision/confirmation history remains authoritative.
-- [ ] Paired-language debt is one blocker per semantic block/target locale and one complete paired
-      block review clears it even when several source-locale ranges changed.
+- [ ] Paired-language debt is one informational entry per semantic block/target locale and one
+      complete paired-block review clears it even when several source-locale ranges changed; it
+      never blocks canonical English review.
 - [ ] Notes show readable operation/state/language and concise before→after, not offsets, IDs, or JSON.
 - [ ] Language switching keeps both locales' pending notes inspectable while exact inline range
       styling and editor selection remain active-locale only.
@@ -226,12 +302,13 @@ Also verify:
 
 - [ ] Privacy blocks Apply/All set as specified.
 - [ ] Unsupported Add becomes `needs_evidence`, is not inserted, and blocks All set.
-- [ ] Evidence-supported Add receives `appliedRevision`, enters the next draft, and can complete after paired-language review.
+- [ ] Evidence-supported Add receives `appliedRevision`, enters the next draft, and can complete canonical English review without a localization gate.
 - [ ] A real evidence ID plus arbitrary unsupported Add wording remains `needs_evidence`; checkbox/ID possession alone never certifies a factual claim.
 - [ ] Applied annotations do not expose Cancel; reversal requires a new pending operation and revision.
-- [ ] Redact suppresses all bound targets in the allowlisted EN/中文 release projection, while Keep preserves permitted safe copy.
-- [ ] Pending insight changes and stale paired-language blocks disable All set.
-- [ ] Accepting a localized pending insight edit does not erase the paired-language review debt.
+- [ ] Redact suppresses all bound targets in the allowlisted English release projection and every
+      included safe localization, while Keep preserves permitted safe copy.
+- [ ] Pending insight changes disable All set; stale localization remains visible but non-blocking.
+- [ ] Accepting a localized pending insight edit does not erase its informational paired-language debt.
 - [ ] Summary counts and revision labels are correct.
 - [ ] Human intent is not silently dropped.
 - [ ] Pending/forged insight state, latest Privacy-history disagreement, and a forged
@@ -241,7 +318,7 @@ Also verify:
 
 - [ ] One candidate at a time with progress.
 - [ ] Visible fields are Local original and Why AI flagged it, followed by Keep/Redact.
-- [ ] Suggested Release/recommendation copy is absent in both languages.
+- [ ] Suggested Release/recommendation copy is absent in English and every available localization.
 - [ ] Available mode shows only permitted minimal original-language context and a specific concern.
 - [ ] Unavailable mode shows the explicit unavailable message, safe risk/uncertainty explanation, and no reconstructed value.
 - [ ] Keep/Redact advance naturally and Review again behaves safely.
@@ -259,16 +336,18 @@ Also verify:
 ## Bilingual
 
 - [ ] Fresh state is English.
-- [ ] One shell-level `EN | 中文` control is compact and remains discoverable on Project Story, Chapter, and Exact Evidence; it is not duplicated as unrelated page-local controls.
+- [ ] English alone can activate Stage 5, complete review, and export; no Chinese readiness gate remains.
+- [ ] One shell-level `EN | 中文` control is compact when a safe Chinese sidecar exists and is hidden when it does not.
 - [ ] Chinese changes Timeline Story labels and full Chapter presentation.
 - [ ] Chinese localizes inline insight title/observation/lesson, participant identity explanations, status/annotation copy, and review blockers; nontechnical English placeholder sentences do not remain.
 - [ ] Chinese localizes Story read/Edit guidance, margin notes, passage context, and collapsed
       canonical-Insight controls while sharing one semantic/review state.
 - [ ] Switching back restores equivalent English.
-- [ ] Every declared shared semantic anchor/technical identifier is present in reader-facing EN and 中文 copy (or has an explicit alignment); missing and one-language-only anchors fail closed.
+- [ ] Every declared semantic anchor/technical identifier is present in canonical English. Chinese alignment is non-gating.
 - [ ] Annotation/Privacy/revision/All set state survives language switching.
 - [ ] One lifecycle/confirmation history drives both languages.
 - [ ] Evidence content remains source-language.
+- [ ] Localization debt remains visible but does not block Apply review or All set; stale localized copy is omitted from release.
 
 ## Independent clean-room completion gate
 
@@ -328,6 +407,15 @@ Use the actual local Viewer. Capture and inspect at least:
 15. exact Evidence with Back to chapter;
 16. Chinese Chapter with shared review state/debt;
 17. narrow Chapter fallback for notes and contextual assistance.
+18. a long multi-step Chapter with readable Story width, useful sticky inline AI Insight, aligned
+    notes, independent left navigation, reachable canonical Insight, no horizontal overflow, and
+    usable narrow/mobile flow.
+
+Review at least one simple Chapter, one disagreement/decision Chapter, one failure/root-cause
+Chapter, one long multi-step technical Chapter, and one Chapter with an unresolved question. Do not
+expect equal lengths. Compare participant, decision, alternative, disagreement, correction,
+consequence, and unresolved-issue coverage semantically; do not use exact wording or string-overlap
+scores.
 
 Check console errors and responsive layout. Preserve the user's visible review state or reset prototype-only QA edits before handoff.
 

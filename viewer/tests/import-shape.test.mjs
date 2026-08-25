@@ -117,8 +117,8 @@ test("Chapter Story defaults to read mode and uses controlled direct editing plu
   assert.match(css,/@media\(max-width:760px\)[\s\S]*\.storyMarginNotes\{display:flex;overflow-x:auto/);
   assert.match(timeline,/passageContext: Record<string, StoryPassageContext>/);
   assert.doesNotMatch(release,/passageContext/);
-  assert.match(workspace,/Read a Chapter to review the full story, evidence, and lessons\./);
-  assert.match(workspace,/阅读任一章节，完整审阅故事、证据与可复用经验/);
+  assert.match(workspace,/Read a Chapter to review the full story, evidence, direct learning, and reusable rules\./);
+  assert.match(workspace,/阅读任一章节，完整审阅故事、证据、直接经验与可复用规则/);
   assert.match(workspace,/setWorkflowOpen\(true\)/);
   assert.match(progress,/private Agent reasoning is never shown here/);
   assert.doesNotMatch(workflowRoute,/original_json|SELECT\s+content|reasoning|prompt/i);
@@ -156,7 +156,8 @@ test("Chapter completion renders unsupported-Add copy only for a needs-evidence 
   const episode=await read("../app/story-chapter-editor.tsx");
   assert.match(episode,/summary\.needsEvidenceAdd > 0 && <p className="completionBlocker">\{labels\.addBlocked\}/);
   assert.match(episode,/summary\.pendingInsights > 0 \? labels\.insightBlocked/);
-  assert.match(episode,/chapterReview\.staleTranslations\.length > 0 \? labels\.translationBlocked/);
+  assert.match(episode,/chapterReview\.staleTranslations\.length > 0 && <p className="completionNotice">\{labels\.translationBlocked\}/);
+  assert.doesNotMatch(episode,/staleTranslations\.length > 0 \? labels\.translationBlocked/);
   assert.doesNotMatch(episode,/summary\.unresolved[^\n]*labels\.addBlocked/);
 });
 test("final package is explicitly unapproved and excludes runtime database", async () => {
@@ -182,11 +183,14 @@ test("organizer labels projects and preserves concise summaries", async () => {
   assert.match(organizer,/primary_project/);assert.match(organizer,/organization_category/);assert.match(organizer,/highlights/);
   assert.match(skill,/at most 18 English words or 32 Chinese characters/);assert.match(skill,/proactively open/);assert.match(skill,/Download ZIP/);
   assert.match(skill,/Never create one timeline per trajectory/);
-  assert.match(skill,/10–40 high-impact milestones/);
+  assert.match(skill,/evidence-supported meaningful milestones without using a numeric quota/);
+  assert.match(skill,/durable\s+progress, substantive iterations/);
   const launcher=await read("../../skills/oxygen-organize-review-export/scripts/run_local_review.py");
   assert.match(launcher,/trajectory_id}:\{event_id/);
   const timeline=await read("../lib/timeline.ts");
-  assert.match(timeline,/maximum = 40/);
+  assert.match(timeline,/maximum\?: number/);
+  assert.match(timeline,/maximum \?\? Number\.POSITIVE_INFINITY/);
+  assert.match(timeline,/slice\(0, maximum \?\? 40\)/);
   assert.match(timeline,/oxygen\.story-highlight\/2/);
   assert.match(timeline,/oxygen\.story-milestone\/1/);
   assert.match(timeline,/releaseEpisode/);
