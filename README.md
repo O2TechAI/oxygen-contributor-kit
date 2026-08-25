@@ -34,12 +34,14 @@
 
 Point your coding agent at this repo and say:
 
-> Follow the Oxygen contributor SOP for this repository. Collect only my in-scope local history,
+> Use the Oxygen Contributor Kit for this repository. Collect only my in-scope local history,
 > organize it by project, prepare the privacy review, build Project Story, pause for my Story
 > review, then show Preferences and Release Preview and finish with a downloadable ZIP.
 > Do not upload or publish anything.
 
-The agent reads [AGENTS.md](AGENTS.md) and [SOP.md](SOP.md) before it touches anything.
+The agent starts with [AGENTS.md](AGENTS.md), then opens each owning Skill when its stage begins.
+[SOP.md](SOP.md) remains the complete human and maintainer reference, not mandatory whole-file
+startup context for every Agent run.
 
 ---
 

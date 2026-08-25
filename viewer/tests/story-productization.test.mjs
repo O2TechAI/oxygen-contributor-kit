@@ -169,11 +169,11 @@ test("the normal workflow delegates to the canonical repository Story runtime", 
     read("../app/workspace.tsx"),
     read("../app/story-chapter-editor.tsx"),
   ]);
-  assert.match(agents, /delegate Project[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
+  assert.match(agents, /delegate[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
   assert.match(sop, /Build Project Story and Review Story[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
   assert.match(organizer, /Delegate Storytelling after the reviewed boundary/);
   assert.match(organizer, /does not need to know or manually name the delegated Skill/);
-  assert.match(agents, /sanitized stage\/state/);
+  assert.match(agents, /Before collection[\s\S]{0,120}sanitized Workflow Progress/i);
   assert.match(sop, /workflow-progress surface/);
   assert.match(organizer, /Never expose chain-of-thought/);
   assert.match(skill, /Canonical Toolkit runtime/);

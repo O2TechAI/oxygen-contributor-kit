@@ -19,6 +19,36 @@ The workflow is complete only when all of the following are true:
 4. `publication_approved` remains `false` unless the contributor separately and explicitly
    approves publication.
 
+## Stable six-stage index
+
+A stage Agent normally opens the owning Skill rather than this complete SOP. These anchors retain
+the full human and maintainer path:
+
+### Stage 1: Collect project history
+
+Continue at [§2 Collect](#2-collect).
+
+### Stage 2: Organize project
+
+Continue at [§3 Organize by project](#3-organize-by-project).
+
+### Stage 3: Check privacy
+
+Continue at [§4 Prepare privacy review](#4-prepare-privacy-review).
+
+### Stage 4: Build Project Story
+
+Continue at [§5 Build Project Story and Review Story](#5-build-project-story-and-review-story).
+
+### Stage 5: Review Story
+
+Continue at [§5 Build Project Story and Review Story](#5-build-project-story-and-review-story).
+
+### Stage 6: Release handoff
+
+Continue at [§7 Prepare Preferences and Release Preview](#7-prepare-preferences-and-release-preview),
+then complete §§8–9.
+
 ## 1. Establish the local boundary
 
 - Resolve the repository or input path and confirm it belongs to the contributor.
