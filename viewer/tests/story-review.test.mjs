@@ -12,10 +12,13 @@ import {
   chapterReviewSummary,
   createStoryAnnotation,
   directStoryEditNeedsEvidence,
+  deriveDirectStoryMutation,
   discardStoryEdit,
   emptyChapterReview,
   hasStoryAnnotationConflict,
+  insightReviewFeedbackState,
   markChapterReady,
+  normalizeDirectBeforeInput,
   privacyReviewState,
   privacyDecisionKey,
   recordStoryEdit,
@@ -103,7 +106,7 @@ test("review summary reserves unsupported-Add guidance for actual needs-evidence
     staleTranslations: [{ subject: "story:scene", language: "zh", count: 1 }],
   };
   assert.deepEqual(chapterReviewSummary(staleOnly), {
-    delete: 0, revise: 0, add: 0, pendingAnnotations: 0, needsEvidenceAdd: 0, pendingInsights: 0, unresolved: 1,
+    delete: 0, revise: 0, add: 0, pendingAnnotations: 0, needsEvidenceAdd: 0, pendingInsights: 0, unresolved: 0,
   });
 
   const unsupportedAdd = createStoryAnnotation({
@@ -266,21 +269,22 @@ test("unsupported Add blocks confirmation while reviewed-evidence Add can apply"
   assert.equal(applyAnnotationsToBlock(zhSource, "outcome", "zh", state.annotations), "决定 留存 holdout 证据。随后形成。");
 });
 
-test("one-language Revise leaves paired prose intact and blocks confirmation as stale", () => {
+test("one-language Revise leaves paired prose intact without blocking canonical review", () => {
   const english = "The decision was final.";
   const chinese = "这个决定当时仍是假设。";
   const correction = createStoryAnnotation({
     blockId: "outcome", type: "revise", sourceLanguage: "en", baseRevision: 1,
     selection: { start: 4, end: 12, text: "decision" }, instruction: "hypothesis",
   });
+  const reviewContext = context([], {}, [evidence], blocks({ outcome: english }, { outcome: chinese }));
   const state = applyChapterReview(
     addStoryAnnotation(emptyChapterReview(), correction),
-    context([], {}, [evidence], blocks({ outcome: english }, { outcome: chinese })),
+    reviewContext,
   ).state;
   assert.equal(applyAnnotationsToBlock(english, "outcome", "en", state.annotations), "The hypothesis was final.");
   assert.equal(applyAnnotationsToBlock(chinese, "outcome", "zh", state.annotations), chinese);
   assert.deepEqual(state.staleTranslations, [{ subject: "story:outcome", language: "zh", count: 1 }]);
-  assert.equal(canMarkChapterReady(state, context()), false);
+  assert.equal(canMarkChapterReady(state, reviewContext), true);
 });
 
 test("applied annotations cannot be cancelled without a new revision", () => {
@@ -299,7 +303,7 @@ test("applied annotations cannot be cancelled without a new revision", () => {
   assert.equal(unchanged.revision, 2);
 });
 
-test("insight edits participate in review provenance and bilingual stale-state gating", () => {
+test("insight edits retain localization debt without making it a readiness gate", () => {
   let state = updateInsightReview(emptyChapterReview(), highlight.id, "en", {
     status: "overridden", text: "Focus on reproducibility.",
     highlight: { ...highlight, lesson: "Focus on reproducibility." }, revision: "direct",
@@ -307,7 +311,7 @@ test("insight edits participate in review provenance and bilingual stale-state g
   assert.equal(state.stage, "reviewing");
   state = applyChapterReview(state, context()).state;
   assert.deepEqual(state.staleTranslations, [{ subject: `insight:${highlight.id}`, language: "zh", count: 1 }]);
-  assert.equal(canMarkChapterReady(state, context()), false);
+  assert.equal(canMarkChapterReady(state, context()), true);
 
   state = updateInsightReview(state, highlight.id, "zh", {
     status: "overridden", text: "强调可复现性。",
@@ -321,7 +325,7 @@ test("insight edits participate in review provenance and bilingual stale-state g
   assert.equal(updateInsightReview(state, highlight.id, "en", { status: "rejected", text: "remove" }), state);
 });
 
-test("Accept cannot erase translation debt from a pending localized insight edit", () => {
+test("Accept preserves non-blocking localization debt from a localized insight edit", () => {
   let state = updateInsightReview(emptyChapterReview(), highlight.id, "en", {
     status: "overridden", text: "Focus on reproducibility.",
     highlight: { ...highlight, lesson: "Focus on reproducibility." }, revision: "direct",
@@ -332,7 +336,30 @@ test("Accept cannot erase translation debt from a pending localized insight edit
   assert.deepEqual(state.insightReviews[highlight.id].pendingLanguages, ["en"]);
   state = applyChapterReview(state, context()).state;
   assert.deepEqual(state.staleTranslations, [{ subject: `insight:${highlight.id}`, language: "zh", count: 1 }]);
-  assert.equal(canMarkChapterReady(state, context()), false);
+  assert.equal(canMarkChapterReady(state, context()), true);
+});
+
+test("Insight feedback distinguishes pending decisions from applied revisions", () => {
+  let state = emptyChapterReview();
+  assert.equal(insightReviewFeedbackState(state.insightReviews[highlight.id]), "none");
+
+  state = updateInsightReview(state, highlight.id, "en", {
+    status: "accepted", text: highlight.lesson,
+  });
+  assert.equal(insightReviewFeedbackState(state.insightReviews[highlight.id]), "accepted_pending");
+  assert.equal(chapterReviewSummary(state).pendingInsights, 1);
+
+  state = updateInsightReview(state, highlight.id, "en", {
+    status: "rejected", text: highlight.lesson,
+  });
+  assert.equal(insightReviewFeedbackState(state.insightReviews[highlight.id]), "rejected_pending");
+  assert.equal(state.publicationApproved, false);
+
+  state = applyChapterReview(state, context()).state;
+  assert.equal(insightReviewFeedbackState(state.insightReviews[highlight.id]), "rejected_applied");
+  assert.equal(state.insightReviews[highlight.id].appliedRevision, state.revision);
+  assert.equal(chapterReviewSummary(state).pendingInsights, 0);
+  assert.equal(state.publicationApproved, false);
 });
 
 test("Reopen restores an applied rejected insight through a new reviewed revision", () => {
@@ -514,6 +541,89 @@ test("range styling rejects stale, mismatched, cross-language, and cross-block o
   assert.deepEqual(storyAnnotationSegments(source, "scene", "en", 1, [mismatched]), [{ text: source, annotationIds: [] }]);
   assert.deepEqual(storyAnnotationSegments(source, "scene", "zh", 1, [mismatched]), [{ text: source, annotationIds: [] }]);
   assert.deepEqual(storyAnnotationSegments(source, "other-block", "en", 1, [mismatched]), [{ text: source, annotationIds: [] }]);
+});
+
+test("reduced beforeinput metadata is normalized without reading unknown fields as strings", () => {
+  const missing = normalizeDirectBeforeInput({
+    nativeEvent: {}, selectionStart: 2, selectionEnd: 2, valueLength: 5,
+  });
+  assert.deepEqual(missing.metadata, {
+    inputTypeMissing: true,
+    dataState: "missing",
+    selectionStart: 2,
+    selectionEnd: 2,
+    editCategory: "unknown",
+    isComposing: false,
+  });
+  assert.equal(missing.mutation, null);
+
+  const nullData = normalizeDirectBeforeInput({
+    nativeEvent: { inputType: "insertText", data: null },
+    selectionStart: 1, selectionEnd: 1, valueLength: 3,
+  });
+  assert.equal(nullData.metadata.dataState, "null");
+  assert.equal(nullData.mutation, null);
+
+  const undefinedData = normalizeDirectBeforeInput({
+    nativeEvent: { inputType: "insertText", data: undefined },
+    selectionStart: 1, selectionEnd: 1, valueLength: 3,
+  });
+  assert.equal(undefinedData.metadata.dataState, "missing");
+  assert.equal(undefinedData.mutation, null);
+});
+
+test("beforeinput normalization covers insert, replacement, delete, paste, and composition categories", () => {
+  const normalized = (nativeEvent, selectionStart, selectionEnd, valueLength = 6) => normalizeDirectBeforeInput({
+    nativeEvent, selectionStart, selectionEnd, valueLength,
+  });
+  assert.deepEqual(normalized({ inputType: "insertText", data: "x" }, 2, 2).mutation,
+    { start: 2, end: 2, insertedText: "x" });
+  assert.deepEqual(normalized({ inputType: "insertReplacementText", data: "term" }, 1, 4).mutation,
+    { start: 1, end: 4, insertedText: "term" });
+  assert.deepEqual(normalized({ inputType: "deleteContentBackward", data: null }, 2, 2).mutation,
+    { start: 1, end: 2, insertedText: "" });
+  assert.deepEqual(normalized({ inputType: "deleteContentForward" }, 2, 2).mutation,
+    { start: 2, end: 3, insertedText: "" });
+  assert.equal(normalized({ inputType: "insertFromPaste", data: null }, 2, 2).metadata.editCategory, "insert");
+  assert.equal(normalized({ inputType: "insertFromPaste", data: null }, 2, 2).mutation, null);
+  const composing = normalized({ inputType: "insertCompositionText", data: "x", isComposing: true }, 2, 2);
+  assert.equal(composing.metadata.editCategory, "composition");
+  assert.equal(composing.metadata.isComposing, true);
+  assert.equal(composing.mutation, null);
+});
+
+test("controlled previous and next text derive one safe fallback mutation", () => {
+  assert.deepEqual(deriveDirectStoryMutation({ previousText: "abcd", nextText: "abXcd", selectionAfter: 3 }),
+    { start: 2, end: 2, insertedText: "X" });
+  assert.deepEqual(deriveDirectStoryMutation({ previousText: "alpha beta", nextText: "alpha term", selectionAfter: 10 }),
+    { start: 6, end: 10, insertedText: "term" });
+  assert.deepEqual(deriveDirectStoryMutation({ previousText: "abcd", nextText: "acd", selectionAfter: 1 }),
+    { start: 1, end: 2, insertedText: "" });
+  assert.deepEqual(deriveDirectStoryMutation({ previousText: "abcd", nextText: "abd", selectionAfter: 2 }),
+    { start: 2, end: 3, insertedText: "" });
+  assert.deepEqual(deriveDirectStoryMutation({
+    previousText: "abcd", nextText: "abXcd", selectionAfter: 3,
+    beforeInputMutation: { start: 0, end: 0, insertedText: "wrong" },
+  }), { start: 2, end: 2, insertedText: "X" });
+  assert.equal(deriveDirectStoryMutation({ previousText: "same", nextText: "same", selectionAfter: 4 }), null);
+});
+
+test("fallback mutation records one transaction and preserves Undo/Redo identity", () => {
+  const source = "One draft.";
+  const mutation = deriveDirectStoryMutation({ previousText: source, nextText: "One revised draft.", selectionAfter: 11 });
+  assert.ok(mutation);
+  let state = recordStoryEdit(emptyChapterReview(), {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "One revised draft.", workingRange: { start: mutation.start, end: mutation.end },
+    insertedText: mutation.insertedText, now: 100,
+  }).state;
+  assert.equal(state.editTransactions.length, 1);
+  const transactionId = state.editTransactions[0].id;
+  state = undoStoryEdit(state, "en");
+  state = redoStoryEdit(state, "en");
+  assert.equal(state.editTransactions.length, 1);
+  assert.equal(state.editTransactions[0].id, transactionId);
+  assert.equal(storyWorkingBlock(source, "chapter", "scene", "en", state), "One revised draft.");
 });
 
 test("direct Story typing is a controlled coalesced block-local transaction", () => {

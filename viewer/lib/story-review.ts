@@ -84,6 +84,25 @@ export type InsightReview = {
   appliedRevision?: number;
 };
 
+export type InsightReviewFeedbackState =
+  | "none"
+  | "accepted_pending"
+  | "rejected_pending"
+  | "changed_pending"
+  | "accepted_applied"
+  | "rejected_applied"
+  | "changed_applied";
+
+/** Derive visible feedback from the persisted review state. Copy remains in the
+ * component so this semantic state hydrates identically in both languages. */
+export function insightReviewFeedbackState(review?: InsightReview): InsightReviewFeedbackState {
+  if (!review) return "none";
+  const decision = review.status === "accepted"
+    ? "accepted"
+    : review.status === "rejected" ? "rejected" : "changed";
+  return `${decision}_${review.resolution}` as InsightReviewFeedbackState;
+}
+
 export type TranslationStaleness = {
   subject: `story:${string}` | `insight:${string}`;
   language: StoryLanguage;
@@ -255,6 +274,128 @@ function plainTextDiff(before: string, after: string) {
     beforeText: before.slice(start, beforeEnd),
     afterText: after.slice(start, afterEnd),
   };
+}
+
+export type DirectInputEditCategory = "insert" | "replace" | "delete" | "history" | "composition" | "unknown";
+
+export type DirectStoryMutation = {
+  start: number;
+  end: number;
+  insertedText: string;
+};
+
+export type SafeDirectInputMetadata = {
+  inputTypeMissing: boolean;
+  dataState: "missing" | "null" | "string" | "other";
+  selectionStart: number;
+  selectionEnd: number;
+  editCategory: DirectInputEditCategory;
+  isComposing: boolean;
+};
+
+type NormalizeDirectBeforeInput = {
+  nativeEvent: unknown;
+  selectionStart: number;
+  selectionEnd: number;
+  valueLength: number;
+};
+
+/** Normalize only the browser metadata needed to optimize one controlled
+ * mutation. The returned diagnostic projection deliberately contains no Story
+ * text. Reduced SyntheticEvent/nativeEvent shapes are ordinary fallback cases,
+ * not fatal errors. */
+export function normalizeDirectBeforeInput(input: NormalizeDirectBeforeInput): {
+  metadata: SafeDirectInputMetadata;
+  mutation: DirectStoryMutation | null;
+} {
+  const native = input.nativeEvent && typeof input.nativeEvent === "object"
+    ? input.nativeEvent as Record<string, unknown>
+    : {};
+  const inputType = typeof native.inputType === "string" ? native.inputType : "";
+  const hasData = Object.prototype.hasOwnProperty.call(native, "data") && native.data !== undefined;
+  const dataState: SafeDirectInputMetadata["dataState"] = !hasData
+    ? "missing"
+    : native.data === null ? "null" : typeof native.data === "string" ? "string" : "other";
+  const length = Number.isInteger(input.valueLength) && input.valueLength >= 0 ? input.valueLength : 0;
+  const selectionStart = Math.max(0, Math.min(length, Number.isInteger(input.selectionStart) ? input.selectionStart : 0));
+  const selectionEnd = Math.max(selectionStart, Math.min(length, Number.isInteger(input.selectionEnd) ? input.selectionEnd : selectionStart));
+  const isComposing = native.isComposing === true || inputType.includes("Composition");
+  const editCategory: DirectInputEditCategory = isComposing
+    ? "composition"
+    : inputType === "historyUndo" || inputType === "historyRedo"
+      ? "history"
+      : inputType.startsWith("delete")
+        ? "delete"
+        : inputType === "insertReplacementText" || (inputType.startsWith("insert") && selectionEnd > selectionStart)
+          ? "replace"
+          : inputType.startsWith("insert")
+            ? "insert"
+            : "unknown";
+  const metadata: SafeDirectInputMetadata = {
+    inputTypeMissing: typeof native.inputType !== "string",
+    dataState,
+    selectionStart,
+    selectionEnd,
+    editCategory,
+    isComposing,
+  };
+  if (isComposing || editCategory === "history" || editCategory === "unknown") return { metadata, mutation: null };
+
+  if (editCategory === "delete") {
+    let start = selectionStart;
+    let end = selectionEnd;
+    if (start === end && inputType === "deleteContentBackward" && start > 0) start -= 1;
+    if (start === end && inputType === "deleteContentForward" && end < length) end += 1;
+    return { metadata, mutation: { start, end, insertedText: "" } };
+  }
+
+  if (inputType === "insertLineBreak" || inputType === "insertParagraph") {
+    return { metadata, mutation: { start: selectionStart, end: selectionEnd, insertedText: "\n" } };
+  }
+  if (typeof native.data !== "string") return { metadata, mutation: null };
+  return {
+    metadata,
+    mutation: { start: selectionStart, end: selectionEnd, insertedText: native.data },
+  };
+}
+
+type DeriveDirectStoryMutation = {
+  previousText: string;
+  nextText: string;
+  selectionAfter: number;
+  beforeInputMutation?: DirectStoryMutation | null;
+};
+
+/** Resolve exactly one plain-text splice. `beforeinput` is accepted only when
+ * it reproduces the controlled next value; otherwise the minimal mutation is
+ * derived from previous/next text with the post-edit caret as a tie-breaker. */
+export function deriveDirectStoryMutation(input: DeriveDirectStoryMutation): DirectStoryMutation | null {
+  const { previousText, nextText } = input;
+  if (previousText === nextText) return null;
+  const pending = input.beforeInputMutation;
+  if (pending
+    && Number.isInteger(pending.start) && Number.isInteger(pending.end)
+    && pending.start >= 0 && pending.end >= pending.start && pending.end <= previousText.length
+    && typeof pending.insertedText === "string"
+    && `${previousText.slice(0, pending.start)}${pending.insertedText}${previousText.slice(pending.end)}` === nextText) {
+    return pending;
+  }
+
+  if (Number.isInteger(input.selectionAfter) && input.selectionAfter >= 0 && input.selectionAfter <= nextText.length) {
+    const selectionAfter = input.selectionAfter;
+    const suffixLength = nextText.length - selectionAfter;
+    const end = previousText.length - suffixLength;
+    if (end >= 0 && previousText.slice(end) === nextText.slice(selectionAfter)) {
+      for (let start = Math.min(selectionAfter, end); start >= 0; start -= 1) {
+        if (previousText.slice(0, start) !== nextText.slice(0, start)) continue;
+        const mutation = { start, end, insertedText: nextText.slice(start, selectionAfter) };
+        if (`${previousText.slice(0, start)}${mutation.insertedText}${previousText.slice(end)}` === nextText) return mutation;
+      }
+    }
+  }
+
+  const diff = plainTextDiff(previousText, nextText);
+  return { start: diff.start, end: diff.beforeEnd, insertedText: diff.afterText };
 }
 
 /** Paste remains editorial plain text. Markup, script/style bodies, NUL bytes,
@@ -596,7 +737,9 @@ export function chapterReviewSummary(state: ChapterReviewState) {
     needsEvidenceAdd: pendingAnnotations.filter((annotation) => annotation.type === "add" && annotation.resolution === "needs_evidence").length
       + pendingEdits.filter((transaction) => transaction.resolution === "needs_evidence").length,
     pendingInsights,
-    unresolved: pendingAnnotations.length + pendingEdits.length + pendingInsights + state.staleTranslations.length,
+    // Localized copy can remain stale as a visible follow-up, but it is no
+    // longer part of the canonical English review-readiness gate.
+    unresolved: pendingAnnotations.length + pendingEdits.length + pendingInsights,
   };
 }
 
@@ -982,7 +1125,7 @@ export function validateChapterReviewCompletion(
     || !validateChapterReviewLedger(state, context.storyKey, context.sourceBlocks, context.reviewedBlocks)
     || !validateInsightReviewLedger(state, context.reviewableInsightIds)
     || !state.evidenceVerified
-    || !Array.isArray(state.staleTranslations) || state.staleTranslations.length > 0
+    || !Array.isArray(state.staleTranslations)
     || state.annotations.some((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence")
     || state.editTransactions.some((transaction) => activeEditResolution(transaction.resolution))
     || Object.values(state.insightReviews).some((review) => review.resolution === "pending")

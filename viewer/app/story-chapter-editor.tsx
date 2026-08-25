@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent as ReactFormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type SyntheticEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CompositionEvent as ReactCompositionEvent, type FormEvent as ReactFormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type SyntheticEvent } from "react";
 import type {
   EvidenceReference,
   StoryHighlightItem,
@@ -17,7 +17,10 @@ import {
   cancelStoryAnnotation,
   chapterReviewSummary,
   discardStoryEdit,
+  deriveDirectStoryMutation,
+  insightReviewFeedbackState,
   markChapterReady,
+  normalizeDirectBeforeInput,
   privacyReviewState,
   recordStoryEdit,
   redoStoryEdit,
@@ -31,6 +34,7 @@ import {
   undoStoryEdit,
   updateInsightReview,
   type ChapterReviewState,
+  type DirectStoryMutation,
   type PrivacyDecision,
   type StoryEditTransaction,
   type StoryReviewAnnotation,
@@ -47,25 +51,34 @@ export type ChapterEvidenceContext = {
 
 type PendingDirectInput = {
   blockId: string;
-  start: number;
-  end: number;
-  insertedText: string;
+  mutation: DirectStoryMutation | null;
+};
+
+type ActiveComposition = {
+  blockId: string;
+  previousText: string;
+};
+
+type CompletedComposition = {
+  blockId: string;
+  nextText: string;
 };
 
 const ui = {
   en: {
     back: "Project story", chapter: "Chapter", previous: "Previous chapter", next: "Next chapter",
     aiDraft: "Initial AI draft", humanReview: "Review in progress", reviewedDraft: "Latest revision ready", ready: "Final Release Memory",
-    releaseNote: "AI-compressed · human-authoritative review", minRead: "min read",
-    people: "People", peoplePrompt: "Who matters in this chapter?", localIdentity: "Local identity · hidden on export", noPeople: "No supported participant was identified for this chapter.",
-    story: "Story", setup: "The setup", turn: "The turn", mattered: "What mattered", followed: "What followed", uncertain: "Still uncertain",
+    releaseNote: "AI-organized · human-authoritative review", minRead: "min read",
+    people: "People", peoplePrompt: "Who matters in this chapter?", localIdentity: "Local identity · hidden on export", participantRequired: "Participant evidence is required before this Chapter can be reviewed.", peopleHidden: "Participant roles are hidden by the current Privacy review.",
+    story: "Story", background: "Background", decisionProcess: "Decision process", result: "Result", openQuestions: "Open questions",
     chapterGuide: "Read the Chapter, edit the Story where needed, review AI Insight and Privacy, then Apply review. Only All set confirms the final memory.",
     storyReadHelp: "Choose Edit to change the Story. Every change stays reviewable before it is applied.", storyEditHelp: "Type directly in the Story. Undo or discard any change. Apply Review when the draft is ready.",
     editStory: "Edit Story", finishEditing: "Finish editing", editingStory: "Editing Story", editMode: "Story Edit Mode", readMode: "Story read mode",
     editInstruction: "Edit one Story passage at a time. Click to type, or select text to replace or delete. Every change is recorded as a note; a cross-passage change is rejected without changing either passage.", undo: "Undo", redo: "Redo", noUndo: "Nothing to undo", noRedo: "Nothing to redo",
-    aiInsight: "AI insight", aiInterpretation: "AI interpretation · not historical fact", observation: "Observation", lesson: "Reusable lesson", completeInsight: "Complete Chapter insight",
-    contextualInsight: "Passage insight", contextualPrompt: "Select or click a Story passage to explore why it mattered.", selectedPassage: "Selected passage", whatHappened: "What was happening", whyMattered: "Why this mattered", learned: "What we learned", showContext: "Show passage insight", hideContext: "Hide passage insight", previousInsight: "Previous insight", nextInsight: "Next insight",
+    aiInsight: "AI insight", aiInterpretation: "AI interpretation · separate from historical fact", observation: "Direct learning", lesson: "Reusable rule", completeInsight: "Complete Chapter insight",
+    contextualInsight: "AI insight", contextualPrompt: "Select or click a Story passage to review its participant interaction, narrative explanation, and reusable rule.", selectedPassage: "Selected passage", whatHappened: "What was happening", whyMattered: "Why this mattered", learned: "What we learned", showContext: "Show AI insight", hideContext: "Hide AI insight", previousInsight: "Previous AI insight", nextInsight: "Next AI insight",
     editInsight: "Edit insight", reviseInsight: "Revise insight with AI", acceptInsight: "Accept", removeInsight: "Do not preserve",
+    acceptedPending: "Accepted — pending Apply review", rejectedPending: "Marked Do not preserve — pending Apply review", changedPending: "Insight changes — pending Apply review", acceptedApplied: "Accepted Insight applied in revision", rejectedApplied: "Do not preserve applied in revision", changedApplied: "Insight changes applied in revision",
     save: "Save", cancel: "Cancel", changeInsight: "How would you like to change this?",
     delete: "Delete", revise: "Revise", add: "Add",
     pending: "Pending review", applied: "Applied", needsEvidence: "Needs reviewed evidence", cancelAnnotation: "Cancel annotation", discardEdit: "Discard", revertEdit: "Revert in a new revision", reviewPassage: "Review this passage", marginNotes: "Story review notes", focusAnnotation: "Show annotated passage", focusEdit: "Show edited passage",
@@ -73,23 +86,24 @@ const ui = {
     localOriginal: "Local original", unavailable: "Original content unavailable in the reviewed artifact.", sourceLanguage: "Source language",
     whyFlagged: "Why AI flagged it", keep: "Keep", redact: "Redact", reviewComplete: "Privacy review complete", reviewAgain: "Review again",
     evidence: "View local evidence", evidenceNote: "Exact source language · local only · never exported with the release chapter", primary: "Primary anchor", supporting: "Supporting evidence", inspect: "Inspect exact evidence",
-    summary: "Review summary", revisions: "revisions", additions: "additions", removals: "removals", privacyDecisions: "privacy decisions",
+    summary: "Review summary", revisions: "revisions", additions: "additions", removals: "removals", privacyDecisions: "privacy decisions", insightDecisions: "pending Insight decisions",
     privacyBlocks: "Complete every privacy decision before applying review.", apply: "Apply current review", applyingNote: "Apply creates another revised draft for you to inspect. It does not finalize or publish this Chapter.",
-    addBlocked: "An addition still needs support from reviewed evidence. Cancel it or return to review before confirming.", directEvidenceBlocked: "A Story edit introduces a new factual claim that is not supported by the reviewed evidence. Inspect or discard that edit before applying.", insightBlocked: "Review the pending AI insight before confirming.", pendingBlocked: "Resolve every pending review item before confirming.", evidenceSupport: "Use wording that appears in the primary reviewed evidence", evidenceBlocked: "The cited exact evidence could not be resolved. Review the evidence reference before applying.", annotationConflict: "This selection overlaps another pending change or no longer matches the current draft. Keep edits within one current passage.", directEditConflict: "That mutation crosses or overlaps controlled edits. Undo or discard the affected note, then edit one passage at a time.", crossBlock: "Edit one Story passage at a time. Cross-passage changes were not applied.", translationBlocked: "The paired language is stale. Review the same semantic passage in the other language before confirming.", noPrivacy: "AI found no release concerns in the reviewed artifact.", removedFromRelease: "Removed from release", markReady: "All set", returnReview: "Continue reviewing", reopen: "Reopen review", readyNote: "Human-confirmed locally. This is not publication approval.", revision: "Revision", noPending: "No pending changes. Inspect the latest revision, then choose All set.",
+    addBlocked: "An addition still needs support from reviewed evidence. Cancel it or return to review before confirming.", directEvidenceBlocked: "A Story edit introduces a new factual claim that is not supported by the reviewed evidence. Inspect or discard that edit before applying.", insightBlocked: "Review the pending AI insight before confirming.", pendingBlocked: "Resolve every pending review item before confirming.", evidenceSupport: "Use wording that appears in the primary reviewed evidence", evidenceBlocked: "The cited exact evidence could not be resolved. Review the evidence reference before applying.", annotationConflict: "This selection overlaps another pending change or no longer matches the current draft. Keep edits within one current passage.", directEditConflict: "That mutation crosses or overlaps controlled edits. Undo or discard the affected note, then edit one passage at a time.", crossBlock: "Edit one Story passage at a time. Cross-passage changes were not applied.", translationBlocked: "The optional paired language is out of date. This does not block the canonical English review.", noPrivacy: "AI found no release concerns in the reviewed artifact.", removedFromRelease: "Removed from release", markReady: "All set", returnReview: "Continue reviewing", reopen: "Reopen review", readyNote: "Human-confirmed locally. This is not publication approval.", revision: "Revision", noPending: "No pending changes. Inspect the latest revision, then choose All set.",
   },
   zh: {
     back: "项目故事", chapter: "章节", previous: "上一章", next: "下一章",
     aiDraft: "初始 AI 草稿", humanReview: "审阅进行中", reviewedDraft: "最新修订稿待确认", ready: "最终发布记忆",
-    releaseNote: "AI 压缩 · 人工意见优先", minRead: "分钟阅读",
-    people: "人物", peoplePrompt: "这一章里，谁最重要？", localIdentity: "本地身份 · 导出时隐藏", noPeople: "这一章没有识别出有证据支持的参与者。",
-    story: "故事", setup: "当时的局面", turn: "转折如何发生", mattered: "真正重要的细节", followed: "后来发生了什么", uncertain: "仍不确定",
+    releaseNote: "AI 组织 · 人工意见优先", minRead: "分钟阅读",
+    people: "人物", peoplePrompt: "这一章里，谁最重要？", localIdentity: "本地身份 · 导出时隐藏", participantRequired: "本章必须有参与者证据，才能进入审阅。", peopleHidden: "当前隐私审阅已隐藏参与者角色。",
+    story: "故事", background: "背景", decisionProcess: "决策过程", result: "结果", openQuestions: "待确认问题",
     chapterGuide: "先阅读章节；如需调整，再编辑故事并审阅 AI 洞察与隐私，然后应用审阅。只有“确认完成”才会确认最终记忆。",
     storyReadHelp: "选择“编辑”即可修改故事；所有改动都会保留为可审阅记录，应用前不会定稿。", storyEditHelp: "直接修改故事文字；任何改动都可以撤销或丢弃。草稿就绪后再应用审阅。",
     editStory: "编辑故事", finishEditing: "结束编辑", editingStory: "正在编辑故事", editMode: "故事编辑模式", readMode: "故事阅读模式",
     editInstruction: "每次只编辑一个故事段落。点击即可输入，或选中文字进行替换、删除；每项改动都会记录为批注，跨段操作会被完整拒绝且不会改动任何段落。", undo: "撤销", redo: "重做", noUndo: "没有可撤销的改动", noRedo: "没有可重做的改动",
-    aiInsight: "AI 洞察", aiInterpretation: "AI 解释 · 并非历史事实", observation: "观察", lesson: "可复用经验", completeInsight: "完整章节洞察",
-    contextualInsight: "段落洞察", contextualPrompt: "选择或点击故事段落，了解它为何重要。", selectedPassage: "所选段落", whatHappened: "当时发生了什么", whyMattered: "为什么重要", learned: "我们学到了什么", showContext: "显示段落洞察", hideContext: "收起段落洞察", previousInsight: "上一条洞察", nextInsight: "下一条洞察",
+    aiInsight: "AI 洞察", aiInterpretation: "AI 解释 · 与历史事实分开", observation: "直接经验", lesson: "可复用规则", completeInsight: "完整章节洞察",
+    contextualInsight: "AI 洞察", contextualPrompt: "选择或点击故事段落，查看参与者互动、叙事讲解和可复用规则。", selectedPassage: "所选段落", whatHappened: "当时发生了什么", whyMattered: "为什么重要", learned: "我们学到了什么", showContext: "显示 AI 洞察", hideContext: "收起 AI 洞察", previousInsight: "上一条 AI 洞察", nextInsight: "下一条 AI 洞察",
     editInsight: "编辑洞察", reviseInsight: "让 AI 修改洞察", acceptInsight: "接受", removeInsight: "不保留",
+    acceptedPending: "已接受——待应用审阅", rejectedPending: "已标记“不保留”——待应用审阅", changedPending: "洞察改动——待应用审阅", acceptedApplied: "已接受的洞察已应用于修订稿", rejectedApplied: "“不保留”决定已应用于修订稿", changedApplied: "洞察改动已应用于修订稿",
     save: "保存", cancel: "取消", changeInsight: "你希望怎样修改？",
     delete: "删除", revise: "修订", add: "补充",
     pending: "待处理", applied: "已应用", needsEvidence: "需要已审阅证据支持", cancelAnnotation: "取消批注", discardEdit: "丢弃", revertEdit: "在新修订中还原", reviewPassage: "审阅这段文字", marginNotes: "故事审阅批注", focusAnnotation: "定位批注原文", focusEdit: "定位修改位置",
@@ -97,9 +111,9 @@ const ui = {
     localOriginal: "本地原文", unavailable: "已审阅材料中不包含原始内容。", sourceLanguage: "原文语言",
     whyFlagged: "AI 标记原因", keep: "保留", redact: "移除", reviewComplete: "隐私审阅已完成", reviewAgain: "重新审阅",
     evidence: "查看本地证据", evidenceNote: "保持精确原文 · 仅限本地 · 不随发布章节导出", primary: "主要锚点", supporting: "补充证据", inspect: "查看精确证据",
-    summary: "审阅摘要", revisions: "处修订", additions: "处补充", removals: "处删除", privacyDecisions: "项隐私决定",
+    summary: "审阅摘要", revisions: "处修订", additions: "处补充", removals: "处删除", privacyDecisions: "项隐私决定", insightDecisions: "项待应用洞察决定",
     privacyBlocks: "应用审阅前，请完成全部隐私决定。", apply: "应用当前审阅", applyingNote: "应用后会生成一版新的修订草稿供你再次检查；这不会定稿或发布本章。",
-    addBlocked: "仍有补充内容需要已审阅证据支持。请取消该批注或返回审阅后再确认。", directEvidenceBlocked: "有一项故事改动引入了已审阅证据无法支持的新事实。请检查或丢弃该改动后再应用。", insightBlocked: "确认完成前，请先审阅待处理的 AI 洞察。", pendingBlocked: "确认完成前，请先解决所有待处理的审阅项。", evidenceSupport: "使用主要已审阅证据中确实出现的表述", evidenceBlocked: "无法解析本章引用的精确证据。请先检查证据引用，再应用审阅。", annotationConflict: "所选范围与另一项待处理改动重叠，或已不再匹配当前草稿。请只修改当前段落。", directEditConflict: "该操作跨越或重叠了受控改动。请先撤销或丢弃相关批注，再逐段修改。", crossBlock: "每次只编辑一个故事段落；跨段改动未被应用。", translationBlocked: "另一语言版本仍待同步。请在另一语言中审阅同一语义段落后再确认。", noPrivacy: "AI 未在已审阅材料中发现发布风险。", removedFromRelease: "已从发布稿移除", markReady: "确认完成", returnReview: "继续审阅", reopen: "重新打开审阅", readyNote: "已在本地获得人工确认；这不代表发布审批。", revision: "修订稿", noPending: "没有待应用的改动。请检查最新修订稿，然后选择“确认完成”。",
+    addBlocked: "仍有补充内容需要已审阅证据支持。请取消该批注或返回审阅后再确认。", directEvidenceBlocked: "有一项故事改动引入了已审阅证据无法支持的新事实。请检查或丢弃该改动后再应用。", insightBlocked: "确认完成前，请先审阅待处理的 AI 洞察。", pendingBlocked: "确认完成前，请先解决所有待处理的审阅项。", evidenceSupport: "使用主要已审阅证据中确实出现的表述", evidenceBlocked: "无法解析本章引用的精确证据。请先检查证据引用，再应用审阅。", annotationConflict: "所选范围与另一项待处理改动重叠，或已不再匹配当前草稿。请只修改当前段落。", directEditConflict: "该操作跨越或重叠了受控改动。请先撤销或丢弃相关批注，再逐段修改。", crossBlock: "每次只编辑一个故事段落；跨段改动未被应用。", translationBlocked: "可选中文版本尚未同步；这不会阻塞英文主版本的审阅。", noPrivacy: "AI 未在已审阅材料中发现发布风险。", removedFromRelease: "已从发布稿移除", markReady: "确认完成", returnReview: "继续审阅", reopen: "重新打开审阅", readyNote: "已在本地获得人工确认；这不代表发布审批。", revision: "修订稿", noPending: "没有待应用的改动。请检查最新修订稿，然后选择“确认完成”。",
   },
 } as const;
 
@@ -159,6 +173,8 @@ export function StoryChapterEditor(props: {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const editorRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const pendingDirectInputRef = useRef<PendingDirectInput | null>(null);
+  const activeCompositionRef = useRef<ActiveComposition | null>(null);
+  const completedCompositionRef = useRef<CompletedComposition | null>(null);
   const backRef = useRef<HTMLButtonElement | null>(null);
   const restoredContextRef = useRef(false);
   const [editMode, setEditMode] = useState(false);
@@ -166,6 +182,21 @@ export function StoryChapterEditor(props: {
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const [focusedAnnotationId, setFocusedAnnotationId] = useState("");
   const [focusedEditId, setFocusedEditId] = useState("");
+  const compositionOwner = `${story.key}\u0000${language}`;
+  const [compositionDraftState, setCompositionDraftState] = useState<{
+    owner: string;
+    drafts: Record<string, string>;
+  }>({ owner: compositionOwner, drafts: {} });
+  const compositionDrafts = compositionDraftState.owner === compositionOwner ? compositionDraftState.drafts : {};
+  const setCompositionDrafts = (update: Record<string, string> | ((drafts: Record<string, string>) => Record<string, string>)) => {
+    setCompositionDraftState((current) => {
+      const currentDrafts = current.owner === compositionOwner ? current.drafts : {};
+      return {
+        owner: compositionOwner,
+        drafts: typeof update === "function" ? update(currentDrafts) : update,
+      };
+    });
+  };
   const [instruction, setInstruction] = useState("");
   const [applyError, setApplyError] = useState("");
   const [applying, setApplying] = useState(false);
@@ -175,9 +206,19 @@ export function StoryChapterEditor(props: {
   const visibleHighlight = insightReview?.localized[language] || baseHighlight;
   const [insightDraft, setInsightDraft] = useState<StoryHighlightItem | undefined>(visibleHighlight);
   const leaveEditMode = () => {
+    pendingDirectInputRef.current = null;
+    activeCompositionRef.current = null;
+    completedCompositionRef.current = null;
+    setCompositionDrafts({});
     setEditMode(false);
     setApplyError("");
   };
+
+  useEffect(() => {
+    pendingDirectInputRef.current = null;
+    activeCompositionRef.current = null;
+    completedCompositionRef.current = null;
+  }, [language, story.key]);
 
   useEffect(() => {
     if (restoredContextRef.current) return;
@@ -248,6 +289,10 @@ export function StoryChapterEditor(props: {
   }, {}), [chapterReview.editTransactions, story.key]);
 
   if (!episode || !presentation || !visibleHighlight || !insightDraft || !story.evidence) return null;
+  if (presentation.people.length === 0) return <section className="simpleEpisode chapterEditor" role="region" aria-label={labels.chapter}>
+    <div className="simpleEpisodeChrome"><div className="chapterCanvas chapterChromeCanvas"><button className="episodeBackLink" ref={backRef} onClick={onClose}>← {labels.back}</button></div></div>
+    <div className="chapterCanvas"><p className="completionBlocker" role="alert">{labels.participantRequired}</p></div>
+  </section>;
 
   const orderedPassageIds = [
     "scene",
@@ -371,39 +416,108 @@ export function StoryChapterEditor(props: {
   };
 
   const captureDirectBeforeInput = (blockId: string, event: ReactFormEvent<HTMLTextAreaElement>) => {
-    const editor = event.currentTarget;
-    const native = event.nativeEvent as InputEvent;
-    let start = editor.selectionStart;
-    let end = editor.selectionEnd;
-    let insertedText = native.data || "";
-    if (native.inputType === "insertLineBreak" || native.inputType === "insertParagraph") insertedText = "\n";
-    if (native.inputType.startsWith("delete")) {
-      insertedText = "";
-      if (start === end && native.inputType === "deleteContentBackward" && start > 0) start -= 1;
-      if (start === end && native.inputType === "deleteContentForward" && end < editor.value.length) end += 1;
+    const editor = event.currentTarget as HTMLTextAreaElement | null;
+    if (!editor) {
+      pendingDirectInputRef.current = null;
+      return;
     }
-    pendingDirectInputRef.current = { blockId, start, end, insertedText };
+    const normalized = normalizeDirectBeforeInput({
+      nativeEvent: event.nativeEvent,
+      selectionStart: editor.selectionStart,
+      selectionEnd: editor.selectionEnd,
+      valueLength: editor.value.length,
+    });
+    pendingDirectInputRef.current = { blockId, mutation: normalized.mutation };
   };
 
   const handleDirectChange = (blockId: string, event: SyntheticEvent<HTMLTextAreaElement>) => {
-    const editor = event.currentTarget;
+    const editor = event.currentTarget as HTMLTextAreaElement | null;
+    if (!editor) {
+      pendingDirectInputRef.current = null;
+      return;
+    }
+    const nextText = editor.value;
+    const selectionAfter = editor.selectionStart;
+    const native = event.nativeEvent && typeof event.nativeEvent === "object"
+      ? event.nativeEvent as unknown as Record<string, unknown>
+      : {};
+    const isComposing = native.isComposing === true;
+    const completedComposition = completedCompositionRef.current;
+    if (!isComposing && completedComposition) {
+      completedCompositionRef.current = null;
+      if (completedComposition.blockId === blockId && completedComposition.nextText === nextText) {
+        pendingDirectInputRef.current = null;
+        return;
+      }
+    }
+    const current = storyWorkingBlock(sourceBlocks[language][blockId] || "", story.key, blockId, language, chapterReview);
+    const activeComposition = activeCompositionRef.current?.blockId === blockId ? activeCompositionRef.current : null;
+    if (isComposing || activeComposition) {
+      if (!activeComposition) activeCompositionRef.current = { blockId, previousText: current };
+      setCompositionDrafts((drafts) => ({ ...drafts, [blockId]: nextText }));
+      pendingDirectInputRef.current = null;
+      if (isComposing) return;
+      const previousText = activeComposition?.previousText || current;
+      activeCompositionRef.current = null;
+      setCompositionDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[blockId];
+        return next;
+      });
+      const mutation = deriveDirectStoryMutation({ previousText, nextText, selectionAfter });
+      completedCompositionRef.current = { blockId, nextText };
+      if (mutation) commitDirectMutation(blockId, nextText, mutation.start, mutation.end, mutation.insertedText, selectionAfter);
+      return;
+    }
     const pending = pendingDirectInputRef.current?.blockId === blockId ? pendingDirectInputRef.current : null;
     pendingDirectInputRef.current = null;
-    const current = storyWorkingBlock(sourceBlocks[language][blockId] || "", story.key, blockId, language, chapterReview);
-    const fallbackStart = Math.max(0, Math.min(current.length, editor.selectionStart - Math.max(0, editor.value.length - current.length)));
-    commitDirectMutation(
-      blockId,
-      editor.value,
-      pending?.start ?? fallbackStart,
-      pending?.end ?? fallbackStart,
-      pending?.insertedText ?? editor.value.slice(fallbackStart, editor.selectionStart),
-      editor.selectionStart,
-    );
+    const mutation = deriveDirectStoryMutation({
+      previousText: current,
+      nextText,
+      selectionAfter,
+      beforeInputMutation: pending?.mutation,
+    });
+    if (mutation) commitDirectMutation(blockId, nextText, mutation.start, mutation.end, mutation.insertedText, selectionAfter);
+  };
+
+  const handleCompositionStart = (blockId: string, event: ReactCompositionEvent<HTMLTextAreaElement>) => {
+    pendingDirectInputRef.current = null;
+    completedCompositionRef.current = null;
+    const editor = event.currentTarget as HTMLTextAreaElement | null;
+    if (!editor) {
+      activeCompositionRef.current = null;
+      return;
+    }
+    const nextText = editor.value;
+    const previousText = storyWorkingBlock(sourceBlocks[language][blockId] || "", story.key, blockId, language, chapterReview);
+    activeCompositionRef.current = { blockId, previousText };
+    setCompositionDrafts((drafts) => ({ ...drafts, [blockId]: nextText }));
+  };
+
+  const handleCompositionEnd = (blockId: string, event: ReactCompositionEvent<HTMLTextAreaElement>) => {
+    const editor = event.currentTarget as HTMLTextAreaElement | null;
+    const active = activeCompositionRef.current?.blockId === blockId ? activeCompositionRef.current : null;
+    pendingDirectInputRef.current = null;
+    activeCompositionRef.current = null;
+    setCompositionDrafts((drafts) => {
+      const next = { ...drafts };
+      delete next[blockId];
+      return next;
+    });
+    if (!active || !editor) return;
+    const nextText = editor.value;
+    const selectionAfter = editor.selectionStart;
+    const mutation = deriveDirectStoryMutation({ previousText: active.previousText, nextText, selectionAfter });
+    completedCompositionRef.current = { blockId, nextText };
+    if (mutation) commitDirectMutation(blockId, nextText, mutation.start, mutation.end, mutation.insertedText, selectionAfter);
   };
 
   const handleDirectPaste = (blockId: string, event: ReactClipboardEvent<HTMLTextAreaElement>) => {
     event.preventDefault();
-    const editor = event.currentTarget;
+    pendingDirectInputRef.current = null;
+    if (activeCompositionRef.current) return;
+    const editor = event.currentTarget as HTMLTextAreaElement | null;
+    if (!editor) return;
     const insertedText = sanitizeStoryPaste(event.clipboardData.getData("text/plain"));
     const start = editor.selectionStart;
     const end = editor.selectionEnd;
@@ -412,6 +526,7 @@ export function StoryChapterEditor(props: {
   };
 
   const handleDirectKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing || activeCompositionRef.current) return;
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
     const key = event.key.toLowerCase();
     if (key === "z") {
@@ -596,11 +711,13 @@ export function StoryChapterEditor(props: {
           data-story-copy
           data-story-editor={blockId}
           ref={(node) => { editorRefs.current[blockId] = node; }}
-          value={copy}
-          rows={Math.max(2, copy.split("\n").length)}
+          value={compositionDrafts[blockId] ?? copy}
+          rows={Math.max(2, (compositionDrafts[blockId] ?? copy).split("\n").length)}
           aria-label={`${labels.editingStory}: ${labels.reviewPassage}`}
           onBeforeInput={(event) => captureDirectBeforeInput(blockId, event)}
           onChange={(event) => handleDirectChange(blockId, event)}
+          onCompositionStart={(event) => handleCompositionStart(blockId, event)}
+          onCompositionEnd={(event) => handleCompositionEnd(blockId, event)}
           onPaste={(event) => handleDirectPaste(blockId, event)}
           onKeyDown={handleDirectKeyDown}
           onFocus={() => activatePassage(blockId)}
@@ -619,11 +736,13 @@ export function StoryChapterEditor(props: {
           data-story-copy
           data-story-editor={blockId}
           ref={(node) => { editorRefs.current[blockId] = node; }}
-          value={copy}
-          rows={Math.max(1, copy.split("\n").length)}
+          value={compositionDrafts[blockId] ?? copy}
+          rows={Math.max(1, (compositionDrafts[blockId] ?? copy).split("\n").length)}
           aria-label={`${labels.editingStory}: ${labels.reviewPassage}`}
           onBeforeInput={(event) => captureDirectBeforeInput(blockId, event)}
           onChange={(event) => handleDirectChange(blockId, event)}
+          onCompositionStart={(event) => handleCompositionStart(blockId, event)}
+          onCompositionEnd={(event) => handleCompositionEnd(blockId, event)}
           onPaste={(event) => handleDirectPaste(blockId, event)}
           onKeyDown={handleDirectKeyDown}
           onFocus={() => activatePassage(blockId)}
@@ -633,6 +752,13 @@ export function StoryChapterEditor(props: {
   };
 
   const visiblePeople = presentation.people.filter((person) => !chapterReview.redactedBlocks.includes(`people:${person.id}`));
+  const insightFeedback = insightReviewFeedbackState(insightReview);
+  const insightFeedbackText = insightFeedback === "accepted_pending" ? labels.acceptedPending
+    : insightFeedback === "rejected_pending" ? labels.rejectedPending
+      : insightFeedback === "changed_pending" ? labels.changedPending
+        : insightFeedback === "accepted_applied" ? `${labels.acceptedApplied} ${insightReview?.appliedRevision || chapterReview.revision}`
+          : insightFeedback === "rejected_applied" ? `${labels.rejectedApplied} ${insightReview?.appliedRevision || chapterReview.revision}`
+            : insightFeedback === "changed_applied" ? `${labels.changedApplied} ${insightReview?.appliedRevision || chapterReview.revision}` : "";
   const insightSuppressed = chapterReview.redactedBlocks.includes(`insight:${visibleHighlight.id}`)
     || (insightReview?.status === "rejected" && insightReview.resolution === "applied"
       && chapterReview.stage !== "reviewing");
@@ -664,7 +790,8 @@ export function StoryChapterEditor(props: {
         <div className="compactActions"><button className="primary" disabled={!insightDraft.title.trim() || !insightDraft.noticed.trim() || !insightDraft.lesson.trim()} onClick={saveInsightEdit}>{labels.save}</button><button onClick={() => setInsightMode("none")}>{labels.cancel}</button></div>
       </div> : insightMode === "revise" ? <div className="inlineInsightEdit"><label>{labels.changeInsight}<textarea rows={3} value={instruction} onChange={(event) => setInstruction(event.target.value)} /></label><div className="compactActions"><button className="primary" disabled={!instruction.trim()} onClick={applyInsightRevision}>{labels.save}</button><button onClick={() => setInsightMode("none")}>{labels.cancel}</button></div></div> : <>
         <dl><div><dt>{labels.observation}</dt><dd>{visibleHighlight.noticed}</dd></div><div><dt>{labels.lesson}</dt><dd>{visibleHighlight.lesson}</dd></div></dl>
-        {chapterReview.stage !== "human_confirmed" && <div className="inlineInsightReview"><button onClick={() => onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "accepted", text: visibleHighlight.lesson }))}>{labels.acceptInsight}</button><button onClick={() => onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "rejected", text: visibleHighlight.lesson }))}>{labels.removeInsight}</button></div>}
+        {insightFeedbackText && <p className={`insightReviewFeedback ${insightReview?.resolution || ""}`} role="status" aria-live="polite" aria-atomic="true"><span aria-hidden="true">✓</span>{insightFeedbackText}</p>}
+        {chapterReview.stage !== "human_confirmed" && <div className="inlineInsightReview"><button className={insightFeedback === "accepted_pending" ? "selected" : ""} aria-pressed={insightFeedback === "accepted_pending"} onClick={() => onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "accepted", text: visibleHighlight.lesson }))}>{insightFeedback === "accepted_pending" ? `✓ ${labels.acceptedPending}` : labels.acceptInsight}</button><button className={insightFeedback === "rejected_pending" ? "selected" : ""} aria-pressed={insightFeedback === "rejected_pending"} onClick={() => onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "rejected", text: visibleHighlight.lesson }))}>{insightFeedback === "rejected_pending" ? `✓ ${labels.rejectedPending}` : labels.removeInsight}</button></div>}
       </>}
     </div>
   </details> : null;
@@ -695,7 +822,7 @@ export function StoryChapterEditor(props: {
           <div className="simpleSectionHead"><div><h3 id="people-heading">{labels.people}</h3><p>{labels.peoplePrompt}</p></div></div>
           {visiblePeople.length ? <div className="peopleList">{visiblePeople.map((person) => <div className="personRow" key={person.id}>
             <b aria-label={person.releaseLabel}>{person.releaseLabel}</b><div><strong>{person.role}</strong><p>{person.description}</p></div>
-          </div>)}</div> : <p className="emptySectionCopy">{labels.noPeople}</p>}
+          </div>)}</div> : <p className="emptySectionCopy">{labels.peopleHidden}</p>}
           {visiblePeople.length > 0 && <p className="identityNote">{labels.localIdentity}</p>}
         </section>
 
@@ -711,15 +838,14 @@ export function StoryChapterEditor(props: {
           </div>}
           <div className={`storyReviewWorkspace ${editMode ? "editing" : "reading"}`} data-story-mode={editMode ? "edit" : "read"}>
             <article className="chapterArticle storyDocument" aria-label={editMode ? labels.editMode : labels.readMode} ref={articleRef} onDoubleClick={handleStoryDoubleClick}>
-              <h4 className="storySubheading">{labels.setup}</h4>
+              <h4 className="storySubheading">{labels.background}</h4>
               {renderParagraph("scene", presentation.story.scene, "chapterLead")}
-              <h4 className="storySubheading">{labels.turn}</h4>
+              <h4 className="storySubheading">{labels.decisionProcess}</h4>
               {presentation.story.reconstruction.map((paragraph, index) => renderParagraph(`reconstruction-${index}`, paragraph))}
-              <h4 className="storySubheading">{labels.mattered}</h4>
               <div className="storyImportantList" role="list">{presentation.story.importantDetails.map((detail, index) => renderListItem(`detail-${index}`, detail))}</div>
-              <h4 className="storySubheading">{labels.followed}</h4>
+              <h4 className="storySubheading">{labels.result}</h4>
               {renderParagraph("outcome", presentation.story.decisionOutcome)}
-              {presentation.story.uncertainty && <><h4 className="storySubheading storyUncertaintyHeading">{labels.uncertain}</h4>{renderParagraph("uncertainty", presentation.story.uncertainty)}</>}
+              {presentation.story.uncertainty && <><h4 className="storySubheading storyUncertaintyHeading">{labels.openQuestions}</h4>{renderParagraph("uncertainty", presentation.story.uncertainty)}</>}
               {canonicalInsightDisclosure && <div className="storyBlockRow canonicalInsightRow"><span className="storyMarginEmpty" aria-hidden="true" />{canonicalInsightDisclosure}</div>}
             </article>
             <aside className={`passageInsightPanel ${contextCollapsed ? "collapsed" : ""}`} data-context-block={activePassageId || ""} aria-label={labels.contextualInsight}>
@@ -762,14 +888,14 @@ export function StoryChapterEditor(props: {
 
         <section className="chapterCompletion" aria-labelledby="review-summary-heading">
           <div><span>{reviewStageLabel(chapterReview, language)}</span><h3 id="review-summary-heading">{labels.summary}</h3></div>
-          <ul><li><b>{summary.revise}</b> {labels.revisions}</li><li><b>{summary.add}</b> {labels.additions}</li><li><b>{summary.delete}</b> {labels.removals}</li><li><b>{privacyState.reviewed} / {candidates.length}</b> {labels.privacyDecisions}</li></ul>
+          <ul><li><b>{summary.revise}</b> {labels.revisions}</li><li><b>{summary.add}</b> {labels.additions}</li><li><b>{summary.delete}</b> {labels.removals}</li><li><b>{summary.pendingInsights}</b> {labels.insightDecisions}</li><li><b>{privacyState.reviewed} / {candidates.length}</b> {labels.privacyDecisions}</li></ul>
           <p>{labels.applyingNote}</p>
           {!privacyState.complete && <p className="completionBlocker">{labels.privacyBlocks}</p>}
           {applyError && <p className="completionBlocker" role="alert">{applyError}</p>}
-          {chapterReview.staleTranslations.length > 0 && <p className="completionBlocker">{labels.translationBlocked}</p>}
+          {chapterReview.staleTranslations.length > 0 && <p className="completionNotice">{labels.translationBlocked}</p>}
           {chapterReview.stage === "reviewing" ? <button className="completionPrimary" disabled={!privacyState.complete || applying} onClick={handleApplyReview}>{labels.apply}</button> : chapterReview.stage === "revision_ready" ? <>
             {summary.needsEvidenceAdd > 0 && <p className="completionBlocker">{labels.addBlocked}</p>}
-            <div className="completionActions"><span>{summary.needsEvidenceAdd > 0 ? labels.addBlocked : summary.pendingInsights > 0 ? labels.insightBlocked : summary.pendingAnnotations > 0 ? labels.pendingBlocked : chapterReview.staleTranslations.length > 0 ? labels.translationBlocked : labels.noPending}</span><button className="completionPrimary" disabled={!canMarkChapterReady(chapterReview, applyContext)} onClick={() => { leaveEditMode(); onChapterReview(markChapterReady(chapterReview, applyContext)); }}>{labels.markReady}</button></div>
+            <div className="completionActions"><span>{summary.needsEvidenceAdd > 0 ? labels.addBlocked : summary.pendingInsights > 0 ? labels.insightBlocked : summary.pendingAnnotations > 0 ? labels.pendingBlocked : labels.noPending}</span><button className="completionPrimary" disabled={!canMarkChapterReady(chapterReview, applyContext)} onClick={() => { leaveEditMode(); onChapterReview(markChapterReady(chapterReview, applyContext)); }}>{labels.markReady}</button></div>
           </> : <div className="readyConfirmation"><b>{labels.ready}</b><p>{labels.readyNote}</p><button onClick={() => onChapterReview(returnChapterToReview(chapterReview))}>{labels.reopen}</button></div>}
         </section>
       </div>
