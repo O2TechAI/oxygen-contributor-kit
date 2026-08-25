@@ -16,18 +16,17 @@ Project Story
 
 The input is reviewed history, never unrestricted raw history. The output is a human-confirmed release representation, never publication approval.
 
-## Required references
+## Progressive reference loading
 
-Read these references before the corresponding work. For end-to-end generation, adaptation, or validation, read all eight completely before editing:
+Read each routed reference completely before the corresponding work. Do not treat all eight as an
+ordinary Build Project Story prerequisite.
 
-1. [product-contract.md](references/product-contract.md) — read before selecting Chapters or adapting the Project Story/Chapter experience.
-2. [story-data-contract.md](references/story-data-contract.md) — read before generating Story data or changing frontend types/import validation.
-3. [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md) — read before changing annotations, Apply review, All set, provenance, or Reopen review.
-4. [ui-interaction-contract.md](references/ui-interaction-contract.md) — read before changing layout, navigation, selection, Privacy interactions, or responsive behavior.
-5. [privacy-evidence-boundary.md](references/privacy-evidence-boundary.md) — read before opening input data, presenting local originals, or linking exact evidence.
-6. [bilingual-contract.md](references/bilingual-contract.md) — read before generating localized Story copy or review state.
-7. [validation-checklist.md](references/validation-checklist.md) — read before writing tests and again before handoff.
-8. [narrative-writing-contract.md](references/narrative-writing-contract.md) — read before generating or revising titles, Story prose, passage assistance, or the canonical Chapter Insight.
+| Stage or condition | Load | Critical boundary |
+|---|---|---|
+| **Build Project Story — always** | [product-contract.md](references/product-contract.md), [story-data-contract.md](references/story-data-contract.md), [privacy-evidence-boundary.md](references/privacy-evidence-boundary.md), and [narrative-writing-contract.md](references/narrative-writing-contract.md) | Input is privacy-prepared reviewed history; output is one complete validated Story candidate ready for atomic activation. Missing product, schema, Privacy/Evidence, or context-complete writing support keeps Build active. |
+| **Human Review or review-UI work** | [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md) and [ui-interaction-contract.md](references/ui-interaction-contract.md) | Load when `ready_for_human_review` is reached and the human begins review/editing, when assisting with Story review, or when diagnosing or implementing review UI. Runtime review state and editor safety remain authoritative. |
+| **Localization requested or present** | [bilingual-contract.md](references/bilingual-contract.md) | Load before creating, validating, refreshing, omitting, inspecting, or releasing localized Story or review state when the user requests localization or a sidecar exists. English remains canonical; missing Chinese is nonblocking. |
+| **QA, clean-room, or submission/release gate** | [validation-checklist.md](references/validation-checklist.md) | Load for final Story conformance, clean-room reproduction, submission/release gating, Storytelling implementation audit, or failed completion-gate diagnosis. The clean-room completion requirement remains mandatory. |
 
 ## Non-negotiable boundaries
 

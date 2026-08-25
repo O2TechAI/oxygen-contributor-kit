@@ -160,6 +160,51 @@ test("the synthetic project completes through the shared review and release runt
   assert.doesNotMatch(JSON.stringify(release), /Synthetic dock code|synthetic-reviewed-document|synthetic-evidence-/);
 });
 
+test("the Story Skill progressively loads stage-local references", async () => {
+  const skill = await read("../../skills/oxygen-storytelling-review/SKILL.md");
+  const routing = skill.match(/## Progressive reference loading([\s\S]*?)## Non-negotiable boundaries/)?.[1];
+  assert.ok(routing);
+  assert.doesNotMatch(routing, /read all eight|all eight completely/i);
+
+  const rows = new Map(
+    routing
+      .split("\n")
+      .filter((line) => /^\| \*\*/.test(line))
+      .map((line) => {
+        const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+        return [cells[0], cells.slice(1)];
+      }),
+  );
+  const build = rows.get("**Build Project Story — always**")?.join(" ") ?? "";
+  for (const reference of [
+    "product-contract.md",
+    "story-data-contract.md",
+    "privacy-evidence-boundary.md",
+    "narrative-writing-contract.md",
+  ]) assert.match(build, new RegExp(reference.replace(".", "\\.")));
+  for (const deferred of [
+    "validation-checklist.md",
+    "ui-interaction-contract.md",
+    "chapter-review-lifecycle.md",
+    "bilingual-contract.md",
+  ]) assert.doesNotMatch(build, new RegExp(deferred.replace(".", "\\.")));
+  assert.match(build, /context-complete writing support keeps Build active/);
+
+  const review = rows.get("**Human Review or review-UI work**")?.join(" ") ?? "";
+  assert.match(review, /chapter-review-lifecycle\.md/);
+  assert.match(review, /ui-interaction-contract\.md/);
+  assert.match(review, /ready_for_human_review/);
+
+  const localization = rows.get("**Localization requested or present**")?.join(" ") ?? "";
+  assert.match(localization, /bilingual-contract\.md/);
+  assert.match(localization, /user requests localization or a sidecar exists/);
+  assert.match(localization, /English remains canonical; missing Chinese is nonblocking/);
+
+  const qa = rows.get("**QA, clean-room, or submission\/release gate**")?.join(" ") ?? "";
+  assert.match(qa, /validation-checklist\.md/);
+  assert.match(qa, /clean-room completion requirement remains mandatory/);
+});
+
 test("the normal workflow delegates to the canonical repository Story runtime", async () => {
   const [agents, sop, organizer, skill, workspace, editor] = await Promise.all([
     read("../../AGENTS.md"),
