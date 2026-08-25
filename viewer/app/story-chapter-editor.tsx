@@ -759,9 +759,10 @@ export function StoryChapterEditor(props: {
         : insightFeedback === "accepted_applied" ? `${labels.acceptedApplied} ${insightReview?.appliedRevision || chapterReview.revision}`
           : insightFeedback === "rejected_applied" ? `${labels.rejectedApplied} ${insightReview?.appliedRevision || chapterReview.revision}`
             : insightFeedback === "changed_applied" ? `${labels.changedApplied} ${insightReview?.appliedRevision || chapterReview.revision}` : "";
-  const insightSuppressed = chapterReview.redactedBlocks.includes(`insight:${visibleHighlight.id}`)
-    || (insightReview?.status === "rejected" && insightReview.resolution === "applied"
-      && chapterReview.stage !== "reviewing");
+  // Do not render Privacy-redacted insight copy. A review decision of Do not
+  // preserve remains visible locally with its applied-revision status so the
+  // reviewer can verify or change it; release projection still omits it.
+  const insightSuppressed = chapterReview.redactedBlocks.includes(`insight:${visibleHighlight.id}`);
 
   const saveInsightEdit = () => {
     onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "overridden", text: insightDraft.lesson.trim(), highlight: insightDraft, revision: "direct" }));

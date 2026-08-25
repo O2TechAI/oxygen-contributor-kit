@@ -48,7 +48,7 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(episode,/original\.availability/);assert.match(episode,/Original content unavailable in the reviewed artifact/);
   assert.match(episode,/privacyState\.active\.whyFlagged/);assert.doesNotMatch(episode,/Suggested release|建议发布表述|labels\.suggestedRelease/);
   assert.match(episode,/publication approval/);
-  assert.match(episode,/insightReview\?\.status === "rejected"[\s\S]*chapterReview\.stage !== "reviewing"/);
+  assert.match(episode,/const insightSuppressed = chapterReview\.redactedBlocks\.includes\(`insight:\$\{visibleHighlight\.id\}`\);/);
   assert.match(episode,/role="region"/);assert.doesNotMatch(episode,/aria-modal/);
   assert.match(episode,/supportingEvidence/);assert.match(episode,/staleTranslations/);
   assert.match(episode,/fetch\("\/api\/evidence"/);assert.match(episode,/supportedAddIds/);assert.match(episode,/evidenceResolved/);
@@ -109,6 +109,8 @@ test("Chapter Story defaults to read mode and uses controlled direct editing plu
   assert.match(episode,/data-story-editor=\{blockId\}/);
   assert.equal((episode.match(/data-inline-insight=/g) || []).length, 1);
   assert.match(episode,/<details className=\{`canonicalInsightDisclosure/);
+  assert.doesNotMatch(episode, /const insightSuppressed =[^;]*insightReview\?\.status === "rejected"/);
+  assert.match(episode, /rejected_applied[\s\S]*labels\.rejectedApplied[\s\S]*aria-live="polite"/);
   assert.match(css,/\.storyReviewWorkspace\.editing \.storyDocument\{border:/);
   assert.match(css,/\.storyBlockRow\{display:grid;grid-template-columns:160px minmax\(0,1fr\)/);
   assert.match(css,/\.passageInsightPanel\{position:sticky/);

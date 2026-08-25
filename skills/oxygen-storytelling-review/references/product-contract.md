@@ -197,7 +197,9 @@ construction. A connective adverb is optional. Do not require a transition word 
 or paragraph, and do not validate the prose against a canonical connector list. Sequence, cause,
 response, contrast, correction, evidence, limitation, and continuation wording must not claim a
 stronger relationship than the reviewed Evidence supports. Prefer syntactic clarity over mechanical
-thesaurus substitution; repeated wording is an editorial concern, not a brittle readiness rule.
+thesaurus substitution. Repeated sentence-opening connectives are an editorial concern, not a
+brittle readiness rule. This does not relax the separate prohibition on `X, not Y` and equivalent
+contrast formulas or the requirement that every Chapter overview be distinct.
 
 Use setup, attempt, problem, turn, consequence, and significance only as internal coverage cues.
 The visible schema headings remain Background, Decision process, Result, and Open questions. Use coherent paragraphs, concrete nouns, active voice, important
