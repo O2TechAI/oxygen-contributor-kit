@@ -304,19 +304,14 @@ test("People must participate in Decision process without invented generic inter
   });
 });
 
-test("Decision process must express an evidence-supported relation instead of listing actor actions", () => {
-  const sequentialLog = changedCandidate(0, (annotation) => {
+test("Decision process may express a supported relationship through natural syntax without a connective allowlist", () => {
+  const naturalRelationship = changedCandidate(1, (annotation) => {
     annotation.reviewPresentation.en.story.reconstruction = [
-      "The calibration owner defined the comparison boundary and recorded the next action.",
-    ];
-    annotation.reviewPresentation.zh.story.reconstruction = [
-      "校准负责人明确了比较边界并记录了下一步行动。",
+      "The field technician's report prompted the calibration owner to replace the validation plan with a controlled trial.",
     ];
     annotation.releaseEpisode.reconstruction = [...annotation.reviewPresentation.en.story.reconstruction];
   });
-  assert.deepEqual(validateStoryCandidatePackage(sequentialLog, evidence), {
-    ok: false, code: "STORY_NARRATIVE_CONTRACT_FAILED",
-  });
+  assert.equal(validateStoryCandidatePackage(naturalRelationship, evidence).ok, true);
 });
 
 test("English participant roles require complete phrase matches in Decision process", () => {

@@ -342,9 +342,8 @@ For each Chapter:
 9. Generate evidence-supported People for every supported actor; if none can be supported, do not promote the event cluster into a Chapter.
    Use every listed Person's localized functional role in Decision process and attribute only the
    actions, questions, corrections, approvals, or responses supported by that Person's Evidence.
-   Connect those turns with at least one natural localized relation marker that accurately denotes
-   a supported contradiction, response, consequence, or temporal transition. Do not use a marker
-   to invent an interaction or causal claim.
+   Express the supported relationship with natural syntax and an optional localized relation marker.
+   Do not require a marker, count connectors, or use one to invent an interaction or causal claim.
 10. Generate contextual Privacy candidates only from permitted reviewed information.
 11. Generate local passage context for every Story-content block as an ordered inline AI Insight
     sequence. Each entry connects supported participant interaction with narrative explanation and a
@@ -399,9 +398,8 @@ Fail closed when any of these conditions is false:
   non-overlapping People coverage;
 - every English Person role appears in Decision process; interaction copy links supported actor
   actions and responses without inventing disagreement, reply, or consensus;
-- English Decision process includes a natural relational connective that accurately marks
-  a supported contradiction, response, consequence, or temporal transition, so it cannot pass as
-  an unconnected action log;
+- English Decision process forms a connected Evidence-bound account through natural syntax and
+  explicit supported roles; no fixed connective, connector count, or lexical allowlist is required;
 - exactly one canonical English AI insight starts as an AI proposal; zero or multiple reviewable insights fail closed;
 - release draft is the default Story view;
 - English passage context contains only the allowlisted bounded fields and covers exactly every

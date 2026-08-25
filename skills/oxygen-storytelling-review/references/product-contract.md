@@ -192,13 +192,12 @@ disagreement. When Evidence contains proposal → objection → revision → agr
 sequence. When it does not, omit the missing turn. Never invent a reply or consensus to make the
 Chapter feel interactive, and do not substitute generic `the team` for a supported role.
 
-The canonical English Decision process must use at least one relational connective to express an
-Evidence-supported turn. Use `However` for a supported conflict or constraint, `In response` for a
-supported reaction, `Therefore` or `As a result` for a supported consequence, and `Subsequently` for
-a supported temporal consequence. Optional Chinese should use an equivalent natural marker such as
-`但是`, `然而`, `对此`, `因此`, `结果`, or `随后`, but localization quality never gates the English
-Story. Mechanical decoration fails. The selected connective must not invent a relationship that the
-reviewed Evidence does not contain.
+Determine the actual semantic relationship first, then express it with the most natural sentence
+construction. A connective adverb is optional. Do not require a transition word in each sentence
+or paragraph, and do not validate the prose against a canonical connector list. Sequence, cause,
+response, contrast, correction, evidence, limitation, and continuation wording must not claim a
+stronger relationship than the reviewed Evidence supports. Prefer syntactic clarity over mechanical
+thesaurus substitution; repeated wording is an editorial concern, not a brittle readiness rule.
 
 Use setup, attempt, problem, turn, consequence, and significance only as internal coverage cues.
 The visible schema headings remain Background, Decision process, Result, and Open questions. Use coherent paragraphs, concrete nouns, active voice, important
@@ -340,10 +339,12 @@ block-associated inline treatment on narrow screens. Notes are local review meta
 enter release output.
 
 Mandatory precomputed evidence-grounded `passageContext`, keyed by every stable rendered Story
-block, drives a small sticky right-side reading companion labeled `AI insight` / `AI 洞察`. English and Chinese require the exact
-same complete key set. A Chapter with any unsupported or missing passage context is incomplete;
-never render it through a silent empty or generic fallback. Clicking or selecting a passage changes
-that local panel. It may
+block, drives a small sticky right-side reading companion labeled `AI insight` / `AI 洞察`. The
+canonical English Chapter requires the exact complete key set. When Chinese exists, its safe
+rendered blocks require their matching context or the sidecar is omitted; Chinese absence never
+blocks English readiness. A canonical Chapter with unsupported or missing English passage context
+is incomplete; never render it through a silent empty or generic fallback. Clicking or selecting a
+passage changes that local panel. It may
 explain what was happening through supported participant interaction, why the moment mattered,
 what became clearer, and a reusable rule. It never begins with a passage ordinal, `semantic passage`,
 block ID, schema name, or other implementation metadata,

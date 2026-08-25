@@ -63,7 +63,7 @@ test("the reusable narrative contract separates a scan-first homepage from evide
   assert.match(product, /Decision process must connect supported People/);
   assert.match(product, /short Chapter-specific summary[\s\S]*differ across Chapters[\s\S]*Evidence-traced/);
   assert.match(product, /Never invent a reply or consensus/);
-  assert.match(product, /relational connective/);
+  assert.match(product, /connective adverb is optional/);
   assert.match(data, /canonical context-retention and voice rules/);
   assert.match(data, /context-complete coherent article/);
   assert.match(data, /coverageLedger: Record<StoryCoverageKey, StoryCoverageItem>/);
@@ -103,7 +103,12 @@ test("the reusable narrative contract separates a scan-first homepage from evide
   assert.match(narrative, /## Chapter overview[\s\S]*lively and engaging[\s\S]*Do not add jokes/);
   assert.match(narrative, /## Inline AI Insight[\s\S]*participant actions, responses,[\s\S]*Never open with a[\s\S]*semantic passage/);
   assert.match(narrative, /localized functional role in Decision process/);
-  assert.match(narrative, /However.*In response.*Therefore/s);
+  assert.match(narrative, /Determine the actual semantic relationship first[\s\S]*connective adverb is optional/);
+  assert.match(narrative, /open vocabulary,[\s\S]*not an allowlist/);
+  assert.match(narrative, /Prefer natural syntactic variety over thesaurus substitution/);
+  assert.match(narrative, /editorial preference, not a lexical[\s\S]*readiness rule/);
+  assert.match(narrative, /must never claim a stronger relationship than Evidence supports/);
+  assert.doesNotMatch([product, data, validation].join("\n"), /must use at least one relational connective|Connect those turns with at least one natural localized relation marker/);
   assert.doesNotMatch(narrative, /three to five concise sentences|four to seven concise sentences/);
   assert.match(narrative, /exactly one reviewable canonical Insight/);
   assert.match(lifecycle, /## Direct-edit transaction model/);
@@ -179,7 +184,8 @@ test("the normal workflow delegates to the canonical repository Story runtime", 
   assert.match(skill, /Direct typing, caret insertion, selection replacement\/deletion/);
   assert.match(skill, /human direct edits and\/or compatible legacy review records/);
   assert.match(skill, /completely fresh, contextless Agent[\s\S]*normal public Oxygen workflow request/);
-  assert.match(skill, /Missing or unsupported context makes that Chapter[\s\S]*incomplete/);
+  assert.match(skill, /Missing or unsupported English context makes that Chapter incomplete/);
+  assert.match(skill, /Missing Chinese never[\s\S]*blocks English readiness/);
   assert.match(skill, /private latent reasoning/);
   assert.match(skill, /at least one supported[\s\S]*participant and complete actor coverage/);
   assert.match(skill, /machine-only events[\s\S]*cannot stand alone/);

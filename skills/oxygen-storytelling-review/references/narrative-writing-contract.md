@@ -55,7 +55,7 @@ The line beneath the title is a short summary of this Chapter. Preview the suppo
 the consequential participant interaction or judgment, and the result or open boundary. Do not use
 a navigation instruction, generic why-read prompt, or copy shared with another Chapter. Bind every
 factual claim to Chapter Evidence. Use concrete nouns, active verbs, specific constraints, a natural
-connective, and varied sentence rhythm. These choices can make the summary lively and engaging while
+Evidence-bound relationship, and varied sentence rhythm. These choices can make the summary lively and engaging while
 preserving the neutral factual voice. Do not add jokes, invented color, dialogue, emotion, motive,
 metaphor, anthropomorphism, or causal certainty.
 
@@ -110,13 +110,60 @@ agreement should appear only when reviewed Evidence contains every turn. Use eac
 localized functional role in Decision process. Do not invent a response or consensus, and avoid
 generic `the team` when a supported role is available.
 
-Use connective adverbs and conjunctions to express the relationship between supported turns.
-`However` / `但是` or `然而` marks an objection, contradiction, discovered problem, or binding
-constraint. `In response` / `对此` marks an evidence-supported reaction or correction. `Therefore`
-or `As a result` / `因此` or `结果` marks causality or outcome. `Subsequently` / `随后` marks temporal
-consequence when no stronger causal claim is supported. Vary sentence structure and connect the
-turns into coherent paragraphs. Do not attach a connective mechanically to every sentence, and do
-not use one to fabricate disagreement, response, consensus, chronology, or causality.
+### Evidence-bound relational writing
+
+> Determine the actual semantic relationship first. Express it with the most natural construction
+> for that sentence. A connective adverb is optional.
+
+Do not require a transition word between every pair of sentences or in every paragraph. Do not
+maintain a small canonical list for Agents to repeat. The examples below are an open vocabulary,
+not an allowlist; any standard English construction is valid when it accurately expresses the
+reviewed relationship.
+
+- **Sequence / progression:** `after`, `before`, `once`, `when`, `later`, `subsequently`, `the next
+  check`, `the following run`, `that step`, or `the next revision`. Use chronology only when it is
+  supported.
+- **Cause / consequence:** `because`, `therefore`, `consequently`, `as a result`, `this caused`,
+  `this led to`, `this required`, `this prevented`, `the failure prompted`, or an equally direct
+  causal verb. Use these only when Evidence establishes causality; temporal order is not causality.
+- **Response / reaction:** `in response`, `the reviewer responded by`, `the owner then requested`,
+  `the implementation agent addressed this by`, `the next revision incorporated`, or a direct
+  response verb. Use response language only when one action genuinely answers another.
+- **Contrast / disagreement:** `however`, `by contrast`, `although`, `while`, `the reviewer
+  disagreed`, `the owner rejected`, `the second result differed`, or `the new evidence contradicted`.
+  Use these only for a real contrast. Never fabricate conflict, and continue to reject `X, not Y`
+  and equivalent rhetorical formulas.
+- **Correction / revision:** `after the correction`, `the revised analysis`, `the reviewer
+  corrected`, `the owner clarified`, `the later run showed`, or `the initial assumption changed
+  after`. Require an actual correction or updated conclusion.
+- **Evidence / support:** name the evidence type, such as `the validation showed`, `the audit
+  found`, `the holdout result confirmed`, `the trace indicated`, `the comparison established`, or
+  `the evidence remained insufficient to determine`. Prefer this precision over vague evidence
+  formulas.
+- **Limitation / uncertainty:** `the cause remained undetermined`, `the available evidence did not
+  establish`, `the test did not resolve`, `the result remained provisional`, or `further validation
+  was still required`. Preserve uncertainty instead of creating certainty through grammar.
+- **Continuation / addition:** `also`, `additionally`, `the same review identified`, `the
+  implementation included`, or `a separate check found`. Use these sparingly; often no explicit
+  connector is needed.
+
+The wording must never claim a stronger relationship than Evidence supports. When Evidence proves
+only chronology, state the sequence directly. When it proves a response, response language is
+allowed. When the relationship itself remains uncertain, state that uncertainty. A connective
+cannot substitute for missing Evidence.
+
+### Syntactic variety and local repetition
+
+Prefer natural syntactic variety over thesaurus substitution. Replacing `therefore` mechanically
+with `consequently` or `accordingly` preserves the same generated rhythm. Vary subjects, direct
+verbs, clauses, and sentence boundaries when doing so improves clarity. Correctness and naturalness
+matter more than lexical diversity.
+
+Within one Chapter, avoid repeatedly opening nearby sentences with `However`, `Therefore`, `Then`,
+`Subsequently`, `Additionally`, `As a result`, or `Meanwhile`. Do not replace a repeated connector
+blindly; rewrite the sentence structure when that is clearer. Repetition is allowed when the same
+word remains the most accurate construction. This is an editorial preference, not a lexical
+validator or an occurrence-count readiness rule.
 
 Preserve the minimum supported thread:
 
@@ -217,7 +264,8 @@ drop the block, or substitute a generic fallback. Use the amount of copy require
 
 Write a small narrative, not a field dump. Connect supported participant actions, responses,
 corrections, consequences, and temporal changes so the moment reads as an interaction. Use specific
-nouns, consequential constraints, supported numbers, and direct causal language. Never open with a
+nouns, consequential constraints, supported numbers, and direct relational language whose strength
+matches Evidence. Never open with a
 passage number, `semantic passage`, block ID, schema name, or other implementation metadata. Omit
 repetitive or unsupported parts. Inline AI Insight is local-only, non-reviewable context and never
 enters release/export.
@@ -252,7 +300,7 @@ Use established standard terminology. Use neutral nouns for headings and classif
 
 Full Chapter prose should be pleasant to read as well as complete. Let supported surprise,
 disagreement, correction, failure, progress, and concrete results supply the interest. Vary sentence
-length and paragraph rhythm, and use natural relation markers. Stylistic energy may organize and
+length and paragraph rhythm, and use natural relational constructions. Stylistic energy may organize and
 clarify Evidence; it may not embellish it.
 
 Do not use metaphors, analogies, figurative language, slogans, literary framing, colloquial language, anthropomorphism, vague AI boilerplate, abstract noun chains, or contrast formulas of the form “X, not Y” and localized equivalents. Do not invent alternate terminology for a known concept. Do not invent motives, emotions, dialogue, causes, or outcomes.

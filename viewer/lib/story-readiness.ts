@@ -164,13 +164,11 @@ function editorialCopy(annotation: StoryAnnotation) {
   ];
 }
 
-function participantInteractionIsIntegrated(
+function participantRolesAreIntegrated(
   presentation: StoryAnnotation["reviewPresentation"]["en"],
 ) {
-  const decisionProcessCopy = presentation.story.reconstruction.join(" ");
-  const decisionProcess = normalizedCopy(decisionProcessCopy);
-  const hasSupportedRelationMarker = /\b(?:however|but|in response|therefore|as a result|because|consequently|afterward|subsequently|so)\b/i.test(decisionProcessCopy);
-  return hasSupportedRelationMarker && presentation.people.every((person) => {
+  const decisionProcess = normalizedCopy(presentation.story.reconstruction.join(" "));
+  return presentation.people.every((person) => {
     const role = normalizedCopy(person.role);
     return role.length > 1 && ` ${decisionProcess} `.includes(` ${role} `);
   });
@@ -190,7 +188,7 @@ function narrativeQualityPasses(annotation: StoryAnnotation) {
     || editorialCopy(annotation).some(violatesEditorialStyle)
     || GENERIC_TITLES.has(normalizedCopy(annotation.title))
     || GENERIC_TITLES.has(normalizedCopy(presentation.title))
-    || !participantInteractionIsIntegrated(presentation)
+    || !participantRolesAreIntegrated(presentation)
     || annotation.releaseEpisode.scene !== canonicalStory.scene
     || JSON.stringify(annotation.releaseEpisode.reconstruction) !== JSON.stringify(canonicalStory.reconstruction)
     || JSON.stringify(annotation.releaseEpisode.importantDetails) !== JSON.stringify(canonicalStory.importantDetails)

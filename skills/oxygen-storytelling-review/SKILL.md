@@ -127,12 +127,13 @@ or result sequence across paragraphs without converting the Chapter into a trans
 manufacture an objection, reply, consensus, or second actor when Evidence contains none. Avoid
 generic `the team` wording when a supported functional role is available.
 
-Use relational connectives to make the supported interaction and causality explicit. Use
-`However` / `但是` or `然而` only for a supported objection, contradiction, or constraint;
-`In response` / `对此` for a supported response or correction; `Therefore` or `As a result` /
-`因此` or `结果` for a supported consequence; and `Subsequently` / `随后` for a supported temporal
-transition. Do not add a connective to every sentence. A connective may clarify an Evidence-backed
-relationship, but it must never invent disagreement, response, consensus, sequence, or causality.
+Determine the actual supported relationship before choosing its wording. Express that relationship
+with the most natural sentence construction; a connective adverb is optional. Sequence, cause,
+response, contrast, correction, evidence, uncertainty, and continuation require different
+Evidence. The examples in [narrative-writing-contract.md](references/narrative-writing-contract.md)
+are an open vocabulary, not an allowlist. Do not require a transition word in every sentence or
+paragraph, force lexical novelty, or substitute one stock connector for another. Prefer clear
+syntax, explicit roles, and direct verbs. Never claim a stronger relationship than Evidence supports.
 
 Before accepting the Chapter set, perform a narrative-coverage audit. Confirm that the selected
 milestones retain supported progress, substantive iterations, and failures as well as judgment
@@ -295,10 +296,12 @@ headings. Label canonical Insight meanings Direct learning and Reusable rule. Ac
 preserve must provide immediate accessible pending feedback; after Apply, show the applied revision
 without implying Saved, Final, Published, or publication approval.
 
-Every complete Chapter must supply `passageContext` for the exact rendered Story-block set in both
-English and Chinese with identical stable keys. Missing or unsupported context makes that Chapter
-incomplete; do not use an empty panel, generic copy, or an optional import fallback. Passage context
-is local non-reviewable reading assistance and never enters Final Release Memory, HTML, or ZIP.
+Every complete canonical English Chapter must supply `passageContext` for its exact rendered
+Story-block set. Missing or unsupported English context makes that Chapter incomplete; do not use
+an empty panel, generic copy, or optional import fallback. When a Chinese sidecar exists, its own
+rendered blocks require safe matching context or the sidecar is omitted. Missing Chinese never
+blocks English readiness. Passage context is local non-reviewable reading assistance and never
+enters Final Release Memory, HTML, or ZIP.
 
 Follow the rule:
 

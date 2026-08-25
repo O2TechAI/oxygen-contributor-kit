@@ -124,9 +124,9 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Decision process uses every listed Person's localized functional role and makes the supported
       action → response/correction/approval → result sequence understandable. It does not replace
       known roles with generic `the team`.
-- [ ] Each localized Decision process uses at least one natural relational connective for a
-      supported contradiction, response, consequence, or temporal transition. The prose reads as a
-      connected account, and the connective does not manufacture an unsupported relationship.
+- [ ] Decision process expresses the actual supported relationship with natural syntax and explicit
+      roles. A connective is optional; no lexical allowlist or occurrence count gates readiness,
+      and the wording never manufactures or strengthens a relationship beyond Evidence.
 - [ ] Omit a missing objection, reply, second actor, or consensus. Fabrication cannot be used to
       make the Chapter sound interactive.
 - [ ] Every Chapter has at least one evidence-supported Person. Empty People fails activation with

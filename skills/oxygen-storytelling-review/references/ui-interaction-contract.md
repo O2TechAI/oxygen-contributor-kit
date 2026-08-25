@@ -146,8 +146,9 @@ coherent paragraphs and selective bullets over card-per-paragraph layouts.
 
 On wide Chapter layouts, use a small restrained sticky panel to the right of the Story document.
 Label it `AI insight` / `AI 洞察`; `Passage insight` and `段落洞察` are not reader-facing names.
-Every complete Chapter supplies one valid `passageContext` for every rendered Story block in both
-languages; missing support makes the Chapter incomplete rather than producing an empty panel.
+Every complete canonical English Chapter supplies one valid `passageContext` for every rendered
+English Story block. When Chinese exists, it supplies safe matching context for its rendered blocks
+or the sidecar is omitted; missing Chinese never makes the English Chapter incomplete.
 Order the exact complete key set by rendered Story-block order. Show current/total position plus
 accessible Previous/Next controls; disable the unavailable boundary direction and do not wrap by
 default. Arrow navigation updates the context, scrolls the stable owning block to a useful position,
