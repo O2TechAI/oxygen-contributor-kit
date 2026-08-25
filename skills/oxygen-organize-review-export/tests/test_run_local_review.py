@@ -143,6 +143,30 @@ class LauncherUnitTest(unittest.TestCase):
             MODULE.attach_run("http://127.0.0.1:3298", "run-1", Path("reviewed run"))
         imported.assert_called_once()
 
+    def test_establishment_uses_target_confirmation_and_exact_identity(self):
+        with mock.patch.object(
+            MODULE, "request_json", return_value={"workflowRunId": "run-1"}
+        ) as request:
+            established = MODULE.establish_workflow_run(
+                mock.sentinel.opener, "http://127.0.0.1:3298", "run-1"
+            )
+        self.assertEqual(established, "run-1")
+        request.assert_called_once_with(
+            mock.sentinel.opener,
+            "http://127.0.0.1:3298/api/workflow",
+            method="POST",
+            body={"workflowRunId": "run-1", "event": "target_confirmed"},
+        )
+
+    def test_establishment_rejects_a_substituted_workflow_run(self):
+        with mock.patch.object(
+            MODULE, "request_json", return_value={"workflowRunId": "other"}
+        ):
+            with self.assertRaisesRegex(SystemExit, "did not establish"):
+                MODULE.establish_workflow_run(
+                    mock.sentinel.opener, "http://127.0.0.1:3298", "run-1"
+                )
+
     def test_attach_rejects_a_different_workflow_run(self):
         with (
             mock.patch.object(MODULE, "request_json", return_value={"workflowRunId": "other"}),
@@ -293,6 +317,13 @@ class LauncherUnitTest(unittest.TestCase):
         self.assertEqual(environment["WRANGLER_LOG_PATH"], str(root / "wrangler.log"))
         self.assertEqual(environment["MINIFLARE_REGISTRY_PATH"], str(root / "registry"))
         self.assertEqual(environment["OXYGEN_VIEWER_HOST"], "127.0.0.1")
+
+    def test_separate_runtime_roots_own_separate_state_directories(self):
+        first = MODULE.viewer_environment(Path("runtime-a"))
+        second = MODULE.viewer_environment(Path("runtime-b"))
+        self.assertNotEqual(
+            first["OXYGEN_VIEWER_STATE_DIR"], second["OXYGEN_VIEWER_STATE_DIR"]
+        )
 
     def test_runtime_environment_carries_exact_requested_port(self):
         environment = MODULE.viewer_environment(Path("runtime root"), 3296)

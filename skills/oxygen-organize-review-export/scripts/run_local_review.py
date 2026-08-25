@@ -887,6 +887,17 @@ def complete_organization(opener, base_url: str) -> dict:
     return current
 
 
+def establish_workflow_run(opener, base_url: str, workflow_run_id: str | None = None) -> str:
+    established = workflow_run_id or f"oxygen-{uuid.uuid4().hex}"
+    workflow = request_json(opener, f"{base_url}/api/workflow", method="POST", body={
+        "workflowRunId": established,
+        "event": "target_confirmed",
+    })
+    if workflow.get("workflowRunId") != established:
+        raise SystemExit("The Viewer did not establish the requested workflow run ID")
+    return established
+
+
 def attach_run(base_url: str, workflow_run_id: str, run: Path) -> None:
     opener = urllib.request.build_opener(
         urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
@@ -1044,12 +1055,10 @@ def main():
             opener = urllib.request.build_opener(
                 urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
             )
+            workflow_run_id = establish_workflow_run(
+                opener, base_url, args.workflow_run_id
+            )
             if target:
-                workflow_run_id = args.workflow_run_id or f"oxygen-{uuid.uuid4().hex}"
-                request_json(opener, f"{base_url}/api/workflow", method="POST", body={
-                    "workflowRunId": workflow_run_id,
-                    "event": "target_confirmed",
-                })
                 print(f"\nOxygen Workflow Progress: {base_url}", flush=True)
                 print(f"Workflow run: {workflow_run_id}", flush=True)
                 print("Working folder confirmed; collection has not started.", flush=True)
