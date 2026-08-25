@@ -253,10 +253,11 @@ test("handoff flush waits through the latest queued acknowledgement before invok
   let current = session("a");
   queue.schedule(current);
   let handoffCalls = 0;
+  let authority = null;
   const barrier = runDurableStoryReviewHandoff({
     persistence: queue,
     currentSession: () => current,
-    handoff: async () => { handoffCalls += 1; return "released"; },
+    handoff: async (value) => { authority = value; handoffCalls += 1; return "released"; },
   });
   current = session("b");
   queue.schedule(current);
@@ -271,6 +272,11 @@ test("handoff flush waits through the latest queued acknowledgement before invok
   assert.equal(await barrier, "released");
   assert.equal(handoffCalls, 1);
   assert.equal(queue.isDurable(session("b")), true);
+  assert.deepEqual(authority, {
+    workflowRunId: "review-run",
+    serverVersion: 2,
+    sourceRevision: 1,
+  });
 });
 
 for (const [name, failure] of [
@@ -310,6 +316,10 @@ test("Workspace routes both HTML and ZIP through the durable-save barrier", asyn
   const handoff = workspace.slice(workspace.indexOf("const downloadReviewed"), workspace.indexOf("const ready ="));
   assert.match(handoff, /runDurableStoryReviewHandoff/);
   assert.ok(handoff.indexOf("runDurableStoryReviewHandoff") < handoff.indexOf("fetch(url"));
+  assert.match(handoff, /workflowRunId/);
+  assert.match(handoff, /serverVersion/);
+  assert.match(handoff, /sourceRevision/);
+  assert.doesNotMatch(handoff, /reviewedStory/);
   assert.match(workspace, /downloadReviewed\("\/api\/organization\/export"/);
   assert.match(workspace, /downloadReviewed\("\/api\/package"/);
 });
