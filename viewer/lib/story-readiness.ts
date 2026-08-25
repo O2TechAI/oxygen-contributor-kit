@@ -33,6 +33,7 @@ export type StoryCandidateFailureCode =
   | "STORY_CHAPTER_OVERVIEW_INVALID"
   | "STORY_PHASE_ORDER_INVALID"
   | "STORY_PHASE_QUALITY_INVALID"
+  | "STORY_CURRENT_STATE_INVALID"
   | "STORY_NARRATIVE_SELF_REVIEW_MISSING"
   | "STORY_NARRATIVE_CONTRACT_FAILED"
   | "STORY_JUDGMENT_COVERAGE_INVALID"
@@ -244,6 +245,7 @@ export function validateStoryCandidatePackage(
   const completedPhases = new Set<string>();
   const phaseRationales = new Map<string, string>();
   const chapterOverviewsEn = new Set<string>();
+  let currentStateChapterCount = 0;
 
   for (const row of candidateRows) {
     if (!row.summary.startsWith(STORY_PREFIX) || row.summary.startsWith(LEGACY_STORY_PREFIX)) {
@@ -253,6 +255,7 @@ export function validateStoryCandidatePackage(
     if (!parsed || parsed.schema !== "oxygen.story-highlight/2") {
       return failure("STORY_CHAPTER_INVALID");
     }
+    if (parsed.kind === "current_state") currentStateChapterCount += 1;
     if (keys.has(parsed.key)) return failure("STORY_KEY_DUPLICATED");
     keys.add(parsed.key);
 
@@ -382,6 +385,11 @@ export function validateStoryCandidatePackage(
       const entry = chapterEvidence.get(JSON.stringify([reference.documentId, resolution.itemId]));
       return Boolean(entry && entry.row.documentId === reference.documentId);
     };
+    const referenceResolves = (reference: { documentId: string; eventId: string }) => {
+      const resolution = resolveEvidenceTarget(evidenceRows, reference.eventId);
+      if (resolution.status !== "resolved" || reference.eventId !== resolution.itemId) return false;
+      return evidenceRows[resolution.index]?.documentId === reference.documentId;
+    };
     const referenceKey = (reference: { documentId: string; eventId: string }) => (
       JSON.stringify([reference.documentId, reference.eventId])
     );
@@ -410,7 +418,26 @@ export function validateStoryCandidatePackage(
 
     const retention = narrativeReview.contextRetention;
     if (!retention) return failure("STORY_CONTEXT_RETENTION_INVALID");
-    if (!retention.sourceScope.every(referenceBelongsToChapter)) {
+    const declaredScope = new Set(retention.sourceScope.map(referenceKey));
+    const chapterScope = new Set([
+      parsed.evidence.primary,
+      ...parsed.evidence.supporting,
+    ].map(referenceKey));
+    const requiredScope = new Set<string>();
+    for (const claim of traceability) {
+      if (claim.kind === "factual_claim") {
+        claim.evidence.forEach((reference) => requiredScope.add(referenceKey(reference)));
+      }
+    }
+    for (const unit of retention.units) {
+      if (unit.state === "represented") requiredScope.add(referenceKey(unit.evidence));
+    }
+    const sameScope = (left: Set<string>, right: Set<string>) => (
+      left.size === right.size && [...left].every((key) => right.has(key))
+    );
+    if (!retention.sourceScope.every(referenceBelongsToChapter)
+      || !sameScope(declaredScope, chapterScope)
+      || !sameScope(chapterScope, requiredScope)) {
       return failure("STORY_CONTEXT_RETENTION_INVALID");
     }
     const representedUnits = new Map(retention.units
@@ -420,7 +447,10 @@ export function validateStoryCandidatePackage(
       return failure("STORY_CONTEXT_RETENTION_INVALID");
     }
     for (const unit of retention.units) {
-      if (!referenceBelongsToChapter(unit.evidence)) {
+      if (unit.state === "excluded" && !referenceResolves(unit.evidence)) {
+        return failure("STORY_CONTEXT_RETENTION_INVALID");
+      }
+      if (unit.state === "represented" && !referenceBelongsToChapter(unit.evidence)) {
         return failure("STORY_CONTEXT_RETENTION_INVALID");
       }
       if (unit.state !== "represented") continue;
@@ -495,6 +525,10 @@ export function validateStoryCandidatePackage(
       return failure("STORY_JUDGMENT_COVERAGE_INVALID");
     }
     annotations.push(parsed);
+  }
+
+  if (currentStateChapterCount !== 1 || annotations.at(-1)?.kind !== "current_state") {
+    return failure("STORY_CURRENT_STATE_INVALID");
   }
 
   return {

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import signal
@@ -16,6 +17,51 @@ SPEC = importlib.util.spec_from_file_location("run_local_review", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
+
+
+def write_trajectory(run: Path, trajectory_id: str) -> Path:
+    directory = run / "trajectories" / trajectory_id
+    directory.mkdir(parents=True)
+    (directory / "manifest.json").write_text(
+        json.dumps({"trajectory_id": trajectory_id}), encoding="utf-8"
+    )
+    (directory / "events.jsonl").write_text("{}\n", encoding="utf-8")
+    return directory
+
+
+def write_index(run: Path, entries: list[dict]) -> None:
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "index.json").write_text(
+        json.dumps({"trajectories": entries}, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def symlink_or_skip(test_case: unittest.TestCase, link: Path, target: Path, *, directory=False):
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except OSError as error:
+        test_case.skipTest(f"symlink creation is unavailable: {error.__class__.__name__}")
+
+
+def directory_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path):
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return
+    except OSError:
+        pass
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+    test_case.skipTest("directory link creation is unavailable")
 
 
 class LauncherUnitTest(unittest.TestCase):
@@ -489,6 +535,129 @@ class LauncherUnitTest(unittest.TestCase):
                     process.stdout.close()
                 if process.stderr:
                     process.stderr.close()
+
+
+class LocateInputsContainmentTest(unittest.TestCase):
+    def assert_import_fails_before_request(self, run: Path, code: str) -> None:
+        with mock.patch.object(MODULE, "request_json") as request:
+            with self.assertRaisesRegex(SystemExit, f"^{code}$"):
+                MODULE.import_run(mock.sentinel.opener, "http://127.0.0.1:3298", run)
+        request.assert_not_called()
+
+    def test_normal_trajectory_id_and_valid_multi_trajectory_run(self):
+        with tempfile.TemporaryDirectory(prefix="review run 测试 ") as temporary:
+            run = Path(temporary, "reviewed run")
+            first = write_trajectory(run, "traj-alpha")
+            second = write_trajectory(run, "traj-beta")
+            write_index(run, [
+                {"trajectory_id": "traj-alpha", "ok": True},
+                {"trajectory_id": "traj-beta", "ok": True},
+            ])
+
+            trajectories, meeting = MODULE.locate_inputs(run)
+
+            self.assertEqual(trajectories, [first.resolve(), second.resolve()])
+            self.assertIsNone(meeting)
+            with mock.patch.object(MODULE, "request_json") as request:
+                self.assertEqual(
+                    MODULE.import_run(
+                        mock.sentinel.opener, "http://127.0.0.1:3298", run
+                    ),
+                    (2, 2),
+                )
+            self.assertEqual(request.call_count, 2)
+
+    def test_traversal_absolute_drive_encoded_and_separator_ids_fail_before_selection(self):
+        invalid_ids = [
+            "../outside",
+            "nested/../../outside",
+            "/absolute/outside",
+            r"C:\outside\trajectory",
+            r"traj-alpha\..\outside",
+            "traj-alpha/../outside",
+            "%2e%2e%2foutside",
+        ]
+        for trajectory_id in invalid_ids:
+            with self.subTest(trajectory_id=trajectory_id), tempfile.TemporaryDirectory() as temporary:
+                run = Path(temporary, "run")
+                write_index(run, [{"trajectory_id": trajectory_id, "ok": True}])
+                with self.assertRaisesRegex(SystemExit, f"^{MODULE.INPUT_TRAJECTORY_ID_INVALID}$"):
+                    MODULE.locate_inputs(run)
+
+    def test_symlinked_trajectory_escape_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / "run"
+            outside = root / "outside-trajectory"
+            outside.mkdir()
+            (outside / "manifest.json").write_text("{}\n", encoding="utf-8")
+            (outside / "events.jsonl").write_text("{}\n", encoding="utf-8")
+            (run / "trajectories").mkdir(parents=True)
+            directory_link_or_skip(self, run / "trajectories" / "traj-escape", outside)
+            write_index(run, [{"trajectory_id": "traj-escape", "ok": True}])
+
+            with self.assertRaisesRegex(SystemExit, f"^{MODULE.INPUT_PATH_OUTSIDE_RUN}$"):
+                MODULE.locate_inputs(run)
+
+    def test_missing_referenced_input_uses_fixed_bounded_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_index(run, [{"trajectory_id": "traj-missing", "ok": True}])
+
+            with self.assertRaisesRegex(SystemExit, f"^{MODULE.INPUT_PATH_MISSING}$"):
+                MODULE.locate_inputs(run)
+
+    def test_fixed_member_symlink_escapes_fail_before_any_viewer_request(self):
+        for member, content in (
+            ("manifest.json", "{}\n"),
+            ("redaction.json", "{}\n"),
+            ("events.jsonl", "{}\n"),
+        ):
+            with self.subTest(member=member), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run = root / "run"
+                trajectory = write_trajectory(run, "traj-alpha")
+                write_index(run, [{"trajectory_id": "traj-alpha", "ok": True}])
+                outside = root / member
+                outside.write_text(content, encoding="utf-8")
+                target = trajectory / member
+                if target.exists():
+                    target.unlink()
+                symlink_or_skip(self, target, outside)
+
+                self.assert_import_fails_before_request(
+                    run, MODULE.INPUT_PATH_OUTSIDE_RUN
+                )
+
+    def test_project_map_symlink_escape_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / "run"
+            write_trajectory(run, "traj-alpha")
+            write_index(run, [{"trajectory_id": "traj-alpha", "ok": True}])
+            outside = root / "outside-project-map.json"
+            outside.write_text("{}\n", encoding="utf-8")
+            symlink_or_skip(self, run / "project-map.json", outside)
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_PATH_OUTSIDE_RUN)
+
+    def test_missing_manifest_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            trajectory = write_trajectory(run, "traj-alpha")
+            (trajectory / "manifest.json").unlink()
+            write_index(run, [{"trajectory_id": "traj-alpha", "ok": True}])
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_PATH_MISSING)
+
+    def test_malformed_fixed_member_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            trajectory = write_trajectory(run, "traj-alpha")
+            (trajectory / "manifest.json").write_text("{", encoding="utf-8")
+            write_index(run, [{"trajectory_id": "traj-alpha", "ok": True}])
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_FILE_INVALID)
 
 
 if __name__ == "__main__":

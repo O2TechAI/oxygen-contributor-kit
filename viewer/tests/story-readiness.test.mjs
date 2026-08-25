@@ -28,12 +28,18 @@ const evidence = syntheticStoryEvents.map((event) => ({
   sequence: event.sequence,
 }));
 
-function changedCandidate(index, change) {
+function changedCandidates(changes) {
   const copy = candidates.map((candidate) => ({ ...candidate }));
-  const annotation = JSON.parse(copy[index].summary.slice(STORY_PREFIX.length));
-  change(annotation);
-  copy[index].summary = STORY_PREFIX + JSON.stringify(annotation);
+  for (const [index, change] of changes) {
+    const annotation = JSON.parse(copy[index].summary.slice(STORY_PREFIX.length));
+    change(annotation);
+    copy[index].summary = STORY_PREFIX + JSON.stringify(annotation);
+  }
   return copy;
+}
+
+function changedCandidate(index, change) {
+  return changedCandidates([[index, change]]);
 }
 
 function addParticipantProof(annotation, personId, reference) {
@@ -165,6 +171,32 @@ test("new Story candidates require fully qualified Evidence identities", () => {
     actorType: "human",
   });
   assert.equal(validateStoryCandidatePackage(candidates, duplicateBareSuffix).ok, true);
+});
+
+test("only one final current-state Chapter can activate human review", () => {
+  assert.equal(validateStoryCandidatePackage([candidates.at(-1)], evidence).ok, true);
+
+  const missingCurrentState = changedCandidate(2, (annotation) => {
+    annotation.kind = "validation";
+  });
+  assert.deepEqual(validateStoryCandidatePackage(missingCurrentState, evidence), {
+    ok: false, code: "STORY_CURRENT_STATE_INVALID",
+  });
+
+  const currentStateInMiddle = changedCandidates([
+    [0, (annotation) => { annotation.kind = "current_state"; }],
+    [2, (annotation) => { annotation.kind = "validation"; }],
+  ]);
+  assert.deepEqual(validateStoryCandidatePackage(currentStateInMiddle, evidence), {
+    ok: false, code: "STORY_CURRENT_STATE_INVALID",
+  });
+
+  const duplicateCurrentState = changedCandidate(0, (annotation) => {
+    annotation.kind = "current_state";
+  });
+  assert.deepEqual(validateStoryCandidatePackage(duplicateCurrentState, evidence), {
+    ok: false, code: "STORY_CURRENT_STATE_INVALID",
+  });
 });
 
 test("malformed truthy Story fields fail closed without throwing", () => {
@@ -334,6 +366,7 @@ test("meeting and coding trajectories retain supported roles, uncertainty, and s
       eventId: "synthetic-reviewed-document:synthetic-agent-action",
     };
     annotation.evidence.supporting.push(agentReference);
+    annotation.narrativeReview.contextRetention.sourceScope.push(agentReference);
     for (const language of ["en", "zh"]) {
       annotation.reviewPresentation[language].people[0].releaseLabel = "Speaker A";
       annotation.reviewPresentation[language].people[0].role = language === "zh" ? "项目负责人" : "Project owner";
@@ -379,6 +412,7 @@ test("meeting and coding trajectories retain supported roles, uncertainty, and s
       eventId: "synthetic-reviewed-document:synthetic-correction-action",
     };
     annotation.evidence.supporting.push(implementationReference);
+    annotation.narrativeReview.contextRetention.sourceScope.push(implementationReference);
     for (const language of ["en", "zh"]) {
       annotation.reviewPresentation[language].people.push({
         id: "correction-agent",
@@ -423,10 +457,27 @@ test("routine machine-only events cannot become Chapters, but actor response may
   });
 
   const diagnosedFailure = changedCandidate(2, (annotation) => {
-    annotation.evidence.supporting.push({
+    const machineReference = {
       documentId: "synthetic-reviewed-document",
       eventId: "synthetic-reviewed-document:synthetic-machine-failure",
+    };
+    annotation.evidence.supporting.push(machineReference);
+    const retention = annotation.narrativeReview.contextRetention;
+    const unitId = "source-unit-diagnosed-machine-failure";
+    retention.sourceScope.push(machineReference);
+    retention.sourceUnitCount += 1;
+    retention.representedUnitCount += 1;
+    retention.units.push({
+      id: unitId,
+      kind: "failure",
+      evidence: machineReference,
+      state: "represented",
+      blockIds: ["detail-0"],
     });
+    const detailClaim = annotation.narrativeReview.claimTraceability
+      .find((claim) => claim.blockId === "detail-0");
+    detailClaim.evidence.push(machineReference);
+    detailClaim.unitIds.push(unitId);
   });
   const diagnosisEvidence = evidence.concat({
     id: "synthetic-reviewed-document:synthetic-machine-failure",
@@ -546,6 +597,79 @@ test("context retention proves distinct source units even when they share one Ev
   assert.equal(validateStoryCandidatePackage(candidates, evidence).ok, true);
 });
 
+test("context retention scope equals the complete required Chapter Evidence set", () => {
+  const missingPrimary = changedCandidate(1, (annotation) => {
+    annotation.narrativeReview.contextRetention.sourceScope = [annotation.evidence.supporting[0]];
+  });
+  assert.deepEqual(validateStoryCandidatePackage(missingPrimary, evidence), {
+    ok: false, code: "STORY_CONTEXT_RETENTION_INVALID",
+  });
+
+  const missingSupporting = changedCandidate(1, (annotation) => {
+    annotation.narrativeReview.contextRetention.sourceScope = [annotation.evidence.primary];
+  });
+  assert.deepEqual(validateStoryCandidatePackage(missingSupporting, evidence), {
+    ok: false, code: "STORY_CONTEXT_RETENTION_INVALID",
+  });
+
+  const unrelatedReference = {
+    documentId: "synthetic-support-document",
+    eventId: "synthetic-support-document:unrelated-event",
+  };
+  const unrelatedEvidence = evidence.concat({
+    id: unrelatedReference.eventId,
+    documentId: unrelatedReference.documentId,
+    eventType: "artifact",
+    actorId: null,
+    actorType: "system",
+  });
+  const extraUnrelated = changedCandidate(0, (annotation) => {
+    annotation.evidence.supporting.push(unrelatedReference);
+    annotation.narrativeReview.contextRetention.sourceScope.push(unrelatedReference);
+  });
+  assert.deepEqual(validateStoryCandidatePackage(extraUnrelated, unrelatedEvidence), {
+    ok: false, code: "STORY_CONTEXT_RETENTION_INVALID",
+  });
+});
+
+test("qualified multi-document supporting Evidence can satisfy complete scope equality", () => {
+  const supportingReference = {
+    documentId: "synthetic-support-document",
+    eventId: "synthetic-support-document:decision-context",
+  };
+  const multiDocumentEvidence = evidence.concat({
+    id: supportingReference.eventId,
+    documentId: supportingReference.documentId,
+    eventType: "artifact",
+    actorId: null,
+    actorType: "system",
+  });
+  const multiDocument = changedCandidate(0, (annotation) => {
+    const retention = annotation.narrativeReview.contextRetention;
+    const unitId = "source-unit-multi-document-context";
+    annotation.evidence.supporting.push(supportingReference);
+    retention.sourceScope.push(supportingReference);
+    retention.sourceUnitCount += 1;
+    retention.representedUnitCount += 1;
+    retention.units.push({
+      id: unitId,
+      kind: "decision",
+      evidence: supportingReference,
+      state: "represented",
+      blockIds: ["detail-0"],
+    });
+    annotation.narrativeReview.claimTraceability.push({
+      id: "claim-multi-document-context",
+      kind: "factual_claim",
+      blockId: "detail-0",
+      evidence: [supportingReference],
+      unitIds: [unitId],
+    });
+  });
+
+  assert.equal(validateStoryCandidatePackage(multiDocument, multiDocumentEvidence).ok, true);
+});
+
 test("context retention is mandatory and every represented unit must own a traced Story block", () => {
   const missingLedger = changedCandidate(0, (annotation) => {
     delete annotation.narrativeReview.contextRetention;
@@ -574,15 +698,24 @@ test("context retention is mandatory and every represented unit must own a trace
 test("only fixed privacy-safe reasons may exclude a classified source unit", () => {
   const allowedExclusion = changedCandidate(0, (annotation) => {
     const retention = annotation.narrativeReview.contextRetention;
-    retention.sourceUnitCount += 1;
-    retention.excludedUnitCount += 1;
-    retention.units.push({
-      id: "source-unit-calibration-duplicate",
-      kind: "response",
-      evidence: annotation.evidence.primary,
-      state: "excluded",
-      reason: "duplicate",
-    });
+    retention.sourceUnitCount += 2;
+    retention.excludedUnitCount += 2;
+    retention.units.push(
+      {
+        id: "source-unit-calibration-duplicate",
+        kind: "response",
+        evidence: annotation.evidence.primary,
+        state: "excluded",
+        reason: "duplicate",
+      },
+      {
+        id: "source-unit-calibration-routine",
+        kind: "progress",
+        evidence: annotation.evidence.primary,
+        state: "excluded",
+        reason: "routine_status",
+      },
+    );
   });
   assert.equal(validateStoryCandidatePackage(allowedExclusion, evidence).ok, true);
 
@@ -601,6 +734,37 @@ test("only fixed privacy-safe reasons may exclude a classified source unit", () 
   assert.deepEqual(validateStoryCandidatePackage(inventedReason, evidence), {
     ok: false, code: "STORY_CHAPTER_INVALID",
   });
+});
+
+test("Privacy-withheld source units stay excluded without expanding Chapter Evidence scope", () => {
+  const withheldReference = {
+    documentId: "synthetic-private-boundary",
+    eventId: "synthetic-private-boundary:withheld-unit",
+  };
+  const localEvidence = evidence.concat({
+    id: withheldReference.eventId,
+    documentId: withheldReference.documentId,
+    eventType: "record",
+    actorId: "withheld-actor",
+    actorType: "human",
+  });
+  const privacyWithheld = changedCandidate(0, (annotation) => {
+    const retention = annotation.narrativeReview.contextRetention;
+    retention.sourceUnitCount += 1;
+    retention.excludedUnitCount += 1;
+    retention.units.push({
+      id: "source-unit-privacy-withheld",
+      kind: "response",
+      evidence: withheldReference,
+      state: "excluded",
+      reason: "privacy_withheld",
+    });
+  });
+  const annotation = JSON.parse(privacyWithheld[0].summary.slice(STORY_PREFIX.length));
+  assert.ok(!annotation.narrativeReview.contextRetention.sourceScope.some(
+    (reference) => reference.eventId === withheldReference.eventId,
+  ));
+  assert.equal(validateStoryCandidatePackage(privacyWithheld, localEvidence).ok, true);
 });
 
 test("Chapter overviews are specific, unique, and Evidence-traced summaries", () => {

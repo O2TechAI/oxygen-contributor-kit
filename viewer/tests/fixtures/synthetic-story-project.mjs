@@ -144,7 +144,7 @@ const contextUnitsFor = (chapter) => ([
 function contextRetentionFor(chapter) {
   return {
     schema: "oxygen.story-context-retention/1",
-    sourceScope: [evidenceFor(chapter.evidenceId)],
+    sourceScope: chapterEvidenceFor(chapter),
     sourceUnitCount: 2,
     representedUnitCount: 2,
     excludedUnitCount: 0,

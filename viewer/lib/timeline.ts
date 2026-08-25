@@ -767,9 +767,6 @@ function validNarrativeReview(
       || !uniqueValues(retention.units.map((unit) => unit.id))
       || retention.units.filter((unit) => unit.state === "represented").length !== retention.representedUnitCount
       || retention.units.filter((unit) => unit.state === "excluded").length !== retention.excludedUnitCount) return false;
-    const scope = new Set(retention.sourceScope.map(evidenceKey));
-    if (retention.units.some((unit) => !scope.has(evidenceKey(unit.evidence)))
-      || retention.sourceScope.some((reference) => !retention.units.some((unit) => evidenceKey(unit.evidence) === evidenceKey(reference)))) return false;
   }
   const validRole = (blockIds: unknown, allowed: string[]) => Array.isArray(blockIds)
     && blockIds.length > 0

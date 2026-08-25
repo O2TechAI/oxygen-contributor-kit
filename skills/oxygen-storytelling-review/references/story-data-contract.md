@@ -414,10 +414,12 @@ Fail closed when any of these conditions is false:
   represented; optional unsupported elements remain explicitly `not_supported`; every supported
   explanatory unit, including judgment moments, durable progress milestones, substantive
   iterations, and consequential failures, is represented in a traceable Story block;
-- the context-retention ledger covers every classified source unit in every Evidence event inside
-  the declared milestone scope; its counts reconcile; every represented unit maps through a factual
-  claim `unitIds` entry to exact Story blocks and Evidence; exclusions use only the fixed privacy-safe
-  reasons; repeated citations of one Evidence event never substitute for distinct unit identities;
+- the context-retention ledger's `sourceScope` equals the complete unique primary/supporting
+  Evidence set used by the Chapter's represented factual claims and source units; its counts
+  reconcile; every represented unit maps through a factual claim `unitIds` entry to exact Story
+  blocks and Evidence; exclusions use only the fixed privacy-safe reasons and do not expand Chapter
+  Evidence scope, including when Privacy withholds a unit; repeated citations of one Evidence event
+  never substitute for distinct unit identities;
 - every People and Story block has exact Chapter-contained factual-claim traceability, every
   material factual claim has its own entry, the canonical Insight has explicit Evidence inputs, and
   local traceability metadata is absent from release/export;

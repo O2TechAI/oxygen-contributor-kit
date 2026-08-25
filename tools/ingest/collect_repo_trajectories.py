@@ -51,6 +51,10 @@ from oxygen_common import (
 SESSION_SCAN_MAX_RECORDS = 2048
 SESSION_SCAN_MAX_BYTES = 4 * 1024 * 1024
 CODEX_CWD_RECORD_TYPES = {"session_meta", "turn_context"}
+MEMORY_SOURCE_MISSING = "MEMORY_SOURCE_MISSING"
+MEMORY_SOURCE_INVALID = "MEMORY_SOURCE_INVALID"
+MEMORY_SOURCE_OUTSIDE_APPROVED_ROOT = "MEMORY_SOURCE_OUTSIDE_APPROVED_ROOT"
+MEMORY_SOURCE_UNREADABLE = "MEMORY_SOURCE_UNREADABLE"
 
 
 def normalize_progress_url(value: str) -> str:
@@ -286,6 +290,15 @@ def cwd_relation(cwd: str, repo: Path) -> str:
     return "unrelated"
 
 
+def resolve_contained_path(candidate: Path, approved_root: Path) -> Path:
+    """Resolve one existing path and require its target to stay inside the approved root."""
+    resolved_root = approved_root.resolve(strict=True)
+    resolved_candidate = candidate.resolve(strict=True)
+    if not resolved_candidate.is_relative_to(resolved_root):
+        raise ValueError("resolved path leaves approved root")
+    return resolved_candidate
+
+
 @dataclass
 class DiscoveryStats:
     system: str
@@ -400,14 +413,14 @@ def find_codex_sessions(
     explicit_boundary = session_root is not None
     try:
         resolved_root = sessions_root.resolve(strict=True)
-    except OSError:
+    except (OSError, RuntimeError):
         return sessions
     for jsonl in sorted(sessions_root.rglob("*.jsonl")):
         try:
-            resolved_jsonl = jsonl.resolve(strict=True)
-        except OSError:
+            resolved_jsonl = resolve_contained_path(jsonl, resolved_root)
+        except (OSError, RuntimeError, ValueError):
             continue
-        if jsonl.is_symlink() or not resolved_jsonl.is_relative_to(resolved_root):
+        if jsonl.is_symlink():
             continue
         scan = session_cwds(resolved_jsonl, "codex", repo)
         if diagnostics is not None:
@@ -492,29 +505,55 @@ def extract(session: Path, system: str, out_root: Path, home: Path, user: str) -
     return entry
 
 
-def copy_memory(src: Path, dest_root: Path, base_label: str, collected: list[dict]) -> None:
-    """Copy one memory file/dir, skipping anything credential-shaped."""
+def copy_memory(
+    src: Path,
+    dest_root: Path,
+    base_label: str,
+    collected: list[dict],
+    approved_root: Path,
+) -> None:
+    """Copy one approved memory file/dir without following a target outside its root."""
+    if not src.exists() and not src.is_symlink():
+        raise ValueError(MEMORY_SOURCE_MISSING)
     try:
-        if not src.exists():
-            return
-        targets = [src] if src.is_file() else sorted(p for p in src.rglob("*") if p.is_file())
+        resolved_src = resolve_contained_path(src, approved_root)
+    except ValueError:
+        raise ValueError(MEMORY_SOURCE_OUTSIDE_APPROVED_ROOT) from None
+    except (OSError, RuntimeError):
+        raise ValueError(MEMORY_SOURCE_INVALID) from None
+
+    try:
+        if resolved_src.is_file():
+            targets = [(src, resolved_src)]
+        elif resolved_src.is_dir():
+            targets = []
+            for target in sorted(src.rglob("*")):
+                try:
+                    resolved_target = resolve_contained_path(target, resolved_src)
+                except ValueError:
+                    raise ValueError(MEMORY_SOURCE_OUTSIDE_APPROVED_ROOT) from None
+                except (OSError, RuntimeError):
+                    raise ValueError(MEMORY_SOURCE_INVALID) from None
+                if resolved_target.is_file():
+                    targets.append((target, resolved_target))
+        else:
+            raise ValueError(MEMORY_SOURCE_INVALID)
     except PermissionError:
-        collected.append({"source": str(src), "skipped": "permission denied"})
-        return
-    for target in targets:
-        if is_sensitive_name(target):
+        raise ValueError(MEMORY_SOURCE_UNREADABLE) from None
+
+    for target, resolved_target in targets:
+        if is_sensitive_name(target) or is_sensitive_name(resolved_target):
             collected.append({"source": str(target), "skipped": "sensitive filename"})
             continue
         rel = target.name if src.is_file() else str(target.relative_to(src))
         dest = dest_root / base_label / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.copy2(target, dest)
+            shutil.copy2(resolved_target, dest)
         except PermissionError:
-            collected.append({"source": str(target), "skipped": "permission denied"})
-            continue
+            raise ValueError(MEMORY_SOURCE_UNREADABLE) from None
         collected.append(
-            {"source": str(target), "copied_to": str(dest), "sha256": sha256_file(target)}
+            {"source": str(target), "copied_to": str(dest), "sha256": sha256_file(resolved_target)}
         )
 
 
@@ -635,17 +674,27 @@ def main(argv=None) -> int:
     memory_root = out / "memory"
     if "claude" in agents:
         for project_dir in claude_project_dirs:
-            copy_memory(
-                project_dir / "memory", memory_root / "claude", f"project-{project_dir.name}", memory
-            )
+            source = project_dir / "memory"
+            if source.exists() or source.is_symlink():
+                copy_memory(
+                    source, memory_root / "claude", f"project-{project_dir.name}", memory,
+                    project_dir,
+                )
         if args.include_global_memory:
-            copy_memory(home / ".claude" / "CLAUDE.md", memory_root / "claude", "global", memory)
-        copy_memory(repo / "CLAUDE.md", memory_root / "claude", "repo", memory)
-        copy_memory(repo / ".claude", memory_root / "claude", "repo-dot-claude", memory)
+            source = home / ".claude" / "CLAUDE.md"
+            if source.exists() or source.is_symlink():
+                copy_memory(source, memory_root / "claude", "global", memory, home / ".claude")
+        for source, label in ((repo / "CLAUDE.md", "repo"), (repo / ".claude", "repo-dot-claude")):
+            if source.exists() or source.is_symlink():
+                copy_memory(source, memory_root / "claude", label, memory, repo)
     if "codex" in agents:
         if args.include_global_memory:
-            copy_memory(home / ".codex" / "AGENTS.md", memory_root / "codex", "global", memory)
-        copy_memory(repo / "AGENTS.md", memory_root / "codex", "repo", memory)
+            source = home / ".codex" / "AGENTS.md"
+            if source.exists() or source.is_symlink():
+                copy_memory(source, memory_root / "codex", "global", memory, home / ".codex")
+        source = repo / "AGENTS.md"
+        if source.exists() or source.is_symlink():
+            copy_memory(source, memory_root / "codex", "repo", memory, repo)
 
     index = {
         "schema_version": "0.2",
