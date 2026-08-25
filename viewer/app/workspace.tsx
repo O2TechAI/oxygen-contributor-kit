@@ -635,11 +635,11 @@ export function InlineWorkspace({
           const current=currentStoryStateRef.current;
           return createStoryReviewSession(workflowRunId,current.chapterReviews,current.privacyDecisions);
         },
-        handoff: () => {
-          const current=currentStoryStateRef.current;
-          const reviewedStory=buildReviewedStoryRelease(current.highlights,current.chapterReviews);
-          return fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({reviewedStory})});
-        },
+        handoff: ({workflowRunId,serverVersion,sourceRevision}) => fetch(url,{
+          method:"POST",
+          headers:{"content-type":"application/json"},
+          body:JSON.stringify({workflowRunId,serverVersion,sourceRevision}),
+        }),
       });
     } catch (value) {
       setError(value instanceof Error ? value.message : "Story review state could not be safely persisted");

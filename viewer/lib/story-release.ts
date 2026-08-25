@@ -265,8 +265,14 @@ export function reviewedStoryPackageEntry(value: unknown) {
   const story = sanitizeReviewedStoryRelease(value);
   return story?.chapters.length ? {
     name: "story/reviewed-project-story.json",
-    data: JSON.stringify(story, null, 2),
+    data: serializeReviewedStoryRelease(story)!,
   } : null;
+}
+
+/** One deterministic public Story serialization shared by HTML and ZIP POST. */
+export function serializeReviewedStoryRelease(value: unknown) {
+  const story = sanitizeReviewedStoryRelease(value);
+  return story ? JSON.stringify(story, null, 2) : null;
 }
 
 /** Strip local Story annotation JSON before organization summaries reach a

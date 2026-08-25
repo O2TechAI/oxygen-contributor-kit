@@ -143,12 +143,13 @@ test("every Viewer-global route uses the canonical sole-run guard", async () => 
 });
 
 test("workflow, Story session, source invalidation, and POST handoff are exact-run bounded", async () => {
-  const [workflow, loader, documents, organization, session, html, packageRoute] = await Promise.all([
+  const [workflow, loader, documents, organization, session, releaseServer, html, packageRoute] = await Promise.all([
     read("../app/api/workflow/route.ts"),
     read("../lib/workflow-progress-server.ts"),
     read("../app/api/documents/route.ts"),
     read("../app/api/organization/route.ts"),
     read("../app/api/story-review-session/route.ts"),
+    read("../lib/story-release-server.ts"),
     read("../app/api/organization/export/route.ts"),
     read("../app/api/package/route.ts"),
   ]);
@@ -160,8 +161,10 @@ test("workflow, Story session, source invalidation, and POST handoff are exact-r
   assert.match(documents, /WHERE id=\?`\)\.bind\(now, authority\.workflowRunId\)/);
   assert.match(organization, /WHERE id=\?`\)\.bind\(now, authority\.workflowRunId\)/);
   assert.equal(session.match(/await requireExactWorkflowRun\(db, /g)?.length, 2);
+  assert.match(releaseServer, /await requireExactWorkflowRun\(db, request\.workflowRunId\)/);
   for (const [name, source] of [["HTML", html], ["ZIP", packageRoute]]) {
     const post = source.slice(source.indexOf("export async function POST"));
-    assert.match(post, /await requireEstablishedWorkflowRun\(db\)/, `${name} POST must bind the sole run`);
+    assert.match(post, /await reconstructReviewedStoryRelease\(/, `${name} POST must use the exact-run release owner`);
+    assert.doesNotMatch(post, /requireEstablishedWorkflowRun/, `${name} POST must not independently select a run`);
   }
 });

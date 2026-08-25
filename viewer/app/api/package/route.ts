@@ -13,15 +13,13 @@ import { computeSourceDigest, redactionReleaseError } from "../../../lib/redacti
 import { canonicalizeStoredAutoRemoved } from "../../../lib/auto-removed.mjs";
 import {
   releaseOrganizationReason,
-  reviewedStoryPackageEntry,
-  sanitizeReviewedStoryRelease,
-  type ReviewedStoryRelease,
 } from "../../../lib/story-release";
 import {
-  WORKFLOW_RUN_AUTHORITY,
-  requireEstablishedWorkflowRun,
-  workflowRunErrorResponse,
-} from "../../../lib/workflow-run-server";
+  RELEASE_ERROR,
+  reconstructReviewedStoryRelease,
+  reconstructReviewedStoryReleaseFromDatabase,
+  releaseErrorResponse,
+} from "../../../lib/story-release-server";
 
 const clean = <T,>(value: string, fallback: T): T => {
   try { return JSON.parse(value) as T; } catch { return fallback; }
@@ -38,7 +36,7 @@ type ReleaseEvent = {
   organization_confidence?: number | null; organization_reason: string;
 };
 
-async function buildPackage(reviewedStory?: ReviewedStoryRelease) {
+async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown) {
   const db = await getD1();
   const redactionJob = await db.prepare(
     "SELECT * FROM redaction_jobs ORDER BY started_at DESC LIMIT 1"
@@ -294,8 +292,17 @@ async function buildPackage(reviewedStory?: ReviewedStoryRelease) {
       data: JSON.stringify(preferenceProbes, null, 2),
     });
   }
-  const storyEntry = reviewedStoryPackageEntry(reviewedStory);
-  if (storyEntry) entries.push(storyEntry);
+  if (reviewedStoryJson) entries.push({
+    name: "story/reviewed-project-story.json",
+    data: reviewedStoryJson,
+  });
+  if (reviewedStoryJson && releaseRequest !== undefined) {
+    const finalReconstruction = await reconstructReviewedStoryReleaseFromDatabase(db, releaseRequest);
+    if (!finalReconstruction.ok) return releaseErrorResponse(finalReconstruction);
+    if (finalReconstruction.serializedStory !== reviewedStoryJson) {
+      return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
+    }
+  }
   const zip = createZip(entries);
   return new Response(zip, { headers: {
     "content-type": "application/zip",
@@ -309,13 +316,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const db = await getD1();
-  const authority = await requireEstablishedWorkflowRun(db);
-  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
-    return workflowRunErrorResponse(authority);
-  }
-  const body = await request.json().catch(() => null) as { reviewedStory?: unknown } | null;
-  const reviewedStory = sanitizeReviewedStoryRelease(body?.reviewedStory);
-  if (!reviewedStory) return Response.json({ error: "ZIP export blocked: invalid reviewed Story release projection" }, { status: 400 });
-  return buildPackage(reviewedStory);
+  const releaseRequest = await request.json().catch(() => null);
+  const reconstruction = await reconstructReviewedStoryRelease(releaseRequest);
+  if (!reconstruction.ok) return releaseErrorResponse(reconstruction);
+  return buildPackage(reconstruction.serializedStory, releaseRequest);
 }

@@ -51,6 +51,12 @@ export type StoryReviewSessionPersistenceState = {
   errorCode: string | null;
 };
 
+export type StoryReviewHandoffAuthority = {
+  workflowRunId: string;
+  serverVersion: number;
+  sourceRevision: number;
+};
+
 type Snapshot = { session: StoryReviewSession; semantic: string };
 type Waiter = { resolve: () => void; reject: (error: Error) => void };
 
@@ -276,13 +282,27 @@ export class StoryReviewSessionPersistenceQueue {
 export async function runDurableStoryReviewHandoff<T>(options: {
   persistence: StoryReviewSessionPersistenceQueue;
   currentSession(): StoryReviewSession | null;
-  handoff(): Promise<T>;
+  handoff(authority: StoryReviewHandoffAuthority): Promise<T>;
 }) {
   for (;;) {
     const session = options.currentSession();
     if (!session) throw new StoryReviewSessionPersistenceError("STORY_SESSION_STATE_INVALID");
     await options.persistence.flush(session);
     const latest = options.currentSession();
-    if (latest && options.persistence.isDurable(latest)) return options.handoff();
+    if (!latest || !options.persistence.isDurable(latest)) continue;
+    const state = options.persistence.getState();
+    const current = options.currentSession();
+    if (!current || !options.persistence.isDurable(current)) continue;
+    if (state.status !== "durable"
+      || !Number.isSafeInteger(state.serverVersion) || state.serverVersion < 0
+      || !Number.isSafeInteger(state.sourceRevision) || Number(state.sourceRevision) < 0
+      || current.workflowRunId !== latest.workflowRunId) {
+      throw new StoryReviewSessionPersistenceError("STORY_SESSION_STATE_INVALID");
+    }
+    return options.handoff({
+      workflowRunId: current.workflowRunId,
+      serverVersion: state.serverVersion,
+      sourceRevision: Number(state.sourceRevision),
+    });
   }
 }

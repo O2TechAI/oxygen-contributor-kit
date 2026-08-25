@@ -235,7 +235,7 @@ test("release projection fails closed when source data contains multiple reviewa
   assert.deepEqual(buildReviewedStoryRelease([multipleInsightMilestone], { chapter: review }).chapters, []);
 });
 
-test("HTML export accepts only the server-sanitized reviewed Story", async () => {
+test("HTML export reconstructs the server-sanitized reviewed Story", async () => {
   const context = reviewContext("redact");
   let review = applyChapterReview(emptyChapterReview(), context).state;
   review = markChapterReady(review, context);
@@ -247,8 +247,9 @@ test("HTML export accepts only the server-sanitized reviewed Story", async () =>
   assert.doesNotMatch(JSON.stringify(sanitized), /must-not-ship|localOriginal|privateEvidence|localIdentityState/);
   const route = await readFile(new URL("../app/api/organization/export/route.ts", import.meta.url), "utf8");
   const post = route.slice(route.indexOf("export async function POST"));
-  assert.match(post, /sanitizeReviewedStoryRelease\(body\?\.reviewedStory\)/);
-  assert.match(post, /renderHtml\(story\)/);
+  assert.match(post, /reconstructReviewedStoryRelease\(await request\.json\(\)\.catch\(\(\) => null\)\)/);
+  assert.match(post, /renderReviewedStoryHtml\(reconstruction\.serializedStory\)/);
+  assert.doesNotMatch(post, /reviewedStory|sanitizeReviewedStoryRelease/);
 });
 
 test("release projection excludes a manually confirmed Chapter without verified evidence", () => {

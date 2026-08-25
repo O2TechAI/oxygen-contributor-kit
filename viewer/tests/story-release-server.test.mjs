@@ -408,8 +408,11 @@ test("both POST routes share reconstruction while GET and heuristic timeline rem
     assert.match(post, /reconstructReviewedStoryRelease/);
     assert.doesNotMatch(post, /reviewedStory|sanitizeReviewedStoryRelease/);
   }
-  assert.match(html, /export async function GET\(\)[\s\S]*renderReviewedStoryHtml\(JSON\.stringify\(emptyStory\(\), null, 2\)\)/);
+  assert.match(html, /export async function GET\(\)[\s\S]*renderReviewedStoryHtml\(JSON\.stringify\(emptyStory\(\)\)\)/);
+  assert.doesNotMatch(html, /JSON\.stringify\(emptyStory\(\), null, 2\)/);
   assert.match(zip, /export async function GET\(\)\s*\{\s*return buildPackage\(\);\s*\}/);
+  assert.match(zip, /reconstructReviewedStoryReleaseFromDatabase\(db, releaseRequest\)/);
+  assert.match(zip, /finalReconstruction\.serializedStory !== reviewedStoryJson/);
   assert.match(zip, /timeline: selectProjectTimeline/);
   const handoff = workspace.slice(workspace.indexOf("const downloadReviewed"), workspace.indexOf("const ready ="));
   assert.match(handoff, /serverVersion/);
