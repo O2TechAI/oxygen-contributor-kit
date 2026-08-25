@@ -6,6 +6,11 @@ import {
   type BulkPreferencePresentations,
   type ProbePresentations,
 } from "../../../lib/preference-presentation";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireEstablishedWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../lib/workflow-run-server";
 
 const SIGNALS = new Set([
   "repeated_correction",
@@ -35,6 +40,10 @@ type AcceptedProbe = IncomingProbe & { normalizedPresentations: ProbePresentatio
 
 export async function GET() {
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const [probes, bulk, run] = await Promise.all([
     db.prepare("SELECT * FROM probes ORDER BY score DESC, created_at ASC").all(),
     db.prepare("SELECT * FROM probe_bulk_decisions ORDER BY count DESC").all(),
@@ -64,6 +73,10 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const body = await request.json() as {
     run?: { status: string; stage: string; model?: string; setAside?: number; autoRemoved?: unknown };
     probes?: IncomingProbe[];

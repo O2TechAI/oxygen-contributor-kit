@@ -1,8 +1,17 @@
 import { getD1 } from "../../../db";
 import { sourceImportMatchesExisting } from "../../../lib/redaction-pass.mjs";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireEstablishedWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../lib/workflow-run-server";
 
 export async function GET() {
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const { results } = await db.prepare(
     `SELECT id,kind,title,source_user,source_system,source_timestamp,item_count,
             updated_at,organization_status,formatted_summary_json
@@ -17,6 +26,10 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const body = await request.json() as {
     document: {
       id: string; kind: "meeting" | "trajectory"; title: string;
@@ -84,7 +97,7 @@ export async function POST(request: Request) {
           story_generation_completed=0,
           story_generation_total=0,story_source_revision=story_source_revision+1,
           active_story_digest=NULL,updated_at=?
-      WHERE id=(SELECT id FROM workflow_runs ORDER BY updated_at DESC LIMIT 1)`).bind(now),
+      WHERE id=?`).bind(now, authority.workflowRunId),
   ]);
 
   for (let start = 0; start < body.items.length; start += 75) {

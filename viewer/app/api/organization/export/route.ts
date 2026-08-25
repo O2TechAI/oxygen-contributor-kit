@@ -2,6 +2,12 @@ import {
   sanitizeReviewedStoryRelease,
   type ReviewedStoryRelease,
 } from "../../../../lib/story-release.ts";
+import { getD1 } from "../../../../db";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireEstablishedWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../../lib/workflow-run-server";
 
 function safeJson(value: unknown) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
@@ -32,6 +38,11 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const body = await request.json().catch(() => null) as { reviewedStory?: unknown } | null;
   const story = sanitizeReviewedStoryRelease(body?.reviewedStory);
   if (!story) return Response.json({ error: "HTML export blocked: invalid reviewed Story release projection" }, { status: 400 });

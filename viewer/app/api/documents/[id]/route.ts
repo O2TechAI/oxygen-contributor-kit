@@ -1,8 +1,17 @@
 import { getD1 } from "../../../../db";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireEstablishedWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../../lib/workflow-run-server";
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const document = await db.prepare(
     `SELECT id,kind,title,source_user,source_system,source_timestamp,item_count,
             metadata_json,updated_at,organization_status,formatted_summary_json

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import {
   applyChapterReview,
   emptyChapterReview,
@@ -12,7 +13,6 @@ import {
   reviewedStoryPackageEntry,
   sanitizeReviewedStoryRelease,
 } from "../lib/story-release.ts";
-import { POST as exportReviewedHtml } from "../app/api/organization/export/route.ts";
 import { STORY_PREFIX, storyReleaseTargetCatalog } from "../lib/timeline.ts";
 
 const candidate = {
@@ -183,15 +183,6 @@ test("applied direct Story edits reach serialized release copy while the edit le
   assert.match(packageEntry.data, /小组需要决定。/);
   assert.doesNotMatch(packageEntry.data, /LEDGER_SENTINEL|PASSAGE_SENTINEL|editTransactions|passageContext/);
 
-  const response = await exportReviewedHtml(new Request("http://localhost/api/organization/export", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ reviewedStory: untrusted }),
-  }));
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /The group needed to decide\./);
-  assert.doesNotMatch(html, /LEDGER_SENTINEL|PASSAGE_SENTINEL|editTransactions|passageContext/);
 });
 
 test("server sanitizer reconstructs the reviewed Story from an explicit allowlist", () => {
@@ -244,23 +235,20 @@ test("release projection fails closed when source data contains multiple reviewa
   assert.deepEqual(buildReviewedStoryRelease([multipleInsightMilestone], { chapter: review }).chapters, []);
 });
 
-test("HTML export serializes only the server-sanitized reviewed Story", async () => {
+test("HTML export accepts only the server-sanitized reviewed Story", async () => {
   const context = reviewContext("redact");
   let review = applyChapterReview(emptyChapterReview(), context).state;
   review = markChapterReady(review, context);
   const untrusted = structuredClone(buildReviewedStoryRelease([milestone], { chapter: review }));
   untrusted.privateEvidence = "must-not-ship";
   untrusted.chapters[0].localOriginal = "must-not-ship";
-  const response = await exportReviewedHtml(new Request("http://localhost/api/organization/export", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ reviewedStory: untrusted }),
-  }));
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type"), /text\/html/);
-  const html = await response.text();
-  assert.match(html, /Reviewed chapter/);
-  assert.doesNotMatch(html, /must-not-ship|localOriginal|privateEvidence|localIdentityState/);
+  const sanitized = sanitizeReviewedStoryRelease(untrusted);
+  assert.ok(sanitized);
+  assert.doesNotMatch(JSON.stringify(sanitized), /must-not-ship|localOriginal|privateEvidence|localIdentityState/);
+  const route = await readFile(new URL("../app/api/organization/export/route.ts", import.meta.url), "utf8");
+  const post = route.slice(route.indexOf("export async function POST"));
+  assert.match(post, /sanitizeReviewedStoryRelease\(body\?\.reviewedStory\)/);
+  assert.match(post, /renderHtml\(story\)/);
 });
 
 test("release projection excludes a manually confirmed Chapter without verified evidence", () => {

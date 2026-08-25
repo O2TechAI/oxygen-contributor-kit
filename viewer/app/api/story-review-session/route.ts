@@ -4,6 +4,11 @@ import {
   canonicalizeStoryReviewSession,
 } from "../../../lib/story-review-session";
 import { isWorkflowRunId } from "../../../lib/workflow-progress";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireExactWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../lib/workflow-run-server";
 
 type SessionRow = { state_json?: string };
 
@@ -18,6 +23,10 @@ export async function GET(request: Request) {
   const workflowRunId = new URL(request.url).searchParams.get("workflowRunId");
   if (!isWorkflowRunId(workflowRunId)) return Response.json({ error: "A valid workflow run is required" }, { status: 400 });
   const db = await getD1();
+  const authority = await requireExactWorkflowRun(db, workflowRunId);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   if (!await reviewReady(db, workflowRunId)) {
     return Response.json({ error: "Story review is not ready" }, { status: 409 });
   }
@@ -44,6 +53,10 @@ export async function POST(request: Request) {
   }
   if (!session) return Response.json({ error: "Invalid Story review session" }, { status: 400 });
   const db = await getD1();
+  const authority = await requireExactWorkflowRun(db, session.workflowRunId);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   if (!await reviewReady(db, session.workflowRunId)) {
     return Response.json({ error: "Story review is not ready" }, { status: 409 });
   }

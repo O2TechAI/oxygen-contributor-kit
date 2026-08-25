@@ -1,4 +1,9 @@
 import { getD1 } from "../../../db";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireEstablishedWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../lib/workflow-run-server";
 
 const JOB_ID = "default";
 const BATCH_SIZE = 250;
@@ -40,11 +45,20 @@ async function status(db: Awaited<ReturnType<typeof getD1>>) {
 
 export async function GET(request: Request) {
   void request;
-  return Response.json(await status(await getD1()));
+  const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
+  return Response.json(await status(db));
 }
 
 export async function POST(request: Request) {
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const now = new Date().toISOString();
   const body = await request.json().catch(() => ({})) as { restart?: boolean };
   if (body.restart) {
@@ -57,7 +71,7 @@ export async function POST(request: Request) {
             story_generation_completed=0,
             story_generation_total=0,story_source_revision=story_source_revision+1,
             active_story_digest=NULL,updated_at=?
-        WHERE id=(SELECT id FROM workflow_runs ORDER BY updated_at DESC LIMIT 1)`).bind(now),
+        WHERE id=?`).bind(now, authority.workflowRunId),
     ]);
   }
   const totalRow = await db.prepare("SELECT COUNT(*) AS count FROM items").first<{ count: number }>();

@@ -2,6 +2,12 @@ import { getD1 } from "../db";
 import { selectReviewableStoryTimeline } from "./story-readiness";
 import { hydrateStoryReviewSession } from "./story-review-session";
 import { deriveWorkflowProgress, isStoryReviewReady } from "./workflow-progress";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  WorkflowRunAuthorityError,
+  requireEstablishedWorkflowRun,
+  requireExactWorkflowRun,
+} from "./workflow-run-server";
 import type { WorkspaceDocument, WorkspaceStatus } from "./workspace-types";
 
 type CountRow = { total: number; completed: number };
@@ -23,15 +29,24 @@ type WorkflowRunRow = {
  * selected or serialized across the Server/Client boundary. */
 export async function loadWorkflowProgress(workflowRunId?: string) {
   const db = await getD1();
-  const runQuery = workflowRunId
-    ? db.prepare(`SELECT id,target_confirmed,collection_status,collection_completed,
-        collection_total,story_generation_status,story_generation_completed,
-        story_generation_total,updated_at
-        FROM workflow_runs WHERE id=?`).bind(workflowRunId).first<WorkflowRunRow>()
-    : db.prepare(`SELECT id,target_confirmed,collection_status,collection_completed,
-        collection_total,story_generation_status,story_generation_completed,
-        story_generation_total,updated_at
-        FROM workflow_runs ORDER BY updated_at DESC LIMIT 1`).first<WorkflowRunRow>();
+  const authority = workflowRunId
+    ? await requireExactWorkflowRun(db, workflowRunId)
+    : await requireEstablishedWorkflowRun(db);
+  if (authority.state === WORKFLOW_RUN_AUTHORITY.noRun && !workflowRunId) {
+    return deriveWorkflowProgress({
+      workflowRunId: "",
+      documentCount: 0,
+      itemCount: 0,
+      organizedItemCount: 0,
+    });
+  }
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    throw new WorkflowRunAuthorityError(authority);
+  }
+  const runQuery = db.prepare(`SELECT id,target_confirmed,collection_status,collection_completed,
+      collection_total,story_generation_status,story_generation_completed,
+      story_generation_total,updated_at
+      FROM workflow_runs WHERE id=?`).bind(authority.workflowRunId).first<WorkflowRunRow>();
   const [items, documents, organization, redaction, run] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN organization_category IS NOT NULL THEN 1 ELSE 0 END) AS completed
@@ -46,7 +61,7 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     .sort()
     .at(-1) || null;
   return deriveWorkflowProgress({
-    workflowRunId: run?.id || JSON.stringify([organization?.id || null, redaction?.id || null]),
+    workflowRunId: run?.id || authority.workflowRunId,
     targetConfirmed: Boolean(run?.target_confirmed),
     collectionStatus: run?.collection_status || null,
     collectionCompleted: Number(run?.collection_completed || 0),

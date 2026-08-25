@@ -1,4 +1,9 @@
 import { getD1 } from "../../../../db";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireEstablishedWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../../lib/workflow-run-server";
 
 const ALLOWED_CATEGORIES = new Set([
   "credential",
@@ -13,6 +18,10 @@ const ALLOWED_CATEGORIES = new Set([
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const body = await request.json() as { category?: string; status?: string; reason?: string };
 
   if (body.category && !ALLOWED_CATEGORIES.has(body.category)) {
@@ -44,6 +53,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const hard = new URL(request.url).searchParams.get("hard") === "1";
 
   const existing = await db.prepare("SELECT id FROM redactions WHERE id=?").bind(id).first();

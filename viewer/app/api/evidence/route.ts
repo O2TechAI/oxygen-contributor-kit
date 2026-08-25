@@ -5,6 +5,11 @@ import {
   type ReviewedEvidenceItem,
 } from "../../../lib/story-evidence";
 import { resolveEvidenceTarget, type EvidenceReference } from "../../../lib/timeline";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireEstablishedWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../lib/workflow-run-server";
 
 const onlyKeys = (value: object, allowed: string[]) => Object.keys(value).every((key) => allowed.includes(key));
 const referenceKey = (value: EvidenceReference) => JSON.stringify([value.documentId, value.eventId]);
@@ -45,6 +50,10 @@ export async function POST(request: Request) {
 
   const documentIds = [...new Set(body.chapterEvidence.map((reference) => reference.documentId))];
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const inventories = await Promise.all(documentIds.map(async (documentId) => {
     const response = await db.prepare(
       "SELECT id FROM items WHERE document_id=? ORDER BY sequence"

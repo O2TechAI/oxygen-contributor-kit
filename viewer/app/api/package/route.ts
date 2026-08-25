@@ -17,6 +17,11 @@ import {
   sanitizeReviewedStoryRelease,
   type ReviewedStoryRelease,
 } from "../../../lib/story-release";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireEstablishedWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../lib/workflow-run-server";
 
 const clean = <T,>(value: string, fallback: T): T => {
   try { return JSON.parse(value) as T; } catch { return fallback; }
@@ -304,6 +309,11 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const body = await request.json().catch(() => null) as { reviewedStory?: unknown } | null;
   const reviewedStory = sanitizeReviewedStoryRelease(body?.reviewedStory);
   if (!reviewedStory) return Response.json({ error: "ZIP export blocked: invalid reviewed Story release projection" }, { status: 400 });

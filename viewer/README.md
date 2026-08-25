@@ -19,3 +19,7 @@ SQLite/D1 is temporary local runtime state. **Download HTML** exports a read-onl
 **Download ZIP** applies every active AI-redaction span and exports the normalized package without
 raw event envelopes. ZIP export is blocked until the AI pass completes with zero rejected spans.
 Neither action uploads data.
+
+One Viewer state directory owns at most one established workflow run for its lifetime. Start a new
+Viewer through the launcher, with a fresh state directory, for another project or workflow; reusing
+one state directory as multi-run history is unsupported.
