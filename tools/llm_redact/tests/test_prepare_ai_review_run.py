@@ -1,9 +1,12 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "prepare_ai_review_run.py"
@@ -12,6 +15,44 @@ MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+
+
+def write_meeting(run: Path, meeting_id: str, *, root=False, records=None) -> Path:
+    directory = run if root else run / "meetings" / meeting_id
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "meeting.json"
+    path.write_text(json.dumps({
+        "meeting_id": meeting_id,
+        "title": "Private title",
+        "records": records if records is not None else [{
+            "record_id": "source-record-id",
+            "speaker": "Named Person",
+            "timestamp": "2026-01-02T03:04:05Z",
+            "text": "safe synthetic review text",
+        }],
+    }), encoding="utf-8")
+    return path
+
+
+def directory_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return
+    except OSError:
+        pass
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+    test_case.skipTest("directory link creation is unavailable")
 
 
 class PrepareAiReviewRunTest(unittest.TestCase):
@@ -114,10 +155,11 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            present, evidence_ids, warning_count = MODULE.prepare_meeting(source, output)
+            meetings = MODULE.discover_meetings(source)
+            evidence_ids, warning_count = MODULE.prepare_meetings(meetings, output)
             prepared = json.loads((output / "meeting.json").read_text())
 
-            self.assertTrue(present)
+            self.assertEqual(len(meetings), 1)
             self.assertEqual(warning_count, 1)
             self.assertEqual(prepared["meeting_id"], "meeting-000001")
             self.assertEqual(prepared["records"], [{
@@ -133,6 +175,85 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             self.assertNotIn("Private title", json.dumps(prepared))
             self.assertNotIn("Named Person", json.dumps(prepared))
             self.assertNotIn("2026-01-02", json.dumps(prepared))
+
+    def test_root_and_plural_meetings_prepare_as_distinct_private_documents(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            write_meeting(source, "meeting-root", root=True)
+            write_meeting(source, "meeting-alpha")
+            write_meeting(source, "meeting-beta")
+
+            meetings = MODULE.discover_meetings(source)
+            evidence_ids, warning_count = MODULE.prepare_meetings(meetings, output)
+
+            prepared_paths = [
+                output / "meeting.json",
+                output / "meetings" / "meeting-000002" / "meeting.json",
+                output / "meetings" / "meeting-000003" / "meeting.json",
+            ]
+            prepared = [json.loads(path.read_text(encoding="utf-8")) for path in prepared_paths]
+            self.assertEqual(
+                [meeting["meeting_id"] for meeting in prepared],
+                ["meeting-000001", "meeting-000002", "meeting-000003"],
+            )
+            self.assertEqual(warning_count, 0)
+            self.assertEqual(
+                evidence_ids["meeting-alpha:source-record-id"],
+                "meeting-000002:record-000001",
+            )
+            self.assertEqual(
+                evidence_ids["meeting-beta:source-record-id"],
+                "meeting-000003:record-000001",
+            )
+            self.assertNotIn("source-record-id", evidence_ids)
+
+    def test_duplicate_and_malformed_meetings_fail_before_output(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            write_meeting(source, "meeting-shared", root=True)
+            write_meeting(source, "meeting-shared")
+            with mock.patch.object(sys, "argv", [
+                str(MODULE_PATH), "--run", str(source), "--out", str(output)
+            ]):
+                with self.assertRaisesRegex(
+                    SystemExit, f"^{MODULE.INPUT_MEETING_ID_DUPLICATE}$"
+                ):
+                    MODULE.main()
+            self.assertFalse(output.exists())
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            write_meeting(source, "meeting-malformed", records="not-a-list")
+            with mock.patch.object(sys, "argv", [
+                str(MODULE_PATH), "--run", str(source), "--out", str(output)
+            ]):
+                with self.assertRaisesRegex(
+                    SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$"
+                ):
+                    MODULE.main()
+            self.assertFalse(output.exists())
+
+    def test_plural_meeting_path_escape_is_rejected(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            outside = root / "outside"
+            write_meeting(outside, "meeting-escape", root=True)
+            (source / "meetings").mkdir(parents=True)
+            directory_link_or_skip(
+                self, source / "meetings" / "meeting-escape", outside
+            )
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{MODULE.INPUT_PATH_OUTSIDE_RUN}$"
+            ):
+                MODULE.discover_meetings(source)
 
 
 if __name__ == "__main__":

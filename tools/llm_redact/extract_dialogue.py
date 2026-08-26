@@ -14,8 +14,12 @@ import sys
 TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
+LLM_REDACT_ROOT = pathlib.Path(__file__).resolve().parent
+if str(LLM_REDACT_ROOT) not in sys.path:
+    sys.path.insert(0, str(LLM_REDACT_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
+from prepare_ai_review_run import discover_meetings
 
 KEEP_EVENT_TYPE = "message"
 
@@ -74,6 +78,22 @@ def extract_meeting(path: pathlib.Path) -> dict | None:
     }
 
 
+def extract_bundles(run: pathlib.Path) -> list[dict]:
+    bundles = []
+    trajectories = run / "trajectories"
+    if trajectories.is_dir():
+        bundles.extend(
+            extract_one(traj_dir)
+            for traj_dir in sorted(trajectories.iterdir())
+            if traj_dir.is_dir()
+        )
+    for meeting in discover_meetings(run):
+        bundle = extract_meeting(meeting["path"])
+        if bundle:
+            bundles.append(bundle)
+    return bundles
+
+
 def main() -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -81,21 +101,9 @@ def main() -> int:
     parser.add_argument("--out", type=pathlib.Path, required=True)
     args = parser.parse_args()
 
-    args.out.mkdir(parents=True, exist_ok=True)
     index = []
-    bundles = []
-    trajectories = args.run / "trajectories"
-    if trajectories.is_dir():
-        bundles.extend(
-            extract_one(traj_dir)
-            for traj_dir in sorted(trajectories.iterdir())
-            if traj_dir.is_dir()
-        )
-    meeting_path = args.run / "meeting.json"
-    if meeting_path.is_file():
-        meeting = extract_meeting(meeting_path)
-        if meeting:
-            bundles.append(meeting)
+    bundles = extract_bundles(args.run)
+    args.out.mkdir(parents=True, exist_ok=True)
     for bundle in bundles:
         if not bundle["turns"]:
             continue
