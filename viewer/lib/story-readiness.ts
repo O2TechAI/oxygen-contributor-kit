@@ -2,6 +2,8 @@ import {
   LEGACY_STORY_PREFIX,
   STORY_COVERAGE_KEYS,
   STORY_PREFIX,
+  SUCCESSOR_STORY_PREFIX,
+  parseStorySource,
   parseStoryAnnotation,
   resolveEvidenceTarget,
   selectProjectTimeline,
@@ -50,6 +52,25 @@ export type StoryCandidateValidation =
   | { ok: false; code: StoryCandidateFailureCode };
 
 const failure = (code: StoryCandidateFailureCode): StoryCandidateValidation => ({ ok: false, code });
+
+export type SuccessorStorySourceFailureCode =
+  | "SUCCESSOR_STORY_CANDIDATE_MISSING"
+  | "SUCCESSOR_STORY_CHAPTER_INVALID"
+  | "SUCCESSOR_STORY_KEY_DUPLICATED"
+  | "SUCCESSOR_STORY_PHASE_INVALID"
+  | "SUCCESSOR_STORY_PHASE_ORDER_INVALID"
+  | "SUCCESSOR_STORY_EVIDENCE_INVALID"
+  | "SUCCESSOR_STORY_PEOPLE_INVALID"
+  | "SUCCESSOR_STORY_CONTEXT_RETENTION_INVALID"
+  | "SUCCESSOR_STORY_INSIGHT_GROUNDING_INVALID";
+
+export type SuccessorStorySourceValidation =
+  | { ok: true; chapterCount: number; canonicalCandidate: string }
+  | { ok: false; code: SuccessorStorySourceFailureCode };
+
+const successorFailure = (
+  code: SuccessorStorySourceFailureCode,
+): SuccessorStorySourceValidation => ({ ok: false, code });
 
 const normalizedCopy = (value: string) => value.toLowerCase()
   .replace(/[^a-z0-9\p{L}]+/gu, " ")
@@ -534,6 +555,143 @@ export function validateStoryCandidatePackage(
   return {
     ok: true,
     chapterCount: annotations.length,
+    canonicalCandidate: JSON.stringify(candidateRows.map((row) => ({ id: row.id, summary: row.summary }))),
+  };
+}
+
+const successorGenericPhases = new Set([
+  ...GENERIC_PHASES,
+  "general work",
+  "other",
+  "later stage",
+]);
+const successorPhaseLabelPattern = /^[\p{L}\p{N}]+(?:[-'][\p{L}\p{N}]+)*(?:\s+[\p{L}\p{N}]+(?:[-'][\p{L}\p{N}]+)*)?$/u;
+
+/** Validate staged Story-First source semantics without activating the result
+ * into current Review Session, Viewer, or release consumers. */
+export function validateSuccessorStorySourcePackage(
+  candidateRows: StoryCandidateRow[],
+  evidenceRows: StoryEvidenceRow[],
+): SuccessorStorySourceValidation {
+  if (!candidateRows.length) return successorFailure("SUCCESSOR_STORY_CANDIDATE_MISSING");
+  const keys = new Set<string>();
+  const completedPhases = new Set<string>();
+  const phaseLabels = new Map<string, string>();
+  let activePhase = "";
+
+  for (const row of candidateRows) {
+    if (!row.summary.startsWith(SUCCESSOR_STORY_PREFIX)) {
+      return successorFailure("SUCCESSOR_STORY_CHAPTER_INVALID");
+    }
+    const parsed = parseStorySource(row.summary);
+    if (!parsed || parsed.schema !== "oxygen.story/3") {
+      return successorFailure("SUCCESSOR_STORY_CHAPTER_INVALID");
+    }
+    if (keys.has(parsed.key)) return successorFailure("SUCCESSOR_STORY_KEY_DUPLICATED");
+    keys.add(parsed.key);
+
+    const phaseId = parsed.phase.id;
+    const phaseLabel = parsed.phase.label.trim();
+    const phaseWordCount = phaseLabel.split(/\s+/u).length;
+    if (phaseWordCount < 1 || phaseWordCount > 2
+      || !successorPhaseLabelPattern.test(phaseLabel)
+      || successorGenericPhases.has(normalizedCopy(phaseLabel))) {
+      return successorFailure("SUCCESSOR_STORY_PHASE_INVALID");
+    }
+    const existingPhaseLabel = phaseLabels.get(phaseId);
+    if (existingPhaseLabel && existingPhaseLabel !== phaseLabel) {
+      return successorFailure("SUCCESSOR_STORY_PHASE_INVALID");
+    }
+    phaseLabels.set(phaseId, phaseLabel);
+    if (phaseId !== activePhase) {
+      if (completedPhases.has(phaseId)) {
+        return successorFailure("SUCCESSOR_STORY_PHASE_ORDER_INVALID");
+      }
+      if (activePhase) completedPhases.add(activePhase);
+      activePhase = phaseId;
+    }
+
+    const chapterEvidence = new Map<string, { row: StoryEvidenceRow; actor: string }>();
+    const evidenceReferences = [parsed.evidence.primary, ...parsed.evidence.supporting];
+    for (const reference of evidenceReferences) {
+      const resolution = resolveEvidenceTarget(evidenceRows, reference.eventId);
+      if (resolution.status !== "resolved" || reference.eventId !== resolution.itemId) {
+        return successorFailure("SUCCESSOR_STORY_EVIDENCE_INVALID");
+      }
+      const evidenceRow = evidenceRows[resolution.index];
+      if (!evidenceRow || evidenceRow.documentId !== reference.documentId) {
+        return successorFailure("SUCCESSOR_STORY_EVIDENCE_INVALID");
+      }
+      chapterEvidence.set(JSON.stringify([reference.documentId, reference.eventId]), {
+        row: evidenceRow,
+        actor: actorSignature(evidenceRow),
+      });
+    }
+    const belongsToChapter = (reference: { documentId: string; eventId: string }) => (
+      chapterEvidence.has(JSON.stringify([reference.documentId, reference.eventId]))
+    );
+
+    if (parsed.people.length === 0) return successorFailure("SUCCESSOR_STORY_PEOPLE_INVALID");
+    const requiredActors = new Set([...chapterEvidence.values()].map((entry) => entry.actor).filter(Boolean));
+    if (requiredActors.size === 0) return successorFailure("SUCCESSOR_STORY_PEOPLE_INVALID");
+    const coveredActors = new Set<string>();
+    for (const person of parsed.people) {
+      if (!person.evidence.every(belongsToChapter)) {
+        return successorFailure("SUCCESSOR_STORY_PEOPLE_INVALID");
+      }
+      const personActors = new Set(person.evidence.map((reference) => (
+        chapterEvidence.get(JSON.stringify([reference.documentId, reference.eventId]))?.actor || ""
+      )));
+      if (personActors.size !== 1 || personActors.has("")
+        || [...personActors].some((actor) => coveredActors.has(actor))) {
+        return successorFailure("SUCCESSOR_STORY_PEOPLE_INVALID");
+      }
+      personActors.forEach((actor) => coveredActors.add(actor));
+    }
+    if ([...requiredActors].some((actor) => !coveredActors.has(actor))) {
+      return successorFailure("SUCCESSOR_STORY_PEOPLE_INVALID");
+    }
+
+    const representedEvidence = new Set<string>();
+    const storyBlocks = new Map(parsed.story.blocks.map((block) => [block.id, block]));
+    for (const block of parsed.story.blocks) {
+      if (!block.evidence.every(belongsToChapter)) {
+        return successorFailure("SUCCESSOR_STORY_EVIDENCE_INVALID");
+      }
+      block.evidence.forEach((reference) => representedEvidence.add(
+        JSON.stringify([reference.documentId, reference.eventId]),
+      ));
+    }
+    const excludedEvidence = new Set<string>();
+    for (const exclusion of parsed.contextRetention.excluded) {
+      const key = JSON.stringify([exclusion.evidence.documentId, exclusion.evidence.eventId]);
+      if (!belongsToChapter(exclusion.evidence) || representedEvidence.has(key)) {
+        return successorFailure("SUCCESSOR_STORY_CONTEXT_RETENTION_INVALID");
+      }
+      excludedEvidence.add(key);
+    }
+    if ([...chapterEvidence.keys()].some((key) => (
+      !representedEvidence.has(key) && !excludedEvidence.has(key)
+    ))) return successorFailure("SUCCESSOR_STORY_CONTEXT_RETENTION_INVALID");
+
+    for (const insight of parsed.insights) {
+      const anchoredBlocks = insight.quote.storyBlockIds.map((blockId) => storyBlocks.get(blockId));
+      if (anchoredBlocks.some((block) => !block)
+        || !insight.evidence.every(belongsToChapter)) {
+        return successorFailure("SUCCESSOR_STORY_INSIGHT_GROUNDING_INVALID");
+      }
+      const anchoredEvidence = new Set(anchoredBlocks.flatMap((block) => (
+        block?.evidence.map((reference) => JSON.stringify([reference.documentId, reference.eventId])) || []
+      )));
+      if (insight.evidence.some((reference) => !anchoredEvidence.has(
+        JSON.stringify([reference.documentId, reference.eventId]),
+      ))) return successorFailure("SUCCESSOR_STORY_INSIGHT_GROUNDING_INVALID");
+    }
+  }
+
+  return {
+    ok: true,
+    chapterCount: candidateRows.length,
     canonicalCandidate: JSON.stringify(candidateRows.map((row) => ({ id: row.id, summary: row.summary }))),
   };
 }

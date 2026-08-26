@@ -11,6 +11,7 @@ export type TimelineCandidate = {
 
 export const STORY_PREFIX = "oxygen.story-highlight/2:";
 export const LEGACY_STORY_PREFIX = "oxygen.story-milestone/1:";
+export const SUCCESSOR_STORY_PREFIX = "oxygen.story/3:";
 
 export type MilestoneKind =
   | "foundation"
@@ -96,6 +97,51 @@ export type StoryPerson = {
   /** Reviewed references supporting this functional role. Historical review
    * artifacts may omit this field; newly activated candidates require it. */
   evidence?: EvidenceReference[];
+};
+
+export type SuccessorStoryPerson = Omit<StoryPerson, "evidence"> & {
+  evidence: EvidenceReference[];
+};
+
+export type SuccessorStoryBlock = {
+  id: string;
+  text: string;
+  evidence: EvidenceReference[];
+};
+
+export type SuccessorStoryInsight = {
+  id: string;
+  title?: string;
+  background: string;
+  quote: { storyBlockIds: string[] };
+  directlyAcquiredExperience: string;
+  principle: string;
+  evidence: EvidenceReference[];
+};
+
+export type SuccessorStorySource = {
+  schema: "oxygen.story/3";
+  key: string;
+  phase: { id: string; label: string };
+  kind?: MilestoneKind;
+  title: string;
+  overview: string;
+  people: SuccessorStoryPerson[];
+  story: {
+    blocks: SuccessorStoryBlock[];
+    uncertainty?: string;
+  };
+  insights: SuccessorStoryInsight[];
+  evidence: {
+    primary: EvidenceReference;
+    supporting: EvidenceReference[];
+  };
+  contextRetention: {
+    excluded: Array<{
+      evidence: EvidenceReference;
+      reason: StoryContextExclusionReason;
+    }>;
+  };
 };
 
 export type StoryChapter = {
@@ -327,7 +373,7 @@ export type StoryAnnotation = {
   narrativeReview?: StoryNarrativeReview;
 };
 
-type LegacyStoryAnnotation = {
+export type LegacyStoryAnnotation = {
   schema: "oxygen.story-milestone/1";
   key: string;
   phase: string;
@@ -932,6 +978,114 @@ export function parseStoryAnnotation(summary?: string): StoryAnnotation | Legacy
   } catch {
     return null;
   }
+}
+
+function validSuccessorStoryPerson(value: unknown): value is SuccessorStoryPerson {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || !onlyKeys(value, ["id", "releaseLabel", "role", "description", "localIdentityState", "evidence"])) return false;
+  const person = value as Partial<SuccessorStoryPerson>;
+  return validStableId(person.id)
+    && nonEmptyString(person.releaseLabel)
+    && nonEmptyString(person.role)
+    && nonEmptyString(person.description)
+    && (person.localIdentityState === "not_identified" || person.localIdentityState === "local_only")
+    && Array.isArray(person.evidence) && person.evidence.length > 0
+    && person.evidence.every(validEvidence)
+    && uniqueValues(person.evidence.map(evidenceKey));
+}
+
+function validSuccessorStoryBlock(value: unknown): value is SuccessorStoryBlock {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || !onlyKeys(value, ["id", "text", "evidence"])) return false;
+  const block = value as Partial<SuccessorStoryBlock>;
+  return validStableId(block.id)
+    && nonEmptyString(block.text) && block.text.length <= 20_000
+    && Array.isArray(block.evidence) && block.evidence.length > 0
+    && block.evidence.every(validEvidence)
+    && uniqueValues(block.evidence.map(evidenceKey));
+}
+
+function validSuccessorStoryInsight(value: unknown): value is SuccessorStoryInsight {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || !onlyKeys(value, [
+      "id", "title", "background", "quote", "directlyAcquiredExperience", "principle", "evidence",
+    ])) return false;
+  const insight = value as Partial<SuccessorStoryInsight>;
+  const quote = insight.quote;
+  return validStableId(insight.id)
+    && (insight.title === undefined || (typeof insight.title === "string" && insight.title.length <= 500))
+    && nonEmptyString(insight.background) && insight.background.length <= 4_000
+    && Boolean(quote && typeof quote === "object" && !Array.isArray(quote)
+      && onlyKeys(quote, ["storyBlockIds"])
+      && Array.isArray(quote.storyBlockIds) && quote.storyBlockIds.length > 0
+      && quote.storyBlockIds.every(validStableId)
+      && uniqueValues(quote.storyBlockIds))
+    && nonEmptyString(insight.directlyAcquiredExperience)
+    && insight.directlyAcquiredExperience.length <= 4_000
+    && nonEmptyString(insight.principle) && insight.principle.length <= 4_000
+    && Array.isArray(insight.evidence) && insight.evidence.length > 0
+    && insight.evidence.every(validEvidence)
+    && uniqueValues(insight.evidence.map(evidenceKey));
+}
+
+/** Parse the staged Story-First source contract. This is intentionally not
+ * used by the current Timeline or Review Session activation path. */
+export function parseSuccessorStorySource(summary?: string): SuccessorStorySource | null {
+  if (!summary?.startsWith(SUCCESSOR_STORY_PREFIX)) return null;
+  try {
+    const value = JSON.parse(summary.slice(SUCCESSOR_STORY_PREFIX.length)) as Partial<SuccessorStorySource>;
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || !onlyKeys(value, [
+        "schema", "key", "phase", "kind", "title", "overview", "people", "story",
+        "insights", "evidence", "contextRetention",
+      ])
+      || value.schema !== "oxygen.story/3"
+      || !validStableId(value.key)
+      || !value.phase || typeof value.phase !== "object" || Array.isArray(value.phase)
+      || !onlyKeys(value.phase, ["id", "label"])
+      || !validStableId(value.phase.id) || !nonEmptyString(value.phase.label)
+      || (value.kind !== undefined && !KINDS.has(value.kind))
+      || !nonEmptyString(value.title) || value.title.length > 500
+      || !nonEmptyString(value.overview) || value.overview.length > 20_000
+      || !Array.isArray(value.people) || !value.people.every(validSuccessorStoryPerson)
+      || !uniqueValues(value.people.map((person) => person.id))
+      || !value.story || typeof value.story !== "object" || Array.isArray(value.story)
+      || !onlyKeys(value.story, ["blocks", "uncertainty"])
+      || !Array.isArray(value.story.blocks) || value.story.blocks.length === 0
+      || !value.story.blocks.every(validSuccessorStoryBlock)
+      || !uniqueValues(value.story.blocks.map((block) => block.id))
+      || (value.story.uncertainty !== undefined
+        && (!nonEmptyString(value.story.uncertainty) || value.story.uncertainty.length > 4_000))
+      || !Array.isArray(value.insights) || !value.insights.every(validSuccessorStoryInsight)
+      || !uniqueValues(value.insights.map((insight) => insight.id))
+      || !value.evidence || typeof value.evidence !== "object" || Array.isArray(value.evidence)
+      || !onlyKeys(value.evidence, ["primary", "supporting"])
+      || !validEvidence(value.evidence.primary)
+      || !Array.isArray(value.evidence.supporting) || !value.evidence.supporting.every(validEvidence)
+      || !uniqueValues([value.evidence.primary, ...value.evidence.supporting].map(evidenceKey))
+      || !value.contextRetention || typeof value.contextRetention !== "object"
+      || Array.isArray(value.contextRetention) || !onlyKeys(value.contextRetention, ["excluded"])
+      || !Array.isArray(value.contextRetention.excluded)
+      || !value.contextRetention.excluded.every((item) => Boolean(item
+        && typeof item === "object" && !Array.isArray(item)
+        && onlyKeys(item, ["evidence", "reason"])
+        && validEvidence(item.evidence)
+        && STORY_CONTEXT_EXCLUSION_REASONS.includes(item.reason)))
+      || !uniqueValues(value.contextRetention.excluded.map((item) => evidenceKey(item.evidence)))) return null;
+    return value as SuccessorStorySource;
+  } catch {
+    return null;
+  }
+}
+
+/** Explicit bounded dispatch. Malformed successor input never falls back to
+ * an older Story parser. */
+export function parseStorySource(
+  summary?: string,
+): StoryAnnotation | LegacyStoryAnnotation | SuccessorStorySource | null {
+  return summary?.startsWith(SUCCESSOR_STORY_PREFIX)
+    ? parseSuccessorStorySource(summary)
+    : parseStoryAnnotation(summary);
 }
 
 export function milestoneKindLabel(kind: MilestoneKind, language: StoryLanguage = "en") {
