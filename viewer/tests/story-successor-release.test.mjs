@@ -97,9 +97,17 @@ function context(currentSource) {
 }
 
 function humanContent(currentSource, overrides = {}) {
+  const text = "approved Story text";
+  const block = currentSource.story.blocks.find((item) => item.id === "story-block-safe");
+  const start = block.text.indexOf(text);
   return {
     background: "Human-approved background.",
-    quote: { chapterKey: currentSource.key, storyBlockIds: ["story-block-safe"] },
+    quote: {
+      chapterKey: currentSource.key,
+      storyBlockId: "story-block-safe",
+      selection: { start, end: start + text.length, text },
+      baseRevision: 2,
+    },
     directlyAcquiredExperience: "The contributor directly acquired this experience.",
     principle: "Preserve the checked boundary.",
     evidence: [evidence],
@@ -176,11 +184,45 @@ test("human-approved Insight releases with stable identity and no review provena
   assert.deepEqual(release.chapters[0].en.insights, [{
     id: "human:release-boundary",
     background: human.background,
-    quote: "The approved Story text states the safe boundary.",
+    quote: "approved Story text",
     directlyAcquiredExperience: human.directlyAcquiredExperience,
     principle: human.principle,
   }]);
-  assert.doesNotMatch(JSON.stringify(release), /human_created|chapterKey|storyBlockIds|appliedRevision/);
+  assert.doesNotMatch(JSON.stringify(release), /human_created|chapterKey|storyBlockId|selection|baseRevision|appliedRevision/);
+});
+
+test("human Quote Privacy is exact: selected bytes fail closed and redaction elsewhere does not broaden", () => {
+  const privacy = { redact: (copy) => copy.replaceAll(PRIVATE, '<redacted category="secret"/>') };
+
+  const elsewhere = source([]);
+  elsewhere.story.blocks[1].text = `The approved Story text states the safe boundary. ${PRIVATE}`;
+  const elsewhereHuman = humanContent(elsewhere);
+  const elsewhereRelease = buildSuccessorReviewedStoryRelease(
+    [elsewhere],
+    { [elsewhere.key]: reviewedState(elsewhere, {}, [["human:elsewhere", elsewhereHuman]]) },
+    privacy,
+  );
+  assert.equal(elsewhereRelease.chapters[0].en.insights[0].quote, "approved Story text");
+  assert.doesNotMatch(JSON.stringify(elsewhereRelease), new RegExp(PRIVATE));
+
+  const selected = source([]);
+  selected.story.blocks[1].text = `The approved ${PRIVATE} Story text states the safe boundary.`;
+  const start = selected.story.blocks[1].text.indexOf(PRIVATE);
+  const selectedHuman = humanContent(selected, {
+    quote: {
+      chapterKey: selected.key,
+      storyBlockId: "story-block-safe",
+      selection: { start, end: start + PRIVATE.length, text: PRIVATE },
+      baseRevision: 2,
+    },
+  });
+  const selectedRelease = buildSuccessorReviewedStoryRelease(
+    [selected],
+    { [selected.key]: reviewedState(selected, {}, [["human:selected-private", selectedHuman]]) },
+    privacy,
+  );
+  assert.deepEqual(selectedRelease.chapters[0].en.insights, []);
+  assert.doesNotMatch(JSON.stringify(selectedRelease), new RegExp(PRIVATE));
 });
 
 test("pending, missing, and edited-without-reaccept successor Insight state blocks release", () => {
@@ -446,11 +488,19 @@ test("synthetic live server flow releases zero, one, and mixed multiple Insights
     const release = await reconstructReviewedStoryReleaseFromDatabase(db, request());
     assert.equal(release.ok, true);
     assert.deepEqual(release.story.chapters[0].en.insights.map((item) => item.id), expected);
+    if (options.includeHuman) {
+      assert.equal(release.story.chapters[0].en.insights
+        .find((item) => item.id === "human:approved").quote, "approved Story text");
+    }
     const zipEntry = successorReviewedStoryPackageEntry(release.story);
     assert.equal(zipEntry.data, release.serializedStory);
     const embedded = renderReviewedStoryHtml(release.serializedStory)
       .match(/const STORY=([\s\S]*?);const view=/)?.[1];
     assert.deepEqual(JSON.parse(embedded), JSON.parse(zipEntry.data));
+    if (options.includeHuman) {
+      assert.equal(JSON.parse(zipEntry.data).chapters[0].en.insights
+        .find((item) => item.id === "human:approved").quote, "approved Story text");
+    }
     assert.equal(release.story.publication_approved, false);
   }
 });

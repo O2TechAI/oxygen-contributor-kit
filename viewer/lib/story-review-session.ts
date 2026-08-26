@@ -211,10 +211,10 @@ function canonicalChapterReview(value: unknown) {
   } as unknown as ChapterReviewState;
 }
 
-function canonicalSuccessorInsightContent(value: unknown, humanAnchor = false): SuccessorInsightContent | null {
+function canonicalSuccessorInsightContent(value: unknown): SuccessorInsightContent | null {
   if (!isRecord(value) || !isRecord(value.quote)
     || !onlyKeys(value, ["title", "background", "quote", "directlyAcquiredExperience", "principle", "evidence"])
-    || !onlyKeys(value.quote, humanAnchor ? ["chapterKey", "storyBlockIds"] : ["storyBlockIds"])) return null;
+    || !onlyKeys(value.quote, ["storyBlockIds"])) return null;
   const storyBlockIds = canonicalStringArray(value.quote.storyBlockIds, 500);
   const evidence = canonicalEvidenceList(value.evidence);
   if (!storyBlockIds || storyBlockIds.length === 0 || !storyBlockIds.every(validStableId)
@@ -238,13 +238,32 @@ function canonicalSuccessorInsightContent(value: unknown, humanAnchor = false): 
 }
 
 function canonicalSuccessorHumanInsightContent(value: unknown): SuccessorHumanInsightContent | null {
-  if (!isRecord(value) || !isRecord(value.quote) || !validStableId(value.quote.chapterKey)) return null;
-  const content = canonicalSuccessorInsightContent(value, true);
+  if (!isRecord(value) || !isRecord(value.quote) || !isRecord(value.quote.selection)
+    || !onlyKeys(value, ["title", "background", "quote", "directlyAcquiredExperience", "principle", "evidence"])
+    || !onlyKeys(value.quote, ["chapterKey", "storyBlockId", "selection", "baseRevision"])
+    || !onlyKeys(value.quote.selection, ["start", "end", "text"])
+    || !validStableId(value.quote.chapterKey) || !validStableId(value.quote.storyBlockId)) return null;
+  const selectionStart = value.quote.selection.start;
+  const selectionEnd = value.quote.selection.end;
+  const selectionText = value.quote.selection.text;
+  const baseRevision = value.quote.baseRevision;
+  if (typeof selectionStart !== "number" || typeof selectionEnd !== "number"
+    || typeof selectionText !== "string" || typeof baseRevision !== "number") return null;
+  const content = canonicalSuccessorInsightContent({
+    ...value,
+    quote: { storyBlockIds: [value.quote.storyBlockId] },
+  });
   return content ? {
     ...content,
     quote: {
       chapterKey: value.quote.chapterKey,
-      storyBlockIds: content.quote.storyBlockIds,
+      storyBlockId: value.quote.storyBlockId,
+      selection: {
+        start: selectionStart,
+        end: selectionEnd,
+        text: selectionText,
+      },
+      baseRevision,
     },
   } : null;
 }

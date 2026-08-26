@@ -1,6 +1,11 @@
-import type { ChapterReviewState, SuccessorChapterReviewState } from "./story-review.ts";
+import type {
+  ChapterReviewState,
+  SuccessorChapterReviewState,
+  SuccessorHumanInsightContent,
+} from "./story-review.ts";
 import {
   applyStoryReviewToBlock,
+  successorHumanQuoteText,
   successorStoryBlocks,
   validateChapterReviewCompletion,
   validateSuccessorChapterReviewCompletion,
@@ -293,19 +298,42 @@ function successorInsightProjection(
 ): SuccessorReleaseInsight | null {
   const anchors = content.quote.storyBlockIds.map((blockId) => blocks.get(blockId));
   if (!anchors.length || anchors.some((block) => !block || block.redacted)) return null;
+  return successorInsightProduct(id, content, anchors.map((block) => block!.copy).join("\n\n"), privacy);
+}
+
+function successorInsightProduct(
+  id: string,
+  content: Omit<SuccessorHumanInsightContent, "quote" | "evidence">,
+  quote: string,
+  privacy: SuccessorReleasePrivacy,
+): SuccessorReleaseInsight {
   return {
     id,
     ...(content.title === undefined ? {} : { title: privacy.redact(content.title) }),
     background: privacy.redact(content.background),
-    quote: anchors.map((block) => block!.copy).join("\n\n"),
+    quote,
     directlyAcquiredExperience: privacy.redact(content.directlyAcquiredExperience),
     principle: privacy.redact(content.principle),
   };
 }
 
-/** Build the distinct Story-First reviewed product. Privacy-prepared Story
- * blocks own Quote copy; source anchors, Evidence, and review provenance never
- * enter the released contract. */
+function successorHumanInsightProjection(
+  id: string,
+  content: SuccessorHumanInsightContent,
+  state: SuccessorChapterReviewState,
+  source: SuccessorStorySource,
+  privacy: SuccessorReleasePrivacy,
+): SuccessorReleaseInsight | null {
+  const quote = successorHumanQuoteText(state, source, content);
+  if (quote === null) return null;
+  const privacyPreparedQuote = privacy.redact(quote);
+  if (privacyPreparedQuote !== quote) return null;
+  return successorInsightProduct(id, content, quote, privacy);
+}
+
+/** Build the distinct Story-First reviewed product. AI Quotes use safe Story
+ * blocks; Human Quotes use their exact Privacy-safe Story selection. Anchors,
+ * Evidence, and review provenance never enter the released contract. */
 export function buildSuccessorReviewedStoryRelease(
   sources: SuccessorStorySource[],
   reviews: Record<string, SuccessorChapterReviewState>,
@@ -338,7 +366,13 @@ export function buildSuccessorReviewedStoryRelease(
     for (const [insightId, review] of Object.entries(state.humanInsights)) {
       if (review.decision !== "human_approved" || review.resolution !== "applied"
         || review.appliedVersion !== review.version) return [];
-      const projected = successorInsightProjection(insightId, review.content, blocksById, privacy);
+      const projected = successorHumanInsightProjection(
+        insightId,
+        review.content,
+        state,
+        source,
+        privacy,
+      );
       if (projected) insights.push(projected);
     }
     insights.sort((left, right) => left.id.localeCompare(right.id));

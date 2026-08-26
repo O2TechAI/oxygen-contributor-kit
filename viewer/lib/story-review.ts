@@ -13,12 +13,14 @@ export type PrivacyDecision = "keep" | "redact";
 export type StoryAnnotationType = "delete" | "revise" | "add";
 export type StoryAnnotationResolution = "pending" | "applied" | "needs_evidence" | "cancelled";
 
+export type StoryTextSelection = { start: number; end: number; text: string };
+
 export type StoryReviewAnnotation = {
   id: string;
   blockId: string;
   type: StoryAnnotationType;
   sourceLanguage: StoryLanguage;
-  selection: { start: number; end: number; text: string };
+  selection: StoryTextSelection;
   instruction?: string;
   supportingEvidence?: EvidenceReference[];
   resolution: StoryAnnotationResolution;
@@ -185,7 +187,12 @@ export type ApplyReviewContext = ChapterReviewCompletionContext & {
 
 export type SuccessorInsightContent = Omit<SuccessorStoryInsight, "id">;
 export type SuccessorHumanInsightContent = Omit<SuccessorInsightContent, "quote"> & {
-  quote: { chapterKey: string; storyBlockIds: string[] };
+  quote: {
+    chapterKey: string;
+    storyBlockId: string;
+    selection: StoryTextSelection;
+    baseRevision: number;
+  };
 };
 
 export type SuccessorSourceInsightReview = {
@@ -880,10 +887,21 @@ function validSuccessorHumanInsightContent(value: unknown): value is SuccessorHu
     || !quote || typeof quote !== "object" || Array.isArray(quote)) return false;
   const content = value as unknown as SuccessorHumanInsightContent;
   return validStableId(content.quote.chapterKey)
-    && onlyKeys(content.quote, ["chapterKey", "storyBlockIds"])
+    && onlyKeys(content.quote, ["chapterKey", "storyBlockId", "selection", "baseRevision"])
+    && validStableId(content.quote.storyBlockId)
+    && Number.isInteger(content.quote.baseRevision) && content.quote.baseRevision >= 1
+    && Boolean(content.quote.selection && typeof content.quote.selection === "object"
+      && !Array.isArray(content.quote.selection)
+      && onlyKeys(content.quote.selection, ["start", "end", "text"])
+      && Number.isInteger(content.quote.selection.start)
+      && Number.isInteger(content.quote.selection.end)
+      && content.quote.selection.start >= 0
+      && content.quote.selection.end > content.quote.selection.start
+      && typeof content.quote.selection.text === "string"
+      && content.quote.selection.text.length === content.quote.selection.end - content.quote.selection.start)
     && validSuccessorInsightContent({
       ...content,
-      quote: { storyBlockIds: content.quote.storyBlockIds },
+      quote: { storyBlockIds: [content.quote.storyBlockId] },
     });
 }
 
@@ -899,13 +917,47 @@ function successorContentBelongsToSource(content: SuccessorInsightContent, sourc
   return content.evidence.every((item) => anchoredEvidence.has(evidenceKey(item)));
 }
 
-function successorHumanContentBelongsToSource(content: SuccessorHumanInsightContent, source: SuccessorStorySource) {
+function successorHumanQuoteTextForValidation(
+  state: SuccessorChapterReviewState,
+  source: SuccessorStorySource,
+  content: SuccessorHumanInsightContent,
+  allowStaleCurrent = false,
+) {
+  if (!validSuccessorHumanInsightContent(content) || content.quote.baseRevision > state.revision) return null;
+  const snapshots = reviewSnapshots(state, successorStoryBlocks(source));
+  const base = snapshots?.get(content.quote.baseRevision)?.en?.[content.quote.storyBlockId];
+  const selection = content.quote.selection;
+  if (typeof base !== "string" || selection.end > base.length
+    || base.slice(selection.start, selection.end) !== selection.text) return null;
+  const current = snapshots?.get(state.revision)?.en?.[content.quote.storyBlockId];
+  if (typeof current !== "string") return null;
+  return allowStaleCurrent || (selection.end <= current.length
+    && current.slice(selection.start, selection.end) === selection.text)
+    ? selection.text
+    : null;
+}
+
+export function successorHumanQuoteText(
+  state: SuccessorChapterReviewState,
+  source: SuccessorStorySource,
+  content: SuccessorHumanInsightContent,
+) {
+  return successorHumanQuoteTextForValidation(state, source, content);
+}
+
+function successorHumanContentBelongsToSource(
+  content: SuccessorHumanInsightContent,
+  source: SuccessorStorySource,
+  state: SuccessorChapterReviewState,
+  allowStaleCurrent = false,
+) {
   return validSuccessorHumanInsightContent(content)
     && content.quote.chapterKey === source.key
     && successorContentBelongsToSource({
       ...content,
-      quote: { storyBlockIds: content.quote.storyBlockIds },
-    }, source);
+      quote: { storyBlockIds: [content.quote.storyBlockId] },
+    }, source)
+    && successorHumanQuoteTextForValidation(state, source, content, allowStaleCurrent) !== null;
 }
 
 export function successorStoryBlocks(source: SuccessorStorySource): StoryBlockCollection {
@@ -963,7 +1015,12 @@ export function validateSuccessorChapterReviewLedger(
     && Number.isInteger(review.version) && review.version >= 1
     && (review.decision === "draft" || review.decision === "human_approved")
     && (review.resolution === "pending" || review.resolution === "applied")
-    && successorHumanContentBelongsToSource(review.content, source)
+    && successorHumanContentBelongsToSource(
+      review.content,
+      source,
+      state,
+      review.decision === "draft" && review.resolution === "pending",
+    )
     && (review.resolution === "pending"
       ? review.appliedVersion === undefined && review.appliedRevision === undefined
       : review.decision === "human_approved"
@@ -1063,7 +1120,7 @@ export function editSuccessorHumanInsight(
   if (state.stage === "human_confirmed"
     || !validStableId(insightId) || !insightId.startsWith("human:")
     || source.insights.some((insight) => insight.id === insightId)
-    || !successorHumanContentBelongsToSource(content, source)) return state;
+    || !successorHumanContentBelongsToSource(content, source, state)) return state;
   return {
     ...state,
     stage: "reviewing",
@@ -1813,9 +1870,24 @@ export function applySuccessorChapterReview(
   );
   if (result.blockedReason) return { state, blockedReason: result.blockedReason };
   const applied = result.state as SuccessorChapterReviewState;
+  const reviewWithStaleHumanQuotesReopened: SuccessorChapterReviewState = {
+    ...applied,
+    humanInsights: Object.fromEntries(Object.entries(applied.humanInsights).map(([insightId, review]) => (
+      review.resolution === "applied" && successorHumanQuoteText(applied, context.source, review.content) === null
+        ? [insightId, {
+          ...review,
+          version: review.version + 1,
+          decision: "draft" as const,
+          resolution: "pending" as const,
+          appliedVersion: undefined,
+          appliedRevision: undefined,
+        }]
+        : [insightId, review]
+    ))),
+  };
   const revision = applied.revision;
   const records: SuccessorInsightRevisionRecord[] = [];
-  const sourceInsightReviews = Object.fromEntries(Object.entries(applied.sourceInsightReviews).map(([insightId, review]) => {
+  const sourceInsightReviews = Object.fromEntries(Object.entries(reviewWithStaleHumanQuotesReopened.sourceInsightReviews).map(([insightId, review]) => {
     if (review.resolution !== "pending" || review.decision === "pending") return [insightId, review];
     records.push({
       revision,
@@ -1831,7 +1903,7 @@ export function applySuccessorChapterReview(
       appliedRevision: revision,
     }];
   })) as Record<string, SuccessorSourceInsightReview>;
-  const humanInsights = Object.fromEntries(Object.entries(applied.humanInsights).map(([insightId, review]) => {
+  const humanInsights = Object.fromEntries(Object.entries(reviewWithStaleHumanQuotesReopened.humanInsights).map(([insightId, review]) => {
     if (review.resolution !== "pending" || review.decision !== "human_approved") return [insightId, review];
     records.push({
       revision,
@@ -1848,11 +1920,11 @@ export function applySuccessorChapterReview(
     }];
   })) as Record<string, SuccessorHumanInsightReview>;
   const nextState: SuccessorChapterReviewState = {
-    ...applied,
+    ...reviewWithStaleHumanQuotesReopened,
     sourceInsightReviews,
     humanInsights,
     successorInsightRevisionHistory: [
-      ...applied.successorInsightRevisionHistory,
+      ...reviewWithStaleHumanQuotesReopened.successorInsightRevisionHistory,
       ...records,
     ].sort(successorRevisionOrder),
   };
@@ -1868,7 +1940,7 @@ export function saveSuccessorHumanInsight(
   context: SuccessorChapterReviewContext,
   insightId: string,
   content: SuccessorHumanInsightContent,
-) {
+): { state: SuccessorChapterReviewState; blockedReason?: "insights" } {
   const existing = state.humanInsights[insightId];
   const reuseDraft = existing?.decision === "draft" && existing.resolution === "pending"
     && JSON.stringify(existing.content) === JSON.stringify(content);
@@ -1919,9 +1991,9 @@ export function saveSuccessorHumanInsight(
       {
         revision,
         insightId,
-        origin: "human_created",
+        origin: "human_created" as const,
         version: review.version,
-        decision: "human_approved",
+        decision: "human_approved" as const,
       },
     ].sort(successorRevisionOrder),
   };

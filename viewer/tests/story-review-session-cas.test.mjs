@@ -77,7 +77,12 @@ function successorSessionWithHuman(updatedAt = "2099-01-01T00:00:00.000Z") {
   const base = emptySuccessorChapterReview(successorSource);
   const human = editSuccessorHumanInsight(base, successorSource, "human:valid", {
     background: "A bounded human-authored context.",
-    quote: { chapterKey: successorSource.key, storyBlockIds: ["block-safe"] },
+    quote: {
+      chapterKey: successorSource.key,
+      storyBlockId: "block-safe",
+      selection: { start: 2, end: 17, text: "synthetic Story" },
+      baseRevision: 1,
+    },
     directlyAcquiredExperience: "The exact source changed the reviewed decision.",
     principle: "Validate durable review state against its exact source.",
     evidence: [successorEvidence],
@@ -323,7 +328,7 @@ test("successor CAS rejects source-invalid updates without changing durable stat
   };
   const foreignAnchor = structuredClone(valid);
   foreignAnchor.chapterReviews[successorSource.key]
-    .humanInsights["human:valid"].content.quote.storyBlockIds = ["missing-block"];
+    .humanInsights["human:valid"].content.quote.storyBlockId = "missing-block";
   const foreignEvidence = structuredClone(valid);
   foreignEvidence.chapterReviews[successorSource.key]
     .humanInsights["human:valid"].content.evidence = [{ documentId: "foreign", eventId: "missing" }];

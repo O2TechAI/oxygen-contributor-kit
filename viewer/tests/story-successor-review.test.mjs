@@ -13,6 +13,7 @@ import {
   recordStoryEdit,
   saveSuccessorHumanInsight,
   successorChapterReviewCompletionBlockers,
+  successorHumanQuoteText,
   successorStoryBlocks,
   updateSuccessorAiInsightDecision,
   validateChapterReviewCompletion,
@@ -88,7 +89,12 @@ function context(currentSource, overrides = {}) {
 function humanContent(currentSource, overrides = {}) {
   return {
     background: "A human-authored bounded context.",
-    quote: { chapterKey: currentSource.key, storyBlockIds: ["block-a"] },
+    quote: {
+      chapterKey: currentSource.key,
+      storyBlockId: "block-a",
+      selection: { start: 4, end: 20, text: "reviewer checked" },
+      baseRevision: 2,
+    },
     directlyAcquiredExperience: "The checked boundary directly changed the decision.",
     principle: "Check the boundary when the decision depends on it.",
     evidence: [evidenceA],
@@ -226,14 +232,26 @@ test("human Save creates a distinct human-approved stable Insight without redund
   assert.equal(review.resolution, "applied");
   assert.equal(review.version, 1);
   assert.equal(review.appliedVersion, 1);
+  assert.deepEqual(review.content.quote, humanContent(currentSource).quote);
+  assert.equal(successorHumanQuoteText(saved.state, currentSource, review.content), "reviewer checked");
   assert.equal(validateSuccessorChapterReviewCompletion(saved.state, context(currentSource)), true);
   assert.equal(saved.state.sourceInsightReviews["human:boundary"], undefined);
 
   const session = createSuccessorStoryReviewSession("reviewed-run", {
     [currentSource.key]: saved.state,
   }, {}, "2026-08-25T00:00:00.000Z");
-  assert.equal(canonicalizeSuccessorStoryReviewSession(structuredClone(session))
-    .chapterReviews[currentSource.key].humanInsights["human:boundary"].version, 1);
+  const roundtrip = canonicalizeSuccessorStoryReviewSession(structuredClone(session));
+  assert.equal(roundtrip.chapterReviews[currentSource.key].humanInsights["human:boundary"].version, 1);
+  assert.deepEqual(
+    roundtrip.chapterReviews[currentSource.key].humanInsights["human:boundary"].content.quote,
+    humanContent(currentSource).quote,
+  );
+  const hydrated = hydrateSuccessorStoryReviewSession(session, "reviewed-run", [currentSource]);
+  assert.equal(successorHumanQuoteText(
+    hydrated.chapterReviews[currentSource.key],
+    currentSource,
+    hydrated.chapterReviews[currentSource.key].humanInsights["human:boundary"].content,
+  ), "reviewer checked");
 });
 
 test("human Save applies only the targeted human Insight", () => {
@@ -294,10 +312,10 @@ test("human Insight anchors, Evidence, four-part content, and IDs fail closed", 
   const currentSource = source(["human:collision"]);
   const base = applyBase(currentSource);
   const invalid = [
-    humanContent(currentSource, { quote: { chapterKey: "foreign-chapter", storyBlockIds: ["block-a"] } }),
-    humanContent(currentSource, { quote: { chapterKey: currentSource.key, storyBlockIds: ["missing-block"] } }),
-    humanContent(currentSource, { quote: { chapterKey: currentSource.key, storyBlockIds: ["block-a", "block-a"] } }),
-    humanContent(currentSource, { quote: { chapterKey: currentSource.key, storyBlockIds: ["block-a"], domain: "raw_private_input" } }),
+    humanContent(currentSource, { quote: { ...humanContent(currentSource).quote, chapterKey: "foreign-chapter" } }),
+    humanContent(currentSource, { quote: { ...humanContent(currentSource).quote, storyBlockId: "missing-block" } }),
+    humanContent(currentSource, { quote: { ...humanContent(currentSource).quote, selection: { start: 4, end: 20, text: "different bytes" } } }),
+    humanContent(currentSource, { quote: { ...humanContent(currentSource).quote, domain: "raw_private_input" } }),
     humanContent(currentSource, { evidence: [{ documentId: "foreign", eventId: "missing" }] }),
     humanContent(currentSource, { principle: "" }),
   ];
@@ -305,6 +323,71 @@ test("human Insight anchors, Evidence, four-part content, and IDs fail closed", 
     assert.equal(editSuccessorHumanInsight(base, currentSource, "human:new", content), base);
   }
   assert.equal(editSuccessorHumanInsight(base, currentSource, "human:collision", humanContent(currentSource)), base);
+});
+
+test("human Quote offsets and exact text identity fail closed", () => {
+  const currentSource = source([]);
+  const base = applyBase(currentSource);
+  const valid = humanContent(currentSource);
+  const invalidSelections = [
+    { start: 4, end: 4, text: "" },
+    { start: -1, end: 4, text: "The r" },
+    { start: 4.5, end: 20, text: "reviewer checked" },
+    { start: 4, end: 200, text: "reviewer checked" },
+    { start: 4, end: 20, text: "reviewer changed" },
+  ];
+  for (const selection of invalidSelections) {
+    const content = humanContent(currentSource, { quote: { ...valid.quote, selection } });
+    assert.equal(editSuccessorHumanInsight(base, currentSource, "human:invalid-range", content), base);
+  }
+  const futureRevision = humanContent(currentSource, { quote: { ...valid.quote, baseRevision: 99 } });
+  assert.equal(editSuccessorHumanInsight(base, currentSource, "human:future-range", futureRevision), base);
+});
+
+test("Story changes reopen an invalidated human Quote without moving or widening its range", () => {
+  const currentSource = source([]);
+  const saved = saveSuccessorHumanInsight(
+    applyBase(currentSource), context(currentSource), "human:range", humanContent(currentSource),
+  ).state;
+  const changed = addStoryAnnotation(saved, createStoryAnnotation({
+    blockId: "block-a",
+    type: "revise",
+    sourceLanguage: "en",
+    baseRevision: saved.revision,
+    selection: { start: 4, end: 20, text: "reviewer checked" },
+    instruction: "contributor verified",
+  }));
+  const applied = applySuccessorChapterReview(changed, context(currentSource));
+  assert.equal(applied.blockedReason, undefined);
+  const reopened = applied.state.humanInsights["human:range"];
+  assert.equal(reopened.version, 2);
+  assert.equal(reopened.decision, "draft");
+  assert.equal(reopened.resolution, "pending");
+  assert.equal(reopened.appliedVersion, undefined);
+  assert.equal(successorHumanQuoteText(applied.state, currentSource, reopened.content), null);
+  assert.equal(successorChapterReviewCompletionBlockers(applied.state, context(currentSource))
+    .some((blocker) => blocker.code === "human_insight_pending"), true);
+});
+
+test("an unrelated Story change after the selected bytes preserves the exact human Quote", () => {
+  const currentSource = source([]);
+  const saved = saveSuccessorHumanInsight(
+    applyBase(currentSource), context(currentSource), "human:range", humanContent(currentSource),
+  ).state;
+  const changed = addStoryAnnotation(saved, createStoryAnnotation({
+    blockId: "block-a",
+    type: "revise",
+    sourceLanguage: "en",
+    baseRevision: saved.revision,
+    selection: { start: 25, end: 33, text: "boundary" },
+    instruction: "limit",
+  }));
+  const applied = applySuccessorChapterReview(changed, context(currentSource));
+  assert.equal(applied.blockedReason, undefined);
+  const preserved = applied.state.humanInsights["human:range"];
+  assert.equal(preserved.decision, "human_approved");
+  assert.equal(preserved.resolution, "applied");
+  assert.equal(successorHumanQuoteText(applied.state, currentSource, preserved.content), "reviewer checked");
 });
 
 test("mutable Insights require every Evidence reference to be supported by a declared Story anchor", () => {
@@ -348,10 +431,15 @@ test("mutable Insights require every Evidence reference to be supported by a dec
   assert.notEqual(editSuccessorHumanInsight(
     base,
     currentSource,
-    "human:two-anchors",
+    "human:block-b",
     humanContent(currentSource, {
-      quote: { chapterKey: currentSource.key, storyBlockIds: ["block-a", "block-b"] },
-      evidence: [evidenceA, evidenceB],
+      quote: {
+        chapterKey: currentSource.key,
+        storyBlockId: "block-b",
+        selection: { start: 4, end: 15, text: "next action" },
+        baseRevision: 2,
+      },
+      evidence: [evidenceB],
     }),
   ), base);
 });
@@ -437,6 +525,12 @@ test("successor hydration requires exact Chapters, source Insight IDs, anchors, 
   const foreignAnchor = structuredClone(session);
   foreignAnchor.chapterReviews[beta.key].humanInsights["human:hydrated"].content.quote.chapterKey = "foreign-chapter";
   assert.deepEqual(hydrateSuccessorStoryReviewSession(foreignAnchor, "reviewed-run", [alpha, beta]).chapterReviews, {});
+  const staleRange = structuredClone(session);
+  staleRange.chapterReviews[beta.key].humanInsights["human:hydrated"].content.quote.selection.text = "changed selection";
+  assert.deepEqual(hydrateSuccessorStoryReviewSession(staleRange, "reviewed-run", [alpha, beta]).chapterReviews, {});
+  const malformedRange = structuredClone(session);
+  malformedRange.chapterReviews[beta.key].humanInsights["human:hydrated"].content.quote.selection.end = 500;
+  assert.deepEqual(hydrateSuccessorStoryReviewSession(malformedRange, "reviewed-run", [alpha, beta]).chapterReviews, {});
   const foreignEvidence = structuredClone(session);
   foreignEvidence.chapterReviews[beta.key].humanInsights["human:hydrated"].content.evidence = [{
     documentId: "foreign", eventId: "missing",

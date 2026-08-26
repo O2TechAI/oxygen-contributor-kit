@@ -41,11 +41,13 @@ test("confirmed Insight changes reopen review before edited bytes enter session 
 
 test("human Add Insight uses one native same-block selection and a stable human identity", () => {
   assert.match(editor, /selection\.rangeCount !== 1/);
-  assert.match(editor, /start !== end/);
-  assert.match(editor, /root\.contains\(start\).*root\.contains\(end\)/);
-  assert.match(editor, /block\.text\.includes\(current\.quote\)/);
+  assert.match(editor, /startCopy !== endCopy/);
+  assert.match(editor, /root\.contains\(startCopy\).*root\.contains\(endCopy\)/);
+  assert.match(editor, /selection: \{ start, end, text \}/);
+  assert.match(editor, /reviewed\.slice\(current\.selection\.start, current\.selection\.end\) !== current\.selection\.text/);
   assert.match(editor, /id: `human:\$\{crypto\.randomUUID\(\)\}`/);
   assert.match(editor, /saveSuccessorHumanInsight/);
+  assert.match(editor, /baseRevision: chapterReview\.revision/);
   assert.match(editor, /Human-created · approved on Save/);
   assert.doesNotMatch(editor, /Accept human Insight|redundant Accept/);
 });
@@ -55,6 +57,8 @@ test("four meanings use safe Story grounding without raw Evidence copy", () => {
     assert.match(editor, new RegExp(label));
   }
   assert.match(editor, /quoteText\(source, visible\.quote\.storyBlockIds\)/);
+  assert.match(editor, /successorHumanQuoteText\(chapterReview, source, review\.content\)/);
+  assert.match(editor, /fixedQuote=\{humanDraft\.quote\.selection\.text\}/);
   assert.match(editor, /Raw Evidence is never shown/);
   assert.doesNotMatch(successorEditor, /eventId\}|documentId\}|Inspect exact evidence/);
 });
@@ -77,12 +81,19 @@ test("workspace consumes the server-owned exact contract and releases both mappe
   assert.doesNotMatch(download, /inactive in this Viewer lane/);
 });
 
-test("successor progress counts independently resolved AI Insight versions, including zero-of-zero", () => {
+test("successor progress counts resolved AI versions and presents zero as affirmative", () => {
   assert.match(workspace, /const successorInsightProgress = successorProjectChapters\.reduce/);
   assert.match(workspace, /progress\.total\+=chapter\.source\.insights\.length/);
   assert.match(workspace, /review\?\.resolution==="applied" && review\.appliedVersion===review\.version/);
   assert.match(workspace, /reviewedInsightTotal = storyLane === "legacy" \? viewerChapters\.length : successorInsightProgress\.total/);
-  assert.match(workspace, /reviewedInsights\}\/\{reviewedInsightTotal\}/);
+  assert.match(workspace, /No AI Insights required/);
+  assert.match(successorEditor, /Review the Story as-is, and add a human Insight from selected Story text only if useful/);
+  assert.doesNotMatch(successorEditor, /source\.insights\.length\s*\?\s*"No AI Insights required"/);
+});
+
+test("successor handoff progress uses the canonical completion evaluator", () => {
+  assert.match(workspace, /state\?\.stage === "human_confirmed"[\s\S]*successorChapterReviewCompletionBlockers\(state,successorCompletionContext\(chapter\.source\)\)\.length === 0/);
+  assert.doesNotMatch(workspace, /successorProjectChapters\.filter\(\(chapter\) => successorChapterReviews\[chapter\.source\.key\]\?\.stage === "human_confirmed"\)/);
 });
 
 test("the route accepts only explicit canonical schema dispatch", () => {

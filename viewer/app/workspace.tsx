@@ -769,7 +769,11 @@ export function InlineWorkspace({
   const reviewedInsightTotal = storyLane === "legacy" ? viewerChapters.length : successorInsightProgress.total;
   const confirmedChapters = storyLane === "legacy"
     ? buildReviewedStoryRelease(highlights,chapterReviews).chapters.length
-    : successorProjectChapters.filter((chapter) => successorChapterReviews[chapter.source.key]?.stage === "human_confirmed").length;
+    : successorProjectChapters.filter((chapter) => {
+      const state=successorChapterReviews[chapter.source.key];
+      return state?.stage === "human_confirmed"
+        && successorChapterReviewCompletionBlockers(state,successorCompletionContext(chapter.source)).length === 0;
+    }).length;
   const displayedWorkflow = workflow ? withHumanReviewProgress(workflow, confirmedChapters, viewerChapters.length) : null;
   const phaseSectionRef = (index:number,node:HTMLElement|null) => {
     if(node) phaseSectionRefs.current.set(index,node);
@@ -1049,7 +1053,7 @@ export function InlineWorkspace({
               <div className="storyCanvasGrid"><div className="storyTimelineColumn">
                 <header className="storyOrientation"><p className="eyebrow">{labels.projectStory}</p><h1>{summary.primary_project || detail?.document.title}</h1>
                   <p>{projectStorySummary}</p>
-                  <div className="storyStats"><span><b>{viewerChapters.length}</b> {labels.milestones}</span><span><b>{phaseGroups.length}</b> {labels.phases}</span><span><b>{reviewedInsights}/{reviewedInsightTotal}</b> {storyLane==="successor"?labels.successorReviewed:labels.reviewed}</span><span><b>{docs.length}</b> {labels.retained}</span></div>
+                  <div className="storyStats"><span><b>{viewerChapters.length}</b> {labels.milestones}</span><span><b>{phaseGroups.length}</b> {labels.phases}</span>{storyLane==="successor" && reviewedInsightTotal===0?<span><b>{storyLanguage==="zh"?"无需 AI 洞察":"No AI Insights required"}</b></span>:<span><b>{reviewedInsights}/{reviewedInsightTotal}</b> {storyLane==="successor"?labels.successorReviewed:labels.reviewed}</span>}<span><b>{docs.length}</b> {labels.retained}</span></div>
                   <small>{docs.length} {storyLanguage==="zh"?"条已审阅来源记录": "reviewed source records"} · {projectCount(selectedProject || primaryProject).toLocaleString()} {labels.events} · {storyLanguage==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
                 </header>
                 <p className="storyNextStep" data-story-stream-instruction>↘ {labels.nextStep}</p>
