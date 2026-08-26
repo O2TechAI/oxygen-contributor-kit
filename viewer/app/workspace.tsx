@@ -15,7 +15,17 @@ import { milestoneKindLabel, type EvidenceReference, type StoryLanguage } from "
 import { selectReviewableStoryTimeline } from "../lib/story-readiness";
 import { buildReviewedStoryRelease } from "../lib/story-release";
 import { phaseGroupIdentity, restoreChapterContext, type ChapterRestoreContext } from "../lib/story-navigation";
-import { createStoryReviewSession, hydrateStoryReviewSession } from "../lib/story-review-session";
+import {
+  canonicalizeStoryReviewSession,
+  createStoryReviewSession,
+  hydrateStoryReviewSession,
+} from "../lib/story-review-session";
+import {
+  StoryReviewSessionPersistenceError,
+  StoryReviewSessionPersistenceQueue,
+  runDurableStoryReviewHandoff,
+  type StoryReviewSessionSaveAcknowledgement,
+} from "../lib/story-review-session-persistence";
 import {
   isStoryReviewReady,
   isStoryWorkspaceReady,
@@ -120,7 +130,13 @@ export function InlineWorkspace({
   const storyDataLoadingRunRef = useRef("");
   const storySessionLoadingRunRef = useRef("");
   const storySessionHydratedRunRef = useRef(initialStorySessionReadyRunId);
+  const storyPersistenceReadyRunRef = useRef("");
   const storyPackageReloadKeyRef = useRef("");
+  const currentStoryStateRef = useRef({
+    chapterReviews: initialChapterReviews,
+    privacyDecisions: initialPrivacyDecisions,
+    highlights: [] as ReturnType<typeof selectReviewableStoryTimeline>,
+  });
   const activeChapterButtonRef = useCallback((node:HTMLButtonElement|null) => {
     if (!node) return;
     requestAnimationFrame(() => node.scrollIntoView({ block:"nearest" }));
@@ -136,6 +152,34 @@ export function InlineWorkspace({
   const [redactionJob,setRedactionJob] = useState<RedactionJob>(null);
   const [redactionBusy,setRedactionBusy] = useState("");
   const redactionJobStatus = redactionJob?.status;
+  const storyPersistenceRef = useRef<StoryReviewSessionPersistenceQueue|null>(null);
+  if (storyPersistenceRef.current == null) {
+    storyPersistenceRef.current = new StoryReviewSessionPersistenceQueue({
+      save: async (request) => {
+        const response = await fetch("/api/story-review-session", {
+          method:"POST",
+          headers:{ "content-type":"application/json" },
+          body:JSON.stringify(request),
+        });
+        const payload = await response.json().catch(() => ({})) as Partial<StoryReviewSessionSaveAcknowledgement>
+          & { error?:string; code?:string };
+        if (!response.ok) {
+          throw new StoryReviewSessionPersistenceError(
+            payload.code || "STORY_SESSION_SAVE_FAILED",
+            payload.error || "Story review state could not be safely persisted",
+          );
+        }
+        return payload as StoryReviewSessionSaveAcknowledgement;
+      },
+      onStatus: (persistence) => {
+        if (persistence.status === "conflict") {
+          setError("Story review changed or its source was replaced. Reload before continuing.");
+        } else if (persistence.status === "failed" && persistence.errorCode) {
+          setError("Story review state could not be safely persisted");
+        }
+      },
+    });
+  }
 
   const loadWorkflow = useCallback(async () => {
     const query = scopedWorkflowRunId
@@ -273,6 +317,8 @@ export function InlineWorkspace({
       storyDataLoadingRunRef.current = "";
       storySessionLoadingRunRef.current = "";
       storySessionHydratedRunRef.current = "";
+      if (storyPersistenceReadyRunRef.current) storyPersistenceRef.current?.invalidate();
+      storyPersistenceReadyRunRef.current = "";
       return;
     }
     if (storyDataReadyRunId === workflowRunId
@@ -312,7 +358,8 @@ export function InlineWorkspace({
     const documentsReady = status?.status === "empty"
       || (status?.status === "complete" && docs.length >= status.documentCount);
     if (!workflowRunId || !storyReviewReady || storyDataReadyRunId !== workflowRunId || !documentsReady
-      || storySessionHydratedRunRef.current === workflowRunId
+      || (storySessionHydratedRunRef.current === workflowRunId
+        && storyPersistenceReadyRunRef.current === workflowRunId)
       || storySessionLoadingRunRef.current === workflowRunId) return;
     storySessionLoadingRunRef.current = workflowRunId;
     let cancelled = false;
@@ -320,14 +367,33 @@ export function InlineWorkspace({
       try {
         const response = await fetch(`/api/story-review-session?workflowRunId=${encodeURIComponent(workflowRunId)}`, { cache:"no-store" });
         if (!response.ok) throw new Error("Story review persistence could not be loaded");
-        const payload = await response.json() as { session?: unknown };
+        const payload = await response.json() as {
+          session?: unknown;
+          serverVersion?: unknown;
+          sourceRevision?: unknown;
+          persistedAt?: unknown;
+        };
+        if (!Number.isSafeInteger(payload.serverVersion) || Number(payload.serverVersion) < 0
+          || !Number.isSafeInteger(payload.sourceRevision) || Number(payload.sourceRevision) < 0
+          || (payload.persistedAt !== null && typeof payload.persistedAt !== "string")) {
+          throw new Error("Story review persistence metadata is invalid");
+        }
+        const canonicalSession = canonicalizeStoryReviewSession(payload.session);
         const events = docs.flatMap((doc) => (doc.formatted_summary?.highlights || []).map((event) => ({ ...event, documentId:doc.id })))
           .sort((a,b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
-        const restored = hydrateStoryReviewSession(payload.session, workflowRunId, selectReviewableStoryTimeline(events));
+        const restored = hydrateStoryReviewSession(canonicalSession, workflowRunId, selectReviewableStoryTimeline(events));
         if (!cancelled) {
+          storyPersistenceRef.current?.initialize({
+            workflowRunId,
+            serverVersion: Number(payload.serverVersion),
+            sourceRevision: Number(payload.sourceRevision),
+            session: canonicalSession,
+            persistedAt: payload.persistedAt as string|null,
+          });
           setChapterReviews(restored.chapterReviews);
           setPrivacyDecisions(restored.privacyDecisions);
           storySessionHydratedRunRef.current = workflowRunId;
+          storyPersistenceReadyRunRef.current = workflowRunId;
           setStorySessionReadyRunId(workflowRunId);
         }
       } catch (value) {
@@ -398,22 +464,14 @@ export function InlineWorkspace({
 
   useEffect(() => {
     if (!workflowRunId || storySessionReadyRunId !== workflowRunId
-      || storySessionHydratedRunRef.current !== workflowRunId) return;
+      || storySessionHydratedRunRef.current !== workflowRunId
+      || storyPersistenceReadyRunRef.current !== workflowRunId) return;
     const session = createStoryReviewSession(workflowRunId, chapterReviews, privacyDecisions);
     if (!session) {
       const errorTimer = setTimeout(() => setError("Story review state could not be safely persisted"), 0);
       return () => clearTimeout(errorTimer);
     }
-    const timer = setTimeout(() => {
-      void fetch("/api/story-review-session", {
-        method:"POST",
-        headers:{ "content-type":"application/json" },
-        body:JSON.stringify(session),
-      }).then((response) => {
-        if (!response.ok) throw new Error("Story review state could not be safely persisted");
-      }).catch((value) => setError(value instanceof Error ? value.message : "Story review state could not be safely persisted"));
-    }, 400);
-    return () => clearTimeout(timer);
+    storyPersistenceRef.current?.schedule(session);
   }, [chapterReviews, privacyDecisions, storySessionReadyRunId, workflowRunId]);
 
   const storyWorkspaceReady = isStoryWorkspaceReady(workflow, {
@@ -422,9 +480,6 @@ export function InlineWorkspace({
     documentCount: docs.length,
     organizationStatus: status?.status,
   });
-  if (!storyWorkspaceReady) {
-    return <WorkflowProgress workflow={workflow} status={status} error={error} language={language} />;
-  }
   const isProject = selected.startsWith("project:");
   const selectedProject = isProject ? selected.slice("project:".length) : "";
   const allHighlights = hydrationHighlights
@@ -440,6 +495,12 @@ export function InlineWorkspace({
     highlights: allHighlights.filter((event) => event.project === selectedProject),
   } : detail?.document.formatted_summary || {};
   const highlights = selectReviewableStoryTimeline(summary.highlights || []);
+  useEffect(() => {
+    currentStoryStateRef.current = { chapterReviews, privacyDecisions, highlights };
+  }, [chapterReviews, highlights, privacyDecisions]);
+  if (!storyWorkspaceReady) {
+    return <WorkflowProgress workflow={workflow} status={status} error={error} language={language} />;
+  }
   if (!activatedStoryHighlights.length
     || (view === "timeline" && !highlights.length)
     || storySessionReadyRunId !== workflowRunId) {
@@ -561,8 +622,29 @@ export function InlineWorkspace({
   const updateChapterReview = (storyKey:string,review:ChapterReviewState) => setChapterReviews((current) => ({...current,[storyKey]:review}));
   const downloadReviewed = async (url:string,filename:string) => {
     setError("");
-    const reviewedStory=buildReviewedStoryRelease(highlights,chapterReviews);
-    const response=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({reviewedStory})});
+    const persistence=storyPersistenceRef.current;
+    if (!persistence || storyPersistenceReadyRunRef.current !== workflowRunId) {
+      setError("Story review persistence is not ready for handoff");
+      return;
+    }
+    let response:Response;
+    try {
+      response=await runDurableStoryReviewHandoff({
+        persistence,
+        currentSession: () => {
+          const current=currentStoryStateRef.current;
+          return createStoryReviewSession(workflowRunId,current.chapterReviews,current.privacyDecisions);
+        },
+        handoff: ({workflowRunId,serverVersion,sourceRevision}) => fetch(url,{
+          method:"POST",
+          headers:{"content-type":"application/json"},
+          body:JSON.stringify({workflowRunId,serverVersion,sourceRevision}),
+        }),
+      });
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "Story review state could not be safely persisted");
+      return;
+    }
     if(!response.ok) {
       const failure=await response.json().catch(()=>({error:"Download failed"})) as {error?:string};
       setError(failure.error || "Download failed");

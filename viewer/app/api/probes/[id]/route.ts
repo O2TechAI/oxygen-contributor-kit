@@ -1,4 +1,9 @@
 import { getD1 } from "../../../../db";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireEstablishedWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../../lib/workflow-run-server";
 
 // Record, change, or withdraw one answer. Only an explicit answer becomes a
 // confirmed preference -- clearing it returns the probe to unanswered rather
@@ -6,6 +11,10 @@ import { getD1 } from "../../../../db";
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const body = await request.json() as {
     choice?: string | null;
     text?: string | null;

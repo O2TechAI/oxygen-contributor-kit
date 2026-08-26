@@ -34,12 +34,14 @@
 
 Point your coding agent at this repo and say:
 
-> Follow the Oxygen contributor SOP for this repository. Collect only my in-scope local history,
-> organize it by project, prepare the privacy review, ask me the preference questions as one
-> batch, open the local Viewer as soon as it is available, and finish with a downloadable ZIP.
+> Use the Oxygen Contributor Kit for this repository. Collect only my in-scope local history,
+> organize it by project, prepare the privacy review, build Project Story, pause for my Story
+> review, then show Preferences and Release Preview and finish with a downloadable ZIP.
 > Do not upload or publish anything.
 
-The agent reads [AGENTS.md](AGENTS.md) and [SOP.md](SOP.md) before it touches anything.
+The agent starts with [AGENTS.md](AGENTS.md), then opens each owning Skill when its stage begins.
+[SOP.md](SOP.md) remains the complete human and maintainer reference, not mandatory whole-file
+startup context for every Agent run.
 
 ---
 
@@ -52,23 +54,23 @@ The agent reads [AGENTS.md](AGENTS.md) and [SOP.md](SOP.md) before it touches an
         ①  COLLECT      only sessions whose cwd is inside the repo
                       │
                       ▼
-        ②  ORGANIZE     project labels · one combined timeline · 10-40 milestones
-                      │
-                      ▼
-        ③  PREPARE      every non-conversational event becomes a bare action label
-                      │              (code, commands, paths, artifacts: gone)
-                      ▼
-        ④  REDACT       your configured AI model, then fail-closed validation
-                      │
-                      ▼
-        ⑤  REVIEW       local Viewer: release preview · edit · delete · answer probes
-                      │
-                      ▼
-        ⑥  PACKAGE      one ZIP, publication_approved = false
+        ②  ORGANIZE     project labels · one combined timeline
+                       │
+                       ▼
+        ③  CHECK PRIVACY  prepared reviewed input · fail-closed validation
+                       │
+                       ▼
+        ④  BUILD PROJECT STORY  evidence-derived Chapters · no numeric quota
+                       │
+                       ▼
+        ⑤  REVIEW STORY  human review in the local Viewer · Agent pauses
+                       │
+                       ▼
+        ⑥  RELEASE HANDOFF  Preferences · Release Preview · reviewed ZIP
 ```
 
-Producing or downloading a ZIP **is not** publication approval. Neither is answering a preference
-question. Each is a separate, explicit act.
+`All set`, producing or downloading a ZIP, and answering a preference question are each separate
+from publication. `publication_approved` remains `false` unless a separate future workflow exists.
 
 ---
 
@@ -174,12 +176,12 @@ Run in this order:
 2. **[`oxygen-organize-review-export`](skills/oxygen-organize-review-export/SKILL.md)** — labels
    mixed conversations by project, selects the primary project, builds one combined timeline per
    project, continues the progress-first Viewer, and packages the reviewed run.
-3. **[`oxygen-elicit-contributor-preferences`](skills/oxygen-elicit-contributor-preferences/SKILL.md)**
-   — finds high-signal friction moments and asks evidence-grounded questions, without inventing
-   preferences.
-4. **[`oxygen-storytelling-review`](skills/oxygen-storytelling-review/SKILL.md)** — transforms an
+3. **[`oxygen-storytelling-review`](skills/oxygen-storytelling-review/SKILL.md)** — transforms an
    already-reviewed project history into an evidence-linked, bilingual Project Story with
    iterative human confirmation that remains separate from publication.
+4. **[`oxygen-elicit-contributor-preferences`](skills/oxygen-elicit-contributor-preferences/SKILL.md)**
+   — after Story review, generates or validates evidence-grounded probes from the same
+   privacy-prepared reviewed input, without inventing preferences.
 
 Supporting tools live in [`tools/llm_redact/`](tools/llm_redact/) (model backend, validators,
 audits) and [`tools/ingest/`](tools/ingest/) (collection and import).

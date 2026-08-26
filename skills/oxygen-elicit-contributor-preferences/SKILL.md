@@ -1,6 +1,6 @@
 ---
 name: oxygen-elicit-contributor-preferences
-description: Turn an organized Oxygen run into a small set of answerable questions that recover the contributor's transferable preferences. Auto-removes clearly-unsafe content and reports the counts, asks once in bulk about judgement-call content, finds the high-signal moments where preferences actually surfaced, reconstructs each situation, and offers three evidence-grounded candidate preferences plus an escape hatch. Use after organization and before the contributor finalizes what to contribute.
+description: Turn a privacy-prepared reviewed Oxygen run into a small set of answerable questions that recover the contributor's transferable preferences. Reuse validated privacy counts and reviewed exclusions, find the high-signal moments where preferences surfaced, reconstruct each situation, and offer three evidence-grounded candidate preferences plus an escape hatch. Use after human Story review during reviewed handoff.
 ---
 
 # Elicit contributor preferences
@@ -16,7 +16,7 @@ uploaded. `publication_approved` stays `false`.
 Two different things get called "sensitive" in this project. Keep them apart:
 
 - **Unsafe content** — credentials, personal identifiers, third-party private data. Detection and
-  removal belong to the redaction pass. This skill only *reports* what it removed.
+  removal belong to the earlier Privacy stage. This skill only reuses its validated aggregate.
 - **High-signal moments** — turns where the contributor pushed back, corrected, argued, or
   reversed a decision. These are not risky; they are the **most valuable** turns, because that is
   where an unstated preference became visible. This skill hunts for these.
@@ -26,59 +26,48 @@ sensitive" destroys the exact thing this workflow exists to capture.
 
 ## Input
 
-An organized run: `work/<run>/` containing `index.json`, `trajectories/`, optionally
-`meeting.json`, and `project-map.json` from `$oxygen-organize-review-export`.
+A privacy-prepared reviewed run: `work/<run>-review/` containing `index.json`, `trajectories/`,
+optionally `meeting.json`, and `project-map.json` from `$oxygen-organize-review-export`.
+
+Do not reopen the raw organized run and do not independently apply or rerun redaction. Generate or
+validate probes only from this reviewed boundary.
 
 Work only on events whose project label is the primary project unless the contributor asks
 otherwise. Off-project events are noise and spending the contributor's attention on them is the
 main way this pass fails.
 
-## Stage 1 — Remove the clearly-unsafe, then say so
+## Stage 1 — Verify the reviewed boundary and report prior removals
 
-Apply the redaction pass. Then report an aggregate, never a silent mutation:
+Read the validated Privacy summary already attached to the reviewed input. Report its aggregate,
+never removed content and never a new mutation:
 
 ```text
 Removed 37 items before review:
   12  credentials and tokens
   19  file paths containing your username
    6  third-party contact details
-Nothing here needed your judgement. Say "show removals" to inspect or undo any of them.
+These counts came from the completed Privacy preparation.
 ```
 
 Rules:
 
 - Report a total and a per-category breakdown. A bare "removed some sensitive content" is not
   acceptable — the contributor cannot audit a number they were never shown.
-- Every removal stays reversible for the whole session. Record the original in the audit log.
 - If the count is zero, say so explicitly. Silence reads as "the tool did not run".
 - Do not include the removed content itself in the summary.
+- Do not create, change, inspect, or undo Privacy decisions in this skill.
 
-## Stage 2 — Ask once, in bulk, about judgement calls
+## Stage 2 — Preserve reviewed judgement-call decisions
 
-Some content is not unsafe but the contributor may still not want to ship it: complaints about
-named people, blunt opinions about other teams or products, venting. This is a judgement call,
-not a rule, so **do not auto-remove it** — and do not ask about it one item at a time either.
-
-Aggregate into a single question with a count and a one-click action:
-
-```text
-Found 41 passages where you or a teammate criticized a named person or organization.
-These are not unsafe, but you may not want to contribute them.
-  [Remove all 41]  [Keep all]  [Let me look first]
-```
-
-Then confirm with a count:
-
-```text
-Removed 41 passages. Say "undo" to restore them.
-```
+Honor the bulk judgement-call decisions already recorded by Privacy preparation. Excluded passages
+do not become probe recaps or candidate preferences, and this skill does not ask the contributor to
+repeat those Privacy decisions.
 
 Rules:
 
-- One question per category, not per occurrence.
-- Always offer inspection as a third option. Bulk actions without a preview are how contributors
-  lose content they wanted.
-- Default to **keep** if the contributor does not answer. Removal must be a deliberate act.
+- Use only the reviewed, permitted events that remain in the prepared input.
+- Never reconstruct or summarize excluded content.
+- Missing Privacy preparation is a blocker, not permission to fall back to raw history.
 
 ## Stage 3 — Find the high-signal moments
 
@@ -170,6 +159,7 @@ target document, and an undo. A probe that silently disappears on click reads as
 
 - Never fabricate a preference the contributor did not confirm. An unanswered probe is unanswered
   data, not a soft yes.
+- Never reopen raw project history or independently run a redaction workflow.
 - Never treat an answered probe as publication approval.
 - Never read credential files, private keys, tokens, or cookies.
 - Use the contributor's configured model and key. Do not require a bundled Oxygen key.

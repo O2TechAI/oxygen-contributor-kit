@@ -4,7 +4,13 @@ import { access, readFile } from "node:fs/promises";
 import { syntheticStoryEvents, syntheticStoryProject } from "./fixtures/synthetic-story-project.mjs";
 import { buildReviewedStoryRelease } from "../lib/story-release.ts";
 import { applyChapterReview, emptyChapterReview, markChapterReady } from "../lib/story-review.ts";
-import { STORY_PREFIX, parseStoryAnnotation, resolveEvidenceTarget, selectProjectTimeline } from "../lib/timeline.ts";
+import {
+  STORY_PREFIX,
+  parseStoryAnnotation,
+  resolveEvidenceTarget,
+  selectProjectTimeline,
+  storyReleaseTargetCatalog,
+} from "../lib/timeline.ts";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
@@ -138,6 +144,7 @@ test("the synthetic project completes through the shared review and release runt
       storyKey: milestone.story.key,
       privacyCandidates: presentation.privacy.candidates,
       privacyDecisions,
+      targetCatalog: storyReleaseTargetCatalog(presentation),
       reviewableInsightIds: presentation.highlights.map((highlight) => highlight.id),
       chapterEvidence: [milestone.story.evidence.primary],
       evidenceResolved: true,
@@ -160,6 +167,55 @@ test("the synthetic project completes through the shared review and release runt
   assert.doesNotMatch(JSON.stringify(release), /Synthetic dock code|synthetic-reviewed-document|synthetic-evidence-/);
 });
 
+test("the Story Skill progressively loads stage-local references", async () => {
+  const skill = await read("../../skills/oxygen-storytelling-review/SKILL.md");
+  const routing = skill.match(/## Progressive reference loading([\s\S]*?)## Non-negotiable boundaries/)?.[1];
+  assert.ok(routing);
+  assert.doesNotMatch(routing, /read all eight|all eight completely/i);
+
+  const rows = new Map(
+    routing
+      .split("\n")
+      .filter((line) => /^\| \*\*/.test(line))
+      .map((line) => {
+        const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+        return [cells[0], cells.slice(1)];
+      }),
+  );
+  const build = rows.get("**Build Project Story — always**")?.join(" ") ?? "";
+  for (const reference of [
+    "product-contract.md",
+    "story-data-contract.md",
+    "privacy-evidence-boundary.md",
+    "narrative-writing-contract.md",
+  ]) assert.match(build, new RegExp(reference.replace(".", "\\.")));
+  for (const deferred of [
+    "validation-checklist.md",
+    "ui-interaction-contract.md",
+    "chapter-review-lifecycle.md",
+    "bilingual-contract.md",
+  ]) assert.doesNotMatch(build, new RegExp(deferred.replace(".", "\\.")));
+  assert.match(build, /context-complete writing support keeps Build active/);
+
+  const lifecycle = rows.get("**Human Review begins**")?.join(" ") ?? "";
+  assert.match(lifecycle, /chapter-review-lifecycle\.md/);
+  assert.match(lifecycle, /ready_for_human_review/);
+  assert.doesNotMatch(lifecycle, /diagnosing, auditing, or implementing review UI/);
+
+  const reviewUi = rows.get("**Human Review or review-UI work**")?.join(" ") ?? "";
+  assert.match(reviewUi, /ui-interaction-contract\.md/);
+  assert.doesNotMatch(reviewUi, /chapter-review-lifecycle\.md/);
+
+  const localization = rows.get("**Localization requested or present**")?.join(" ") ?? "";
+  assert.match(localization, /bilingual-contract\.md/);
+  assert.match(localization, /user requests localization or a sidecar exists/);
+  assert.match(localization, /English remains canonical; missing Chinese is nonblocking/);
+
+  const qa = rows.get("**QA, clean-room, or submission\/release gate**")?.join(" ") ?? "";
+  assert.match(qa, /validation-checklist\.md/);
+  assert.match(qa, /clean-room completion requirement remains mandatory/);
+});
+
 test("the normal workflow delegates to the canonical repository Story runtime", async () => {
   const [agents, sop, organizer, skill, workspace, editor] = await Promise.all([
     read("../../AGENTS.md"),
@@ -169,11 +225,11 @@ test("the normal workflow delegates to the canonical repository Story runtime", 
     read("../app/workspace.tsx"),
     read("../app/story-chapter-editor.tsx"),
   ]);
-  assert.match(agents, /delegate Project[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
-  assert.match(sop, /Prepare Storytelling Review[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
+  assert.match(agents, /delegate[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
+  assert.match(sop, /Build Project Story and Review Story[\s\S]*skills\/oxygen-storytelling-review\/SKILL\.md/);
   assert.match(organizer, /Delegate Storytelling after the reviewed boundary/);
   assert.match(organizer, /does not need to know or manually name the delegated Skill/);
-  assert.match(agents, /sanitized stage\/state/);
+  assert.match(agents, /Before collection[\s\S]{0,120}sanitized Workflow Progress/i);
   assert.match(sop, /workflow-progress surface/);
   assert.match(organizer, /Never expose chain-of-thought/);
   assert.match(skill, /Canonical Toolkit runtime/);

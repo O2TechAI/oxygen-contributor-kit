@@ -106,7 +106,7 @@ function state(
   blockedReasonCode?: WorkflowProgressState["blockedReasonCode"],
 ): WorkflowProgressState {
   return {
-    workflowRunId: facts.workflowRunId || "local-review",
+    workflowRunId: facts.workflowRunId || "",
     status,
     currentStageId,
     safeStatusCode,

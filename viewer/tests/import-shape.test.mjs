@@ -166,16 +166,16 @@ test("final package is explicitly unapproved and excludes runtime database", asy
   const route=await read("../app/api/package/route.ts");
   for(const name of ["manifest.json","data/documents.json","data/events.json","project-map.json","privacy/redaction-summary.json","review/oxygen-local-viewer.html"])assert.match(route,new RegExp(name.replace(/[/.]/g,"\\$&")));
   assert.match(route,/publication_approved: false/);assert.match(route,/oxygen-contribution\.zip/);assert.doesNotMatch(route,/\.sqlite|\.wrangler/);
-  assert.match(route,/releaseOrganizationReason/);assert.match(route,/reviewedStoryPackageEntry/);assert.match(route,/export async function POST/);
+  assert.match(route,/releaseOrganizationReason/);assert.match(route,/story\/reviewed-project-story\.json/);assert.match(route,/reviewedStoryJson/);assert.match(route,/export async function POST/);
 });
 test("HTML and ZIP downloads accept only the reviewed Story release projection", async () => {
-  const html=await read("../app/api/organization/export/route.ts"),release=await read("../lib/story-release.ts"),ui=await read("../app/workspace.tsx");
-  assert.match(html,/sanitizeReviewedStoryRelease/);assert.match(html,/human-confirmed Final Release Memory/i);
+  const html=await read("../app/api/organization/export/route.ts"),release=await read("../lib/story-release.ts"),releaseServer=await read("../lib/story-release-server.ts"),ui=await read("../app/workspace.tsx");
+  assert.match(html,/reconstructReviewedStoryRelease/);assert.match(html,/human-confirmed Final Release Memory/i);
   assert.doesNotMatch(html,/formatted_summary_json|SELECT .*content|organization_reason/);
   for(const forbidden of ["exact evidence","Privacy originals","local identities","annotations","instructions"])assert.match(release,new RegExp(forbidden,"i"));
   assert.match(release,/story\/reviewed-project-story\.json/);
-  assert.match(release,/state\.stage !== "human_confirmed"/);assert.match(release,/validateChapterReviewCompletion/);assert.match(release,/publication_approved: false/);
-  assert.match(ui,/buildReviewedStoryRelease/);assert.match(ui,/method:"POST"/);
+  assert.match(releaseServer,/stage !== "human_confirmed"/);assert.match(releaseServer,/validateStoryCandidatePackage/);assert.match(release,/publication_approved: false/);
+  assert.match(ui,/buildReviewedStoryRelease/);assert.match(ui,/JSON\.stringify\(\{workflowRunId,serverVersion,sourceRevision\}\)/);assert.match(ui,/method:"POST"/);assert.doesNotMatch(ui,/JSON\.stringify\(\{ reviewedStory/);
 });
 test("removed features and login routes stay deleted", async () => {
   for(const path of ["../app/login/page.tsx","../lib/auth.ts","../app/api/annotations/route.ts","../app/api/checklists/route.ts","../app/api/rewrite/[id]/route.ts"]){await assert.rejects(access(new URL(path,import.meta.url)));}

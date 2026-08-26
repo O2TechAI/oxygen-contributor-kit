@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CompositionEvent as ReactCompositionEvent, type FormEvent as ReactFormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type SyntheticEvent } from "react";
-import type {
-  EvidenceReference,
-  StoryHighlightItem,
-  StoryLanguage,
-  TimelineMilestone,
+import {
+  storyReleaseTargetCatalog,
+  type EvidenceReference,
+  type StoryHighlightItem,
+  type StoryLanguage,
+  type TimelineMilestone,
 } from "../lib/timeline";
 import { restoreEvidenceOrigin } from "../lib/story-navigation";
 import {
@@ -168,6 +169,9 @@ export function StoryChapterEditor(props: {
   const { story } = milestone;
   const episode = story.releaseEpisode;
   const presentation = story.reviewPresentation?.[language];
+  const targetCatalog = story.reviewPresentation?.en
+    ? storyReleaseTargetCatalog(story.reviewPresentation.en)
+    : null;
   const labels = ui[language];
   const articleRef = useRef<HTMLElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -262,6 +266,7 @@ export function StoryChapterEditor(props: {
     storyKey: story.key,
     privacyCandidates: candidates,
     privacyDecisions,
+    targetCatalog: targetCatalog!,
     reviewableInsightIds: baseHighlight ? [baseHighlight.id] : [],
     chapterEvidence: evidence,
     evidenceResolved: chapterReview.evidenceVerified,
@@ -288,7 +293,7 @@ export function StoryChapterEditor(props: {
     return result;
   }, {}), [chapterReview.editTransactions, story.key]);
 
-  if (!episode || !presentation || !visibleHighlight || !insightDraft || !story.evidence) return null;
+  if (!episode || !presentation || !targetCatalog || !visibleHighlight || !insightDraft || !story.evidence) return null;
   if (presentation.people.length === 0) return <section className="simpleEpisode chapterEditor" role="region" aria-label={labels.chapter}>
     <div className="simpleEpisodeChrome"><div className="chapterCanvas chapterChromeCanvas"><button className="episodeBackLink" ref={backRef} onClick={onClose}>← {labels.back}</button></div></div>
     <div className="chapterCanvas"><p className="completionBlocker" role="alert">{labels.participantRequired}</p></div>

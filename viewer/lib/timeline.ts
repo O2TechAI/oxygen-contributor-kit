@@ -48,6 +48,19 @@ export type StoryReleaseTarget =
   | "uncertainty"
   | `insight:${string}`;
 
+export type StoryReleaseTargetDescriptor =
+  | {
+      target: "phase" | "title" | "overview" | "before" | "after" | "scene" | "outcome" | "uncertainty";
+      kind: "scalar";
+      field: "phase" | "title" | "overview" | "before" | "after" | "scene" | "decisionOutcome" | "uncertainty";
+    }
+  | { target: `reconstruction-${number}`; kind: "reconstruction"; index: number }
+  | { target: `detail-${number}`; kind: "detail"; index: number }
+  | { target: `people:${string}`; kind: "person"; id: string }
+  | { target: `insight:${string}`; kind: "insight"; id: string };
+
+export type StoryReleaseTargetCatalog = ReadonlyMap<StoryReleaseTarget, StoryReleaseTargetDescriptor>;
+
 export type ReleaseEpisode = {
   startTimestamp?: string;
   endTimestamp?: string;
@@ -494,6 +507,60 @@ function storyContentBlockIds(value: StoryLanguagePresentation) {
   ];
 }
 
+/** Derive every legal review/release target from one current Story
+ * presentation. Direct-editable body blocks remain a deliberately narrower
+ * responsibility than this semantic target catalog. */
+export function storyReleaseTargetCatalog(
+  value: StoryLanguagePresentation,
+): StoryReleaseTargetCatalog | null {
+  if (!value || typeof value !== "object"
+    || !nonEmptyString(value.phase) || !nonEmptyString(value.title)
+    || !nonEmptyString(value.overview) || !nonEmptyString(value.before) || !nonEmptyString(value.after)
+    || !Array.isArray(value.people) || !value.story || typeof value.story !== "object"
+    || !nonEmptyString(value.story.scene)
+    || !Array.isArray(value.story.reconstruction) || !value.story.reconstruction.every(nonEmptyString)
+    || !Array.isArray(value.story.importantDetails) || !value.story.importantDetails.every(nonEmptyString)
+    || !nonEmptyString(value.story.decisionOutcome)
+    || (value.story.uncertainty !== undefined && value.story.uncertainty !== null
+      && !nonEmptyString(value.story.uncertainty))
+    || !Array.isArray(value.highlights)) return null;
+
+  const catalog = new Map<StoryReleaseTarget, StoryReleaseTargetDescriptor>();
+  const add = (descriptor: StoryReleaseTargetDescriptor) => {
+    if (catalog.has(descriptor.target)) return false;
+    catalog.set(descriptor.target, descriptor);
+    return true;
+  };
+  const fixed: Array<Extract<StoryReleaseTargetDescriptor, { kind: "scalar" }>> = [
+    { target: "phase", kind: "scalar", field: "phase" },
+    { target: "title", kind: "scalar", field: "title" },
+    { target: "overview", kind: "scalar", field: "overview" },
+    { target: "before", kind: "scalar", field: "before" },
+    { target: "after", kind: "scalar", field: "after" },
+  ];
+  for (const descriptor of fixed) add(descriptor);
+  for (const person of value.people) {
+    if (!validStableId(person?.id)
+      || !add({ target: `people:${person.id}`, kind: "person", id: person.id })) return null;
+  }
+  add({ target: "scene", kind: "scalar", field: "scene" });
+  value.story.reconstruction.forEach((_, index) => {
+    add({ target: `reconstruction-${index}`, kind: "reconstruction", index });
+  });
+  value.story.importantDetails.forEach((_, index) => {
+    add({ target: `detail-${index}`, kind: "detail", index });
+  });
+  add({ target: "outcome", kind: "scalar", field: "decisionOutcome" });
+  if (typeof value.story.uncertainty === "string") {
+    add({ target: "uncertainty", kind: "scalar", field: "uncertainty" });
+  }
+  for (const highlight of value.highlights) {
+    if (!validStableId(highlight?.id)
+      || !add({ target: `insight:${highlight.id}`, kind: "insight", id: highlight.id })) return null;
+  }
+  return catalog;
+}
+
 function validPassageContext(value: unknown, blockIds: string[]) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entries = Object.entries(value);
@@ -511,12 +578,7 @@ function validPassageContext(value: unknown, blockIds: string[]) {
 }
 
 function semanticBlockIds(value: StoryLanguagePresentation) {
-  return [
-    "phase", "title", "overview", "before", "after",
-    ...value.people.map((person) => `people:${person.id}`),
-    ...storyContentBlockIds(value),
-    ...value.highlights.map((highlight) => `insight:${highlight.id}`),
-  ];
+  return [...(storyReleaseTargetCatalog(value)?.keys() || [])];
 }
 
 function validReviewLanguage(value: unknown): value is StoryLanguagePresentation {
@@ -767,9 +829,6 @@ function validNarrativeReview(
       || !uniqueValues(retention.units.map((unit) => unit.id))
       || retention.units.filter((unit) => unit.state === "represented").length !== retention.representedUnitCount
       || retention.units.filter((unit) => unit.state === "excluded").length !== retention.excludedUnitCount) return false;
-    const scope = new Set(retention.sourceScope.map(evidenceKey));
-    if (retention.units.some((unit) => !scope.has(evidenceKey(unit.evidence)))
-      || retention.sourceScope.some((reference) => !retention.units.some((unit) => evidenceKey(unit.evidence) === evidenceKey(reference)))) return false;
   }
   const validRole = (blockIds: unknown, allowed: string[]) => Array.isArray(blockIds)
     && blockIds.length > 0

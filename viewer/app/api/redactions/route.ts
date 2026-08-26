@@ -4,6 +4,11 @@ import {
   finalRedactionStatus,
   partitionPersistableRedactions,
 } from "../../../lib/redaction-pass.mjs";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  requireEstablishedWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../lib/workflow-run-server";
 
 type IncomingRedaction = {
   id?: string;
@@ -30,6 +35,10 @@ const ALLOWED_CATEGORIES = new Set([
 
 export async function GET() {
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const [redactions, job] = await Promise.all([
     db.prepare(
       `SELECT id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
@@ -45,6 +54,10 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const db = await getD1();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const body = await request.json() as {
     job?: { status: string; stage: string; model?: string; total?: number; rejected?: number };
     redactions?: IncomingRedaction[];

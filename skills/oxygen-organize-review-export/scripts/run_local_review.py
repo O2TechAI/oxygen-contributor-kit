@@ -35,6 +35,12 @@ from oxygen_utf8 import configure_utf8_stdio, text_subprocess_options
 
 
 VIEWER_HOST = "127.0.0.1"
+INPUT_RUN_INVALID = "INPUT_RUN_INVALID"
+INPUT_INDEX_INVALID = "INPUT_INDEX_INVALID"
+INPUT_TRAJECTORY_ID_INVALID = "INPUT_TRAJECTORY_ID_INVALID"
+INPUT_PATH_OUTSIDE_RUN = "INPUT_PATH_OUTSIDE_RUN"
+INPUT_PATH_MISSING = "INPUT_PATH_MISSING"
+INPUT_FILE_INVALID = "INPUT_FILE_INVALID"
 
 _WINDOWS_BOOTSTRAP = """\
 import ctypes
@@ -589,12 +595,20 @@ def request_json(opener, url: str, *, method="GET", body=None):
         return json.loads(response.read().decode("utf-8"))
 
 
+def resolve_contained_path(candidate: Path, approved_root: Path) -> Path:
+    """Resolve one existing input and require its target to stay inside the run root."""
+    resolved_root = approved_root.resolve(strict=True)
+    resolved_candidate = candidate.resolve(strict=True)
+    if not resolved_candidate.is_relative_to(resolved_root):
+        raise ValueError("resolved path leaves approved run")
+    return resolved_candidate
+
+
 def event_content(event: dict, trajectory_dir: Path) -> str:
     payload = event.get("payload") or {}
     if event.get("event_type") == "artifact" and isinstance(payload.get("path"), str):
-        candidate = (trajectory_dir / payload["path"]).resolve()
         try:
-            candidate.relative_to(trajectory_dir.resolve())
+            candidate = resolve_contained_path(trajectory_dir / payload["path"], trajectory_dir)
             data = candidate.read_bytes()
             if b"\0" not in data:
                 return data.decode("utf-8")
@@ -613,17 +627,11 @@ def event_content(event: dict, trajectory_dir: Path) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def import_trajectory(opener, base_url: str, directory: Path, project_map: dict):
-    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
-    redaction_path = directory / "redaction.json"
-    redaction = json.loads(redaction_path.read_text(encoding="utf-8")) if redaction_path.exists() else {
-        "review_status": "pending", "publication_approved": False,
-    }
-    events = [
-        json.loads(line)
-        for line in (directory / "events.jsonl").read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+def import_trajectory(opener, base_url: str, prepared: dict, project_map: dict):
+    directory = prepared["directory"]
+    manifest = prepared["manifest"]
+    redaction = prepared["redaction"]
+    events = prepared["events"]
     event_times = [
         event.get("timestamp") or event.get("started_at") for event in events
         if event.get("timestamp") or event.get("started_at")
@@ -673,8 +681,7 @@ def import_trajectory(opener, base_url: str, directory: Path, project_map: dict)
     return len(items)
 
 
-def import_meeting(opener, base_url: str, path: Path):
-    dataset = json.loads(path.read_text(encoding="utf-8"))
+def import_meeting(opener, base_url: str, path: Path, dataset: dict):
     records = dataset.get("records") or []
     meeting_id = dataset.get("meeting_id") or dataset.get("id") or path.parent.name
     document = {
@@ -713,40 +720,161 @@ def import_meeting(opener, base_url: str, path: Path):
     return len(items)
 
 
+def _validated_trajectory_id(value) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", value):
+        raise SystemExit(INPUT_TRAJECTORY_ID_INVALID)
+    if urllib.parse.unquote(value) != value:
+        raise SystemExit(INPUT_TRAJECTORY_ID_INVALID)
+    return value
+
+
+def _located_input(candidate: Path, approved_run: Path) -> Path:
+    try:
+        return resolve_contained_path(candidate, approved_run)
+    except ValueError:
+        raise SystemExit(INPUT_PATH_OUTSIDE_RUN) from None
+    except (OSError, RuntimeError):
+        raise SystemExit(INPUT_PATH_MISSING) from None
+
+
+def _located_file(candidate: Path, approved_run: Path, *, required: bool) -> Path | None:
+    if not candidate.exists() and not candidate.is_symlink():
+        if required:
+            raise SystemExit(INPUT_PATH_MISSING)
+        return None
+    located = _located_input(candidate, approved_run)
+    if not located.is_file():
+        raise SystemExit(INPUT_PATH_MISSING)
+    return located
+
+
+def _trajectory_files(directory: Path, approved_run: Path) -> tuple[Path, Path | None, Path]:
+    manifest = _located_file(directory / "manifest.json", approved_run, required=True)
+    redaction = _located_file(directory / "redaction.json", approved_run, required=False)
+    events = _located_file(directory / "events.jsonl", approved_run, required=True)
+    assert manifest is not None and events is not None
+    return manifest, redaction, events
+
+
+def _read_json_object(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise SystemExit(INPUT_FILE_INVALID) from None
+    if not isinstance(value, dict):
+        raise SystemExit(INPUT_FILE_INVALID)
+    return value
+
+
+def _prepare_trajectory(directory: Path, approved_run: Path) -> dict:
+    manifest_path, redaction_path, events_path = _trajectory_files(directory, approved_run)
+    manifest = _read_json_object(manifest_path)
+    if manifest.get("trajectory_id") is not None:
+        _validated_trajectory_id(manifest["trajectory_id"])
+    redaction = _read_json_object(redaction_path) if redaction_path else {
+        "review_status": "pending", "publication_approved": False,
+    }
+    try:
+        events = [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise SystemExit(INPUT_FILE_INVALID) from None
+    if not all(isinstance(event, dict) for event in events):
+        raise SystemExit(INPUT_FILE_INVALID)
+    return {
+        "directory": directory,
+        "manifest": manifest,
+        "redaction": redaction,
+        "events": events,
+    }
+
+
 def locate_inputs(run: Path):
-    index_path = run / "index.json"
+    try:
+        approved_run = run.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise SystemExit(INPUT_RUN_INVALID) from None
+    if not approved_run.is_dir():
+        raise SystemExit(INPUT_RUN_INVALID)
+
+    index_candidate = approved_run / "index.json"
+    index_path = None
     trajectories = []
-    if index_path.exists():
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-        for entry in index.get("trajectories") or []:
+    if index_candidate.exists() or index_candidate.is_symlink():
+        index_path = _located_input(index_candidate, approved_run)
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise SystemExit(INPUT_INDEX_INVALID) from None
+        if not isinstance(index, dict):
+            raise SystemExit(INPUT_INDEX_INVALID)
+        entries = index.get("trajectories") or []
+        if not isinstance(entries, list):
+            raise SystemExit(INPUT_INDEX_INVALID)
+        selected_entries = 0
+        seen_ids = set()
+        for entry in entries:
+            if not isinstance(entry, dict) or ("ok" in entry and not isinstance(entry["ok"], bool)):
+                raise SystemExit(INPUT_INDEX_INVALID)
             trajectory_id = entry.get("trajectory_id")
-            if trajectory_id and entry.get("ok", True):
-                directory = run / "trajectories" / trajectory_id
-                if (directory / "events.jsonl").exists():
+            if trajectory_id is None and entry.get("ok", True) is False:
+                continue
+            trajectory_id = _validated_trajectory_id(trajectory_id)
+            if trajectory_id in seen_ids:
+                raise SystemExit(INPUT_INDEX_INVALID)
+            seen_ids.add(trajectory_id)
+            if entry.get("ok", True) is False:
+                continue
+            selected_entries += 1
+            directory = _located_input(approved_run / "trajectories" / trajectory_id, approved_run)
+            if not directory.is_dir():
+                raise SystemExit(INPUT_PATH_MISSING)
+            _trajectory_files(directory, approved_run)
+            trajectories.append(directory)
+        if not trajectories and selected_entries == 0:
+            trajectory_root = approved_run / "trajectories"
+            if trajectory_root.is_dir():
+                for events_candidate in sorted(trajectory_root.glob("*/events.jsonl")):
+                    events_path = _located_input(events_candidate, approved_run)
+                    directory = _located_input(events_path.parent, approved_run)
+                    if not events_path.is_file() or not directory.is_dir():
+                        raise SystemExit(INPUT_PATH_MISSING)
+                    _trajectory_files(directory, approved_run)
                     trajectories.append(directory)
-        if not trajectories:
-            trajectories = sorted(
-                path.parent for path in (run / "trajectories").glob("*/events.jsonl")
-            )
-    meeting = run / "meeting.json"
-    if not trajectories and not meeting.exists() and not index_path.exists():
-        raise SystemExit(f"Unrecognized ingest output: {run}")
-    return trajectories, meeting if meeting.exists() else None
+
+    _located_file(approved_run / "project-map.json", approved_run, required=False)
+
+    meeting_candidate = approved_run / "meeting.json"
+    meeting = None
+    if meeting_candidate.exists() or meeting_candidate.is_symlink():
+        meeting = _located_input(meeting_candidate, approved_run)
+        if not meeting.is_file():
+            raise SystemExit(INPUT_PATH_MISSING)
+    if not trajectories and meeting is None and index_path is None:
+        raise SystemExit(INPUT_RUN_INVALID)
+    return trajectories, meeting
 
 
 def import_run(opener, base_url: str, run: Path) -> tuple[int, int]:
     trajectories, meeting = locate_inputs(run)
-    project_map_path = run / "project-map.json"
-    project_map = (
-        json.loads(project_map_path.read_text(encoding="utf-8"))
-        if project_map_path.exists()
-        else {}
+    approved_run = _located_input(run, run)
+    project_map_path = _located_file(
+        approved_run / "project-map.json", approved_run, required=False
     )
+    project_map = _read_json_object(project_map_path) if project_map_path else {}
+    prepared_trajectories = [
+        _prepare_trajectory(path, approved_run) for path in trajectories
+    ]
+    meeting_dataset = _read_json_object(meeting) if meeting else None
     event_count = sum(
-        import_trajectory(opener, base_url, path, project_map) for path in trajectories
+        import_trajectory(opener, base_url, prepared, project_map)
+        for prepared in prepared_trajectories
     )
-    if meeting:
-        event_count += import_meeting(opener, base_url, meeting)
+    if meeting and meeting_dataset is not None:
+        event_count += import_meeting(opener, base_url, meeting, meeting_dataset)
     return len(trajectories) + int(meeting is not None), event_count
 
 
@@ -757,6 +885,17 @@ def complete_organization(opener, base_url: str) -> dict:
             opener, f"{base_url}/api/organization", method="POST", body={}
         )
     return current
+
+
+def establish_workflow_run(opener, base_url: str, workflow_run_id: str | None = None) -> str:
+    established = workflow_run_id or f"oxygen-{uuid.uuid4().hex}"
+    workflow = request_json(opener, f"{base_url}/api/workflow", method="POST", body={
+        "workflowRunId": established,
+        "event": "target_confirmed",
+    })
+    if workflow.get("workflowRunId") != established:
+        raise SystemExit("The Viewer did not establish the requested workflow run ID")
+    return established
 
 
 def attach_run(base_url: str, workflow_run_id: str, run: Path) -> None:
@@ -916,12 +1055,10 @@ def main():
             opener = urllib.request.build_opener(
                 urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
             )
+            workflow_run_id = establish_workflow_run(
+                opener, base_url, args.workflow_run_id
+            )
             if target:
-                workflow_run_id = args.workflow_run_id or f"oxygen-{uuid.uuid4().hex}"
-                request_json(opener, f"{base_url}/api/workflow", method="POST", body={
-                    "workflowRunId": workflow_run_id,
-                    "event": "target_confirmed",
-                })
                 print(f"\nOxygen Workflow Progress: {base_url}", flush=True)
                 print(f"Workflow run: {workflow_run_id}", flush=True)
                 print("Working folder confirmed; collection has not started.", flush=True)

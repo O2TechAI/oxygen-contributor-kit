@@ -7,6 +7,13 @@ import {
 } from "../../../lib/story-readiness";
 import { LEGACY_STORY_PREFIX, STORY_PREFIX } from "../../../lib/timeline";
 import { isWorkflowRunId } from "../../../lib/workflow-progress";
+import {
+  WORKFLOW_RUN_AUTHORITY,
+  WorkflowRunAuthorityError,
+  establishWorkflowRun,
+  requireExactWorkflowRun,
+  workflowRunErrorResponse,
+} from "../../../lib/workflow-run-server";
 
 const EVENTS = new Set([
   "target_confirmed",
@@ -39,9 +46,16 @@ export async function GET(request: Request) {
   if (requestedRunId !== null && !isWorkflowRunId(requestedRunId)) {
     return Response.json({ error: "Invalid workflow run" }, { status: 400 });
   }
-  return Response.json(await loadWorkflowProgress(requestedRunId || undefined), {
-    headers: { "Cache-Control": "no-store, max-age=0" },
-  });
+  try {
+    return Response.json(await loadWorkflowProgress(requestedRunId || undefined), {
+      headers: { "Cache-Control": "no-store, max-age=0" },
+    });
+  } catch (error) {
+    if (error instanceof WorkflowRunAuthorityError) {
+      return workflowRunErrorResponse(error.authority);
+    }
+    throw error;
+  }
 }
 
 export async function POST(request: Request) {
@@ -75,6 +89,18 @@ export async function POST(request: Request) {
   }
 
   const db = await getD1();
+  const now = new Date().toISOString();
+  if (event === "target_confirmed") {
+    const authority = await establishWorkflowRun(db, workflowRunId, now);
+    if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+      return workflowRunErrorResponse(authority);
+    }
+    return Response.json(await loadWorkflowProgress(authority.workflowRunId));
+  }
+  const authority = await requireExactWorkflowRun(db, workflowRunId);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   if (event.startsWith("story_")) {
     const [run, organization, redaction] = await Promise.all([
       db.prepare(`SELECT id,story_generation_status,story_source_revision
@@ -90,7 +116,6 @@ export async function POST(request: Request) {
     if (organization?.status !== "complete" || redaction?.status !== "complete") {
       return Response.json({ error: "Reviewed Story boundary is not ready" }, { status: 409 });
     }
-    const now = new Date().toISOString();
     if (event === "story_generation_started") {
       await db.prepare(`UPDATE workflow_runs
         SET story_generation_status='running',story_generation_completed=0,
@@ -161,20 +186,11 @@ export async function POST(request: Request) {
     return Response.json({ error: "Workflow collection state is terminal" }, { status: 409 });
   }
 
-  const now = new Date().toISOString();
   const blockerCode = nextStatus === "failed" ? "COLLECTION_FAILED" : null;
-  await db.prepare(`INSERT INTO workflow_runs (
-      id,target_confirmed,collection_status,collection_completed,collection_total,
-      blocker_code,created_at,updated_at
-    ) VALUES (?,?,?,?,?,?,?,?)
-    ON CONFLICT(id) DO UPDATE SET
-      target_confirmed=excluded.target_confirmed,
-      collection_status=excluded.collection_status,
-      collection_completed=excluded.collection_completed,
-      collection_total=excluded.collection_total,
-      blocker_code=excluded.blocker_code,
-      updated_at=excluded.updated_at`)
-    .bind(workflowRunId, 1, nextStatus, completed, total, blockerCode, now, now)
+  await db.prepare(`UPDATE workflow_runs SET
+      collection_status=?,collection_completed=?,collection_total=?,blocker_code=?,updated_at=?
+      WHERE id=?`)
+    .bind(nextStatus, completed, total, blockerCode, now, workflowRunId)
     .run();
 
   return Response.json(await loadWorkflowProgress(workflowRunId));
