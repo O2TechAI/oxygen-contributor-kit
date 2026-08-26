@@ -14,13 +14,18 @@ reviewed project history
 
 It must serve both a human who wants an understandable account and a future agent that needs evidence-grounded lessons. It is not an event browser with new styling, and Final Release Memory is not publication approval.
 
+New generation targets `oxygen.story/3`. This changes generated Story semantics only. It does not
+activate `/3` in the live Viewer, change Review Session runtime, change release, or approve
+publication.
+
 ## Productization boundary
 
 The repository Skill and Viewer are one reusable capability, not a template for a new standalone
 application. In this Toolkit, reuse `InlineWorkspace` in `viewer/app/workspace.tsx`,
 `StoryChapterEditor` in `viewer/app/story-chapter-editor.tsx`, and the shared Timeline/review/
-evidence/navigation/release primitives under `viewer/lib`. Generate validated Story data and bind
-it to that runtime. Change the renderer only to close a proven generalized capability gap.
+evidence/navigation/release primitives under `viewer/lib`. Generate validated staged `/3` Story data
+against the existing parser/readiness foundation. Do not bind it to the live Viewer, Review Session,
+or release in this lane. Change no renderer merely to complete generation migration.
 
 Keep these product constraints stable across projects: application shell, editorial hierarchy,
 phase-grouped Timeline, Chapter review interactions, privacy/evidence boundaries, bilingual shared
@@ -46,6 +51,20 @@ Before readiness, refresh remains on Build Progress. When atomic activation reac
 the already-open tab loads the activated Story snapshot and reveals it within the normal polling
 interval; manual refresh, tab reopening, or evaluator intervention is never part of the product
 boundary.
+
+## Story-first construction
+
+Use these conceptual passes inside the existing Build Project Story stage:
+
+1. understand the complete approved project history;
+2. determine coherent Chapter narrative arcs;
+3. write the complete ordered Chapter and Project Story narrative;
+4. verify continuity, chronology, attribution, Evidence, causal restraint, Privacy, and uncertainty;
+5. group adjacent Chapters into precise one- or two-word Phases;
+6. only after the complete Story is understood, identify independently warranted learning moments;
+7. produce zero or more Insights.
+
+These are not new top-level workflow stages. Story inclusion is independent of Insight worthiness.
 
 ## Story selection
 
@@ -73,15 +92,17 @@ may have none. Keep separate milestones when each establishes a distinct durable
 understand the project's progress. Combine them only when they belong to one connected causal arc.
 Deduplicate repeated discussion of the same state or result.
 
-Explicit reviewed Story annotations, when present and valid, outrank heuristic selection. A
-heuristic fallback should rank candidates globally for development value, penalize routine
-status/procedure, deduplicate normalized meaning, then restore chronology. A message that merely
-says work is continuing is routine status. A completed capability, evidence-backed improvement,
-substantive iteration, diagnostic failure, or recovery is meaningful progress.
+Explicit reviewed Story annotations, when present and valid, inform Chapter derivation but do not
+override complete-arc, Evidence, Privacy, or chronology requirements. A transcript, meeting, file,
+event count, fixed time slice, Insight count, importance score, Highlight worthiness, or reusable
+lesson does not define a Chapter boundary. A message that merely says work is continuing is routine
+status. A completed capability, evidence-backed improvement, substantive iteration, diagnostic
+failure, or recovery can be meaningful project memory.
 
-Do not invent low-value Chapters to reach a count or discard supported milestones to stay below one.
-Use the number required by the reviewed history and reviewability. The last Chapter must honestly
-describe the latest supported current state; if the evidence ends mid-investigation, say so.
+Do not invent low-value Chapters to reach a count or discard supported arcs to stay below one. Use
+the number required by complete coherent narrative arcs. Current state may form its own Chapter
+when it is a coherent arc or remain the supported ending of the final Chapter; if Evidence ends
+mid-investigation, say so.
 
 Audit the full milestone set before accepting the selection. When reviewed evidence supports the
 initiating problem, goal, or baseline assumptions, the opening Chapter and Project Story overview
@@ -118,7 +139,7 @@ Use this product hierarchy:
 Project Story = scan-first navigation
 Chapter Story = context-complete durable project memory
 Exact Evidence = verification
-AI Insight = learning and bounded reusable rules
+AI Insights = zero or more independently warranted learning moments
 ```
 
 For Chapter Story, apply these requirements:
@@ -153,7 +174,9 @@ It should represent the major trajectory without mechanically listing every Phas
 metrics shown below, or sounding like an implementation log. Optimize for project understanding
 per sentence, not brevity that erases meaning.
 
-Phase names behave like book-part names. Strongly prefer one or two scannable English words and an
+After Chapter arcs and order are complete, group adjacent Chapters into Phases. Phase must not
+dictate, split, or merge Chapter boundaries. Phase names behave like book-part names. Use precise
+one- or two-word English labels and an
 equivalently compact natural Chinese label. Derive names from evidence; do not change supported
 Phase selection merely to obtain prettier labels and do not treat example names as a taxonomy.
 Each Phase must represent one coherent problem/transition class with a concise evidence-derived
@@ -207,10 +230,13 @@ technical facts, and material numbers. A Chapter may contain several substantial
 the evidence requires them. Remove audit-report voice, command-by-command narration, mechanical
 field enumeration, generic summary filler, and repeated test/status noise that adds no learning.
 
-The canonical AI Insight is explicitly labeled interpretation. Historical facts remain in Story and
-Exact Evidence. Its Direct learning and Reusable rule
-may be fuller when needed to preserve a grounded pattern, but must stay project-specific and avoid
-formulaic openings or abstract advice that could describe any project. Final reviewed Chapters may
+Insights are explicitly labeled interpretation. Historical facts remain in Story and Exact
+Evidence. Generate `0..n` only after the complete Story is understood, with no quota. Each existing
+Insight contains Background, Quote, Directly Acquired Experience, and Principle. Quote uses safe
+reviewed Story anchors and never copies raw/private Evidence. Directly Acquired Experience remains
+bounded to the actual project moment. Principle may abstract for a genuinely similar future
+condition but cannot introduce unsupported industry prior. Insight title is optional presentation
+metadata. Final reviewed Chapters may
 carry evidence-backed visible rationale, mistakes, corrections, human overrides, rejected
 approaches, successful patterns, and outcomes forward to future Agents. Never preserve private
 latent model reasoning as Story.
@@ -232,7 +258,7 @@ The top of the Project Story must retain a concise orientation area containing, 
 - short project-story overview;
 - number of meaningful milestones / Chapters;
 - number of narrative phases;
-- reviewed-Highlight progress;
+- Insight review progress when a compatible successor review runtime is active;
 - source-record / evidence context when useful.
 
 These are mandatory information categories, not optional visual decoration. Derive values from the current project Story; never hardcode example counts. Keep the treatment typographic and compact rather than repeating the same identity in a second dominant full-width project card.
@@ -241,9 +267,9 @@ The homepage is a table of contents, not a compressed Chapter. Preserve this rea
 
 ```text
 Project identity / overview
-→ milestones · phases · reviewed-Highlight progress
+→ Chapters · Phases · source orientation
 → Phase
-→ Milestone: date · type · AI Highlight · title · Before → After · chips
+→ Chapter: date · type · title · Before → After · chips
 → evidence metadata / Read Chapter
 ```
 
@@ -253,7 +279,7 @@ Every selected milestone card must show:
 
 - date (mandatory; time is optional);
 - milestone/change type;
-- an unmistakable visible AI-selected Highlight label/marker;
+- Chapter title and source orientation;
 - short Chapter title;
 - concise Before → After state transition;
 - high-signal keyword/metric/version/status chips when supported;
@@ -326,7 +352,7 @@ Participant records use stable IDs, safe release labels (`A`, `B`, `C`, `AI`, or
 
 Real/local identity may be used only when supported and permitted for local review. It never automatically becomes release identity. If identity is uncertain, keep it generic. Never fabricate a person or name.
 
-## Story, inline AI insight, and canonical AI insight
+## Story and sparse Insights
 
 Render Story as one coherent article with readable paragraphs, meaningful subheadings, bullets where
 scanning improves, and explicit uncertainty where supported. Internal fields such as scene,
@@ -340,31 +366,17 @@ Show annotation notes in the left margin beside their block on wide screens and 
 block-associated inline treatment on narrow screens. Notes are local review metadata and never
 enter release output.
 
-Mandatory precomputed evidence-grounded `passageContext`, keyed by every stable rendered Story
-block, drives a small sticky right-side reading companion labeled `AI insight` / `AI 洞察`. The
-canonical English Chapter requires the exact complete key set. When Chinese exists, its safe
-rendered blocks require their matching context or the sidecar is omitted; Chinese absence never
-blocks English readiness. A canonical Chapter with unsupported or missing English passage context
-is incomplete; never render it through a silent empty or generic fallback. Clicking or selecting a
-passage changes that local panel. It may
-explain what was happening through supported participant interaction, why the moment mattered,
-what became clearer, and a reusable rule. It never begins with a passage ordinal, `semantic passage`,
-block ID, schema name, or other implementation metadata,
-conservatively omitting claims the reviewed context cannot support. It is not another reviewable or
-release Insight and is excluded from export by default.
+Passage assistance is not part of `/3` source readiness. If retained by a later consumer, it is
+optional, local, human-facing, non-authoritative, does not require why-it-mattered,
+what-was-learned, or reusable-lesson copy for every block, does not create an Insight, and remains
+excluded from release unless separately authorized.
 
-Exactly one structured, reviewable AI Highlight remains in each Chapter's data. Present its full
-content in a disclosure at the end of Story, collapsed by default. Reject a Chapter with zero or
-multiple reviewable insights rather than silently rendering only the first. The canonical insight
-includes:
-
-- a label such as AI insight or Turning point;
-- explicit `AI interpretation · not historical fact` status;
-- observation;
-- reusable rule;
-- lightweight accept/remove/direct-edit/human-directed revision affordances.
-
-There is no standalone top-level Highlights section.
+A successor Chapter contains zero or more structured Insights. Each existing Insight is explicitly
+`AI interpretation · not historical fact` until human review, uses the four successor meanings, and
+requires independent explicit review of its current version once `/2` review is activated. Zero
+Insights creates zero Insight-review obligations. This lane does not redesign or activate the
+current UI and must not route `/3` through a single-Insight fallback. There is no standalone
+top-level Insights section.
 
 ## Unaffected Viewer behavior
 

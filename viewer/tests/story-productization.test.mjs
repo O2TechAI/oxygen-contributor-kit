@@ -41,91 +41,49 @@ test("a non-Golden synthetic project exercises dynamic Story shapes", () => {
   }
 });
 
-test("the reusable narrative contract separates a scan-first homepage from evidence-driven Chapter memory", async () => {
-  const [product, data, bilingual, validation, narrative, lifecycle, interaction] = await Promise.all([
+test("active generation contracts adopt Story-first sparse Insight semantics", async () => {
+  const [skill, product, data, bilingual, validation, narrative, migration] = await Promise.all([
+    read("../../skills/oxygen-storytelling-review/SKILL.md"),
     read("../../skills/oxygen-storytelling-review/references/product-contract.md"),
     read("../../skills/oxygen-storytelling-review/references/story-data-contract.md"),
     read("../../skills/oxygen-storytelling-review/references/bilingual-contract.md"),
     read("../../skills/oxygen-storytelling-review/references/validation-checklist.md"),
     read("../../skills/oxygen-storytelling-review/references/narrative-writing-contract.md"),
-    read("../../skills/oxygen-storytelling-review/references/chapter-review-lifecycle.md"),
-    read("../../skills/oxygen-storytelling-review/references/ui-interaction-contract.md"),
+    read("../../skills/oxygen-storytelling-review/references/story-first-successor-contract.md"),
   ]);
-  for (const contract of [
-    "Every reviewed historical record", "2–3 concise sentences", "one or two scannable English words",
-    "Context-complete project memory without fictionalization", "durable project memory for humans and future Agents",
-    "problem,", "constraints", "rejected approaches", "private[\\s\\n]+latent model reasoning",
-  ]) assert.match(product, new RegExp(contract));
-  assert.match(product, /Project Story = scan-first navigation[\s\S]*Chapter Story = context-complete durable project memory[\s\S]*Exact Evidence = verification[\s\S]*AI Insight = learning/);
-  assert.match(product, /decision-relevant context coverage[\s\S]*factual and Evidence fidelity[\s\S]*readability/);
-  assert.match(product, /Brevity is not a Chapter objective/);
-  assert.match(product, /background, causal or temporal relationships, participant[\s\S]*interaction, judgment, failed attempt, progress or iteration, or result/);
-  assert.match(product, /Chapter length is determined by the Evidence/);
-  assert.match(product, /meaningful project development/);
-  assert.match(product, /durable progress/);
-  assert.match(product, /substantive iteration/);
-  assert.match(product, /Judgment moments[\s\S]*Other eligible milestones/);
-  assert.match(product, /Do not invent low-value Chapters[\s\S]*discard supported milestones/);
-  assert.match(product, /Decision process must connect supported People/);
-  assert.match(product, /short Chapter-specific summary[\s\S]*differ across Chapters[\s\S]*Evidence-traced/);
-  assert.match(product, /Never invent a reply or consensus/);
-  assert.match(product, /connective adverb is optional/);
-  assert.match(data, /canonical context-retention and voice rules/);
-  assert.match(data, /context-complete coherent article/);
-  assert.match(data, /coverageLedger: Record<StoryCoverageKey, StoryCoverageItem>/);
-  assert.match(data, /claimTraceability: StoryClaimTrace\[\]/);
-  assert.match(data, /contextRetention: StoryContextRetention/);
-  assert.match(data, /Several units may share an Evidence reference/);
-  assert.match(data, /distinct localized Chapter `overview`[\s\S]*navigation instructions and repeated boilerplate/);
-  assert.match(data, /passage context for every Story-content block/);
-  assert.match(data, /A missing map, missing key, or extra key[\s\S]*no valid empty or silent fallback/);
-  assert.match(bilingual, /same start, turn, and current boundary/);
-  assert.match(bilingual, /Chapter depth remains semantically equivalent/);
-  assert.match(bilingual, /English is also the sole Story-readiness and human-review gate/);
-  assert.match(bilingual, /absence, incomplete prose, semantic drift, or outstanding translation debt cannot[\s\S]*block Stage 5/);
-  assert.match(data, /zh\?: LanguagePresentation/);
-  assert.match(validation, /English alone can activate Stage 5, complete review, and export/);
-  assert.match(validation, /Chapter copy[\s\S]*retains every supported unit/);
-  assert.match(validation, /`supporting_detail` fails readiness/);
-  assert.match(validation, /Every Chapter title is followed by a distinct localized summary/);
-  for (const concept of [/durable progress/, /substantive iteration/, /failure/]) {
-    assert.match(validation, concept);
-  }
-  assert.match(validation, /## Workflow progress/);
-  for (const contract of ["Background", "Decision process", "Direct learning", "Reusable rule", "Open questions", "Record the supported context, decision process, result, and open questions"]) {
-    assert.match(narrative, new RegExp(contract));
-  }
-  for (const rule of ["Do not use metaphors, analogies", "X, not Y", "Cause not determined", "standard terminology", "actor Evidence"]) {
-    assert.match(narrative, new RegExp(rule.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
-  }
-  assert.match(narrative, /Do not set[\s\S]*global word, sentence, paragraph, or\s+character target/);
-  assert.match(narrative, /Chapter brevity is never a selection, generation,[\s\S]*revision, or validation objective/);
-  assert.match(narrative, /Readability may reorganize[\s\S]*but may not delete/);
-  assert.match(narrative, /Chapter coverage ledger/);
-  assert.match(narrative, /claim traceability for every material factual claim/);
-  assert.match(narrative, /context-retention ledger/);
-  assert.match(narrative, /Repeating one reference across many claims cannot satisfy this gate/);
-  assert.match(narrative, /Make participant interaction legible/);
-  assert.match(narrative, /## Chapter overview[\s\S]*lively and engaging[\s\S]*Do not add jokes/);
-  assert.match(narrative, /## Inline AI Insight[\s\S]*participant actions, responses,[\s\S]*Never open with a[\s\S]*semantic passage/);
-  assert.match(narrative, /localized functional role in Decision process/);
-  assert.match(narrative, /Determine the actual semantic relationship first[\s\S]*connective adverb is optional/);
-  assert.match(narrative, /open vocabulary,[\s\S]*not an allowlist/);
-  assert.match(narrative, /Prefer natural syntactic variety over thesaurus substitution/);
-  assert.match(narrative, /editorial preference, not a lexical[\s\S]*readiness rule/);
-  assert.match(narrative, /must never claim a stronger relationship than Evidence supports/);
-  assert.doesNotMatch([product, data, validation].join("\n"), /must use at least one relational connective|Connect those turns with at least one natural localized relation marker/);
-  assert.doesNotMatch(narrative, /three to five concise sentences|four to seven concise sentences/);
-  assert.match(narrative, /exactly one reviewable canonical Insight/);
-  assert.match(lifecycle, /## Direct-edit transaction model/);
-  assert.match(lifecycle, /Direct editing is the primary current lifecycle/);
-  assert.match(lifecycle, /pending or needs evidence[\s\S]*evidence\/ledger provenance fails validation/);
-  assert.match(lifecycle, /stale paired locale[\s\S]*informational[\s\S]*never blocks canonical English review/);
-  assert.match(lifecycle, /Undo marks the most recently changed active-locale pending transaction reverted/);
-  assert.match(interaction, /current\/total position plus[\s\S]*Previous\/Next controls/);
-  assert.match(interaction, /Label it `AI insight` \/ `AI 洞察`[\s\S]*never opens with a semantic-passage number/);
-  assert.match(validation, /## Direct Story editing/);
-  assert.doesNotMatch([product, data, bilingual, validation, narrative, lifecycle, interaction].join("\n"), /BOM Sourcing Benchmark|127\.0\.0\.1:326[14]/);
+  const activeContracts = [skill, product, data, bilingual, validation, narrative].join("\n");
+
+  assert.match(skill, /oxygen\.story\/3/);
+  assert.match(data, /prefix: oxygen\.story\/3:[\s\S]*schema: oxygen\.story\/3/);
+  assert.match(activeContracts, /understand the complete approved project history[\s\S]*determine coherent Chapter narrative arcs[\s\S]*write the complete ordered Chapter and Project Story narrative[\s\S]*verify continuity, chronology, attribution, Evidence[\s\S]*group adjacent Chapters[\s\S]*only after the complete Story is understood[\s\S]*zero or more Insights/i);
+  assert.match(activeContracts, /complete coherent narrative arc/);
+  assert.match(activeContracts, /Every Chapter (?:requires|retains|has) at least one (?:supported|Evidence-supported|evidence-supported) Person or actor/i);
+  assert.match(activeContracts, /Chapter boundaries[\s\S]*before[\s\S]*Phase|After[\s\S]*ordered Chapter sequence[\s\S]*group adjacent Chapters/i);
+  assert.match(activeContracts, /0\.\.n/);
+  assert.match(activeContracts, /no (?:minimum|semantic minimum)[\s\S]*(?:maximum|quota|density target)/i);
+  assert.match(activeContracts, /exactly (?:these )?four semantic meanings[\s\S]*Background[\s\S]*Quote[\s\S]*Directly Acquired Experience[\s\S]*Principle/i);
+  assert.match(activeContracts, /Insight title is optional presentation metadata/i);
+  assert.match(activeContracts, /Passage assistance[\s\S]*optional[\s\S]*human-facing[\s\S]*non-authoritative/i);
+  assert.match(activeContracts, /does not require a (?:per-block )?lesson|No Story block (?:is required to|must) contain/i);
+  assert.match(activeContracts, /Quote[\s\S]*safe reviewed Story[\s\S]*(?:never|not) cop(?:y|ied) raw\/private Evidence/i);
+  assert.match(activeContracts, /Directly Acquired Experience[\s\S]*actual project moment/i);
+  assert.match(activeContracts, /Principle[\s\S]*unsupported industry prior/i);
+  assert.match(activeContracts, /Privacy[\s\S]*Evidence[\s\S]*chronology[\s\S]*attribution[\s\S]*causal restraint[\s\S]*uncertainty[\s\S]*non-fabrication/i);
+  assert.match(activeContracts, /does not activate[\s\S]*Viewer[\s\S]*Review Session[\s\S]*release/i);
+  assert.match(migration, /MERGE_INTO_CANONICAL_LATER[\s\S]*DELETE_AFTER_CANONICALIZATION/);
+
+  for (const obsolete of [
+    /every Chapter has exactly one canonical Insight/i,
+    /generate exactly one reviewable canonical Insight/i,
+    /dated AI-selected Highlight/i,
+    /visible AI-selected Highlight/i,
+    /title names tension plus change/i,
+    /main problem, participants, final action, and result must be represented/i,
+    /last Chapter must be current state/i,
+    /Generate local AI assistance for every rendered Story block/i,
+  ]) assert.doesNotMatch(activeContracts, obsolete);
+  assert.doesNotMatch(activeContracts, /typically 1[–-]3|at least one Insight|maximum three/i);
+  assert.doesNotMatch(activeContracts, /BOM Sourcing Benchmark|127\.0\.0\.1:326[14]/);
 
   const sentences = syntheticStoryProject.overview.en.match(/[^.!?]+[.!?]+/g) || [];
   assert.ok(sentences.length >= 2 && sentences.length <= 3);
@@ -232,20 +190,19 @@ test("the normal workflow delegates to the canonical repository Story runtime", 
   assert.match(agents, /Before collection[\s\S]{0,120}sanitized Workflow Progress/i);
   assert.match(sop, /workflow-progress surface/);
   assert.match(organizer, /Never expose chain-of-thought/);
-  assert.match(skill, /Canonical Toolkit runtime/);
-  assert.match(skill, /viewer\/app\/workspace\.tsx[\s\S]*InlineWorkspace/);
-  assert.match(skill, /viewer\/app\/story-chapter-editor\.tsx[\s\S]*StoryChapterEditor/);
-  assert.match(skill, /passage-context/);
+  assert.match(skill, /Canonical Toolkit boundary/);
+  assert.match(skill, /viewer\/lib\/timeline\.ts[\s\S]*viewer\/lib\/story-readiness\.ts/);
+  assert.match(skill, /Do not bind `\/3` into `InlineWorkspace`, `StoryChapterEditor`/);
+  assert.match(skill, /Passage assistance is not a `\/3` generation or readiness requirement/);
   assert.match(skill, /narrative-writing-contract\.md/);
   assert.match(skill, /Direct typing, caret insertion, selection replacement\/deletion/);
   assert.match(skill, /human direct edits and\/or compatible legacy review records/);
   assert.match(skill, /completely fresh, contextless Agent[\s\S]*normal public Oxygen workflow request/);
-  assert.match(skill, /Missing or unsupported English context makes that Chapter incomplete/);
-  assert.match(skill, /Missing Chinese never[\s\S]*blocks English readiness/);
+  assert.match(skill, /Missing, incomplete, or stale Chinese never blocks[\s\S]*English candidate/);
   assert.match(skill, /private latent reasoning/);
-  assert.match(skill, /at least one supported[\s\S]*participant and complete actor coverage/);
+  assert.match(skill, /Every\s+Chapter requires at least one supported Person or actor/);
   assert.match(skill, /machine-only events[\s\S]*cannot stand alone/);
-  assert.match(skill, /Background, Decision process, Result, and Open questions/);
+  assert.match(skill, /Background, Quote, Directly Acquired Experience,[\s\S]*Principle/);
   assert.match(skill, /beforeinput` as optional metadata/);
   assert.match(workspace, /export function InlineWorkspace/);
   assert.match(editor, /export function StoryChapterEditor/);

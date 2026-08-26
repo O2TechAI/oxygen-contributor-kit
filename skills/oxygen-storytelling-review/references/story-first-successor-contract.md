@@ -1,8 +1,13 @@
 # Story-First Successor Target Contract
 
-> **FROZEN TARGET SEMANTICS — NOT THE ACTIVE RUNTIME CONTRACT.**
+> **FROZEN MIGRATION PROVENANCE — NOT THE ACTIVE GENERATION OR RUNTIME CONTRACT.**
 >
-> The current runtime and its exact-one Story contracts remain authoritative and truthful until an explicit successor parser, readiness, review, and release migration lands. Do not partially mix legacy and successor meanings. Legacy artifacts retain their original semantics and must not be reinterpreted as successor approval or readiness.
+> The active generation contracts now absorb these Story-First semantics and generate
+> `oxygen.story/3`. The live Viewer, Review Session, and release paths remain unchanged until their
+> separate activation migrations land. Legacy artifacts retain their original semantics and must
+> not be reinterpreted as successor approval or readiness.
+>
+> Migration status: `MERGE_INTO_CANONICAL_LATER` -> `DELETE_AFTER_CANONICALIZATION`.
 
 ## Scope
 
@@ -147,4 +152,7 @@ Legacy behavior must never fabricate successor semantics. In particular, a legac
 
 ## Implementation boundary
 
-This target contract becomes active only through a later bounded migration of source parsing/readiness and then the dependent Review Session, Viewer, and release layers. Until that work lands, current exact-one contracts and current rejection behavior must remain unchanged.
+The active generation contracts are the canonical instructions for new Story candidates. This file
+remains only as migration provenance until equivalent semantic regression coverage is fully
+canonicalized, after which it should be deleted. The current Viewer, Review Session, and release
+behavior remains unchanged until separately activated.
