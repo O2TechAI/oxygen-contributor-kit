@@ -483,7 +483,7 @@ test("successor packages fail closed on mixed source versions", () => {
   ), { ok: false, code: "SUCCESSOR_STORY_CHAPTER_INVALID" });
 });
 
-test("successor source remains staged outside current session, editor, and release consumers", async () => {
+test("successor source remains staged outside activation, editor, persistence, and release consumers", async () => {
   const { candidateRows } = buildSuccessorFixture("one-insight");
   assert.deepEqual(selectReviewableStoryTimeline([{
     id: candidateRows[0].id,
@@ -491,10 +491,9 @@ test("successor source remains staged outside current session, editor, and relea
   }]), []);
 
   const readOnlyConsumers = [
-    "../lib/story-review.ts",
-    "../lib/story-review-session.ts",
     "../lib/story-review-session-persistence.ts",
     "../lib/story-review-session-server.ts",
+    "../app/api/story-review-session/route.ts",
     "../app/story-chapter-editor.tsx",
     "../app/workspace.tsx",
     "../lib/story-release.ts",

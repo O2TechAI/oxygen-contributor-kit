@@ -1,13 +1,26 @@
 import {
   privacyDecisionKey,
+  successorStoryBlocks,
   validateChapterReviewCompletion,
   validateChapterReviewLedger,
   validateInsightReviewLedger,
+  validateSuccessorChapterReviewCompletion,
+  validateSuccessorChapterReviewLedger,
   type ChapterReviewState,
   type PrivacyDecision,
+  type SuccessorChapterReviewContext,
+  type SuccessorChapterReviewState,
+  type SuccessorHumanInsightContent,
+  type SuccessorHumanInsightReview,
+  type SuccessorInsightContent,
+  type SuccessorInsightRevisionRecord,
+  type SuccessorSourceInsightReview,
 } from "./story-review.ts";
 import {
+  SUCCESSOR_STORY_PREFIX,
+  parseSuccessorStorySource,
   storyReleaseTargetCatalog,
+  type SuccessorStorySource,
   type StoryLanguage,
   type StoryReleaseTarget,
   type TimelineMilestone,
@@ -15,6 +28,7 @@ import {
 import { isWorkflowRunId } from "./workflow-progress.ts";
 
 export const STORY_REVIEW_SESSION_SCHEMA = "oxygen.story-review-session/1" as const;
+export const SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA = "oxygen.story-review-session/2" as const;
 export const MAX_STORY_REVIEW_SESSION_BYTES = 2_000_000;
 
 export type StoryReviewSession = {
@@ -25,13 +39,25 @@ export type StoryReviewSession = {
   updatedAt: string;
 };
 
+export type SuccessorStoryReviewSession = {
+  schema: typeof SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA;
+  workflowRunId: string;
+  chapterReviews: Record<string, SuccessorChapterReviewState>;
+  privacyDecisions: Record<string, PrivacyDecision>;
+  updatedAt: string;
+};
+
+export type AnyStoryReviewSession = StoryReviewSession | SuccessorStoryReviewSession;
+
 export type HydratedStoryReviewSession = Pick<StoryReviewSession, "chapterReviews" | "privacyDecisions">;
+export type HydratedSuccessorStoryReviewSession = Pick<SuccessorStoryReviewSession, "chapterReviews" | "privacyDecisions">;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value)
   && typeof value === "object" && !Array.isArray(value);
 const validStableId = (value: unknown): value is string => typeof value === "string"
   && value.trim().length > 0 && value.length <= 1_000;
 const validDecision = (value: unknown): value is PrivacyDecision => value === "keep" || value === "redact";
+const onlyKeys = (value: object, allowed: string[]) => Object.keys(value).every((key) => allowed.includes(key));
 
 function canonicalEvidence(value: unknown) {
   if (!isRecord(value)) return null;
@@ -185,6 +211,143 @@ function canonicalChapterReview(value: unknown) {
   } as unknown as ChapterReviewState;
 }
 
+function canonicalSuccessorInsightContent(value: unknown, humanAnchor = false): SuccessorInsightContent | null {
+  if (!isRecord(value) || !isRecord(value.quote)
+    || !onlyKeys(value, ["title", "background", "quote", "directlyAcquiredExperience", "principle", "evidence"])
+    || !onlyKeys(value.quote, humanAnchor ? ["chapterKey", "storyBlockIds"] : ["storyBlockIds"])) return null;
+  const storyBlockIds = canonicalStringArray(value.quote.storyBlockIds, 500);
+  const evidence = canonicalEvidenceList(value.evidence);
+  if (!storyBlockIds || storyBlockIds.length === 0 || !storyBlockIds.every(validStableId)
+    || new Set(storyBlockIds).size !== storyBlockIds.length
+    || !evidence || evidence.length === 0
+    || evidence.some((item) => !validStableId(item!.documentId) || !validStableId(item!.eventId))
+    || new Set(evidence.map((item) => JSON.stringify(item))).size !== evidence.length
+    || (value.title !== undefined && (typeof value.title !== "string" || value.title.length > 500))
+    || typeof value.background !== "string" || !value.background.trim() || value.background.length > 4_000
+    || typeof value.directlyAcquiredExperience !== "string"
+    || !value.directlyAcquiredExperience.trim() || value.directlyAcquiredExperience.length > 4_000
+    || typeof value.principle !== "string" || !value.principle.trim() || value.principle.length > 4_000) return null;
+  return {
+    ...(value.title === undefined ? {} : { title: value.title }),
+    background: value.background,
+    quote: { storyBlockIds },
+    directlyAcquiredExperience: value.directlyAcquiredExperience,
+    principle: value.principle,
+    evidence: evidence as SuccessorInsightContent["evidence"],
+  };
+}
+
+function canonicalSuccessorHumanInsightContent(value: unknown): SuccessorHumanInsightContent | null {
+  if (!isRecord(value) || !isRecord(value.quote) || !validStableId(value.quote.chapterKey)) return null;
+  const content = canonicalSuccessorInsightContent(value, true);
+  return content ? {
+    ...content,
+    quote: {
+      chapterKey: value.quote.chapterKey,
+      storyBlockIds: content.quote.storyBlockIds,
+    },
+  } : null;
+}
+
+function canonicalSourceInsightReview(value: unknown): SuccessorSourceInsightReview | null {
+  if (!isRecord(value)
+    || value.origin !== "source_ai"
+    || !Number.isInteger(value.version) || Number(value.version) < 1
+    || !["pending", "accepted", "rejected"].includes(String(value.decision))
+    || (value.resolution !== "pending" && value.resolution !== "applied")) return null;
+  const editedContent = value.editedContent === undefined ? undefined : canonicalSuccessorInsightContent(value.editedContent);
+  if ((value.editedContent !== undefined && !editedContent)
+    || (editedContent === undefined ? value.version !== 1 : Number(value.version) < 2)
+    || (value.resolution === "pending"
+      ? value.appliedVersion !== undefined || value.appliedRevision !== undefined
+      : value.decision === "pending"
+        || !Number.isInteger(value.appliedVersion) || Number(value.appliedVersion) < 1
+        || !Number.isInteger(value.appliedRevision) || Number(value.appliedRevision) < 2)) return null;
+  return {
+    origin: "source_ai",
+    version: Number(value.version),
+    decision: value.decision as SuccessorSourceInsightReview["decision"],
+    resolution: value.resolution,
+    ...(editedContent ? { editedContent } : {}),
+    ...(value.appliedVersion === undefined ? {} : { appliedVersion: Number(value.appliedVersion) }),
+    ...(value.appliedRevision === undefined ? {} : { appliedRevision: Number(value.appliedRevision) }),
+  };
+}
+
+function canonicalHumanInsightReview(value: unknown): SuccessorHumanInsightReview | null {
+  if (!isRecord(value)
+    || value.origin !== "human_created"
+    || !Number.isInteger(value.version) || Number(value.version) < 1
+    || (value.decision !== "draft" && value.decision !== "human_approved")
+    || (value.resolution !== "pending" && value.resolution !== "applied")) return null;
+  const content = canonicalSuccessorHumanInsightContent(value.content);
+  if (!content
+    || (value.resolution === "pending"
+      ? value.appliedVersion !== undefined || value.appliedRevision !== undefined
+      : value.decision !== "human_approved"
+        || !Number.isInteger(value.appliedVersion) || Number(value.appliedVersion) < 1
+        || !Number.isInteger(value.appliedRevision) || Number(value.appliedRevision) < 2)) return null;
+  return {
+    origin: "human_created",
+    version: Number(value.version),
+    decision: value.decision,
+    resolution: value.resolution,
+    content,
+    ...(value.appliedVersion === undefined ? {} : { appliedVersion: Number(value.appliedVersion) }),
+    ...(value.appliedRevision === undefined ? {} : { appliedRevision: Number(value.appliedRevision) }),
+  };
+}
+
+function canonicalSuccessorRevision(value: unknown): SuccessorInsightRevisionRecord | null {
+  if (!isRecord(value)
+    || !Number.isInteger(value.revision) || Number(value.revision) < 2
+    || !validStableId(value.insightId)
+    || (value.origin !== "source_ai" && value.origin !== "human_created")
+    || !Number.isInteger(value.version) || Number(value.version) < 1
+    || (value.origin === "source_ai" && value.decision !== "accepted" && value.decision !== "rejected")
+    || (value.origin === "human_created" && value.decision !== "human_approved")) return null;
+  return {
+    revision: Number(value.revision),
+    insightId: value.insightId,
+    origin: value.origin,
+    version: Number(value.version),
+    decision: value.decision as SuccessorInsightRevisionRecord["decision"],
+  };
+}
+
+function canonicalSuccessorChapterReview(value: unknown): SuccessorChapterReviewState | null {
+  if (!isRecord(value)
+    || !isRecord(value.sourceInsightReviews) || Object.keys(value.sourceInsightReviews).length > 500
+    || !isRecord(value.humanInsights) || Object.keys(value.humanInsights).length > 500
+    || !Array.isArray(value.successorInsightRevisionHistory)
+    || value.successorInsightRevisionHistory.length > 5_000) return null;
+  const common = canonicalChapterReview(value);
+  if (!common || Object.keys(common.insightReviews).length !== 0) return null;
+  const sourceEntries = Object.entries(value.sourceInsightReviews).sort(([left], [right]) => left.localeCompare(right));
+  const humanEntries = Object.entries(value.humanInsights).sort(([left], [right]) => left.localeCompare(right));
+  if (sourceEntries.some(([id]) => !validStableId(id))
+    || humanEntries.some(([id]) => !validStableId(id) || !id.startsWith("human:"))) return null;
+  const sourceReviews = sourceEntries.map(([id, review]) => [id, canonicalSourceInsightReview(review)] as const);
+  const humanReviews = humanEntries.map(([id, review]) => [id, canonicalHumanInsightReview(review)] as const);
+  const history = value.successorInsightRevisionHistory.map(canonicalSuccessorRevision);
+  if (sourceReviews.some(([, review]) => !review)
+    || humanReviews.some(([, review]) => !review)
+    || history.some((record) => !record)) return null;
+  const sortedHistory = (history as SuccessorInsightRevisionRecord[]).sort((left, right) => (
+    left.revision - right.revision
+      || left.origin.localeCompare(right.origin)
+      || left.insightId.localeCompare(right.insightId)
+  ));
+  if (new Set(sortedHistory.map((record) => JSON.stringify([record.revision, record.origin, record.insightId]))).size
+    !== sortedHistory.length) return null;
+  return {
+    ...common,
+    sourceInsightReviews: Object.fromEntries(sourceReviews) as Record<string, SuccessorSourceInsightReview>,
+    humanInsights: Object.fromEntries(humanReviews) as Record<string, SuccessorHumanInsightReview>,
+    successorInsightRevisionHistory: sortedHistory,
+  };
+}
+
 /** Reconstruct the local persistence envelope from an explicit allowlist. This
  * removes unknown/private payload fields before the session can be stored or
  * hydrated. Source-bound ledger validation happens in `hydrateStoryReviewSession`. */
@@ -216,6 +379,42 @@ export function canonicalizeStoryReviewSession(value: unknown): StoryReviewSessi
   };
 }
 
+export function canonicalizeSuccessorStoryReviewSession(value: unknown): SuccessorStoryReviewSession | null {
+  if (!isRecord(value)
+    || value.schema !== SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA
+    || !isWorkflowRunId(value.workflowRunId)
+    || !isRecord(value.chapterReviews)
+    || Object.keys(value.chapterReviews).length > 500
+    || typeof value.updatedAt !== "string" || !value.updatedAt.trim() || value.updatedAt.length > 100) return null;
+  let serializedSize = MAX_STORY_REVIEW_SESSION_BYTES + 1;
+  try { serializedSize = new TextEncoder().encode(JSON.stringify(value)).byteLength; } catch { return null; }
+  if (serializedSize > MAX_STORY_REVIEW_SESSION_BYTES) return null;
+  const privacyDecisions = canonicalDecisions(value.privacyDecisions);
+  if (!privacyDecisions) return null;
+  const chapterReviews: Record<string, SuccessorChapterReviewState> = {};
+  for (const [storyKey, rawReview] of Object.entries(value.chapterReviews).sort(([left], [right]) => left.localeCompare(right))) {
+    if (!validStableId(storyKey)) return null;
+    const review = canonicalSuccessorChapterReview(rawReview);
+    if (!review) return null;
+    chapterReviews[storyKey] = review;
+  }
+  return {
+    schema: SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
+    workflowRunId: value.workflowRunId,
+    chapterReviews,
+    privacyDecisions: Object.fromEntries(Object.entries(privacyDecisions).sort(([left], [right]) => left.localeCompare(right))),
+    updatedAt: value.updatedAt,
+  };
+}
+
+/** Exact schema dispatch only; malformed successor payloads never become v1. */
+export function parseStoryReviewSession(value: unknown): AnyStoryReviewSession | null {
+  if (!isRecord(value)) return null;
+  return value.schema === SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA
+    ? canonicalizeSuccessorStoryReviewSession(value)
+    : value.schema === STORY_REVIEW_SESSION_SCHEMA ? canonicalizeStoryReviewSession(value) : null;
+}
+
 export function createStoryReviewSession(
   workflowRunId: string,
   chapterReviews: Record<string, ChapterReviewState>,
@@ -224,6 +423,21 @@ export function createStoryReviewSession(
 ) {
   return canonicalizeStoryReviewSession({
     schema: STORY_REVIEW_SESSION_SCHEMA,
+    workflowRunId,
+    chapterReviews,
+    privacyDecisions,
+    updatedAt,
+  });
+}
+
+export function createSuccessorStoryReviewSession(
+  workflowRunId: string,
+  chapterReviews: Record<string, SuccessorChapterReviewState>,
+  privacyDecisions: Record<string, PrivacyDecision>,
+  updatedAt = new Date().toISOString(),
+) {
+  return canonicalizeSuccessorStoryReviewSession({
+    schema: SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
     workflowRunId,
     chapterReviews,
     privacyDecisions,
@@ -341,4 +555,95 @@ export function hydrateStoryReviewSession(
     }
   }
   return { chapterReviews, privacyDecisions };
+}
+
+function successorReviewContext(source: SuccessorStorySource): SuccessorChapterReviewContext {
+  const blocks = successorStoryBlocks(source);
+  return {
+    source,
+    privacyCandidates: [],
+    privacyDecisions: {},
+    targetCatalog: new Map(),
+    evidenceResolved: true,
+    supportedAddIds: [],
+    supportedEditIds: [],
+    sourceBlocks: blocks,
+    reviewedBlocks: blocks,
+  };
+}
+
+function validPersistedSuccessorReview(state: SuccessorChapterReviewState, source: SuccessorStorySource) {
+  if (![
+    "reviewing", "revision_ready", "human_confirmed",
+  ].includes(state.stage)
+    || typeof state.evidenceVerified !== "boolean"
+    || state.publicationApproved !== false
+    || Object.keys(state.appliedPrivacyDecisions || {}).length !== 0
+    || !Array.isArray(state.redactedBlocks) || state.redactedBlocks.length !== 0
+    || !Array.isArray(state.staleTranslations)) return false;
+  const storyIds = new Set(source.story.blocks.map((block) => block.id));
+  const insightIds = new Set([
+    ...source.insights.map((insight) => insight.id),
+    ...Object.keys(state.humanInsights || {}),
+  ]);
+  if (state.staleTranslations.some((item) => !item
+    || (item.language !== "en" && item.language !== "zh")
+    || !Number.isInteger(item.count) || item.count < 1
+    || typeof item.subject !== "string"
+    || (item.subject.startsWith("story:") && !storyIds.has(item.subject.slice("story:".length)))
+    || (item.subject.startsWith("insight:") && !insightIds.has(item.subject.slice("insight:".length)))
+    || (!item.subject.startsWith("story:") && !item.subject.startsWith("insight:")))) return false;
+  const allowedEvidence = new Set([source.evidence.primary, ...source.evidence.supporting]
+    .map((item) => JSON.stringify([item.documentId, item.eventId])));
+  const reviewEvidence = [...state.annotations.flatMap((item) => item.supportingEvidence || []),
+    ...state.editTransactions.flatMap((item) => item.supportingEvidence || [])];
+  if (reviewEvidence.some((item) => !allowedEvidence.has(JSON.stringify([item.documentId, item.eventId])))) return false;
+  if (!validateSuccessorChapterReviewLedger(state, source, true)) return false;
+  if (Object.values(state.sourceInsightReviews).some((review) => (
+    review.resolution === "applied" && review.appliedVersion !== review.version
+  )) || Object.values(state.humanInsights).some((review) => (
+    review.resolution === "applied" && review.appliedVersion !== review.version
+  ))) return false;
+  const context = successorReviewContext(source);
+  return state.stage === "reviewing" || validateSuccessorChapterReviewCompletion(state, context);
+}
+
+/** Hydrate the exact successor Chapter set only. Any version, identity,
+ * anchor, Evidence, or provenance mismatch fails the whole successor session. */
+export function hydrateSuccessorStoryReviewSession(
+  value: unknown,
+  workflowRunId: string,
+  rawSources: unknown[],
+): HydratedSuccessorStoryReviewSession {
+  const empty = { chapterReviews: {}, privacyDecisions: {} };
+  const session = canonicalizeSuccessorStoryReviewSession(value);
+  if (!session || session.workflowRunId !== workflowRunId || Object.keys(session.privacyDecisions).length !== 0
+    || !Array.isArray(rawSources) || rawSources.length === 0 || rawSources.length > 500) return empty;
+  const sources: SuccessorStorySource[] = [];
+  for (const rawSource of rawSources) {
+    let parsed: SuccessorStorySource | null = null;
+    try {
+      parsed = parseSuccessorStorySource(`${SUCCESSOR_STORY_PREFIX}${JSON.stringify(rawSource)}`);
+    } catch {
+      return empty;
+    }
+    if (!parsed) return empty;
+    sources.push(parsed);
+  }
+  const sourceMap = new Map<string, SuccessorStorySource>();
+  for (const source of sources) {
+    if (sourceMap.has(source.key)) return empty;
+    sourceMap.set(source.key, source);
+  }
+  const sourceKeys = [...sourceMap.keys()].sort();
+  const reviewKeys = Object.keys(session.chapterReviews).sort();
+  if (sourceKeys.length !== reviewKeys.length || sourceKeys.some((key, index) => key !== reviewKeys[index])) return empty;
+  const chapterReviews: Record<string, SuccessorChapterReviewState> = {};
+  for (const storyKey of sourceKeys) {
+    const source = sourceMap.get(storyKey)!;
+    const review = session.chapterReviews[storyKey];
+    if (!validPersistedSuccessorReview(review, source)) return empty;
+    chapterReviews[storyKey] = review;
+  }
+  return { chapterReviews, privacyDecisions: {} };
 }

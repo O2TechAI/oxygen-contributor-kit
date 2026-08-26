@@ -1,5 +1,7 @@
 import type {
   EvidenceReference,
+  SuccessorStoryInsight,
+  SuccessorStorySource,
   StoryHighlightItem,
   StoryLanguage,
   StoryPrivacyCandidate,
@@ -166,11 +168,65 @@ export type ChapterReviewBlocker = {
   itemId?: string;
 };
 
+export type SuccessorChapterReviewBlocker = Omit<ChapterReviewBlocker, "code"> & {
+  code: ChapterReviewBlocker["code"]
+    | "ai_insight_decision_missing"
+    | "ai_insight_decision_pending"
+    | "ai_insight_reaccept_required"
+    | "human_insight_pending";
+};
+
 export type ApplyReviewContext = ChapterReviewCompletionContext & {
   chapterEvidence: EvidenceReference[];
   evidenceResolved: boolean;
   supportedAddIds: string[];
   supportedEditIds?: string[];
+};
+
+export type SuccessorInsightContent = Omit<SuccessorStoryInsight, "id">;
+export type SuccessorHumanInsightContent = Omit<SuccessorInsightContent, "quote"> & {
+  quote: { chapterKey: string; storyBlockIds: string[] };
+};
+
+export type SuccessorSourceInsightReview = {
+  origin: "source_ai";
+  version: number;
+  decision: "pending" | "accepted" | "rejected";
+  resolution: "pending" | "applied";
+  editedContent?: SuccessorInsightContent;
+  appliedVersion?: number;
+  appliedRevision?: number;
+};
+
+export type SuccessorHumanInsightReview = {
+  origin: "human_created";
+  version: number;
+  decision: "draft" | "human_approved";
+  resolution: "pending" | "applied";
+  content: SuccessorHumanInsightContent;
+  appliedVersion?: number;
+  appliedRevision?: number;
+};
+
+export type SuccessorInsightRevisionRecord = {
+  revision: number;
+  insightId: string;
+  origin: "source_ai" | "human_created";
+  version: number;
+  decision: "accepted" | "rejected" | "human_approved";
+};
+
+export type SuccessorChapterReviewState = ChapterReviewState & {
+  sourceInsightReviews: Record<string, SuccessorSourceInsightReview>;
+  humanInsights: Record<string, SuccessorHumanInsightReview>;
+  successorInsightRevisionHistory: SuccessorInsightRevisionRecord[];
+};
+
+export type SuccessorChapterReviewContext = Omit<
+  ApplyReviewContext,
+  "storyKey" | "reviewableInsightIds" | "chapterEvidence"
+> & {
+  source: SuccessorStorySource;
 };
 
 export const emptyChapterReview = (): ChapterReviewState => ({
@@ -187,6 +243,22 @@ export const emptyChapterReview = (): ChapterReviewState => ({
   evidenceVerified: false,
   publicationApproved: false,
 });
+
+export function emptySuccessorChapterReview(source: SuccessorStorySource): SuccessorChapterReviewState {
+  return {
+    ...emptyChapterReview(),
+    sourceInsightReviews: Object.fromEntries([...source.insights]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((insight) => [insight.id, {
+        origin: "source_ai" as const,
+        version: 1,
+        decision: "pending" as const,
+        resolution: "pending" as const,
+      }])),
+    humanInsights: {},
+    successorInsightRevisionHistory: [],
+  };
+}
 
 export function createStoryAnnotation(input: Omit<StoryReviewAnnotation, "id" | "resolution">): StoryReviewAnnotation {
   const instruction = input.instruction?.trim();
@@ -780,6 +852,234 @@ const validEvidenceReference = (value: unknown): value is EvidenceReference => B
   && typeof (value as EvidenceReference).eventId === "string"
   && Boolean((value as EvidenceReference).eventId.trim());
 
+const onlyKeys = (value: object, allowed: string[]) => Object.keys(value).every((key) => allowed.includes(key));
+
+function validSuccessorInsightContent(value: unknown): value is SuccessorInsightContent {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || !onlyKeys(value, ["title", "background", "quote", "directlyAcquiredExperience", "principle", "evidence"])) return false;
+  const content = value as Partial<SuccessorInsightContent>;
+  const quote = content.quote;
+  return (content.title === undefined || (typeof content.title === "string" && content.title.length <= 500))
+    && typeof content.background === "string" && Boolean(content.background.trim()) && content.background.length <= 4_000
+    && Boolean(quote && typeof quote === "object" && !Array.isArray(quote)
+      && onlyKeys(quote, ["storyBlockIds"])
+      && Array.isArray(quote.storyBlockIds) && quote.storyBlockIds.length > 0 && quote.storyBlockIds.length <= 500
+      && quote.storyBlockIds.every(validStableId)
+      && new Set(quote.storyBlockIds).size === quote.storyBlockIds.length)
+    && typeof content.directlyAcquiredExperience === "string"
+    && Boolean(content.directlyAcquiredExperience.trim()) && content.directlyAcquiredExperience.length <= 4_000
+    && typeof content.principle === "string" && Boolean(content.principle.trim()) && content.principle.length <= 4_000
+    && Array.isArray(content.evidence) && content.evidence.length > 0 && content.evidence.length <= 500
+    && content.evidence.every(validEvidenceReference)
+    && new Set(content.evidence.map(evidenceKey)).size === content.evidence.length;
+}
+
+function validSuccessorHumanInsightContent(value: unknown): value is SuccessorHumanInsightContent {
+  const quote = (value as { quote?: unknown } | null)?.quote;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || !quote || typeof quote !== "object" || Array.isArray(quote)) return false;
+  const content = value as unknown as SuccessorHumanInsightContent;
+  return validStableId(content.quote.chapterKey)
+    && onlyKeys(content.quote, ["chapterKey", "storyBlockIds"])
+    && validSuccessorInsightContent({
+      ...content,
+      quote: { storyBlockIds: content.quote.storyBlockIds },
+    });
+}
+
+function successorContentBelongsToSource(content: SuccessorInsightContent, source: SuccessorStorySource) {
+  if (!validSuccessorInsightContent(content)) return false;
+  const blocks = new Map(source.story.blocks.map((block) => [block.id, block]));
+  const allowedEvidence = new Set([source.evidence.primary, ...source.evidence.supporting].map(evidenceKey));
+  if (content.quote.storyBlockIds.some((blockId) => !blocks.has(blockId))
+    || content.evidence.some((item) => !allowedEvidence.has(evidenceKey(item)))) return false;
+  const anchoredEvidence = new Set(content.quote.storyBlockIds.flatMap((blockId) => (
+    blocks.get(blockId)?.evidence.map(evidenceKey) || []
+  )));
+  return content.evidence.some((item) => anchoredEvidence.has(evidenceKey(item)));
+}
+
+function successorHumanContentBelongsToSource(content: SuccessorHumanInsightContent, source: SuccessorStorySource) {
+  return validSuccessorHumanInsightContent(content)
+    && content.quote.chapterKey === source.key
+    && successorContentBelongsToSource({
+      ...content,
+      quote: { storyBlockIds: content.quote.storyBlockIds },
+    }, source);
+}
+
+export function successorStoryBlocks(source: SuccessorStorySource): StoryBlockCollection {
+  return {
+    en: Object.fromEntries(source.story.blocks.map((block) => [block.id, block.text])),
+    zh: {},
+  };
+}
+
+function successorRevisionOrder(left: SuccessorInsightRevisionRecord, right: SuccessorInsightRevisionRecord) {
+  return left.revision - right.revision
+    || left.origin.localeCompare(right.origin)
+    || left.insightId.localeCompare(right.insightId);
+}
+
+/** Validate successor-only Insight identity, content, and provenance while the
+ * existing Chapter annotation/direct-edit ledger remains the common owner. */
+export function validateSuccessorChapterReviewLedger(
+  state: SuccessorChapterReviewState,
+  source: SuccessorStorySource,
+  requireExactSourceIds = false,
+) {
+  const sourceIds = source.insights.map((insight) => insight.id);
+  const reviewIds = Object.keys(state.sourceInsightReviews || {});
+  const humanIds = Object.keys(state.humanInsights || {});
+  if (source.schema !== "oxygen.story/3"
+    || !validateChapterReviewLedger(state, source.key, successorStoryBlocks(source))
+    || Object.keys(state.insightReviews || {}).length !== 0
+    || !state.sourceInsightReviews || typeof state.sourceInsightReviews !== "object" || Array.isArray(state.sourceInsightReviews)
+    || !state.humanInsights || typeof state.humanInsights !== "object" || Array.isArray(state.humanInsights)
+    || !Array.isArray(state.successorInsightRevisionHistory)
+    || reviewIds.some((id) => !sourceIds.includes(id))
+    || (requireExactSourceIds && (reviewIds.length !== sourceIds.length || sourceIds.some((id) => !reviewIds.includes(id))))
+    || humanIds.some((id) => !validStableId(id) || !id.startsWith("human:") || sourceIds.includes(id))
+    || new Set([...reviewIds, ...humanIds]).size !== reviewIds.length + humanIds.length) return false;
+
+  const sourceReviewsValid = Object.values(state.sourceInsightReviews).every((review) => Boolean(review)
+    && review.origin === "source_ai"
+    && Number.isInteger(review.version) && review.version >= 1
+    && ["pending", "accepted", "rejected"].includes(review.decision)
+    && (review.resolution === "pending" || review.resolution === "applied")
+    && (review.editedContent === undefined
+      ? review.version === 1
+      : review.version >= 2 && successorContentBelongsToSource(review.editedContent, source))
+    && (review.resolution === "pending"
+      ? review.appliedVersion === undefined && review.appliedRevision === undefined
+      : review.decision !== "pending"
+        && Number.isInteger(review.appliedVersion) && review.appliedVersion! >= 1
+        && Number.isInteger(review.appliedRevision) && review.appliedRevision! >= 2
+        && review.appliedRevision! <= state.revision));
+  if (!sourceReviewsValid) return false;
+
+  const humanReviewsValid = Object.values(state.humanInsights).every((review) => Boolean(review)
+    && review.origin === "human_created"
+    && Number.isInteger(review.version) && review.version >= 1
+    && (review.decision === "draft" || review.decision === "human_approved")
+    && (review.resolution === "pending" || review.resolution === "applied")
+    && successorHumanContentBelongsToSource(review.content, source)
+    && (review.resolution === "pending"
+      ? review.appliedVersion === undefined && review.appliedRevision === undefined
+      : review.decision === "human_approved"
+        && Number.isInteger(review.appliedVersion) && review.appliedVersion! >= 1
+        && Number.isInteger(review.appliedRevision) && review.appliedRevision! >= 2
+        && review.appliedRevision! <= state.revision));
+  if (!humanReviewsValid) return false;
+
+  const history = state.successorInsightRevisionHistory;
+  const canonicalHistory = [...history].sort(successorRevisionOrder);
+  if (history.some((record, index) => record !== canonicalHistory[index])
+    || new Set(history.map((record) => JSON.stringify([record.revision, record.origin, record.insightId]))).size !== history.length
+    || history.some((record) => !Number.isInteger(record.revision) || record.revision < 2 || record.revision > state.revision
+      || !validStableId(record.insightId)
+      || (record.origin !== "source_ai" && record.origin !== "human_created")
+      || !Number.isInteger(record.version) || record.version < 1
+      || (record.origin === "source_ai" && !["accepted", "rejected"].includes(record.decision))
+      || (record.origin === "human_created" && record.decision !== "human_approved")
+      || !state.revisionHistory.some((chapterRecord) => chapterRecord.revision === record.revision)
+      || (record.origin === "source_ai" ? !sourceIds.includes(record.insightId) : !humanIds.includes(record.insightId)))) return false;
+
+  const latestRecord = (insightId: string, origin: SuccessorInsightRevisionRecord["origin"]) => (
+    [...history].reverse().find((record) => record.insightId === insightId && record.origin === origin)
+  );
+  return Object.entries(state.sourceInsightReviews).every(([insightId, review]) => {
+    if (review.resolution !== "applied") return true;
+    const record = latestRecord(insightId, "source_ai");
+    return Boolean(record
+      && record!.revision === review.appliedRevision
+      && record!.version === review.appliedVersion
+      && record!.decision === review.decision);
+  }) && Object.entries(state.humanInsights).every(([insightId, review]) => {
+    if (review.resolution !== "applied") return true;
+    const record = latestRecord(insightId, "human_created");
+    return Boolean(record
+      && record!.revision === review.appliedRevision
+      && record!.version === review.appliedVersion
+      && record!.decision === "human_approved");
+  });
+}
+
+export function updateSuccessorAiInsightDecision(
+  state: SuccessorChapterReviewState,
+  source: SuccessorStorySource,
+  insightId: string,
+  decision: "accepted" | "rejected",
+): SuccessorChapterReviewState {
+  const previous = state.sourceInsightReviews[insightId];
+  if (state.stage === "human_confirmed" || !source.insights.some((insight) => insight.id === insightId) || !previous) return state;
+  return {
+    ...state,
+    stage: "reviewing",
+    sourceInsightReviews: {
+      ...state.sourceInsightReviews,
+      [insightId]: {
+        ...previous,
+        decision,
+        resolution: "pending",
+        appliedVersion: undefined,
+        appliedRevision: undefined,
+      },
+    },
+  };
+}
+
+export function editSuccessorAiInsight(
+  state: SuccessorChapterReviewState,
+  source: SuccessorStorySource,
+  insightId: string,
+  content: SuccessorInsightContent,
+): SuccessorChapterReviewState {
+  const previous = state.sourceInsightReviews[insightId];
+  if (state.stage === "human_confirmed" || !previous || !successorContentBelongsToSource(content, source)) return state;
+  return {
+    ...state,
+    stage: "reviewing",
+    sourceInsightReviews: {
+      ...state.sourceInsightReviews,
+      [insightId]: {
+        origin: "source_ai",
+        version: previous.version + 1,
+        decision: "pending",
+        resolution: "pending",
+        editedContent: content,
+      },
+    },
+  };
+}
+
+export function editSuccessorHumanInsight(
+  state: SuccessorChapterReviewState,
+  source: SuccessorStorySource,
+  insightId: string,
+  content: SuccessorHumanInsightContent,
+): SuccessorChapterReviewState {
+  const previous = state.humanInsights[insightId];
+  if (state.stage === "human_confirmed"
+    || !validStableId(insightId) || !insightId.startsWith("human:")
+    || source.insights.some((insight) => insight.id === insightId)
+    || !successorHumanContentBelongsToSource(content, source)) return state;
+  return {
+    ...state,
+    stage: "reviewing",
+    humanInsights: {
+      ...state.humanInsights,
+      [insightId]: {
+        origin: "human_created",
+        version: (previous?.version || 0) + 1,
+        decision: "draft",
+        resolution: "pending",
+        content,
+      },
+    },
+  };
+}
+
 function updateTranslationStaleness(
   current: TranslationStaleness[],
   subject: TranslationStaleness["subject"],
@@ -1136,9 +1436,10 @@ function sameUniqueStrings(left: unknown, right: unknown) {
     && left.every((value) => right.includes(value));
 }
 
-function evaluateChapterReviewCompletion(
+function evaluateValidatedCommonChapterReviewCompletion(
   state: ChapterReviewState,
   context: ChapterReviewCompletionContext,
+  insightBlockers: ChapterReviewBlocker[],
 ): ChapterReviewBlocker[] {
   const chapterKey = validStableId(context?.storyKey) ? context.storyKey : "unknown";
   const chapterBlocker = (code: ChapterReviewBlocker["code"]): ChapterReviewBlocker => ({
@@ -1148,12 +1449,6 @@ function evaluateChapterReviewCompletion(
   });
 
   try {
-    if (!validStableId(context.storyKey)) return [chapterBlocker("review_state_invalid")];
-    if (!privacyComplete(context)) return [chapterBlocker("privacy_incomplete")];
-    if (!validateChapterReviewLedger(state, context.storyKey, context.sourceBlocks, context.reviewedBlocks)
-      || !validateInsightReviewLedger(state, context.reviewableInsightIds)
-      || !Array.isArray(state.staleTranslations)) return [chapterBlocker("review_state_invalid")];
-
     const blockers: ChapterReviewBlocker[] = [];
     if (!state.evidenceVerified) blockers.push(chapterBlocker("evidence_unverified"));
     blockers.push(...state.annotations
@@ -1174,14 +1469,7 @@ function evaluateChapterReviewCompletion(
         targetId: transaction.blockId,
         itemId: transaction.id,
       })));
-    blockers.push(...Object.entries(state.insightReviews)
-      .filter(([, review]) => review.resolution === "pending")
-      .map(([insightId]) => ({
-        code: "insight_pending" as const,
-        chapterKey,
-        targetKind: "insight" as const,
-        targetId: insightId,
-      })));
+    blockers.push(...insightBlockers);
     if (!sameDecisions(state.appliedPrivacyDecisions, currentPrivacyDecisions(context))) {
       blockers.push(chapterBlocker("privacy_decisions_stale"));
     }
@@ -1198,6 +1486,133 @@ function evaluateChapterReviewCompletion(
   } catch {
     return [chapterBlocker("review_state_invalid")];
   }
+}
+
+function evaluateCommonChapterReviewCompletion(
+  state: ChapterReviewState,
+  context: ChapterReviewCompletionContext,
+  insightBlockers: ChapterReviewBlocker[] = [],
+) {
+  const chapterKey = validStableId(context?.storyKey) ? context.storyKey : "unknown";
+  const invalid = (code: "review_state_invalid" | "privacy_incomplete"): ChapterReviewBlocker[] => [{
+    code,
+    chapterKey,
+    targetKind: "chapter",
+  }];
+  try {
+    if (!validStableId(context.storyKey)) return invalid("review_state_invalid");
+    if (!privacyComplete(context)) return invalid("privacy_incomplete");
+    if (!validateChapterReviewLedger(state, context.storyKey, context.sourceBlocks, context.reviewedBlocks)
+      || !Array.isArray(state.staleTranslations)) return invalid("review_state_invalid");
+    return evaluateValidatedCommonChapterReviewCompletion(state, context, insightBlockers);
+  } catch {
+    return invalid("review_state_invalid");
+  }
+}
+
+function evaluateChapterReviewCompletion(
+  state: ChapterReviewState,
+  context: ChapterReviewCompletionContext,
+): ChapterReviewBlocker[] {
+  const chapterKey = validStableId(context?.storyKey) ? context.storyKey : "unknown";
+  try {
+    if (!validStableId(context.storyKey)) {
+      return [{ code: "review_state_invalid", chapterKey, targetKind: "chapter" }];
+    }
+    if (!privacyComplete(context)) {
+      return [{ code: "privacy_incomplete", chapterKey, targetKind: "chapter" }];
+    }
+    if (!validateInsightReviewLedger(state, context.reviewableInsightIds)) {
+      return [{ code: "review_state_invalid", chapterKey, targetKind: "chapter" }];
+    }
+    const insightBlockers: ChapterReviewBlocker[] = Object.entries(state.insightReviews)
+      .filter(([, review]) => review.resolution === "pending")
+      .map(([insightId]) => ({
+        code: "insight_pending",
+        chapterKey,
+        targetKind: "insight",
+        targetId: insightId,
+      }));
+    return evaluateCommonChapterReviewCompletion(state, context, insightBlockers);
+  } catch {
+    return [{ code: "review_state_invalid", chapterKey, targetKind: "chapter" }];
+  }
+}
+
+function successorInsightCompletionBlockers(
+  state: SuccessorChapterReviewState,
+  source: SuccessorStorySource,
+): SuccessorChapterReviewBlocker[] {
+  const blockers: SuccessorChapterReviewBlocker[] = [];
+  for (const insight of source.insights) {
+    const review = state.sourceInsightReviews[insight.id];
+    if (!review) {
+      blockers.push({
+        code: "ai_insight_decision_missing", chapterKey: source.key, targetKind: "insight", targetId: insight.id,
+      });
+      continue;
+    }
+    const currentApplied = review.resolution === "applied"
+      && review.appliedVersion === review.version
+      && review.appliedRevision !== undefined;
+    if (currentApplied) continue;
+    blockers.push({
+      code: review.version > 1 || review.resolution === "applied"
+        ? "ai_insight_reaccept_required"
+        : "ai_insight_decision_pending",
+      chapterKey: source.key,
+      targetKind: "insight",
+      targetId: insight.id,
+    });
+  }
+  blockers.push(...Object.entries(state.humanInsights)
+    .filter(([, review]) => review.resolution !== "applied"
+      || review.decision !== "human_approved"
+      || review.appliedVersion !== review.version)
+    .map(([insightId]) => ({
+      code: "human_insight_pending" as const,
+      chapterKey: source.key,
+      targetKind: "insight" as const,
+      targetId: insightId,
+    })));
+  return blockers;
+}
+
+function evaluateSuccessorChapterReviewCompletion(
+  state: SuccessorChapterReviewState,
+  context: SuccessorChapterReviewContext,
+): SuccessorChapterReviewBlocker[] {
+  const commonContext: ChapterReviewCompletionContext = {
+    ...context,
+    storyKey: context.source.key,
+    reviewableInsightIds: [],
+  };
+  if (!validateSuccessorChapterReviewLedger(state, context.source)) {
+    return [{
+      code: "review_state_invalid" as const,
+      chapterKey: context.source.key,
+      targetKind: "chapter" as const,
+    }];
+  }
+  return [
+    ...evaluateCommonChapterReviewCompletion(state, commonContext),
+    ...successorInsightCompletionBlockers(state, context.source),
+  ];
+}
+
+/** Project bounded successor reasons without including Insight or Evidence copy. */
+export function successorChapterReviewCompletionBlockers(
+  state: SuccessorChapterReviewState,
+  context: SuccessorChapterReviewContext,
+) {
+  return evaluateSuccessorChapterReviewCompletion(state, context);
+}
+
+export function validateSuccessorChapterReviewCompletion(
+  state: SuccessorChapterReviewState,
+  context: SuccessorChapterReviewContext,
+) {
+  return evaluateSuccessorChapterReviewCompletion(state, context).length === 0;
 }
 
 /** Project bounded, display-safe reasons that the current Chapter cannot complete. */
@@ -1217,9 +1632,10 @@ export function validateChapterReviewCompletion(
   return evaluateChapterReviewCompletion(state, context).length === 0;
 }
 
-export function applyChapterReview(
+function applyChapterReviewWithInsightValidator(
   state: ChapterReviewState,
   context: ApplyReviewContext,
+  insightValidator: (state: ChapterReviewState, reviewableInsightIds: string[]) => boolean,
 ): { state: ChapterReviewState; blockedReason?: "privacy" | "evidence" | "annotations" | "direct_evidence" } {
   if (!validStableId(context.storyKey)
     || state.editTransactions.some((transaction) => transaction.storyKey !== context.storyKey)) {
@@ -1228,7 +1644,7 @@ export function applyChapterReview(
   if (!privacyComplete(context)) return { state, blockedReason: "privacy" };
   if (!context.evidenceResolved) return { state, blockedReason: "evidence" };
   if (!validateChapterReviewLedger(state, context.storyKey, context.sourceBlocks, context.reviewedBlocks)
-    || !validateInsightReviewLedger(state, context.reviewableInsightIds)) {
+    || !insightValidator(state, context.reviewableInsightIds)) {
     return { state, blockedReason: "annotations" };
   }
   const availableEvidence = new Set(context.chapterEvidence.map(evidenceKey));
@@ -1364,6 +1780,124 @@ export function applyChapterReview(
   return validateChapterReviewLedger(nextState, context.storyKey, context.sourceBlocks, context.reviewedBlocks)
     ? { state: nextState }
     : { state, blockedReason: "annotations" };
+}
+
+export function applyChapterReview(
+  state: ChapterReviewState,
+  context: ApplyReviewContext,
+) {
+  return applyChapterReviewWithInsightValidator(state, context, validateInsightReviewLedger);
+}
+
+export function applySuccessorChapterReview(
+  state: SuccessorChapterReviewState,
+  context: SuccessorChapterReviewContext,
+): {
+  state: SuccessorChapterReviewState;
+  blockedReason?: "privacy" | "evidence" | "annotations" | "direct_evidence" | "insights";
+} {
+  const applyContext: ApplyReviewContext = {
+    ...context,
+    storyKey: context.source.key,
+    reviewableInsightIds: context.source.insights.map((insight) => insight.id),
+    chapterEvidence: [context.source.evidence.primary, ...context.source.evidence.supporting],
+  };
+  const result = applyChapterReviewWithInsightValidator(
+    state,
+    applyContext,
+    (candidate) => validateSuccessorChapterReviewLedger(
+      candidate as SuccessorChapterReviewState,
+      context.source,
+      true,
+    ),
+  );
+  if (result.blockedReason) return { state, blockedReason: result.blockedReason };
+  const applied = result.state as SuccessorChapterReviewState;
+  const revision = applied.revision;
+  const records: SuccessorInsightRevisionRecord[] = [];
+  const sourceInsightReviews = Object.fromEntries(Object.entries(applied.sourceInsightReviews).map(([insightId, review]) => {
+    if (review.resolution !== "pending" || review.decision === "pending") return [insightId, review];
+    records.push({
+      revision,
+      insightId,
+      origin: "source_ai",
+      version: review.version,
+      decision: review.decision,
+    });
+    return [insightId, {
+      ...review,
+      resolution: "applied" as const,
+      appliedVersion: review.version,
+      appliedRevision: revision,
+    }];
+  })) as Record<string, SuccessorSourceInsightReview>;
+  const humanInsights = Object.fromEntries(Object.entries(applied.humanInsights).map(([insightId, review]) => {
+    if (review.resolution !== "pending" || review.decision !== "human_approved") return [insightId, review];
+    records.push({
+      revision,
+      insightId,
+      origin: "human_created",
+      version: review.version,
+      decision: "human_approved",
+    });
+    return [insightId, {
+      ...review,
+      resolution: "applied" as const,
+      appliedVersion: review.version,
+      appliedRevision: revision,
+    }];
+  })) as Record<string, SuccessorHumanInsightReview>;
+  const nextState: SuccessorChapterReviewState = {
+    ...applied,
+    sourceInsightReviews,
+    humanInsights,
+    successorInsightRevisionHistory: [
+      ...applied.successorInsightRevisionHistory,
+      ...records,
+    ].sort(successorRevisionOrder),
+  };
+  return validateSuccessorChapterReviewLedger(nextState, context.source, true)
+    ? { state: nextState }
+    : { state, blockedReason: "insights" };
+}
+
+/** A human Save is approval for exactly the authored version and receives its
+ * own applied Chapter revision; no redundant Accept transition is created. */
+export function saveSuccessorHumanInsight(
+  state: SuccessorChapterReviewState,
+  context: SuccessorChapterReviewContext,
+  insightId: string,
+  content: SuccessorHumanInsightContent,
+) {
+  const existing = state.humanInsights[insightId];
+  const reuseDraft = existing?.decision === "draft" && existing.resolution === "pending"
+    && JSON.stringify(existing.content) === JSON.stringify(content);
+  const draft = reuseDraft
+    ? state
+    : editSuccessorHumanInsight(state, context.source, insightId, content);
+  if (draft === state && !reuseDraft) return { state, blockedReason: "insights" as const };
+  const pendingApproval: SuccessorChapterReviewState = {
+    ...draft,
+    humanInsights: {
+      ...draft.humanInsights,
+      [insightId]: { ...draft.humanInsights[insightId], decision: "human_approved" },
+    },
+  };
+  return applySuccessorChapterReview(pendingApproval, context);
+}
+
+export function canMarkSuccessorChapterReady(
+  state: SuccessorChapterReviewState,
+  context: SuccessorChapterReviewContext,
+) {
+  return state.stage === "revision_ready" && validateSuccessorChapterReviewCompletion(state, context);
+}
+
+export function markSuccessorChapterReady(
+  state: SuccessorChapterReviewState,
+  context: SuccessorChapterReviewContext,
+): SuccessorChapterReviewState {
+  return canMarkSuccessorChapterReady(state, context) ? { ...state, stage: "human_confirmed" } : state;
 }
 
 export function canMarkChapterReady(state: ChapterReviewState, context: ApplyReviewContext) {
