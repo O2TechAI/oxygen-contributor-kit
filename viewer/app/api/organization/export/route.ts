@@ -2,6 +2,7 @@ import {
   type ReviewedStoryRelease,
 } from "../../../../lib/story-release.ts";
 import {
+  RELEASE_ERROR,
   reconstructReviewedStoryRelease,
   releaseErrorResponse,
 } from "../../../../lib/story-release-server.ts";
@@ -37,9 +38,16 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const reconstruction = await reconstructReviewedStoryRelease(await request.json().catch(() => null));
+  const releaseRequest = await request.json().catch(() => null);
+  const reconstruction = await reconstructReviewedStoryRelease(releaseRequest);
   if (!reconstruction.ok) return releaseErrorResponse(reconstruction);
-  return new Response(renderReviewedStoryHtml(reconstruction.serializedStory), {
+  const html = renderReviewedStoryHtml(reconstruction.serializedStory);
+  const finalReconstruction = await reconstructReviewedStoryRelease(releaseRequest);
+  if (!finalReconstruction.ok) return releaseErrorResponse(finalReconstruction);
+  if (finalReconstruction.serializedStory !== reconstruction.serializedStory) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
+  }
+  return new Response(html, {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "content-disposition": 'attachment; filename="oxygen-reviewed-story.html"',

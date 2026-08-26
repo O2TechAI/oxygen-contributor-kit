@@ -235,12 +235,14 @@ test("confirmed fragments are removed from derived ZIP text too", () => {
 
 test("package route is gated and never selects original event JSON", async () => {
   const route = await readFile(new URL("../app/api/package/route.ts", import.meta.url), "utf8");
+  const snapshot = await readFile(new URL("../lib/release-privacy-snapshot.ts", import.meta.url), "utf8");
   const redactions = await readFile(new URL("../app/api/redactions/route.ts", import.meta.url), "utf8");
   const documents = await readFile(new URL("../app/api/documents/route.ts", import.meta.url), "utf8");
   const compare = await readFile(new URL("../app/redaction-compare.tsx", import.meta.url), "utf8");
   assert.match(route, /redactionReleaseError/);
   assert.match(route, /computeSourceDigest/);
-  assert.match(route, /WHERE status='active'/);
+  assert.match(snapshot, /WHERE status='active'/);
+  assert.match(route, /capturePackageReleasePrivacySnapshot/);
   assert.match(route, /privacy\/redaction-summary\.json/);
   assert.match(route, /preference-probes\.json/);
   assert.match(route, /safeTextCache\.has\(source\)/);

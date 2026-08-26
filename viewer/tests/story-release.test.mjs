@@ -247,8 +247,10 @@ test("HTML export reconstructs the server-sanitized reviewed Story", async () =>
   assert.doesNotMatch(JSON.stringify(sanitized), /must-not-ship|localOriginal|privateEvidence|localIdentityState/);
   const route = await readFile(new URL("../app/api/organization/export/route.ts", import.meta.url), "utf8");
   const post = route.slice(route.indexOf("export async function POST"));
-  assert.match(post, /reconstructReviewedStoryRelease\(await request\.json\(\)\.catch\(\(\) => null\)\)/);
-  assert.match(post, /renderReviewedStoryHtml\(reconstruction\.serializedStory\)/);
+  assert.match(post, /const releaseRequest = await request\.json\(\)\.catch\(\(\) => null\)/);
+  assert.equal(post.match(/reconstructReviewedStoryRelease\(releaseRequest\)/g)?.length, 2);
+  assert.match(post, /const html = renderReviewedStoryHtml\(reconstruction\.serializedStory\)/);
+  assert.match(post, /finalReconstruction\.serializedStory !== reconstruction\.serializedStory/);
   assert.doesNotMatch(post, /reviewedStory|sanitizeReviewedStoryRelease/);
 });
 

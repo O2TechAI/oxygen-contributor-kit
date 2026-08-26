@@ -27,9 +27,9 @@ import {
 import { parseSuccessorStorySource } from "./timeline.ts";
 import { isWorkflowRunId } from "./workflow-progress.ts";
 import {
-  WORKFLOW_RUN_AUTHORITY,
-  requireExactWorkflowRun,
-} from "./workflow-run-server.ts";
+  captureStoryReleasePrivacySnapshot,
+  type ReleaseSnapshotTestOptions,
+} from "./release-privacy-snapshot.ts";
 
 type ReleaseDatabase = Awaited<ReturnType<typeof getD1>>;
 
@@ -88,6 +88,7 @@ export const RELEASE_ERROR = {
   sessionMissing: "RELEASE_SESSION_MISSING",
   reviewIncomplete: "RELEASE_REVIEW_INCOMPLETE",
   stateInvalid: "RELEASE_STATE_INVALID",
+  privacyConflict: "RELEASE_PRIVACY_CONFLICT",
 } as const;
 
 export type ReleaseErrorCode = typeof RELEASE_ERROR[keyof typeof RELEASE_ERROR];
@@ -146,13 +147,7 @@ async function sha256(value: string) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function readReleaseSessionRecord(
-  db: ReleaseDatabase,
-  workflowRunId: string,
-): Promise<ReleaseSessionRecord> {
-  const row = await db.prepare(`SELECT state_json,updated_at,server_version
-    FROM story_review_sessions WHERE workflow_run_id=?`)
-    .bind(workflowRunId).first<ReleaseSessionRow>();
+function readReleaseSessionRecord(row: ReleaseSessionRow | null): ReleaseSessionRecord {
   if (!row) return { session: null, serverVersion: 0, sourceRevision: null, persistedAt: null };
   let session: AnyStoryReviewSession | null = null;
   let sourceRevision: number | null = null;
@@ -180,24 +175,20 @@ async function readReleaseSessionRecord(
 export async function reconstructReviewedStoryReleaseFromDatabase(
   db: ReleaseDatabase,
   input: unknown,
+  options: ReleaseSnapshotTestOptions = {},
 ): Promise<ServerOwnedReleaseResult> {
   const request = parseRequest(input);
   if (!request) return failure(RELEASE_ERROR.requestInvalid);
 
-  const authority = await requireExactWorkflowRun(db, request.workflowRunId);
-  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+  const initialSnapshot = await captureStoryReleasePrivacySnapshot(db, request.workflowRunId);
+  if (initialSnapshot.authorityRows.length !== 1
+    || initialSnapshot.authorityRows[0]?.id !== request.workflowRunId) {
     return failure(RELEASE_ERROR.runConflict);
   }
 
-  const [run, record, redactionJob, itemResult] = await Promise.all([
-    db.prepare(`SELECT id,story_generation_status,story_source_revision,active_story_digest
-      FROM workflow_runs WHERE id=?`).bind(request.workflowRunId).first<ReleaseRunRow>(),
-    readReleaseSessionRecord(db, request.workflowRunId),
-    db.prepare("SELECT * FROM redaction_jobs ORDER BY started_at DESC LIMIT 1")
-      .first<Record<string, unknown>>(),
-    db.prepare(`SELECT id,document_id,sequence,event_type,actor_id,actor_type,timestamp,
-      content,organization_reason FROM items ORDER BY document_id,sequence`).all<ReleaseItemRow>(),
-  ]);
+  const run = initialSnapshot.run as ReleaseRunRow | null;
+  const record = readReleaseSessionRecord(initialSnapshot.session as ReleaseSessionRow | null);
+  const redactionJob = initialSnapshot.redactionJob;
 
   const activeSourceRevision = validRevision(run?.story_source_revision)
     ? run.story_source_revision
@@ -222,7 +213,7 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     return failure(RELEASE_ERROR.sourceConflict, boundedMetadata);
   }
 
-  const items = itemResult.results || [];
+  const items = initialSnapshot.itemRows as ReleaseItemRow[];
   const currentSourceDigest = await computeSourceDigest(items);
   if (redactionReleaseError(redactionJob, currentSourceDigest)) {
     return failure(RELEASE_ERROR.storyNotReady, boundedMetadata);
@@ -274,10 +265,8 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
       return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
     }
 
-    const redactionResult = await db.prepare(`SELECT item_id,start_offset,end_offset,category,status
-      FROM redactions WHERE status='active' ORDER BY item_id,start_offset`).all<ReleaseRedactionRow>();
     const redactionsByItem = new Map<string, ReleaseRedactionRow[]>();
-    for (const span of redactionResult.results || []) {
+    for (const span of initialSnapshot.redactionRows as ReleaseRedactionRow[]) {
       const itemId = String(span.item_id || "");
       redactionsByItem.set(itemId, [...(redactionsByItem.get(itemId) || []), span]);
     }
@@ -298,6 +287,11 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     if (!story || !serializedStory
       || !sameKeys(expectedKeys, story.chapters.map((chapter) => chapter.key))) {
       return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
+    }
+    await options.beforeFinalPrivacyCheck?.();
+    const finalSnapshot = await captureStoryReleasePrivacySnapshot(db, request.workflowRunId);
+    if (finalSnapshot.digest !== initialSnapshot.digest) {
+      return failure(RELEASE_ERROR.privacyConflict, boundedMetadata);
     }
     return { ok: true, story, serializedStory };
   }
@@ -331,6 +325,11 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     || !sameKeys(expectedKeys, story.chapters.map((chapter) => chapter.key))) {
     return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
   }
+  await options.beforeFinalPrivacyCheck?.();
+  const finalSnapshot = await captureStoryReleasePrivacySnapshot(db, request.workflowRunId);
+  if (finalSnapshot.digest !== initialSnapshot.digest) {
+    return failure(RELEASE_ERROR.privacyConflict, boundedMetadata);
+  }
   return { ok: true, story, serializedStory };
 }
 
@@ -348,6 +347,7 @@ const messages: Record<ReleaseErrorCode, string> = {
   [RELEASE_ERROR.sessionMissing]: "Reviewed Story session is missing",
   [RELEASE_ERROR.reviewIncomplete]: "Reviewed Story review is incomplete",
   [RELEASE_ERROR.stateInvalid]: "Reviewed Story release state is invalid",
+  [RELEASE_ERROR.privacyConflict]: "Release Privacy state changed during assembly",
 };
 
 export function releaseErrorResponse(result: ReleaseFailure) {

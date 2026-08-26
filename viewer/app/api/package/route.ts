@@ -1,6 +1,5 @@
-import { getD1 } from "../../../db";
-import { createZip } from "../../../lib/zip";
-import { selectProjectTimeline } from "../../../lib/timeline";
+import { createZip } from "../../../lib/zip.ts";
+import { selectProjectTimeline } from "../../../lib/timeline.ts";
 import {
   activeRedactionFragments,
   redactKnownFragments,
@@ -12,14 +11,18 @@ import {
 import { computeSourceDigest, redactionReleaseError } from "../../../lib/redaction-pass.mjs";
 import { canonicalizeStoredAutoRemoved } from "../../../lib/auto-removed.mjs";
 import {
+  capturePackageReleasePrivacySnapshot,
+  type ReleaseSnapshotTestOptions,
+} from "../../../lib/release-privacy-snapshot.ts";
+import {
   releaseOrganizationReason,
-} from "../../../lib/story-release";
+} from "../../../lib/story-release.ts";
 import {
   RELEASE_ERROR,
   reconstructReviewedStoryRelease,
   reconstructReviewedStoryReleaseFromDatabase,
   releaseErrorResponse,
-} from "../../../lib/story-release-server";
+} from "../../../lib/story-release-server.ts";
 
 const clean = <T,>(value: string, fallback: T): T => {
   try { return JSON.parse(value) as T; } catch { return fallback; }
@@ -35,12 +38,16 @@ type ReleaseEvent = {
   timestamp?: string | null; content: string; organization_category: string;
   organization_confidence?: number | null; organization_reason: string;
 };
+type PackageDatabase = Parameters<typeof capturePackageReleasePrivacySnapshot>[0];
 
-async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown) {
-  const db = await getD1();
-  const redactionJob = await db.prepare(
-    "SELECT * FROM redaction_jobs ORDER BY started_at DESC LIMIT 1"
-  ).first<Record<string, unknown>>();
+export async function buildPackageFromDatabase(
+  db: PackageDatabase,
+  reviewedStoryJson?: string,
+  releaseRequest?: unknown,
+  options: ReleaseSnapshotTestOptions = {},
+) {
+  const privacySnapshot = await capturePackageReleasePrivacySnapshot(db);
+  const redactionJob = privacySnapshot.redactionJob;
   const preliminaryError = redactionReleaseError(
     redactionJob,
     redactionJob?.source_digest,
@@ -49,24 +56,12 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
     return Response.json({ error: preliminaryError }, { status: 409 });
   }
 
-  const [documentResult, itemResult, redactionResult, probeResult, bulkResult, probeRun] = await Promise.all([
-    db.prepare(
-      `SELECT id,kind,source_system,item_count,metadata_json,formatted_summary_json
-         FROM documents ORDER BY source_timestamp,title`
-    ).all<Record<string, unknown>>(),
-    db.prepare(
-      `SELECT id,document_id,sequence,event_type,actor_type,timestamp,content,
-              organization_category,organization_confidence,organization_reason
-         FROM items ORDER BY document_id,sequence`
-    ).all<Record<string, unknown>>(),
-    db.prepare(
-      `SELECT id,item_id,document_id,start_offset,end_offset,category,status
-         FROM redactions WHERE status='active' ORDER BY item_id,start_offset`
-    ).all<Record<string, unknown>>(),
-    db.prepare("SELECT * FROM probes ORDER BY score DESC,created_at").all<Record<string, unknown>>(),
-    db.prepare("SELECT * FROM probe_bulk_decisions ORDER BY count DESC").all<Record<string, unknown>>(),
-    db.prepare("SELECT * FROM probe_runs ORDER BY started_at DESC LIMIT 1").first<Record<string, unknown>>(),
-  ]);
+  const documentResult = { results: privacySnapshot.documentRows };
+  const itemResult = { results: privacySnapshot.itemRows };
+  const redactionResult = { results: privacySnapshot.redactionRows };
+  const probeResult = { results: privacySnapshot.probeRows };
+  const bulkResult = { results: privacySnapshot.bulkRows };
+  const probeRun = privacySnapshot.probeRun;
   const currentSourceDigest = await computeSourceDigest(itemResult.results);
   const sourceError = redactionReleaseError(redactionJob, currentSourceDigest);
   if (sourceError) {
@@ -247,7 +242,7 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
     set_aside: Number(probeRun?.set_aside || 0),
   };
 
-  const exportedAt = new Date().toISOString();
+  const exportedAt = options.exportedAt ?? new Date().toISOString();
   const sourceTypes = Array.from(new Set(documents.map((document) => document.source_system))).sort();
   const counts = {
     documents: documents.length,
@@ -296,6 +291,8 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
     name: "story/reviewed-project-story.json",
     data: reviewedStoryJson,
   });
+  const zip = createZip(entries);
+  await options.beforeFinalPrivacyCheck?.();
   if (reviewedStoryJson && releaseRequest !== undefined) {
     const finalReconstruction = await reconstructReviewedStoryReleaseFromDatabase(db, releaseRequest);
     if (!finalReconstruction.ok) return releaseErrorResponse(finalReconstruction);
@@ -303,12 +300,20 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
       return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
     }
   }
-  const zip = createZip(entries);
+  const finalPrivacySnapshot = await capturePackageReleasePrivacySnapshot(db);
+  if (finalPrivacySnapshot.digest !== privacySnapshot.digest) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.privacyConflict });
+  }
   return new Response(zip, { headers: {
     "content-type": "application/zip",
     "content-disposition": 'attachment; filename="oxygen-contribution.zip"',
     "cache-control": "no-store",
   } });
+}
+
+async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown) {
+  const { getD1 } = await import("../../../db/index.ts");
+  return buildPackageFromDatabase(await getD1(), reviewedStoryJson, releaseRequest);
 }
 
 export async function GET() {

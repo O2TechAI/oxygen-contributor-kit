@@ -35,6 +35,7 @@ const RUN_ID = "successor-release-run";
 const SOURCE_REVISION = 9;
 const SERVER_VERSION = 6;
 const PRIVATE = "PRIVATE_STORY_SENTINEL";
+const PRIVATE_STORY_QUOTE_SENTINEL = "PRIVATE_STORY_QUOTE_SENTINEL";
 const evidence = { documentId: "story-doc", eventId: "story-doc:chapter-item" };
 
 function insight(id, blockId = "story-block-safe", overrides = {}) {
@@ -50,7 +51,7 @@ function insight(id, blockId = "story-block-safe", overrides = {}) {
   };
 }
 
-function source(insights = [], overrides = {}) {
+function source(insights = [], overrides = {}, privateValue = PRIVATE) {
   return {
     schema: "oxygen.story/3",
     key: "chapter-release",
@@ -68,7 +69,7 @@ function source(insights = [], overrides = {}) {
     }],
     story: {
       blocks: [
-        { id: "story-block-private", text: `The ${PRIVATE} was removed.`, evidence: [evidence] },
+        { id: "story-block-private", text: `The ${privateValue} was removed.`, evidence: [evidence] },
         { id: "story-block-safe", text: "The approved Story text states the safe boundary.", evidence: [evidence] },
       ],
       uncertainty: "The remaining uncertainty is explicit.",
@@ -272,6 +273,21 @@ class FakeSuccessorReleaseDb {
         if (/SELECT id FROM workflow_runs ORDER BY id LIMIT 2/.test(sql)) {
           return { results: [...this.runs.keys()].sort().slice(0, 2).map((id) => ({ id })) };
         }
+        if (/FROM workflow_runs WHERE id=\?/.test(sql)) {
+          const run = this.runs.get(values[0]);
+          return { results: run ? [{
+            id: run.id,
+            story_generation_status: run.status,
+            story_source_revision: run.sourceRevision,
+            active_story_digest: run.activeStoryDigest,
+          }] : [] };
+        }
+        if (/FROM story_review_sessions WHERE workflow_run_id=\?/.test(sql)) {
+          return { results: this.session ? [structuredClone(this.session)] : [] };
+        }
+        if (/FROM redaction_jobs/.test(sql)) {
+          return { results: this.redactionJob ? [structuredClone(this.redactionJob)] : [] };
+        }
         if (/organization_reason AS summary/.test(sql)) return { results: this.items.map((item) => ({
           id: item.id, documentId: item.document_id, summary: item.organization_reason,
         })) };
@@ -303,6 +319,10 @@ class FakeSuccessorReleaseDb {
       },
     };
   }
+
+  batch(statements) {
+    return Promise.all(statements.map((statement) => statement.all()));
+  }
 }
 
 async function serverFixture({
@@ -312,8 +332,10 @@ async function serverFixture({
   ],
   decisions = {},
   includeHuman = false,
+  storyPrivate = PRIVATE,
+  initiallyRedacted = true,
 } = {}) {
-  const currentSource = source(sourceInsights);
+  const currentSource = source(sourceInsights, {}, storyPrivate);
   const humans = includeHuman
     ? [["human:approved", humanContent(currentSource)]] : [];
   const state = reviewedState(currentSource, decisions, humans);
@@ -326,7 +348,7 @@ async function serverFixture({
     actor_id: "contributor",
     actor_type: "user",
     timestamp: "2026-08-25T00:00:00.000Z",
-    content: `${PRIVATE} supporting evidence`,
+    content: `${storyPrivate} supporting evidence`,
     organization_reason: `${SUCCESSOR_STORY_PREFIX}${JSON.stringify(currentSource)}`,
   };
   const candidateRows = [{ id: item.id, documentId: item.document_id, summary: item.organization_reason }];
@@ -357,18 +379,18 @@ async function serverFixture({
     },
     redactionJob: {
       status: "complete",
-      completed: 1,
-      total: 1,
+      completed: initiallyRedacted ? 1 : 0,
+      total: initiallyRedacted ? 1 : 0,
       rejected: 0,
       source_digest: sourceDigest,
     },
-    redactions: [{
+    redactions: initiallyRedacted ? [{
       item_id: item.id,
       start_offset: 0,
-      end_offset: PRIVATE.length,
+      end_offset: storyPrivate.length,
       category: "secret",
       status: "active",
-    }],
+    }] : [],
   });
   return { db, currentSource };
 }
@@ -497,12 +519,42 @@ test("unknown reserved Story versions cannot bypass live bootstrap or release se
   assert.doesNotMatch(releaseOrganizationReason(unknownReason), new RegExp(`${originalSentinel}|${evidenceSentinel}`));
 });
 
+test("anchored Story Privacy mutation before finalization cannot release stale Quote bytes", async () => {
+  const fixture = await serverFixture({
+    storyPrivate: PRIVATE_STORY_QUOTE_SENTINEL,
+    initiallyRedacted: false,
+    sourceInsights: [insight("insight-private-anchor", "story-block-private")],
+  });
+  const item = fixture.db.items[0];
+  const result = await reconstructReviewedStoryReleaseFromDatabase(
+    fixture.db,
+    request(),
+    {
+      beforeFinalPrivacyCheck: () => {
+        fixture.db.redactions = [{
+          id: "late-story-redaction",
+          item_id: item.id,
+          document_id: item.document_id,
+          start_offset: 0,
+          end_offset: PRIVATE_STORY_QUOTE_SENTINEL.length,
+          category: "sensitive",
+          status: "active",
+          updated_at: "2026-08-25T00:00:20.000Z",
+        }];
+      },
+    },
+  );
+  assert.equal(result.code, RELEASE_ERROR.privacyConflict);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(PRIVATE_STORY_QUOTE_SENTINEL));
+});
+
 test("successor HTML and ZIP use the same canonical reviewed release bytes", async () => {
   const { db } = await serverFixture();
   const release = await reconstructReviewedStoryReleaseFromDatabase(db, request());
   assert.equal(release.ok, true);
   const htmlModule = await import("../app/api/organization/export/route.ts");
   const html = htmlModule.renderReviewedStoryHtml(release.serializedStory);
+  assert.equal(htmlModule.renderReviewedStoryHtml(release.serializedStory), html);
   const embedded = html.match(/const STORY=([\s\S]*?);const view=/)?.[1];
   assert.ok(embedded);
   const zipEntry = successorReviewedStoryPackageEntry(release.story);

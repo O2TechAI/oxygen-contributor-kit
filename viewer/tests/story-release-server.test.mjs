@@ -89,7 +89,23 @@ class FakeReleaseDb {
         if (/SELECT id FROM workflow_runs ORDER BY id LIMIT 2/.test(sql)) {
           return { results: [...this.runs.keys()].sort().slice(0, 2).map((id) => ({ id })) };
         }
+        if (/FROM workflow_runs WHERE id=\?/.test(sql)) {
+          const run = this.runs.get(values[0]);
+          return { results: run ? [{
+            id: run.id,
+            story_generation_status: run.status,
+            story_source_revision: run.sourceRevision,
+            active_story_digest: run.activeStoryDigest,
+          }] : [] };
+        }
+        if (/FROM story_review_sessions WHERE workflow_run_id=\?/.test(sql)) {
+          return { results: this.session ? [structuredClone(this.session)] : [] };
+        }
+        if (/FROM redaction_jobs/.test(sql)) {
+          return { results: this.redactionJob ? [structuredClone(this.redactionJob)] : [] };
+        }
         if (/FROM items/.test(sql)) return { results: structuredClone(this.items) };
+        if (/FROM redactions/.test(sql)) return { results: [] };
         throw new Error(`Unexpected release all SQL: ${sql}`);
       },
       first: async () => {
@@ -111,6 +127,10 @@ class FakeReleaseDb {
         throw new Error(`Unexpected release first SQL: ${sql}`);
       },
     };
+  }
+
+  batch(statements) {
+    return Promise.all(statements.map((statement) => statement.all()));
   }
 }
 
