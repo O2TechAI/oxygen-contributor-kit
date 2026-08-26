@@ -769,6 +769,11 @@ export function StoryChapterEditor(props: {
   // reviewer can verify or change it; release projection still omits it.
   const insightSuppressed = chapterReview.redactedBlocks.includes(`insight:${visibleHighlight.id}`);
 
+  const toggleInsightMode = (mode: "edit" | "revise") => {
+    if (insightMode === mode) return setInsightMode("none");
+    if (chapterReview.stage === "human_confirmed") onChapterReview(returnChapterToReview(chapterReview));
+    setInsightMode(mode);
+  };
   const saveInsightEdit = () => {
     onChapterReview(updateInsightReview(chapterReview, visibleHighlight.id, language, { status: "overridden", text: insightDraft.lesson.trim(), highlight: insightDraft, revision: "direct" }));
     setInsightMode("none");
@@ -785,10 +790,10 @@ export function StoryChapterEditor(props: {
   const canonicalInsightDisclosure = !insightSuppressed ? <details className={`canonicalInsightDisclosure ${insightReview?.status === "rejected" ? "rejected" : ""}`} data-canonical-insight={visibleHighlight.id} data-inline-insight={visibleHighlight.id}>
     <summary><span>✦ {labels.aiInsight}</span><b>{visibleHighlight.title}</b><small>{labels.aiInterpretation}</small></summary>
     <div className="canonicalInsightBody">
-      <div className="inlineInsightHead"><span>{labels.completeInsight}</span>{chapterReview.stage !== "human_confirmed" && <div>
-        <button title={labels.editInsight} aria-label={labels.editInsight} onClick={() => setInsightMode(insightMode === "edit" ? "none" : "edit")}>{language === "zh" ? "编辑" : "Edit"}</button>
-        <button title={labels.reviseInsight} aria-label={labels.reviseInsight} onClick={() => setInsightMode(insightMode === "revise" ? "none" : "revise")}>{language === "zh" ? "修改" : "Revise"}</button>
-      </div>}</div>
+      <div className="inlineInsightHead"><span>{labels.completeInsight}</span><div>
+        <button title={labels.editInsight} aria-label={labels.editInsight} onClick={() => toggleInsightMode("edit")}>{language === "zh" ? "编辑" : "Edit"}</button>
+        <button title={labels.reviseInsight} aria-label={labels.reviseInsight} onClick={() => toggleInsightMode("revise")}>{language === "zh" ? "修改" : "Revise"}</button>
+      </div></div>
       {insightMode === "edit" ? <div className="inlineInsightEdit">
         <label>{language === "zh" ? "标题" : "Title"}<input value={insightDraft.title} onChange={(event) => setInsightDraft({ ...insightDraft, title: event.target.value })} /></label>
         <label>{labels.observation}<textarea rows={3} value={insightDraft.noticed} onChange={(event) => setInsightDraft({ ...insightDraft, noticed: event.target.value })} /></label>

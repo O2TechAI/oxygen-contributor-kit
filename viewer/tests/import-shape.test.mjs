@@ -162,6 +162,23 @@ test("Chapter completion renders unsupported-Add copy only for a needs-evidence 
   assert.doesNotMatch(episode,/staleTranslations\.length > 0 \? labels\.translationBlocked/);
   assert.doesNotMatch(episode,/summary\.unresolved[^\n]*labels\.addBlocked/);
 });
+test("visible confirmed Insights reopen before Edit or Revise while Privacy suppression remains authoritative", async () => {
+  const episode=await read("../app/story-chapter-editor.tsx");
+  const lifecycleStart=episode.indexOf("const toggleInsightMode");
+  const toggle=episode.slice(lifecycleStart,episode.indexOf("const saveInsightEdit",lifecycleStart));
+  const insightLifecycle=episode.slice(lifecycleStart,episode.indexOf("return <section",lifecycleStart));
+  const disclosure=insightLifecycle.slice(insightLifecycle.indexOf("const canonicalInsightDisclosure"));
+  assert.match(toggle,/if \(insightMode === mode\) return setInsightMode\("none"\)/);
+  assert.match(toggle,/chapterReview\.stage === "human_confirmed"[\s\S]*onChapterReview\(returnChapterToReview\(chapterReview\)\)[\s\S]*setInsightMode\(mode\)/);
+  assert.match(disclosure,/aria-label=\{labels\.editInsight\} onClick=\{\(\) => toggleInsightMode\("edit"\)\}/);
+  assert.match(disclosure,/aria-label=\{labels\.reviseInsight\} onClick=\{\(\) => toggleInsightMode\("revise"\)\}/);
+  assert.doesNotMatch(disclosure,/chapterReview\.stage !== "human_confirmed" && <div>[\s\S]*labels\.editInsight/);
+  assert.match(disclosure,/chapterReview\.stage !== "human_confirmed" && <div className="inlineInsightReview"/);
+  assert.match(insightLifecycle,/updateInsightReview\(chapterReview,[^\n]*status: "overridden"[^\n]*revision: "direct"/);
+  assert.match(insightLifecycle,/updateInsightReview\(chapterReview,[^\n]*status: "overridden"[^\n]*revision: "ai"/);
+  assert.match(episode,/const insightSuppressed = chapterReview\.redactedBlocks\.includes\(`insight:\$\{visibleHighlight\.id\}`\);/);
+  assert.match(episode,/const canonicalInsightDisclosure = !insightSuppressed \?/);
+});
 test("final package is explicitly unapproved and excludes runtime database", async () => {
   const route=await read("../app/api/package/route.ts");
   for(const name of ["manifest.json","data/documents.json","data/events.json","project-map.json","privacy/redaction-summary.json","review/oxygen-local-viewer.html"])assert.match(route,new RegExp(name.replace(/[/.]/g,"\\$&")));
