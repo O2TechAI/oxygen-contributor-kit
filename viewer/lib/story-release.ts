@@ -1,9 +1,16 @@
-import type { ChapterReviewState } from "./story-review.ts";
-import { applyStoryReviewToBlock, validateChapterReviewCompletion } from "./story-review.ts";
+import type { ChapterReviewState, SuccessorChapterReviewState } from "./story-review.ts";
+import {
+  applyStoryReviewToBlock,
+  successorStoryBlocks,
+  validateChapterReviewCompletion,
+  validateSuccessorChapterReviewCompletion,
+} from "./story-review.ts";
 import {
   LEGACY_STORY_PREFIX,
+  SUCCESSOR_STORY_PREFIX,
   STORY_PREFIX,
   storyReleaseTargetCatalog,
+  type SuccessorStorySource,
   type StoryLanguage,
   type StoryReleaseTarget,
   type StoryReleaseTargetCatalog,
@@ -59,6 +66,52 @@ export type ReviewedStoryRelease = {
   schema_version: "oxygen.reviewed-story/1";
   publication_approved: false;
   chapters: ReviewedReleaseChapter[];
+};
+
+export const SUCCESSOR_REVIEWED_STORY_SCHEMA = "oxygen.reviewed-story/2" as const;
+
+type SuccessorReleasePerson = {
+  releaseLabel: string;
+  role: string;
+  description: string;
+};
+
+export type SuccessorReleaseInsight = {
+  id: string;
+  title?: string;
+  background: string;
+  quote: string;
+  directlyAcquiredExperience: string;
+  principle: string;
+};
+
+type SuccessorReleaseLocale = {
+  title: string;
+  overview: string;
+  people: SuccessorReleasePerson[];
+  story: {
+    blocks: string[];
+    uncertainty?: string;
+  };
+  insights: SuccessorReleaseInsight[];
+};
+
+export type SuccessorReviewedReleaseChapter = {
+  key: string;
+  phase: { id: string; label: string };
+  kind?: string;
+  revision: number;
+  en: SuccessorReleaseLocale;
+};
+
+export type SuccessorReviewedStoryRelease = {
+  schema_version: typeof SUCCESSOR_REVIEWED_STORY_SCHEMA;
+  publication_approved: false;
+  chapters: SuccessorReviewedReleaseChapter[];
+};
+
+export type SuccessorReleasePrivacy = {
+  redact: (copy: string) => string;
 };
 
 type ScalarReleaseField = Extract<StoryReleaseTargetDescriptor, { kind: "scalar" }>["field"];
@@ -184,6 +237,140 @@ export function buildReviewedStoryRelease(
   return { schema_version: "oxygen.reviewed-story/1", publication_approved: false, chapters };
 }
 
+const noReleaseRedaction: SuccessorReleasePrivacy = { redact: (copy) => copy };
+
+function successorReviewContext(source: SuccessorStorySource, state: SuccessorChapterReviewState) {
+  const sourceCollection = successorStoryBlocks(source);
+  return {
+    source,
+    privacyCandidates: [],
+    privacyDecisions: {},
+    targetCatalog: new Map(),
+    evidenceResolved: true,
+    supportedAddIds: [],
+    supportedEditIds: [],
+    sourceBlocks: sourceCollection,
+    reviewedBlocks: {
+      en: Object.fromEntries(source.story.blocks.map((block) => [
+        block.id,
+        applyStoryReviewToBlock(block.text, block.id, "en", state),
+      ])),
+      zh: {},
+    },
+  };
+}
+
+type PrivacyPreparedStoryBlock = {
+  id: string;
+  copy: string;
+  redacted: boolean;
+};
+
+function privacyPreparedStoryBlocks(
+  source: SuccessorStorySource,
+  state: SuccessorChapterReviewState,
+  privacy: SuccessorReleasePrivacy,
+) {
+  return source.story.blocks.map<PrivacyPreparedStoryBlock>((block) => {
+    const reviewed = applyStoryReviewToBlock(block.text, block.id, "en", state);
+    const safe = privacy.redact(reviewed);
+    return { id: block.id, copy: safe, redacted: safe !== reviewed };
+  });
+}
+
+function successorInsightProjection(
+  id: string,
+  content: {
+    title?: string;
+    background: string;
+    quote: { storyBlockIds: string[] };
+    directlyAcquiredExperience: string;
+    principle: string;
+  },
+  blocks: Map<string, PrivacyPreparedStoryBlock>,
+  privacy: SuccessorReleasePrivacy,
+): SuccessorReleaseInsight | null {
+  const anchors = content.quote.storyBlockIds.map((blockId) => blocks.get(blockId));
+  if (!anchors.length || anchors.some((block) => !block || block.redacted)) return null;
+  return {
+    id,
+    ...(content.title === undefined ? {} : { title: privacy.redact(content.title) }),
+    background: privacy.redact(content.background),
+    quote: anchors.map((block) => block!.copy).join("\n\n"),
+    directlyAcquiredExperience: privacy.redact(content.directlyAcquiredExperience),
+    principle: privacy.redact(content.principle),
+  };
+}
+
+/** Build the distinct Story-First reviewed product. Privacy-prepared Story
+ * blocks own Quote copy; source anchors, Evidence, and review provenance never
+ * enter the released contract. */
+export function buildSuccessorReviewedStoryRelease(
+  sources: SuccessorStorySource[],
+  reviews: Record<string, SuccessorChapterReviewState>,
+  privacy: SuccessorReleasePrivacy = noReleaseRedaction,
+): SuccessorReviewedStoryRelease {
+  const seen = new Set<string>();
+  const chapters = sources.flatMap((source) => {
+    const state = reviews[source.key];
+    if (seen.has(source.key) || !state || state.stage !== "human_confirmed") return [];
+    seen.add(source.key);
+    const context = successorReviewContext(source, state);
+    if (!validateSuccessorChapterReviewCompletion(state, context)) return [];
+
+    const preparedBlocks = privacyPreparedStoryBlocks(source, state, privacy);
+    const blocksById = new Map(preparedBlocks.map((block) => [block.id, block]));
+    const insights: SuccessorReleaseInsight[] = [];
+    for (const sourceInsight of source.insights) {
+      const review = state.sourceInsightReviews[sourceInsight.id];
+      if (review.decision === "rejected") continue;
+      if (review.decision !== "accepted" || review.resolution !== "applied"
+        || review.appliedVersion !== review.version) return [];
+      const projected = successorInsightProjection(
+        sourceInsight.id,
+        review.editedContent || sourceInsight,
+        blocksById,
+        privacy,
+      );
+      if (projected) insights.push(projected);
+    }
+    for (const [insightId, review] of Object.entries(state.humanInsights)) {
+      if (review.decision !== "human_approved" || review.resolution !== "applied"
+        || review.appliedVersion !== review.version) return [];
+      const projected = successorInsightProjection(insightId, review.content, blocksById, privacy);
+      if (projected) insights.push(projected);
+    }
+    insights.sort((left, right) => left.id.localeCompare(right.id));
+
+    return [{
+      key: source.key,
+      phase: { id: source.phase.id, label: privacy.redact(source.phase.label) },
+      ...(source.kind === undefined ? {} : { kind: source.kind }),
+      revision: state.revision,
+      en: {
+        title: privacy.redact(source.title),
+        overview: privacy.redact(source.overview),
+        people: source.people.map((person) => ({
+          releaseLabel: privacy.redact(person.releaseLabel),
+          role: privacy.redact(person.role),
+          description: privacy.redact(person.description),
+        })),
+        story: {
+          blocks: preparedBlocks.filter((block) => !block.redacted).map((block) => block.copy),
+          ...(source.story.uncertainty === undefined
+            ? {} : { uncertainty: privacy.redact(source.story.uncertainty) }),
+        },
+        insights,
+      },
+    }];
+  });
+  return {
+    schema_version: SUCCESSOR_REVIEWED_STORY_SCHEMA,
+    publication_approved: false,
+    chapters,
+  };
+}
+
 const requiredString = (value: unknown, maximum = 20_000) => typeof value === "string"
   && value.length > 0
   && value.length <= maximum;
@@ -260,6 +447,85 @@ export function sanitizeReviewedStoryRelease(value: unknown): ReviewedStoryRelea
   return { schema_version: "oxygen.reviewed-story/1", publication_approved: false, chapters };
 }
 
+function sanitizeSuccessorLocale(value: unknown): SuccessorReleaseLocale | null {
+  if (!value || typeof value !== "object") return null;
+  const input = value as Partial<SuccessorReleaseLocale>;
+  if (!requiredString(input.title, 500) || !requiredString(input.overview)) return null;
+  if (!Array.isArray(input.people) || input.people.length > 100 || !input.people.every((person) => (
+    requiredString(person?.releaseLabel, 100) && requiredString(person?.role, 500)
+    && requiredString(person?.description)
+  ))) return null;
+  if (!input.story || !stringArray(input.story.blocks)
+    || (input.story.uncertainty !== undefined && !requiredString(input.story.uncertainty, 4_000))) return null;
+  if (!Array.isArray(input.insights) || input.insights.length > 500) return null;
+  const insightIds = new Set<string>();
+  const insights: SuccessorReleaseInsight[] = [];
+  for (const insight of input.insights) {
+    if (!requiredString(insight?.id, 1_000) || insightIds.has(insight.id)
+      || (insight.title !== undefined && !boundedString(insight.title, 500))
+      || !requiredString(insight.background, 4_000) || !requiredString(insight.quote, 1_000_000)
+      || !requiredString(insight.directlyAcquiredExperience, 4_000)
+      || !requiredString(insight.principle, 4_000)) return null;
+    insightIds.add(insight.id);
+    insights.push({
+      id: insight.id,
+      ...(insight.title === undefined ? {} : { title: insight.title }),
+      background: insight.background,
+      quote: insight.quote,
+      directlyAcquiredExperience: insight.directlyAcquiredExperience,
+      principle: insight.principle,
+    });
+  }
+  insights.sort((left, right) => left.id.localeCompare(right.id));
+  return {
+    title: input.title,
+    overview: input.overview,
+    people: input.people.map((person) => ({
+      releaseLabel: person.releaseLabel,
+      role: person.role,
+      description: person.description,
+    })),
+    story: {
+      blocks: [...input.story.blocks],
+      ...(input.story.uncertainty === undefined ? {} : { uncertainty: input.story.uncertainty }),
+    },
+    insights,
+  };
+}
+
+/** Recreate only the Story-First product allowlist. Locales, Story-block IDs,
+ * Evidence, anchors, ledgers, origins, and CAS metadata are not accepted fields. */
+export function sanitizeSuccessorReviewedStoryRelease(value: unknown): SuccessorReviewedStoryRelease | null {
+  if (!value || typeof value !== "object") return null;
+  const input = value as Partial<SuccessorReviewedStoryRelease>;
+  if (input.schema_version !== SUCCESSOR_REVIEWED_STORY_SCHEMA || input.publication_approved !== false
+    || !Array.isArray(input.chapters) || input.chapters.length > 500) return null;
+  const seen = new Set<string>();
+  const chapters: SuccessorReviewedReleaseChapter[] = [];
+  for (const chapter of input.chapters) {
+    if (!requiredString(chapter?.key, 1_000) || seen.has(chapter.key)
+      || !chapter.phase || !requiredString(chapter.phase.id, 1_000)
+      || !requiredString(chapter.phase.label, 500)
+      || (chapter.kind !== undefined && !requiredString(chapter.kind, 100))
+      || !Number.isInteger(chapter.revision) || chapter.revision < 2) return null;
+    const en = sanitizeSuccessorLocale(chapter.en);
+    if (!en) return null;
+    seen.add(chapter.key);
+    chapters.push({
+      key: chapter.key,
+      phase: { id: chapter.phase.id, label: chapter.phase.label },
+      ...(chapter.kind === undefined ? {} : { kind: chapter.kind }),
+      revision: chapter.revision,
+      en,
+    });
+  }
+  return {
+    schema_version: SUCCESSOR_REVIEWED_STORY_SCHEMA,
+    publication_approved: false,
+    chapters,
+  };
+}
+
 /** Produce the exact allowlisted Story entry used by the ZIP builder. */
 export function reviewedStoryPackageEntry(value: unknown) {
   const story = sanitizeReviewedStoryRelease(value);
@@ -275,6 +541,19 @@ export function serializeReviewedStoryRelease(value: unknown) {
   return story ? JSON.stringify(story, null, 2) : null;
 }
 
+export function successorReviewedStoryPackageEntry(value: unknown) {
+  const story = sanitizeSuccessorReviewedStoryRelease(value);
+  return story?.chapters.length ? {
+    name: "story/reviewed-project-story.json",
+    data: serializeSuccessorReviewedStoryRelease(story)!,
+  } : null;
+}
+
+export function serializeSuccessorReviewedStoryRelease(value: unknown) {
+  const story = sanitizeSuccessorReviewedStoryRelease(value);
+  return story ? JSON.stringify(story, null, 2) : null;
+}
+
 /** Strip local Story annotation JSON before organization summaries reach a
  * contribution package. Only the concise release-facing Timeline sentence is
  * retained; reviewPresentation and exact evidence never cross this boundary. */
@@ -282,11 +561,12 @@ export function releaseOrganizationReason(value: unknown) {
   const source = String(value ?? "");
   const prefix = source.startsWith(STORY_PREFIX)
     ? STORY_PREFIX
-    : source.startsWith(LEGACY_STORY_PREFIX) ? LEGACY_STORY_PREFIX : "";
+    : source.startsWith(LEGACY_STORY_PREFIX) ? LEGACY_STORY_PREFIX
+      : source.startsWith(SUCCESSOR_STORY_PREFIX) ? SUCCESSOR_STORY_PREFIX : "";
   if (!prefix) return source;
   try {
     const parsed = JSON.parse(source.slice(prefix.length)) as Record<string, unknown>;
-    const summary = parsed.timelineSummary ?? parsed.narrative ?? parsed.title;
+    const summary = parsed.timelineSummary ?? parsed.narrative ?? parsed.overview ?? parsed.title;
     return typeof summary === "string" ? summary : "Reviewed project milestone";
   } catch {
     return "Reviewed project milestone";

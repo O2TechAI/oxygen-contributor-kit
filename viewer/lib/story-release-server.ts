@@ -1,19 +1,35 @@
 import type { getD1 } from "../db";
 import { computeSourceDigest, redactionReleaseError } from "./redaction-pass.mjs";
+import { activeRedactionFragments, redactKnownFragments } from "./release.mjs";
 import {
   buildReviewedStoryRelease,
+  buildSuccessorReviewedStoryRelease,
   sanitizeReviewedStoryRelease,
+  sanitizeSuccessorReviewedStoryRelease,
   serializeReviewedStoryRelease,
+  serializeSuccessorReviewedStoryRelease,
 } from "./story-release.ts";
-import { hydrateStoryReviewSession } from "./story-review-session.ts";
-import { readStoryReviewSessionRecord } from "./story-review-session-server.ts";
+import {
+  STORY_REVIEW_SESSION_SCHEMA,
+  SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
+  hydrateStoryReviewSession,
+  hydrateSuccessorStoryReviewSession,
+  parseStoryReviewSession,
+  type AnyStoryReviewSession,
+} from "./story-review-session.ts";
 import {
   selectReviewableStoryTimeline,
   validateStoryCandidatePackage,
+  validateSuccessorStorySourcePackage,
   type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
-import { LEGACY_STORY_PREFIX, STORY_PREFIX } from "./timeline.ts";
+import {
+  LEGACY_STORY_PREFIX,
+  SUCCESSOR_STORY_PREFIX,
+  STORY_PREFIX,
+  parseSuccessorStorySource,
+} from "./timeline.ts";
 import { isWorkflowRunId } from "./workflow-progress.ts";
 import {
   WORKFLOW_RUN_AUTHORITY,
@@ -39,6 +55,27 @@ type ReleaseItemRow = {
   timestamp?: string | null;
   content?: string;
   organization_reason?: string;
+};
+
+type ReleaseRedactionRow = {
+  item_id?: string;
+  start_offset?: number;
+  end_offset?: number;
+  category?: string;
+  status?: string;
+};
+
+type ReleaseSessionRow = {
+  state_json?: string;
+  updated_at?: string;
+  server_version?: number;
+};
+
+type ReleaseSessionRecord = {
+  session: AnyStoryReviewSession | null;
+  serverVersion: number;
+  sourceRevision: number | null;
+  persistedAt: string | null;
 };
 
 export type ServerOwnedReleaseRequest = {
@@ -69,7 +106,8 @@ type ReleaseFailure = {
 
 type ReleaseSuccess = {
   ok: true;
-  story: NonNullable<ReturnType<typeof sanitizeReviewedStoryRelease>>;
+  story: NonNullable<ReturnType<typeof sanitizeReviewedStoryRelease>>
+    | NonNullable<ReturnType<typeof sanitizeSuccessorReviewedStoryRelease>>;
   serializedStory: string;
 };
 
@@ -113,6 +151,35 @@ async function sha256(value: string) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function readReleaseSessionRecord(
+  db: ReleaseDatabase,
+  workflowRunId: string,
+): Promise<ReleaseSessionRecord> {
+  const row = await db.prepare(`SELECT state_json,updated_at,server_version
+    FROM story_review_sessions WHERE workflow_run_id=?`)
+    .bind(workflowRunId).first<ReleaseSessionRow>();
+  if (!row) return { session: null, serverVersion: 0, sourceRevision: null, persistedAt: null };
+  let session: AnyStoryReviewSession | null = null;
+  let sourceRevision: number | null = null;
+  try {
+    const stored = JSON.parse(String(row.state_json || ""));
+    if (isRecord(stored) && validRevision(stored.sourceRevision) && "session" in stored) {
+      sourceRevision = stored.sourceRevision;
+      session = parseStoryReviewSession(stored.session);
+    } else {
+      session = parseStoryReviewSession(stored);
+    }
+  } catch {
+    // Malformed state remains fail-closed while bounded CAS metadata is retained.
+  }
+  return {
+    session,
+    serverVersion: validRevision(row.server_version) ? row.server_version : 0,
+    sourceRevision,
+    persistedAt: typeof row.updated_at === "string" && row.updated_at ? row.updated_at : null,
+  };
+}
+
 /** Reconstruct the only POST-eligible reviewed Story from the exact activated
  * candidate, current Privacy source, and source-bound durable review session. */
 export async function reconstructReviewedStoryReleaseFromDatabase(
@@ -130,7 +197,7 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
   const [run, record, redactionJob, itemResult] = await Promise.all([
     db.prepare(`SELECT id,story_generation_status,story_source_revision,active_story_digest
       FROM workflow_runs WHERE id=?`).bind(request.workflowRunId).first<ReleaseRunRow>(),
-    readStoryReviewSessionRecord(db, request.workflowRunId),
+    readReleaseSessionRecord(db, request.workflowRunId),
     db.prepare("SELECT * FROM redaction_jobs ORDER BY started_at DESC LIMIT 1")
       .first<Record<string, unknown>>(),
     db.prepare(`SELECT id,document_id,sequence,event_type,actor_id,actor_type,timestamp,
@@ -167,7 +234,8 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
   }
 
   const candidateItems = items.filter((item) => String(item.organization_reason || "").startsWith(STORY_PREFIX)
-    || String(item.organization_reason || "").startsWith(LEGACY_STORY_PREFIX))
+    || String(item.organization_reason || "").startsWith(LEGACY_STORY_PREFIX)
+    || String(item.organization_reason || "").startsWith(SUCCESSOR_STORY_PREFIX))
     .sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || ""))
       || left.document_id.localeCompare(right.document_id)
       || Number(left.sequence || 0) - Number(right.sequence || 0));
@@ -183,12 +251,78 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     actorId: item.actor_id,
     actorType: item.actor_type,
   }));
+  const successorSource = candidateRows.length > 0
+    && candidateRows.every((row) => row.summary.startsWith(SUCCESSOR_STORY_PREFIX));
+  const legacySource = candidateRows.length > 0
+    && candidateRows.every((row) => row.summary.startsWith(STORY_PREFIX)
+      || row.summary.startsWith(LEGACY_STORY_PREFIX));
+  if (successorSource === legacySource) {
+    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  }
+
+  if (successorSource) {
+    if (record.session.schema !== SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA) {
+      return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+    }
+    const validation = validateSuccessorStorySourcePackage(candidateRows, evidenceRows);
+    if (!validation.ok || !run.active_story_digest
+      || await sha256(validation.canonicalCandidate) !== run.active_story_digest) {
+      return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+    }
+    const sources = candidateRows.map((row) => parseSuccessorStorySource(row.summary));
+    if (sources.some((source) => !source)) return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+    const exactSources = sources.flatMap((source) => source ? [source] : []);
+    const expectedKeys = exactSources.map((source) => source.key);
+    if (expectedKeys.length !== validation.chapterCount
+      || !sameKeys(expectedKeys, Object.keys(record.session.chapterReviews))) {
+      return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
+    }
+    const hydrated = hydrateSuccessorStoryReviewSession(
+      record.session,
+      request.workflowRunId,
+      exactSources,
+    );
+    if (!sameKeys(expectedKeys, Object.keys(hydrated.chapterReviews))
+      || expectedKeys.some((key) => hydrated.chapterReviews[key]?.stage !== "human_confirmed")) {
+      return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
+    }
+
+    const redactionResult = await db.prepare(`SELECT item_id,start_offset,end_offset,category,status
+      FROM redactions WHERE status='active' ORDER BY item_id,start_offset`).all<ReleaseRedactionRow>();
+    const redactionsByItem = new Map<string, ReleaseRedactionRow[]>();
+    for (const span of redactionResult.results || []) {
+      const itemId = String(span.item_id || "");
+      redactionsByItem.set(itemId, [...(redactionsByItem.get(itemId) || []), span]);
+    }
+    let fragments: Array<{ text: string; category: string }> = [];
+    try {
+      fragments = items.flatMap((item) => activeRedactionFragments(
+        String(item.content || ""),
+        redactionsByItem.get(item.id) || [],
+      ));
+    } catch {
+      return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+    }
+    const built = buildSuccessorReviewedStoryRelease(exactSources, hydrated.chapterReviews, {
+      redact: (copy) => redactKnownFragments(copy, fragments),
+    });
+    const story = sanitizeSuccessorReviewedStoryRelease(built);
+    const serializedStory = serializeSuccessorReviewedStoryRelease(story);
+    if (!story || !serializedStory
+      || !sameKeys(expectedKeys, story.chapters.map((chapter) => chapter.key))) {
+      return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
+    }
+    return { ok: true, story, serializedStory };
+  }
+
+  if (record.session.schema !== STORY_REVIEW_SESSION_SCHEMA) {
+    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  }
   const validation = validateStoryCandidatePackage(candidateRows, evidenceRows);
   if (!validation.ok || !run.active_story_digest
     || await sha256(validation.canonicalCandidate) !== run.active_story_digest) {
     return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
   }
-
   const milestones = selectReviewableStoryTimeline(candidateItems.map((item) => ({
     id: item.id,
     documentId: item.document_id,
