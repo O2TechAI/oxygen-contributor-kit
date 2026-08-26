@@ -41,20 +41,28 @@ test("a non-Golden synthetic project exercises dynamic Story shapes", () => {
   }
 });
 
-test("active generation contracts adopt Story-first sparse Insight semantics", async () => {
-  const [skill, product, data, bilingual, validation, narrative, migration] = await Promise.all([
+test("active contracts align Story-first semantics with the live versioned workflow", async () => {
+  const [skill, product, data, bilingual, validation, narrative, ui, lifecycle, migration] = await Promise.all([
     read("../../skills/oxygen-storytelling-review/SKILL.md"),
     read("../../skills/oxygen-storytelling-review/references/product-contract.md"),
     read("../../skills/oxygen-storytelling-review/references/story-data-contract.md"),
     read("../../skills/oxygen-storytelling-review/references/bilingual-contract.md"),
     read("../../skills/oxygen-storytelling-review/references/validation-checklist.md"),
     read("../../skills/oxygen-storytelling-review/references/narrative-writing-contract.md"),
+    read("../../skills/oxygen-storytelling-review/references/ui-interaction-contract.md"),
+    read("../../skills/oxygen-storytelling-review/references/chapter-review-lifecycle.md"),
     read("../../skills/oxygen-storytelling-review/references/story-first-successor-contract.md"),
   ]);
-  const activeContracts = [skill, product, data, bilingual, validation, narrative].join("\n");
+  const activeContracts = [skill, product, data, bilingual, validation, narrative, ui, lifecycle].join("\n");
 
   assert.match(skill, /oxygen\.story\/3/);
   assert.match(data, /prefix: oxygen\.story\/3:[\s\S]*schema: oxygen\.story\/3/);
+  assert.match(skill, /oxygen\.story\/3[\s\S]*deterministic source readiness[\s\S]*atomic workflow activation[\s\S]*oxygen\.story-review-session\/2[\s\S]*SuccessorStoryChapterEditor[\s\S]*oxygen\.reviewed-story\/2/i);
+  assert.match(product, /oxygen\.story\/3[\s\S]*deterministic source readiness[\s\S]*atomic workflow activation[\s\S]*oxygen\.story-review-session\/2[\s\S]*successor Viewer review[\s\S]*oxygen\.reviewed-story\/2/i);
+  assert.match(data, /oxygen\.story\/3[\s\S]*oxygen\.story-review-session\/2[\s\S]*oxygen\.reviewed-story\/2/i);
+  assert.match(skill, /source readiness[\s\S]{0,180}(?:is not|not)[\s\S]{0,120}human review completion/i);
+  assert.match(product, /oxygen\.story-highlight\/2[\s\S]*oxygen\.story-review-session\/1[\s\S]*oxygen\.reviewed-story\/1/i);
+  assert.match(lifecycle, /canonical live contract is `oxygen\.story\/3`[\s\S]*`oxygen\.story-review-session\/2`[\s\S]*`oxygen\.reviewed-story\/2`/i);
   assert.match(activeContracts, /understand the complete approved project history[\s\S]*determine coherent Chapter narrative arcs[\s\S]*write the complete ordered Chapter and Project Story narrative[\s\S]*verify continuity, chronology, attribution, Evidence[\s\S]*group adjacent Chapters[\s\S]*only after the complete Story is understood[\s\S]*zero or more Insights/i);
   assert.match(activeContracts, /complete coherent narrative arc/);
   assert.match(activeContracts, /Every Chapter (?:requires|retains|has) at least one (?:supported|Evidence-supported|evidence-supported) Person or actor/i);
@@ -69,7 +77,13 @@ test("active generation contracts adopt Story-first sparse Insight semantics", a
   assert.match(activeContracts, /Directly Acquired Experience[\s\S]*actual project moment/i);
   assert.match(activeContracts, /Principle[\s\S]*unsupported industry prior/i);
   assert.match(activeContracts, /Privacy[\s\S]*Evidence[\s\S]*chronology[\s\S]*attribution[\s\S]*causal restraint[\s\S]*uncertainty[\s\S]*non-fabrication/i);
-  assert.match(activeContracts, /does not activate[\s\S]*Viewer[\s\S]*Review Session[\s\S]*release/i);
+  const timelineContract = ui.match(/## Project Story Timeline([\s\S]*?)## Chapter rail/)?.[1] ?? "";
+  assert.match(timelineContract, /canonical `\/3`[\s\S]*Story Chapter card[\s\S]*No AI-selected Highlight signal[\s\S]*required/i);
+  assert.match(timelineContract, /Compatibility[\s\S]*oxygen\.story-highlight\/2[\s\S]*AI-selected Highlight signal[\s\S]*only inside that\s+versioned path/i);
+  const passageContract = ui.match(/## Optional passage assistance([\s\S]*?)## Compatibility `\/2` canonical Highlight/)?.[1] ?? "";
+  assert.match(passageContract, /canonical `oxygen\.story\/3`[\s\S]*optional[\s\S]*non-authoritative/i);
+  assert.match(passageContract, /No Story block must supply `passageContext`[\s\S]*why-it-mattered[\s\S]*what-was-learned[\s\S]*reusable lesson/i);
+  assert.match(passageContract, /Compatibility `\/2` passage context[\s\S]*Only `oxygen\.story-highlight\/2` retains/i);
   assert.match(migration, /MERGE_INTO_CANONICAL_LATER[\s\S]*DELETE_AFTER_CANONICALIZATION/);
 
   for (const obsolete of [
@@ -81,6 +95,11 @@ test("active generation contracts adopt Story-first sparse Insight semantics", a
     /main problem, participants, final action, and result must be represented/i,
     /last Chapter must be current state/i,
     /Generate local AI assistance for every rendered Story block/i,
+    /Do not bind `\/3`[\s\S]*Viewer/i,
+    /stop before live Timeline \/ Viewer activation/i,
+    /future successor activation/i,
+    /current Viewer, Review Session, and release behavior remains unchanged/i,
+    /Every complete canonical English Chapter supplies one valid `passageContext`/i,
   ]) assert.doesNotMatch(activeContracts, obsolete);
   assert.doesNotMatch(activeContracts, /typically 1[–-]3|at least one Insight|maximum three/i);
   assert.doesNotMatch(activeContracts, /BOM Sourcing Benchmark|127\.0\.0\.1:326[14]/);
@@ -191,9 +210,9 @@ test("the normal workflow delegates to the canonical repository Story runtime", 
   assert.match(sop, /workflow-progress surface/);
   assert.match(organizer, /Never expose chain-of-thought/);
   assert.match(skill, /Canonical Toolkit boundary/);
-  assert.match(skill, /viewer\/lib\/timeline\.ts[\s\S]*viewer\/lib\/story-readiness\.ts/);
-  assert.match(skill, /Do not bind `\/3` into `InlineWorkspace`, `StoryChapterEditor`/);
-  assert.match(skill, /Passage assistance is not a `\/3` generation or readiness requirement/);
+  assert.match(skill, /viewer\/lib\/timeline\.ts[\s\S]*viewer\/lib\/story-readiness\.ts[\s\S]*atomic workflow activation/);
+  assert.match(skill, /oxygen\.story\/3[\s\S]*oxygen\.story-review-session\/2[\s\S]*SuccessorStoryChapterEditor[\s\S]*oxygen\.reviewed-story\/2/);
+  assert.match(skill, /For `\/3`, passage assistance[\s\S]*optional[\s\S]*never Story readiness or Review Session completion/);
   assert.match(skill, /narrative-writing-contract\.md/);
   assert.match(skill, /Direct typing, caret insertion, selection replacement\/deletion/);
   assert.match(skill, /human direct edits and\/or compatible legacy review records/);

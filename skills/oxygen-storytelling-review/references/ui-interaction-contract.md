@@ -4,11 +4,12 @@
 
 Reuse the existing Viewer shell. Keep its top navigation, one left project/source rail, main canvas, Timeline, Release preview, Preferences, and download actions.
 
-The canonical repository entrypoints are `InlineWorkspace` in `viewer/app/workspace.tsx` and
-`StoryChapterEditor` in `viewer/app/story-chapter-editor.tsx`. Their data/state dependencies are
-the generalized modules in `viewer/lib/timeline.ts` and `viewer/lib/story-*`. Bind validated Story
-metadata to those components. Do not create a parallel page, second shell, project-bound renderer,
-or replacement privacy/release implementation merely because content differs.
+The canonical repository entrypoints are `InlineWorkspace` in `viewer/app/workspace.tsx`,
+`SuccessorStoryChapterEditor` for canonical `oxygen.story/3`, and `StoryChapterEditor` for
+compatibility `oxygen.story-highlight/2`. Their data/state dependencies are the generalized modules
+in `viewer/lib/timeline.ts` and `viewer/lib/story-*`. Bind validated Story metadata through the exact
+versioned path. Do not create a parallel page, second shell, project-bound renderer, or replacement
+privacy/release implementation merely because content differs.
 
 When a Chapter opens, do not replace the shell with a disconnected full-width reading page. Keep the rail visible on desktop and usable in responsive stacked form on small screens.
 
@@ -24,13 +25,23 @@ right: sticky Phase directory
 
 The right directory exists only when meaningful phases exist and space permits. It lists short phase titles in order, scrolls the center Timeline to the selected phase, and marks the active/visible phase where practical. Hide or collapse it at narrower breakpoints instead of squeezing the Timeline or duplicating the left rail.
 
-Keep project identity and orientation compact at the top of the center canvas. Preserve project name, overview, milestone count, phase count, reviewed-Highlight progress, and useful source/evidence context. Do not repeat that orientation inside a second giant project card.
+Keep project identity and orientation compact at the top of the center canvas. For canonical `/3`,
+preserve project name, overview, Chapter count, Phase count, version-appropriate Insight review
+progress, and useful source/evidence context. Compatibility `/2` may retain reviewed-Highlight
+progress under its explicitly versioned presentation. Do not repeat that orientation inside a
+second giant project card.
 
 Place the short localized “Read a Chapter…” direction inside the Story stream after orientation and
 immediately before the first Phase. Give it a restrained accent/directional cue, not a card, banner,
 Hero paragraph, or new section. The rest of the approved homepage composition remains unchanged.
 
-Each phase heading is a clear narrative boundary. Each milestone card is a scan object with mandatory date, milestone type, visible AI-selected Highlight signal, concise title, unmistakable Before → After, intentional high-signal chips, then quiet evidence/read metadata. Do not render a paragraph-like Timeline summary when title + transition + chips already communicate the Chapter. Long explanation remains in the Chapter.
+Each Phase heading is a clear narrative boundary. For canonical `/3`, each Story Chapter card is a
+scan object with supported date/type when present, concise title, unmistakable Before → After,
+intentional high-signal chips, then quiet Evidence/read metadata. No AI-selected Highlight signal,
+importance rank, or visible Highlight marker is required. Compatibility
+`oxygen.story-highlight/2` may retain its historical AI-selected Highlight signal only inside that
+versioned path. Do not render a paragraph-like Timeline summary when title + transition + chips
+already communicate the Chapter. Long explanation remains in the Chapter.
 
 Before/After should read as two short states separated by a clear directional cue. Chips use the existing accent color and remain compact; they are not decorative tags or a substitute for unsupported facts.
 
@@ -132,8 +143,11 @@ Background
 → Decision process
 → Result
 → Open questions
-→ collapsed canonical AI insight
 ```
+
+The complete `/3` Story precedes Insight selection. Zero or more separate Insights may follow when
+independently warranted; the Story outline never requires an Insight slot. Compatibility `/2` may
+retain its collapsed single canonical AI insight.
 
 Use these standard localized terms. Keep supporting evidence/factors inside Decision process. Do
 not render an empty heading or a heading whose only content is generic filler. Preserve enough causal and technical context for the Chapter to work as durable human
@@ -142,37 +156,28 @@ a global minimum or maximum. Keep long connected decision arcs in the same reada
 do not expand into raw logs. Prefer
 coherent paragraphs and selective bullets over card-per-paragraph layouts.
 
-## Inline AI Insight
+## Optional passage assistance
 
-On wide Chapter layouts, use a small restrained sticky panel to the right of the Story document.
-Label it `AI insight` / `AI 洞察`; `Passage insight` and `段落洞察` are not reader-facing names.
-Every complete canonical English Chapter supplies one valid `passageContext` for every rendered
-English Story block. When Chinese exists, it supplies safe matching context for its rendered blocks
-or the sidecar is omitted; missing Chinese never makes the English Chapter incomplete.
-Order the exact complete key set by rendered Story-block order. Show current/total position plus
-accessible Previous/Next controls; disable the unavailable boundary direction and do not wrap by
-default. Arrow navigation updates the context, scrolls the stable owning block to a useful position,
-highlights it, and clears the former highlight. Respect reduced-motion preference.
-The explanation connects supported participant actions, responses, judgments, and consequences.
-It never opens with a semantic-passage number or exposes block/schema metadata. End with the bounded
-Reusable rule when supported.
+For canonical `oxygen.story/3`, passage assistance is optional, local, human-facing, and
+non-authoritative. No Story block must supply `passageContext`, why-it-mattered,
+what-was-learned, or a reusable lesson. Missing assistance does not affect source readiness,
+`oxygen.story-review-session/2` completion, Insight cardinality, or reviewed release. Assistance is
+not a canonical Insight, does not create review state, and never enters release/export.
 
-Long Chapters must keep the Story column readable, the passage panel useful during scrolling, the
-canonical Insight reachable, margin notes aligned to their owning blocks, the left Chapter
-navigation independently scrollable, and the layout free of horizontal overflow. Preserve the same
-access on narrow screens through the existing inline/collapsible treatment.
+If optional assistance is present, keep the Story column readable, bind navigation only to stable
+safe Story blocks, respect reduced motion, and preserve access on narrow screens without horizontal
+overflow. It may summarize supported local context, but it must not fabricate a lesson, expose
+block/schema metadata, or generate an Insight from arbitrary selection.
 
-Clicking or focusing a reviewable block updates the same sequence position. It may
-naturally present what was happening, the consequential tension/constraint, why a supported role acted,
-what changed, and a grounded reusable principle as a coherent evidence-grounded explanation. Do not
-truncate supported explanatory context to make this assistance concise, and do not generate a new
-Insight from arbitrary selected text.
+### Compatibility `/2` passage context
 
-This panel is local reading assistance, never a second canonical Insight or runtime model call. It
-must not create review state or enter release/export. On narrow screens, fold it into a compact
-inline/collapsible surface without horizontal overflow or loss of access.
+Only `oxygen.story-highlight/2` retains the historical complete `passageContext` panel contract.
+For that compatibility path, order the complete key set by rendered Story-block order; show
+accessible Previous/Next navigation; scroll/highlight the owning block safely; omit an unsafe or
+incomplete Chinese sidecar without invalidating English; and keep the panel local, non-release, and
+separate from the Chapter's single reviewable Highlight. These requirements do not apply to `/3`.
 
-## Legacy canonical AI insight
+## Compatibility `/2` canonical Highlight
 
 For `oxygen.story-highlight/2`, place the Chapter's single reviewable insight in a disclosure at the end of Story, collapsed by
 default. Import validation must fail closed on zero or multiple insights; do not build a
@@ -213,7 +218,7 @@ Insight or Evidence copy.
 
 For the legacy direct Story editor, selecting text in Story Edit Mode is a native editor operation. Typing replaces the selection and
 Backspace/Delete removes it; both routes create the same controlled block-local transaction and note
-as other direct edits. Focusing the owning block may synchronize passage assistance, but selection
+as other direct edits. Focusing the owning block may synchronize version-specific passage assistance when present, but selection
 itself must not trigger a re-render or open a floating Delete/Revise/Add action window. Default read
 mode remains non-mutating.
 
@@ -308,8 +313,8 @@ Material equivalence requires:
 - compact aligned People;
 - default read mode plus a compact pencil/Edit control and zero-guesswork controlled editing surface;
 - synchronized Undo/Redo and left-margin edit/annotation notes with a compact responsive fallback;
-- secondary sticky ordered inline-AI-Insight sequence on wide layouts and inline/collapsible fallback;
-- one collapsed canonical AI Insight at the end of legacy Story, or stable sparse AI/human Insight cards for `/3`;
+- optional local passage assistance when present, with no `/3` readiness, completion, or release role;
+- one collapsed compatibility `/2` canonical Highlight, or stable sparse AI/human Insight cards for `/3`;
 - native legacy selection replacement/deletion without a redundant action popover, plus only the bounded `/3` Add Insight exception;
 - one active Privacy interaction;
 - one focused completion area;

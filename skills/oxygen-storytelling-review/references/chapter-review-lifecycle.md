@@ -28,10 +28,17 @@ type ChapterReviewStage = "reviewing" | "revision_ready" | "human_confirmed";
 
 The initial draft is revision 1. Each successful Apply review increments the revision. All set does not increment it; it confirms the currently presented clean revision.
 
+The canonical live contract is `oxygen.story/3` → `oxygen.story-review-session/2` →
+`oxygen.reviewed-story/2`. Atomic source activation enters this lifecycle but does not complete it:
+human Insight decisions, edits, Privacy, Apply review, and All set remain separate gates. The
+compatibility contract remains `oxygen.story-highlight/2` → session `/1` → reviewed-story `/1`;
+historical `oxygen.story-milestone/1` is non-reviewable compatibility only.
+
 Direct editing is the primary current lifecycle. Imported Delete/Revise/Add annotations are
 compatibility records only; they may be validated and resolved without becoming a creation toolbar.
 All set remains unavailable while any direct transaction is pending or needs evidence, any
-compatible legacy work is unresolved, Privacy is incomplete, the legacy canonical Insight is pending, or
+compatible legacy work is unresolved, Privacy is incomplete, the compatibility `/2` canonical
+Highlight is pending, or
 evidence/ledger provenance fails validation. A stale paired locale remains visible as informational
 localization debt and never blocks canonical English review.
 

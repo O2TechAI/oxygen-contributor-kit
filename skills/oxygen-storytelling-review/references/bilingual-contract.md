@@ -13,11 +13,12 @@ English is the canonical fresh-session default. Mount one compact control in the
 English is the canonical `oxygen.story/3` generation and source-readiness surface. Chinese is an
 optional localized sidecar. Its absence, incomplete prose, semantic drift, or outstanding
 translation debt cannot invalidate a valid English candidate or later block compatible review and
-release. This contract does not activate `/3` in the Viewer or change Review Session/release. Hide
-the Chinese control when no
-complete safe sidecar is available. If supplied Chinese breaks shared participant, Privacy,
-Evidence, or semantic-block identity, discard that sidecar and continue with the validated English
-Story. Never weaken the English, Privacy, or Evidence gates to preserve a localization.
+release. Canonical `/3` activation uses `oxygen.story-review-session/2` and server-owned
+`oxygen.reviewed-story/2`; localization does not alter that mapping or turn source readiness into
+human review completion. Hide the Chinese control when no complete safe sidecar is available. If
+supplied Chinese breaks shared participant, Privacy, Evidence, or semantic-block identity, discard
+that sidecar and continue with the validated English Story. Never weaken the English, Privacy, or
+Evidence gates to preserve a localization.
 
 ## What localizes
 

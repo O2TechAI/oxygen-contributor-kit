@@ -14,18 +14,40 @@ reviewed project history
 
 It must serve both a human who wants an understandable account and a future agent that needs evidence-grounded lessons. It is not an event browser with new styling, and Final Release Memory is not publication approval.
 
-New generation targets `oxygen.story/3`. This changes generated Story semantics only. It does not
-activate `/3` in the live Viewer, change Review Session runtime, change release, or approve
-publication.
+New generation targets the canonical live `oxygen.story/3` workflow:
+
+```text
+oxygen.story/3
+→ deterministic source readiness
+→ atomic workflow activation
+→ oxygen.story-review-session/2
+→ successor Viewer review
+→ server-owned oxygen.reviewed-story/2 release
+```
+
+Deterministic source readiness permits atomic activation into human review; it is not human review
+completion, Final Release Memory, download authority, or publication approval.
 
 ## Productization boundary
 
 The repository Skill and Viewer are one reusable capability, not a template for a new standalone
 application. In this Toolkit, reuse `InlineWorkspace` in `viewer/app/workspace.tsx`,
-`StoryChapterEditor` in `viewer/app/story-chapter-editor.tsx`, and the shared Timeline/review/
-evidence/navigation/release primitives under `viewer/lib`. Generate validated staged `/3` Story data
-against the existing parser/readiness foundation. Do not bind it to the live Viewer, Review Session,
-or release in this lane. Change no renderer merely to complete generation migration.
+`SuccessorStoryChapterEditor` for canonical `/3`, `StoryChapterEditor` for compatibility `/2`, and
+the shared Timeline/review/evidence/navigation/release primitives under `viewer/lib`. Generate and
+validate `/3` Story data against the existing parser/readiness foundation, then use the existing
+atomic activation, session `/2`, successor Viewer, and server-owned reviewed-story `/2` path. Change
+no renderer merely to align contract authority.
+
+Compatibility remains explicitly versioned:
+
+```text
+oxygen.story-highlight/2
+→ oxygen.story-review-session/1
+→ oxygen.reviewed-story/1
+```
+
+Historical `oxygen.story-milestone/1` remains non-reviewable compatibility only. Its old Highlight,
+importance, passage-context, exact-one-Insight, and current-state requirements never define `/3`.
 
 Keep these product constraints stable across projects: application shell, editorial hierarchy,
 phase-grouped Timeline, Chapter review interactions, privacy/evidence boundaries, bilingual shared
@@ -68,7 +90,7 @@ These are not new top-level workflow stages. Story inclusion is independent of I
 
 ## Story selection
 
-Select Chapters by meaningful project development. A milestone may record a consequential change,
+Select Chapters by meaningful project development. A Chapter may record a consequential change,
 durable progress, a substantive iteration, or a failure that established a useful project state.
 Judgment moments are important causal units inside many Chapters. Other eligible milestones include
 durable progress, substantive iteration, and consequential failure. Suitable signals include:
@@ -88,7 +110,7 @@ durable progress, substantive iteration, and consequential failure. Suitable sig
 
 Do not select by equal time, equal event count, equal message volume, one per conversation, one per
 trajectory, or a target Chapter count. Several Chapters may occur in a short period; quiet periods
-may have none. Keep separate milestones when each establishes a distinct durable state needed to
+may have none. Keep separate Chapters when each establishes a distinct durable state needed to
 understand the project's progress. Combine them only when they belong to one connected causal arc.
 Deduplicate repeated discussion of the same state or result.
 
@@ -104,7 +126,7 @@ the number required by complete coherent narrative arcs. Current state may form 
 when it is a coherent arc or remain the supported ending of the final Chapter; if Evidence ends
 mid-investigation, say so.
 
-Audit the full milestone set before accepting the selection. When reviewed evidence supports the
+Audit the full Chapter set before accepting the selection. When reviewed evidence supports the
 initiating problem, goal, or baseline assumptions, the opening Chapter and Project Story overview
 must establish that beginning. Do not start a mature project Story at a midstream command failure,
 import-path fix, test-collection issue, or other routine setup incident merely because it is easy
@@ -256,9 +278,9 @@ The top of the Project Story must retain a concise orientation area containing, 
 
 - canonical project name;
 - short project-story overview;
-- number of meaningful milestones / Chapters;
+- number of meaningful Chapters;
 - number of narrative phases;
-- Insight review progress when a compatible successor review runtime is active;
+- version-appropriate Insight/Highlight review progress;
 - source-record / evidence context when useful.
 
 These are mandatory information categories, not optional visual decoration. Derive values from the current project Story; never hardcode example counts. Keep the treatment typographic and compact rather than repeating the same identity in a second dominant full-width project card.
@@ -273,9 +295,9 @@ Project identity / overview
 → evidence metadata / Read Chapter
 ```
 
-When reviewed evidence supports meaningful narrative phases, every milestone belongs visibly to one phase. Phase headings/boundaries must be stronger than ordinary card metadata. Do not force a fixed phase count or invent phases. On desktop, add a lightweight sticky right-side Phase directory that lists the generated phases in order, scrolls directly to them, and indicates the active/visible phase where practical. It remains secondary to the Timeline and collapses rather than creating three cramped columns on narrow screens.
+When reviewed evidence supports meaningful narrative phases, every Chapter belongs visibly to one phase. Phase headings/boundaries must be stronger than ordinary card metadata. Do not force a fixed phase count or invent phases. On desktop, add a lightweight sticky right-side Phase directory that lists the generated phases in order, scrolls directly to them, and indicates the active/visible phase where practical. It remains secondary to the Timeline and collapses rather than creating three cramped columns on narrow screens.
 
-Every selected milestone card must show:
+Every selected Chapter card must show:
 
 - date (mandatory; time is optional);
 - milestone/change type;
@@ -366,17 +388,17 @@ Show annotation notes in the left margin beside their block on wide screens and 
 block-associated inline treatment on narrow screens. Notes are local review metadata and never
 enter release output.
 
-Passage assistance is not part of `/3` source readiness. If retained by a later consumer, it is
+Passage assistance is not part of `/3` source readiness or Review Session completion. If present, it is
 optional, local, human-facing, non-authoritative, does not require why-it-mattered,
 what-was-learned, or reusable-lesson copy for every block, does not create an Insight, and remains
-excluded from release unless separately authorized.
+excluded from reviewed release.
 
-A successor Chapter contains zero or more structured Insights. Each existing Insight is explicitly
+A canonical `/3` Chapter contains zero or more structured Insights. Each existing Insight is explicitly
 `AI interpretation · not historical fact` until human review, uses the four successor meanings, and
-requires independent explicit review of its current version once `/2` review is activated. Zero
-Insights creates zero Insight-review obligations. This lane does not redesign or activate the
-current UI and must not route `/3` through a single-Insight fallback. There is no standalone
-top-level Insights section.
+requires independent explicit review of its current version in `oxygen.story-review-session/2`.
+An AI edit requires a new Accept; a human Insight is approved by human Save for that saved version.
+Zero Insights creates zero Insight-review obligations. The live runtime must not route `/3` through
+the compatibility single-Insight fallback. There is no standalone top-level Insights section.
 
 ## Unaffected Viewer behavior
 

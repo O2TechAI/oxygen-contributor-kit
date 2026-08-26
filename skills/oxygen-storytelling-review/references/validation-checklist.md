@@ -4,8 +4,9 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 
 ## Story-first generation contract
 
-- [ ] Active generation targets `oxygen.story/3`; source readiness does not activate Viewer,
-      Review Session, release, or publication.
+- [ ] Active generation targets `oxygen.story/3`; deterministic source readiness permits atomic
+      workflow activation into `oxygen.story-review-session/2` and the successor Viewer, but is not
+      human review completion, reviewed-story `/2` release authority, or publication approval.
 - [ ] Generation order is complete approved history -> coherent Chapter arcs -> complete Story ->
       continuity/chronology/attribution/Evidence/uncertainty verification -> adjacent Chapter Phase
       grouping -> independently warranted learning moments -> zero or more Insights.
@@ -23,8 +24,11 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
       non-release; no Story block requires why-it-mattered, what-was-learned, or a reusable lesson.
 - [ ] Complete-history consideration, context retention, failure retention, chronology, attribution,
       causal restraint, uncertainty, Privacy, Evidence traceability, and non-fabrication remain.
-- [ ] Current Viewer, Review Session, and release tests retain their historical semantics and are not
-      weakened to activate successor behavior early.
+- [ ] The canonical live mapping is `/3` source -> session `/2` -> reviewed-story `/2`; the server
+      revalidates exact source revision/digest and review completion rather than treating generation
+      readiness as human approval.
+- [ ] Compatibility remains explicitly `/2` Story Highlight -> session `/1` -> reviewed-story `/1`;
+      historical `/1` Story Milestone remains non-reviewable compatibility only.
 
 ## Data and safety
 
@@ -38,8 +42,8 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Every newly generated primary/supporting/Person `eventId` is the exact fully qualified imported item ID; each reference is unique and resolves to exactly one actual reviewed item before activation, Apply, or All set.
 - [ ] Participant, insight, Privacy-candidate, and annotation IDs are bounded primitive strings and unique within each Chapter and paired language presentation; numeric/string coercion cannot collapse two identities.
 - [ ] Privacy decisions use an injective Chapter/candidate tuple identity rather than delimiter concatenation; delimiter-shaped IDs cannot collide.
-- [ ] `/3` source import accepts zero or more Insights. Current legacy import/release exact-one
-      behavior remains unchanged and is not reused to activate successor sources.
+- [ ] `/3` source import accepts zero or more Insights. Compatibility `oxygen.story-highlight/2`
+      import/release retains its exact-one behavior and is never reused for canonical `/3`.
 - [ ] Final confirmation/release revalidates insight provenance, latest Privacy decision history,
       and the exact derived redacted-target set; forged browser state fails closed.
 - [ ] No identity/evidence/fact was fabricated.
@@ -414,9 +418,9 @@ Use the actual local Viewer. Capture and inspect at least:
 5. caret insertion, selection replacement/deletion, Undo/Redo, and multiple left-margin notes;
 6. pending Discard plus applied Revert-in-a-new-revision;
 7. native selection replacement/deletion with no floating action window;
-8. optional passage-assistance state when the unchanged current runtime exposes it;
+8. optional passage-assistance state when a version-specific presentation exposes it;
 9. Next/Previous with owning-block scroll/highlight and Story focus synchronization when present;
-10. current runtime Insight presentation regression without treating it as `/3` generation meaning;
+10. canonical `/3` sparse-Insight presentation and compatibility `/2` single-Highlight regression;
 11. Privacy available mode;
 12. Privacy unavailable mode;
 13. gated completion and clean revision-ready state;

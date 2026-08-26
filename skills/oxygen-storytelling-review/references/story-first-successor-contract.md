@@ -1,11 +1,13 @@
 # Story-First Successor Target Contract
 
-> **FROZEN MIGRATION PROVENANCE — NOT THE ACTIVE GENERATION OR RUNTIME CONTRACT.**
+> **FROZEN MIGRATION PROVENANCE — NOT THE ROUTED ACTIVE GENERATION OR RUNTIME CONTRACT.**
 >
-> The active generation contracts now absorb these Story-First semantics and generate
-> `oxygen.story/3`. The live Viewer, Review Session, and release paths remain unchanged until their
-> separate activation migrations land. Legacy artifacts retain their original semantics and must
-> not be reinterpreted as successor approval or readiness.
+> The routed active contracts now own these Story-First semantics. The canonical live path is
+> `oxygen.story/3` → `oxygen.story-review-session/2` → `oxygen.reviewed-story/2` after deterministic
+> source readiness, atomic activation, and explicit human review. Compatibility
+> `oxygen.story-highlight/2` remains session `/1` → reviewed-story `/1`; historical
+> `oxygen.story-milestone/1` remains non-reviewable compatibility only. Legacy artifacts retain their
+> original semantics and must not be reinterpreted as successor approval or readiness.
 >
 > Migration status: `MERGE_INTO_CANONICAL_LATER` -> `DELETE_AFTER_CANONICALIZATION`.
 
@@ -154,5 +156,5 @@ Legacy behavior must never fabricate successor semantics. In particular, a legac
 
 The active generation contracts are the canonical instructions for new Story candidates. This file
 remains only as migration provenance until equivalent semantic regression coverage is fully
-canonicalized, after which it should be deleted. The current Viewer, Review Session, and release
-behavior remains unchanged until separately activated.
+canonicalized, after which it should be deleted. Its preserved migration history does not override
+the live `/3` → session `/2` → reviewed-story `/2` contract.

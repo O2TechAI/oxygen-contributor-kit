@@ -14,10 +14,20 @@ local metadata that references reviewed Evidence IDs. It must not overwrite sour
 raw/private Evidence into Story fields, or embed project-specific copy in generic Skill/frontend
 source.
 
-`oxygen.story/3` is the active generation target. It is production-parseable and
-source-readiness-testable, but this contract does not activate it in the live Timeline, Viewer,
-Review Session, or release flow. `oxygen.story-highlight/2` and historical artifacts retain their
-original meanings and are never rewritten or shape-guessed into `/3`.
+`oxygen.story/3` is the canonical live generation source. A complete homogeneous package must pass
+deterministic source readiness before the workflow atomically activates it. The active mapping is:
+
+```text
+oxygen.story/3
+→ oxygen.story-review-session/2
+→ oxygen.reviewed-story/2
+```
+
+Source readiness permits atomic activation into human review; it is not explicit Insight review,
+All set, release authority, or publication approval. Compatibility remains exact and isolated:
+`oxygen.story-highlight/2` maps to `oxygen.story-review-session/1` and
+`oxygen.reviewed-story/1`. Historical `oxygen.story-milestone/1` is non-reviewable compatibility
+only. No legacy artifact is rewritten or shape-guessed into `/3`.
 
 ## Stable identities
 
@@ -241,10 +251,12 @@ candidate staged and disclose the bounded validation failure.
 
 ## Review-state separation
 
-AI-generated Insights eventually require explicit human review of the currently presented version
-under `oxygen.story-review-session/2`; silence is not approval and each existing Insight resolves
-independently. Zero source Insights creates zero Insight-review obligations. This generation lane
-does not create, activate, persist, or release successor Review Sessions.
+AI-generated Insights require explicit human review of the currently presented version under
+`oxygen.story-review-session/2`; silence is not approval and each existing Insight resolves
+independently. Editing an AI Insight creates a new version that requires a new Accept. Zero source
+Insights creates zero Insight-review obligations. A saved human-created Insight is human-authored
+and approved for that saved version. Only the server-owned validated `/3` + session `/2` path may
+construct `oxygen.reviewed-story/2` after review completion.
 
 Every review state retains the immutable publication boundary equivalent to:
 

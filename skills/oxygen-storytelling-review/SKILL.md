@@ -23,7 +23,7 @@ ordinary Build Project Story prerequisite.
 
 | Stage or condition | Load | Critical boundary |
 |---|---|---|
-| **Build Project Story — always** | [product-contract.md](references/product-contract.md), [story-data-contract.md](references/story-data-contract.md), [privacy-evidence-boundary.md](references/privacy-evidence-boundary.md), and [narrative-writing-contract.md](references/narrative-writing-contract.md) | Input is privacy-prepared reviewed history; output is one complete validated staged `oxygen.story/3` candidate. Missing product, schema, Privacy/Evidence, or context-complete writing support keeps Build active. Source readiness does not activate Viewer, Review Session, or release. |
+| **Build Project Story — always** | [product-contract.md](references/product-contract.md), [story-data-contract.md](references/story-data-contract.md), [privacy-evidence-boundary.md](references/privacy-evidence-boundary.md), and [narrative-writing-contract.md](references/narrative-writing-contract.md) | Input is privacy-prepared reviewed history; output is one complete validated `oxygen.story/3` source candidate. Missing product, schema, Privacy/Evidence, or context-complete writing support keeps Build active. Deterministic source readiness permits atomic workflow activation; it is not human review completion or release authority. |
 | **Human Review begins** | [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md) | Load when `ready_for_human_review` is reached and the human begins review/editing or asks for Story review assistance. Runtime review state and editor safety remain authoritative. |
 | **Human Review or review-UI work** | [ui-interaction-contract.md](references/ui-interaction-contract.md) | Load when Human Review begins or when diagnosing, auditing, or implementing review UI. The canonical Viewer remains the only review interface. |
 | **Localization requested or present** | [bilingual-contract.md](references/bilingual-contract.md) | Load before creating, validating, refreshing, omitting, inspecting, or releasing localized Story or review state when the user requests localization or a sidecar exists. English remains canonical; missing Chinese is nonblocking. |
@@ -42,23 +42,29 @@ If the reviewed artifact lacks information needed for a richer Story, remain con
 
 ## Canonical Toolkit boundary
 
-Inside this repository, reuse the existing successor source foundation:
+Inside this repository, reuse the canonical live versioned workflow:
 
 ```text
 reviewed project data
-→ staged `oxygen.story/3` metadata (`viewer/lib/timeline.ts`)
-→ successor source readiness (`viewer/lib/story-readiness.ts`)
-→ stop before live Timeline / Viewer activation
+→ generated `oxygen.story/3` metadata (`viewer/lib/timeline.ts`)
+→ deterministic source readiness (`viewer/lib/story-readiness.ts`)
+→ atomic workflow activation
+→ `oxygen.story-review-session/2`
+→ successor Viewer review (`SuccessorStoryChapterEditor`)
+→ server-owned `oxygen.reviewed-story/2` release
 ```
 
 Generate project-specific Story data against those existing entrypoints. Do not add a second app,
 generation framework, compatibility adapter, project-bound page, or direct import of local Story
-copy. Do not bind `/3` into `InlineWorkspace`, `StoryChapterEditor`, persistence, release, or export
-in this lane. Current Viewer, Review Session, and release behavior remains unchanged.
+copy. The canonical `/3` path uses session `/2`, the successor Viewer, and reviewed-story `/2`.
+The compatibility path remains `oxygen.story-highlight/2` → session `/1` → reviewed-story `/1`;
+historical `oxygen.story-milestone/1` remains non-reviewable compatibility only.
 
 Workflow callers should delegate here automatically after organization and privacy preparation;
-the contributor should not need to know this Skill's name. A valid generated candidate remains
-staged until separately authorized activation work lands.
+the contributor should not need to know this Skill's name. A candidate remains inactive while
+generation or deterministic source readiness is incomplete. Once the complete candidate passes the
+existing atomic activation gate, the workflow enters human review; generation alone never confirms
+the Story or authorizes release.
 
 ## End-to-end workflow
 
@@ -189,7 +195,7 @@ At generation time, write every primary, supporting, and Person Evidence `eventI
 fully qualified imported item ID. A bare event suffix is ineligible even when it currently resolves
 once. Reject that candidate before staging. Regeneration after ambiguity wastes completed work.
 
-The staged package is source-ready only when its English Project Summary is complete; every Chapter
+The candidate is source-ready only when its English Project Summary is complete; every Chapter
 is one complete coherent arc with nonempty supported People and Story blocks; adjacent Chapters are
 grouped into precise one- or two-word Phases; Evidence and Privacy structures resolve; every allowed
 Evidence input is represented or uses one fixed safe exclusion reason; and no placeholder, fallback
@@ -210,19 +216,30 @@ failure retention, causal restraint, uncertainty, Privacy, and non-fabrication r
 check fails, keep Build Project Story active and improve the staged candidate or disclose the
 Evidence limitation.
 
-Passage assistance is not a `/3` generation or readiness requirement. If retained by a later
-consumer, it is optional, local, human-facing, non-authoritative, does not create an Insight, does
-not require a per-block lesson, and remains excluded from release unless separately authorized.
+Passage assistance is not a `/3` generation or readiness requirement. If present, it is optional,
+local, human-facing, non-authoritative, does not create an Insight, does not require a per-block
+lesson, and remains excluded from reviewed release.
 
-Do not request atomic Story activation from this lane. Do not bind the staged `/3` candidate into
-the live Timeline, Viewer, `StoryChapterEditor`, Review Session persistence, or release. Report
-source parsing/readiness truthfully and leave the existing runtime unchanged.
+After the complete `/3` candidate passes deterministic source readiness, request the existing atomic
+workflow activation:
 
-### 4. Preserve the live Project Story boundary
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --attach-url <viewer-url> --workflow-run-id <run-id> --story-event ready
+```
 
-Retain the existing application shell byte-for-byte in this lane. The current Timeline remains the
+Activation must revalidate the exact homogeneous source package, source revision, and digest before
+entering Review Story. The live `/3` path creates or hydrates `oxygen.story-review-session/2`, opens
+the successor Viewer, and later reconstructs `oxygen.reviewed-story/2` server-side only after human
+review completion. Source readiness is not Accept/Reject resolution, All set, Final Release Memory,
+download authority, or publication approval.
+
+### 4. Enter the live Project Story boundary
+
+Retain the existing application shell. The live Timeline remains the
 narrative table of contents with project/source navigation, Phase presentation, direct Chapter
-actions, Release preview, and Preferences. A staged `/3` source must not appear there early.
+actions, Release preview, and Preferences. An incomplete or invalid `/3` source must not appear
+there; an atomically activated ready `/3` source is the canonical Story workflow.
 
 Reuse the existing centered loading treatment as the workflow-progress surface. Derive its stages
 from the contributor workflow and show completed/current/next, waiting/blocked state, real
@@ -283,14 +300,15 @@ previous/next-text mutation when metadata is incomplete, deduplicate `beforeinpu
 commit IME composition only after its stable result.
 On narrow screens, fold notes into compact block-associated surfaces without reducing Story width.
 
-Do not change the current passage panel or Insight UI in this lane. Passage assistance is optional,
-local, human-facing, non-authoritative, and never `/3` Story readiness. It does not require why-it-
-mattered, what-was-learned, or reusable-lesson copy for every block and never creates an Insight.
+For `/3`, passage assistance, if present, is optional, local, human-facing, non-authoritative, and
+never Story readiness or Review Session completion. It does not require why-it-mattered,
+what-was-learned, or reusable-lesson copy for every block, never creates an Insight, and never enters
+reviewed release.
 
-When a later activation lane binds successor sources, zero, one, or multiple independently
-warranted Insights must be handled by the successor review contract. Each Insight contains
+In the live `/3` Viewer, zero, one, or multiple independently warranted Insights are handled by the
+successor review contract. Each Insight contains
 Background, Quote, Directly Acquired Experience, and Principle; title is optional presentation
-metadata. Do not route `/3` through a current single-Insight fallback.
+metadata. Do not route `/3` through the compatibility single-Insight fallback.
 
 Follow the rule:
 
@@ -336,8 +354,8 @@ annotations are compatibility records, not the primary current interaction. Huma
 authoritative, but unsupported factual additions must be flagged rather than fabricated. Preserve
 revision provenance.
 
-Only All set creates human-confirmed Final Release Memory in an activated compatible runtime. For a
-future successor activation, every existing AI Insight must resolve independently through explicit
+Only All set creates human-confirmed Final Release Memory in an activated compatible runtime. For
+the live `/3` path, every existing AI Insight must resolve independently through explicit
 review of the currently presented version; zero Insights creates zero Insight-review obligations.
 Privacy, Evidence, pending edits, provenance, localization debt, Reopen, and publication separation
 remain governed by the review lifecycle and are not changed here.
@@ -359,8 +377,9 @@ There is no Suggested Release field or AI-prescribed decision. When permitted re
 Run the generation contract/source-shape checks from
 [validation-checklist.md](references/validation-checklist.md). Prove `/3`, Story-first order,
 required supported People, Chapter-first Phase grouping, sparse `0..n` Insights, exact four Insight
-meanings, optional title metadata, optional passage assistance, preserved safety, and non-activation.
-Do not perform browser/runtime changes merely to validate this generation lane.
+meanings, optional title metadata, optional passage assistance, preserved safety, atomic activation,
+session `/2`, successor review, and server-owned reviewed-story `/2` release. Keep generation
+readiness, human review completion, release download, and publication approval distinct.
 
 Do not require browser-independent pixel identity. Require bounded Golden-v1 fidelity: the retained three-region desktop composition, editorial hierarchy, restrained palette/card usage, responsive article width, Chapter reading order, and mandatory interactions remain recognizable. Project content, counts, wrapping, and minor spacing may vary. Reject a new visual system or information hierarchy when the canonical components can render the validated data.
 
