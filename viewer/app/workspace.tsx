@@ -97,7 +97,7 @@ const workspaceUi = {
     introTitle:"AI-selected highlights are the table of contents.", intro:"Open a chapter for People, Story, and Privacy. AI insights stay inside the narrative; local evidence stays secondary.",
     before:"BEFORE", after:"AFTER", selected:"AI-selected highlight", evidence:"reviewed evidence event", read:"Read chapter", workflow:"Workflow",
     nextStep:"Read a Chapter to review the full story, evidence, direct learning, and reusable rules.",
-    downloadReviewKicker:"Review required", downloadReviewTitle:"Review before download", downloadReviewIntro:"Complete these Chapter review items, then try the download again.", downloadReviewCount:"unresolved review items", openReview:"Open review", close:"Close",
+    downloadReviewKicker:"Review required", downloadReviewTitle:"Review before download", downloadReviewIntro:"Complete these Chapter review items, then try the download again.", downloadReviewCount:"unresolved review items", openReview:"Open review", close:"Close", chapter:"Chapter",
     downloadBlockers:{
       review_state_invalid:"Review state needs attention", privacy_incomplete:"Privacy review is incomplete", evidence_unverified:"Evidence review is incomplete",
       annotation_pending:"A Story review change still needs Apply Review", annotation_needs_evidence:"A Story review change needs Evidence",
@@ -115,7 +115,7 @@ const workspaceUi = {
     introTitle:"AI 选择的高光就是故事目录。", intro:"打开一章，按人物、故事和隐私阅读；AI 洞察留在叙事中，本地证据保持为次要入口。",
     before:"之前", after:"之后", selected:"AI 选择的高光", evidence:"条已审阅证据", read:"阅读章节", workflow:"工作流",
     nextStep:"阅读任一章节，完整审阅故事、证据、直接经验与可复用规则。",
-    downloadReviewKicker:"需要审阅", downloadReviewTitle:"下载前请完成审阅", downloadReviewIntro:"请完成以下章节审阅项，然后再次尝试下载。", downloadReviewCount:"项待解决审阅", openReview:"打开审阅", close:"关闭",
+    downloadReviewKicker:"需要审阅", downloadReviewTitle:"下载前请完成审阅", downloadReviewIntro:"请完成以下章节审阅项，然后再次尝试下载。", downloadReviewCount:"项待解决审阅", openReview:"打开审阅", close:"关闭", chapter:"章节",
     downloadBlockers:{
       review_state_invalid:"审阅状态需要处理", privacy_incomplete:"隐私审阅尚未完成", evidence_unverified:"证据审阅尚未完成",
       annotation_pending:"故事审阅改动仍需应用审阅", annotation_needs_evidence:"故事审阅改动需要证据",
@@ -731,7 +731,6 @@ export function InlineWorkspace({
     return {
       project:milestone.project || "",
       chapterKey,
-      title:presentation?.title || milestone.story.title,
       stage:state.stage,
       completionBlockers,
     };
@@ -950,8 +949,8 @@ export function InlineWorkspace({
         <h1 id="download-review-title">{labels.downloadReviewTitle}</h1>
         <p className="organizationIntro">{labels.downloadReviewIntro}</p>
         <p className="workflowStatus">{downloadBlockerCount} {labels.downloadReviewCount}</p>
-        <div>{downloadBlockerGroups.map((group) => <section key={`${group.project}:${group.chapterKey}`}>
-          <h2>{group.title}</h2>
+        <div>{downloadBlockerGroups.map((group,groupIndex) => <section key={`${group.project}:${group.chapterKey}`}>
+          <h2>{labels.chapter} {groupIndex+1}</h2>
           {group.blockers.map((blocker,index) => <button className="docCard" key={`${blocker.code}:${blocker.targetKind}:${blocker.targetId || ""}:${blocker.itemId || ""}:${index}`} onClick={() => openDownloadReviewBlocker(group,blocker)}>
             <span className="docTitle">{labels.downloadBlockers[blocker.code]}</span><span className="kind">{labels.openReview}</span><small>{labels.openReview} →</small>
           </button>)}

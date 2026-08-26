@@ -22,14 +22,12 @@ export type DownloadReviewBlocker = Omit<ChapterReviewBlocker, "chapterKey" | "c
 export type DownloadReviewBlockerGroup = {
   project: string;
   chapterKey: string;
-  title: string;
   blockers: DownloadReviewBlocker[];
 };
 
 export function groupDownloadReviewBlockers(chapters: Array<{
   project: string;
   chapterKey: string;
-  title: string;
   stage: ChapterReviewStage;
   completionBlockers: ChapterReviewBlocker[];
 }>): DownloadReviewBlockerGroup[] {
@@ -46,7 +44,6 @@ export function groupDownloadReviewBlockers(chapters: Array<{
     return blockers.length ? [{
       project: chapter.project,
       chapterKey: chapter.chapterKey,
-      title: chapter.title,
       blockers,
     }] : [];
   });

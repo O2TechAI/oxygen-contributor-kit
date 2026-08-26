@@ -39,11 +39,11 @@ test("download aggregation preserves current completion semantics and adds only 
   assert.deepEqual(confirmed.insightReviews,{});
   assert.deepEqual(chapterReviewCompletionBlockers(confirmed,completionContext),[]);
   assert.deepEqual(groupDownloadReviewBlockers([{
-    project:"Project",chapterKey:"chapter-one",title:"Safe Chapter",stage:confirmed.stage,completionBlockers:[],
+    project:"Project",chapterKey:"chapter-one",stage:confirmed.stage,completionBlockers:[],
   }]),[]);
 
   const revisionReady=groupDownloadReviewBlockers([{
-    project:"Project",chapterKey:"chapter-one",title:"Safe Chapter",stage:"revision_ready",completionBlockers:[],
+    project:"Project",chapterKey:"chapter-one",stage:"revision_ready",completionBlockers:[],
   }]);
   assert.deepEqual(revisionReady[0].blockers,[{code:"chapter_not_confirmed",targetKind:"chapter"}]);
 
@@ -53,7 +53,7 @@ test("download aggregation preserves current completion semantics and adds only 
     code:"insight_pending",chapterKey:"chapter-one",targetKind:"insight",targetId:insightId,
   }]);
   assert.deepEqual(groupDownloadReviewBlockers([{
-    project:"Project",chapterKey:"chapter-one",title:"Safe Chapter",stage:pending.stage,completionBlockers,
+    project:"Project",chapterKey:"chapter-one",stage:pending.stage,completionBlockers,
   }])[0].blockers,[
     {code:"insight_pending",targetKind:"insight",targetId:insightId},
     {code:"chapter_not_confirmed",targetKind:"chapter"},
@@ -68,9 +68,60 @@ test("malformed review state collapses to safe generic blocker data", () => {
     code:"review_state_invalid",chapterKey:"chapter-one",targetKind:"chapter",
   }]);
   const serialized=JSON.stringify(groupDownloadReviewBlockers([{
-    project:"Project",chapterKey:"chapter-one",title:"Safe Chapter",stage:"reviewing",completionBlockers,
+    project:"Project",chapterKey:"chapter-one",stage:"reviewing",completionBlockers,
   }]));
   assert.equal(serialized.includes("PRIVATE_REJECTED_COPY"),false);
+});
+
+test("Privacy-redacted Chapter title never enters blocker presentation or rendered copy", async () => {
+  const privateTitle="PRIVATE_CHAPTER_TITLE_SENTINEL";
+  const syntheticChapter={project:"Project",chapterKey:"chapter-one",presentation:{title:privateTitle}};
+  const privateSourceBlocks={en:{title:syntheticChapter.presentation.title,scene:"Safe source."},zh:{}};
+  const privacyCandidate={
+    id:"private-title",title:"Synthetic candidate",explanation:"Synthetic",recommendation:"redact",
+    releaseTargets:["title"],original:{availability:"unavailable"},whyFlagged:"Synthetic",
+  };
+  const privateContext={
+    ...completionContext,
+    privacyCandidates:[privacyCandidate],
+    privacyDecisions:{"private-title":"redact"},
+    targetCatalog:new Map([
+      ["title",{target:"title",kind:"scalar",field:"title"}],
+      ["scene",{target:"scene",kind:"scalar",field:"scene"}],
+      [`insight:${insightId}`,{target:`insight:${insightId}`,kind:"insight",id:insightId}],
+    ]),
+    sourceBlocks:privateSourceBlocks,
+    reviewedBlocks:privateSourceBlocks,
+  };
+  const applied=applyChapterReview(emptyChapterReview(),{
+    ...privateContext,chapterEvidence:[{documentId:"doc",eventId:"event"}],evidenceResolved:true,
+    supportedAddIds:[],supportedEditIds:[],
+  }).state;
+  assert.deepEqual(applied.redactedBlocks,["title"]);
+  const completionBlockers=chapterReviewCompletionBlockers(applied,{
+    ...privateContext,reviewedBlocks:{en:{title:"",scene:"Safe source."},zh:{}},
+  });
+  const groups=groupDownloadReviewBlockers([{
+    project:syntheticChapter.project,chapterKey:syntheticChapter.chapterKey,stage:applied.stage,completionBlockers,
+  }]);
+  assert.equal(groups[0].chapterKey,syntheticChapter.chapterKey);
+  assert.deepEqual(groups[0].blockers,[{code:"chapter_not_confirmed",targetKind:"chapter"}]);
+  assert.equal(JSON.stringify(groups).includes(privateTitle),false);
+  assert.equal(Object.hasOwn(groups[0],"title"),false);
+
+  const workspace=await read("../app/workspace.tsx");
+  const aggregation=workspace.slice(workspace.indexOf("const currentDownloadReviewBlockerGroups"),workspace.indexOf("const openDownloadReviewBlocker"));
+  const surface=workspace.slice(workspace.indexOf("downloadBlockerGroups.length > 0"),workspace.indexOf("workflowOpen &&"));
+  const navigation=workspace.slice(workspace.indexOf("const openDownloadReviewBlocker"),workspace.indexOf("const downloadReviewed"));
+  assert.doesNotMatch(aggregation,/title:presentation|milestone\.story\.title/);
+  assert.match(surface,/downloadBlockerGroups\.map\(\(group,groupIndex\)/);
+  assert.match(surface,/<h2>\{labels\.chapter\} \{groupIndex\+1\}<\/h2>/);
+  assert.doesNotMatch(surface,/group\.title|presentation\.title|story\.title/);
+  assert.match(surface,/labels\.downloadBlockers\[blocker\.code\]/);
+  assert.match(workspace,/chapter:"Chapter"/);
+  assert.match(workspace,/chapter:"章节"/);
+  assert.match(navigation,/setStoryNavigation\(\{project:group\.project,storyKey:group\.chapterKey\}\)/);
+  assert.equal(surface.includes(privateTitle),false);
 });
 
 test("HTML and ZIP share one blocker preflight before the unchanged durable handoff", async () => {
@@ -89,12 +140,12 @@ test("HTML and ZIP share one blocker preflight before the unchanged durable hand
   assert.doesNotMatch(download,/blockerGroups[^\n]*JSON\.stringify|reviewedStory|chapterReviews[^\n]*JSON\.stringify/);
 });
 
-test("blocker surface groups safe labels by Chapter and exposes only buttons", async () => {
+test("blocker surface groups safe ordinal labels by Chapter and exposes only buttons", async () => {
   const workspace=await read("../app/workspace.tsx");
   const surface=workspace.slice(workspace.indexOf("downloadBlockerGroups.length > 0"),workspace.indexOf("workflowOpen &&"));
   assert.match(surface,/role="dialog" aria-modal="true" aria-labelledby="download-review-title"/);
-  assert.match(surface,/downloadBlockerGroups\.map\(\(group\) => <section/);
-  assert.match(surface,/<h2>\{group\.title\}<\/h2>/);
+  assert.match(surface,/downloadBlockerGroups\.map\(\(group,groupIndex\) => <section/);
+  assert.match(surface,/<h2>\{labels\.chapter\} \{groupIndex\+1\}<\/h2>/);
   assert.match(surface,/group\.blockers\.map[\s\S]*<button className="docCard"/);
   assert.match(surface,/labels\.downloadBlockers\[blocker\.code\]/);
   assert.doesNotMatch(surface,/instruction|beforeText|afterText|original|excerpt|localized|serverVersion|sourceRevision/);
