@@ -236,6 +236,45 @@ test("human Save creates a distinct human-approved stable Insight without redund
     .chapterReviews[currentSource.key].humanInsights["human:boundary"].version, 1);
 });
 
+test("human Save applies only the targeted human Insight", () => {
+  const currentSource = source(["insight-a", "insight-b"]);
+  let state = applyBase(currentSource);
+  state = updateSuccessorAiInsightDecision(state, currentSource, "insight-b", "accepted");
+  state = editSuccessorHumanInsight(
+    state,
+    currentSource,
+    "human:draft",
+    humanContent(currentSource, { principle: "Keep this separate draft pending." }),
+  );
+  const unrelatedBefore = structuredClone({
+    pendingAi: state.sourceInsightReviews["insight-a"],
+    acceptedAi: state.sourceInsightReviews["insight-b"],
+    draftHuman: state.humanInsights["human:draft"],
+  });
+
+  const saved = saveSuccessorHumanInsight(
+    state,
+    context(currentSource),
+    "human:target",
+    humanContent(currentSource),
+  );
+
+  assert.equal(saved.blockedReason, undefined);
+  assert.deepEqual({
+    pendingAi: saved.state.sourceInsightReviews["insight-a"],
+    acceptedAi: saved.state.sourceInsightReviews["insight-b"],
+    draftHuman: saved.state.humanInsights["human:draft"],
+  }, unrelatedBefore);
+  assert.deepEqual(saved.state.successorInsightRevisionHistory.slice(-1), [{
+    revision: saved.state.revision,
+    insightId: "human:target",
+    origin: "human_created",
+    version: 1,
+    decision: "human_approved",
+  }]);
+  assert.equal(saved.state.humanInsights["human:target"].resolution, "applied");
+});
+
 test("later human drafts block, while a later explicit Save approves that authored version", () => {
   const currentSource = source([]);
   const first = saveSuccessorHumanInsight(
@@ -266,6 +305,55 @@ test("human Insight anchors, Evidence, four-part content, and IDs fail closed", 
     assert.equal(editSuccessorHumanInsight(base, currentSource, "human:new", content), base);
   }
   assert.equal(editSuccessorHumanInsight(base, currentSource, "human:collision", humanContent(currentSource)), base);
+});
+
+test("mutable Insights require every Evidence reference to be supported by a declared Story anchor", () => {
+  const currentSource = source(["insight-one"]);
+  const otherChapterEvidence = { documentId: "other-chapter-document", eventId: "other-chapter-event" };
+  const base = applyBase(currentSource);
+  const aiContent = (quote, evidence) => {
+    const content = { ...insight("unused"), quote, evidence };
+    delete content.id;
+    return content;
+  };
+
+  assert.notEqual(editSuccessorAiInsight(
+    base, currentSource, "insight-one", aiContent({ storyBlockIds: ["block-a"] }, [evidenceA]),
+  ), base);
+  assert.equal(editSuccessorAiInsight(
+    base, currentSource, "insight-one", aiContent({ storyBlockIds: ["block-a"] }, [evidenceA, evidenceB]),
+  ), base);
+  assert.notEqual(editSuccessorAiInsight(
+    base, currentSource, "insight-one", aiContent({ storyBlockIds: ["block-a", "block-b"] }, [evidenceA, evidenceB]),
+  ), base);
+  assert.equal(editSuccessorAiInsight(
+    base,
+    currentSource,
+    "insight-one",
+    aiContent({ storyBlockIds: ["block-a"] }, [otherChapterEvidence]),
+  ), base);
+  assert.equal(editSuccessorAiInsight(
+    base, currentSource, "insight-one", aiContent({ storyBlockIds: ["missing-block"] }, [evidenceA]),
+  ), base);
+
+  assert.notEqual(editSuccessorHumanInsight(
+    base, currentSource, "human:one-anchor", humanContent(currentSource),
+  ), base);
+  assert.equal(editSuccessorHumanInsight(
+    base,
+    currentSource,
+    "human:unanchored",
+    humanContent(currentSource, { evidence: [evidenceA, evidenceB] }),
+  ), base);
+  assert.notEqual(editSuccessorHumanInsight(
+    base,
+    currentSource,
+    "human:two-anchors",
+    humanContent(currentSource, {
+      quote: { chapterKey: currentSource.key, storyBlockIds: ["block-a", "block-b"] },
+      evidence: [evidenceA, evidenceB],
+    }),
+  ), base);
 });
 
 test("successor blockers are bounded, content-free, and share the validation evaluator", () => {

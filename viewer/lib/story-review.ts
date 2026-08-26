@@ -896,7 +896,7 @@ function successorContentBelongsToSource(content: SuccessorInsightContent, sourc
   const anchoredEvidence = new Set(content.quote.storyBlockIds.flatMap((blockId) => (
     blocks.get(blockId)?.evidence.map(evidenceKey) || []
   )));
-  return content.evidence.some((item) => anchoredEvidence.has(evidenceKey(item)));
+  return content.evidence.every((item) => anchoredEvidence.has(evidenceKey(item)));
 }
 
 function successorHumanContentBelongsToSource(content: SuccessorHumanInsightContent, source: SuccessorStorySource) {
@@ -1883,7 +1883,57 @@ export function saveSuccessorHumanInsight(
       [insightId]: { ...draft.humanInsights[insightId], decision: "human_approved" },
     },
   };
-  return applySuccessorChapterReview(pendingApproval, context);
+  if (!validateSuccessorChapterReviewLedger(pendingApproval, context.source, true)) {
+    return { state, blockedReason: "insights" as const };
+  }
+  const revision = pendingApproval.revision + 1;
+  const review = pendingApproval.humanInsights[insightId];
+  const nextState: SuccessorChapterReviewState = {
+    ...pendingApproval,
+    stage: "reviewing",
+    revision,
+    annotations: pendingApproval.annotations.map((annotation) => annotation.resolution === "pending"
+      ? { ...annotation, baseRevision: revision }
+      : annotation),
+    editTransactions: pendingApproval.editTransactions.map((transaction) => activeEditResolution(transaction.resolution)
+      ? { ...transaction, baseRevision: revision }
+      : transaction),
+    humanInsights: {
+      ...pendingApproval.humanInsights,
+      [insightId]: {
+        ...review,
+        resolution: "applied",
+        appliedVersion: review.version,
+        appliedRevision: revision,
+      },
+    },
+    revisionHistory: [...pendingApproval.revisionHistory, {
+      revision,
+      annotationIds: [],
+      editTransactionIds: [],
+      insightIds: [],
+      privacyDecisions: pendingApproval.appliedPrivacyDecisions,
+    }],
+    successorInsightRevisionHistory: [
+      ...pendingApproval.successorInsightRevisionHistory,
+      {
+        revision,
+        insightId,
+        origin: "human_created",
+        version: review.version,
+        decision: "human_approved",
+      },
+    ].sort(successorRevisionOrder),
+  };
+  if (!validateSuccessorChapterReviewLedger(nextState, context.source, true)) {
+    return { state, blockedReason: "insights" as const };
+  }
+  return {
+    state: {
+      ...nextState,
+      stage: validateSuccessorChapterReviewCompletion(nextState, context) ? "revision_ready" : "reviewing",
+    },
+  };
 }
 
 export function canMarkSuccessorChapterReady(

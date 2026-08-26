@@ -1,5 +1,6 @@
 import type { getD1 } from "../db";
 import {
+  hydrateSuccessorStoryReviewSession,
   parseStoryReviewSession,
   storyReviewSessionSemanticJson,
   STORY_REVIEW_SESSION_SCHEMA,
@@ -11,6 +12,7 @@ import {
   validateRecognizedStorySourcePackage,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
+import { parseSuccessorStorySource } from "./timeline.ts";
 
 type ReviewSessionDatabase = Awaited<ReturnType<typeof getD1>>;
 
@@ -112,13 +114,13 @@ export async function readActiveStoryReviewSource(
 
 /** Derive the active source/session contract from the complete recognized
  * package. The version is never selected by the browser or persisted twice. */
-export async function readActiveStoryReviewContract(
+async function readActiveStoryReviewPackage(
   db: ReviewSessionDatabase,
   workflowRunId: string,
 ) {
   const active = await readActiveStoryReviewSource(db, workflowRunId);
   if (!active.ready || active.sourceRevision === null) {
-    return { ...active, storySourceSchema: null, storySessionSchema: null };
+    return { active, candidateRows: [], validation: null };
   }
   const [candidateRows, evidenceResult] = await Promise.all([
     readReservedStoryCandidateRows(db),
@@ -130,7 +132,15 @@ export async function readActiveStoryReviewContract(
     candidateRows,
     evidenceResult.results || [],
   );
-  return validation.ok
+  return { active, candidateRows, validation: validation.ok ? validation : null };
+}
+
+export async function readActiveStoryReviewContract(
+  db: ReviewSessionDatabase,
+  workflowRunId: string,
+) {
+  const { active, validation } = await readActiveStoryReviewPackage(db, workflowRunId);
+  return validation
     ? {
         ...active,
         storySourceSchema: validation.sourceSchema,
@@ -235,15 +245,19 @@ export async function persistStoryReviewSessionCas(
     || canonical.schema !== request.storySessionSchema) {
     return { ok: false, code: STORY_SESSION_ERROR.stateInvalid };
   }
-  const [active, current] = await Promise.all([
-    readActiveStoryReviewSource(db, request.workflowRunId),
+  const [activePackage, current] = await Promise.all([
+    readActiveStoryReviewPackage(db, request.workflowRunId),
     readStoryReviewSessionRecord(db, request.workflowRunId),
   ]);
+  const { active, candidateRows, validation } = activePackage;
   if (!active.ready || active.sourceRevision === null) {
     return failure(STORY_SESSION_ERROR.notReady, current, active.sourceRevision);
   }
   if (active.sourceRevision !== request.sourceRevision) {
     return failure(STORY_SESSION_ERROR.sourceConflict, current, active.sourceRevision);
+  }
+  if (!validation || validation.sessionSchema !== request.storySessionSchema) {
+    return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
   }
   if (request.expectedVersion !== current.serverVersion) {
     return failure(STORY_SESSION_ERROR.versionConflict, current, active.sourceRevision);
@@ -251,6 +265,24 @@ export async function persistStoryReviewSessionCas(
   if (current.session && current.session.schema !== canonical.schema
     && (current.sourceRevision === null || current.sourceRevision === request.sourceRevision)) {
     return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
+  }
+  if (canonical.schema === SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA) {
+    if (validation.sourceSchema !== "oxygen.story/3") {
+      return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
+    }
+    const sources = candidateRows.map((row) => parseSuccessorStorySource(row.summary));
+    if (sources.some((source) => !source)) {
+      return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
+    }
+    const exactSources = sources.flatMap((source) => source ? [source] : []);
+    const hydrated = hydrateSuccessorStoryReviewSession(
+      canonical,
+      request.workflowRunId,
+      exactSources,
+    );
+    if (Object.keys(hydrated.chapterReviews).length !== exactSources.length) {
+      return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
+    }
   }
 
   const persistedSession = parseStoryReviewSession({ ...canonical, updatedAt: serverNow });

@@ -9,6 +9,10 @@ import {
   SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
   storyReviewSessionSemanticJson,
 } from "../lib/story-review-session.ts";
+import {
+  editSuccessorHumanInsight,
+  emptySuccessorChapterReview,
+} from "../lib/story-review.ts";
 
 const serverModule = await import("../lib/story-review-session-server.ts")
   .catch((importError) => ({ importError }));
@@ -31,7 +35,9 @@ const session = (label, updatedAt = "2099-01-01T00:00:00.000Z") => {
 };
 
 const successorSession = (updatedAt = "2099-01-01T00:00:00.000Z") => (
-  createSuccessorStoryReviewSession("review-run", {}, {}, updatedAt)
+  createSuccessorStoryReviewSession("review-run", {
+    [successorSource.key]: emptySuccessorChapterReview(successorSource),
+  }, {}, updatedAt)
 );
 
 const successorEvidence = { documentId: "successor-doc", eventId: "successor-doc:successor-item" };
@@ -54,6 +60,32 @@ const successorSource = {
   evidence: { primary: successorEvidence, supporting: [] },
   contextRetention: { excluded: [] },
 };
+
+function useSuccessorSource(db) {
+  db.items = [{
+    id: successorEvidence.eventId,
+    document_id: successorEvidence.documentId,
+    event_type: "message",
+    actor_id: "owner",
+    actor_type: "user",
+    summary: `oxygen.story/3:${JSON.stringify(successorSource)}`,
+  }];
+  return db;
+}
+
+function successorSessionWithHuman(updatedAt = "2099-01-01T00:00:00.000Z") {
+  const base = emptySuccessorChapterReview(successorSource);
+  const human = editSuccessorHumanInsight(base, successorSource, "human:valid", {
+    background: "A bounded human-authored context.",
+    quote: { chapterKey: successorSource.key, storyBlockIds: ["block-safe"] },
+    directlyAcquiredExperience: "The exact source changed the reviewed decision.",
+    principle: "Validate durable review state against its exact source.",
+    evidence: [successorEvidence],
+  });
+  return createSuccessorStoryReviewSession("review-run", {
+    [successorSource.key]: human,
+  }, {}, updatedAt);
+}
 
 class FakeReviewDb {
   runs = new Map([["review-run", { status: "ready_for_human_review", sourceRevision: 1 }]]);
@@ -170,15 +202,7 @@ test("server derives the compatibility session contract from the complete valida
 
 test("successor contract creates, saves, and refreshes only a schema-2 session", async () => {
   const { readActiveStoryReviewContract, readStoryReviewSessionRecord } = serverContract();
-  const db = new FakeReviewDb();
-  db.items = [{
-    id: successorEvidence.eventId,
-    document_id: successorEvidence.documentId,
-    event_type: "message",
-    actor_id: "owner",
-    actor_type: "user",
-    summary: `oxygen.story/3:${JSON.stringify(successorSource)}`,
-  }];
+  const db = useSuccessorSource(new FakeReviewDb());
   const active = await readActiveStoryReviewContract(db, "review-run");
   assert.equal(active.storySourceSchema, "oxygen.story/3");
   assert.equal(active.storySessionSchema, SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA);
@@ -248,7 +272,7 @@ test("semantic no-op ignores client updatedAt and does not mutate version or tim
 
 test("schema-2 uses the same CAS, server timestamp, and semantic no-op path", async () => {
   const { persistStoryReviewSessionCas, readStoryReviewSessionRecord } = serverContract();
-  const db = new FakeReviewDb();
+  const db = useSuccessorSource(new FakeReviewDb());
   const created = await persistStoryReviewSessionCas(db, {
     workflowRunId: "review-run", expectedVersion: 0, sourceRevision: 1,
     session: successorSession("2999-12-31T23:59:59.999Z"),
@@ -267,7 +291,7 @@ test("schema-2 uses the same CAS, server timestamp, and semantic no-op path", as
 
 test("CAS rejects a session that disagrees with the server-derived schema before writing", async () => {
   const { STORY_SESSION_ERROR } = serverContract();
-  const db = new FakeReviewDb();
+  const db = useSuccessorSource(new FakeReviewDb());
   const result = await serverModule.persistStoryReviewSessionCas(db, {
     workflowRunId: "review-run",
     expectedVersion: 0,
@@ -278,6 +302,42 @@ test("CAS rejects a session that disagrees with the server-derived schema before
   assert.deepEqual(result, { ok: false, code: STORY_SESSION_ERROR.stateInvalid });
   assert.equal(db.sessions.size, 0);
   assert.notEqual(STORY_REVIEW_SESSION_SCHEMA, SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA);
+});
+
+test("successor CAS rejects source-invalid updates without changing durable state or version", async () => {
+  const { persistStoryReviewSessionCas, readStoryReviewSessionRecord, STORY_SESSION_ERROR } = serverContract();
+  const db = useSuccessorSource(new FakeReviewDb());
+  const valid = successorSessionWithHuman();
+  const created = await persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run", expectedVersion: 0, sourceRevision: 1, session: valid,
+  }, "2035-01-01T00:00:00.000Z");
+  assert.equal(created.serverVersion, 1);
+  const durableBefore = structuredClone(db.sessions.get("review-run"));
+  const durableRecordBefore = await readStoryReviewSessionRecord(db, "review-run");
+
+  const missingChapter = structuredClone(valid);
+  missingChapter.chapterReviews = {};
+  const foreignInsight = structuredClone(valid);
+  foreignInsight.chapterReviews[successorSource.key].sourceInsightReviews.foreign = {
+    origin: "source_ai", version: 1, decision: "pending", resolution: "pending",
+  };
+  const foreignAnchor = structuredClone(valid);
+  foreignAnchor.chapterReviews[successorSource.key]
+    .humanInsights["human:valid"].content.quote.storyBlockIds = ["missing-block"];
+  const foreignEvidence = structuredClone(valid);
+  foreignEvidence.chapterReviews[successorSource.key]
+    .humanInsights["human:valid"].content.evidence = [{ documentId: "foreign", eventId: "missing" }];
+
+  for (const invalid of [missingChapter, foreignInsight, foreignAnchor, foreignEvidence]) {
+    const rejected = await persistStoryReviewSessionCas(db, {
+      workflowRunId: "review-run", expectedVersion: 1, sourceRevision: 1, session: invalid,
+    }, "2035-01-01T00:00:01.000Z");
+    assert.equal(rejected.code, STORY_SESSION_ERROR.stateInvalid);
+    assert.deepEqual(db.sessions.get("review-run"), durableBefore);
+    const durable = await readStoryReviewSessionRecord(db, "review-run");
+    assert.equal(durable.serverVersion, 1);
+    assert.deepEqual(durable, durableRecordBefore);
+  }
 });
 
 test("CAS rejects an in-place session schema switch and permits an explicit source revision transition", async () => {
@@ -292,6 +352,7 @@ test("CAS rejects an in-place session schema switch and permits an explicit sour
   assert.equal(rejected.code, STORY_SESSION_ERROR.stateInvalid);
   assert.equal((await readStoryReviewSessionRecord(db, "review-run")).session.schema, "oxygen.story-review-session/1");
   db.runs.get("review-run").sourceRevision = 2;
+  useSuccessorSource(db);
   const transitioned = await persistStoryReviewSessionCas(db, {
     workflowRunId: "review-run", expectedVersion: 1, sourceRevision: 2, session: successorSession(),
   }, "2035-01-01T00:00:02.000Z");
