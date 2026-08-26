@@ -970,8 +970,8 @@ test("refresh, direct navigation, activation, and progress remain persisted and 
   assert.match(sessionRoute, /Story review is not ready/);
   assert.doesNotMatch(workflowRoute, /SELECT\s+content|original_json|reasoning|prompt|tool.?arg|private.?message/i);
   assert.match(workspace, /const loadActivatedStory = async/);
-  assert.match(workspace, /if \(!response\.ok\) throw new Error\("Organization could not be prepared"\)/);
-  assert.match(workspace, /fetchOrganizationStatus\(\{ method:"POST" \}\)/);
+  assert.match(workspace, /throw organizationRequestError\("Organization could not be prepared", \{ status: response\.status \}\)/);
+  assert.match(workspace, /requestOrganization: fetchOrganizationStatus/);
   assert.match(workspace, /setStoryDataReadyRunId\(workflowRunId\)/);
   assert.match(workspace, /storyDataReadyRunId !== workflowRunId/);
 });
