@@ -8,10 +8,13 @@
     2. "Speaker A: text" / "说话人0: text" / "张三: text"
     3. plain lines (no speaker structure)
 
-Outputs in --out (default tools/out/meeting-<id>/):
+Single-source outputs in --out (default tools/out/meeting-<id>/):
     meeting.json        canonical records (order/speaker/timestamp/text/source_line)
     raw.md              internal raw markdown, same shape as scripts/import_timestamped_meeting.py
     timestamped.txt     present when timestamps exist — feeds the existing Oxygen importer
+
+With multiple sources, --out is required and each meeting keeps the same files under
+meetings/<meeting-id>/.
 
 Everything is marked contains_unredacted_source_text=true / publication_approved=false.
 """
@@ -117,29 +120,7 @@ def parse_lines(text: str) -> tuple[list[dict], str]:
     return records, detected
 
 
-def main(argv=None) -> int:
-    configure_utf8_stdio()
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", type=Path, help="txt/md transcript or m4a/wav/mp3 audio")
-    parser.add_argument("--out", type=Path)
-    parser.add_argument("--meeting-id", default=None)
-    parser.add_argument("--title", default=None)
-    parser.add_argument("--date", default=None, help="YYYY-MM-DD (default today)")
-    parser.add_argument("--model", default="small", help="ASR model when source is audio")
-    parser.add_argument("--language", default=None)
-    parser.add_argument("--hf-token", default=None)
-    parser.add_argument("--no-publish", action="store_true",
-                        help="do not copy the result into the shared ingest-staging area")
-    args = parser.parse_args(argv)
-
-    source = args.source.expanduser().resolve()
-    if not source.is_file():
-        raise fail(f"source not found: {source}")
-    date = args.date or dt.date.today().isoformat()
-    meeting_id = args.meeting_id or f"meeting-{safe_slug(source.stem)}-{run_stamp()}"
-    title = args.title or source.stem
-    out = args.out.expanduser().resolve() if args.out else (
-        Path(__file__).resolve().parent / "out" / meeting_id)
+def import_source(source: Path, out: Path, meeting_id: str, title: str, date: str, args) -> dict:
     out.mkdir(parents=True, exist_ok=True)
 
     if source.suffix.lower() in AUDIO_SUFFIXES:
@@ -198,8 +179,59 @@ def main(argv=None) -> int:
         if staged:
             progress(98, "publish", f"staged for Inline import: {staged}")
     progress(100, "done", f"{len(records)} records ({detected}) -> {out}")
-    print(json.dumps({"output": str(out), "meeting_id": meeting_id, "staged": staged,
-                      "record_count": len(records), "detected_format": detected}, ensure_ascii=False))
+    return {"output": str(out), "meeting_id": meeting_id, "staged": staged,
+            "record_count": len(records), "detected_format": detected}
+
+
+def main(argv=None) -> int:
+    configure_utf8_stdio()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path, nargs="+",
+                        help="one or more txt/md transcripts or m4a/wav/mp3 audio files")
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--meeting-id", default=None)
+    parser.add_argument("--title", default=None)
+    parser.add_argument("--date", default=None, help="YYYY-MM-DD (default today)")
+    parser.add_argument("--model", default="small", help="ASR model when source is audio")
+    parser.add_argument("--language", default=None)
+    parser.add_argument("--hf-token", default=None)
+    parser.add_argument("--no-publish", action="store_true",
+                        help="do not copy the result into the shared ingest-staging area")
+    args = parser.parse_args(argv)
+
+    sources = [source.expanduser().resolve() for source in args.source]
+    for source in sources:
+        if not source.is_file():
+            raise fail(f"source not found: {source}")
+    multiple = len(sources) > 1
+    if multiple and args.out is None:
+        raise fail("--out is required when importing multiple meetings")
+    if multiple and (args.meeting_id or args.title):
+        raise fail("--meeting-id and --title support single-meeting imports only")
+
+    stamp = run_stamp()
+    meeting_ids = [
+        args.meeting_id or f"meeting-{safe_slug(source.stem)}-{stamp}"
+        for source in sources
+    ]
+    if len(set(meeting_ids)) != len(meeting_ids):
+        raise fail("duplicate meeting IDs in one collection run")
+
+    date = args.date or dt.date.today().isoformat()
+    base_out = args.out.expanduser().resolve() if args.out else (
+        Path(__file__).resolve().parent / "out" / meeting_ids[0])
+    results = []
+    for source, meeting_id in zip(sources, meeting_ids):
+        out = base_out / "meetings" / meeting_id if multiple else base_out
+        results.append(import_source(
+            source, out, meeting_id, args.title or source.stem, date, args
+        ))
+
+    if multiple:
+        print(json.dumps({"output": str(base_out), "meeting_count": len(results),
+                          "meetings": results}, ensure_ascii=False))
+    else:
+        print(json.dumps(results[0], ensure_ascii=False))
     return 0
 
 

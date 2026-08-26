@@ -38,6 +38,8 @@ VIEWER_HOST = "127.0.0.1"
 INPUT_RUN_INVALID = "INPUT_RUN_INVALID"
 INPUT_INDEX_INVALID = "INPUT_INDEX_INVALID"
 INPUT_TRAJECTORY_ID_INVALID = "INPUT_TRAJECTORY_ID_INVALID"
+INPUT_MEETING_ID_INVALID = "INPUT_MEETING_ID_INVALID"
+INPUT_MEETING_ID_DUPLICATE = "INPUT_MEETING_ID_DUPLICATE"
 INPUT_PATH_OUTSIDE_RUN = "INPUT_PATH_OUTSIDE_RUN"
 INPUT_PATH_MISSING = "INPUT_PATH_MISSING"
 INPUT_FILE_INVALID = "INPUT_FILE_INVALID"
@@ -681,9 +683,10 @@ def import_trajectory(opener, base_url: str, prepared: dict, project_map: dict):
     return len(items)
 
 
-def import_meeting(opener, base_url: str, path: Path, dataset: dict):
+def import_meeting(opener, base_url: str, prepared: dict):
+    dataset = prepared["dataset"]
     records = dataset.get("records") or []
-    meeting_id = dataset.get("meeting_id") or dataset.get("id") or path.parent.name
+    meeting_id = prepared["meeting_id"]
     document = {
         "id": meeting_id, "kind": "meeting",
         "title": dataset.get("title") or meeting_id,
@@ -726,6 +729,13 @@ def _validated_trajectory_id(value) -> str:
     if urllib.parse.unquote(value) != value:
         raise SystemExit(INPUT_TRAJECTORY_ID_INVALID)
     return value
+
+
+def _validated_meeting_id(value) -> str:
+    try:
+        return _validated_trajectory_id(value)
+    except SystemExit:
+        raise SystemExit(INPUT_MEETING_ID_INVALID) from None
 
 
 def _located_input(candidate: Path, approved_run: Path) -> Path:
@@ -792,6 +802,17 @@ def _prepare_trajectory(directory: Path, approved_run: Path) -> dict:
     }
 
 
+def _prepare_meeting(path: Path) -> dict:
+    dataset = _read_json_object(path)
+    records = dataset.get("records")
+    if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
+        raise SystemExit(INPUT_FILE_INVALID)
+    meeting_id = _validated_meeting_id(
+        dataset.get("meeting_id") or dataset.get("id") or path.parent.name
+    )
+    return {"path": path, "dataset": dataset, "meeting_id": meeting_id}
+
+
 def locate_inputs(run: Path):
     try:
         approved_run = run.resolve(strict=True)
@@ -847,19 +868,38 @@ def locate_inputs(run: Path):
 
     _located_file(approved_run / "project-map.json", approved_run, required=False)
 
+    meetings = []
     meeting_candidate = approved_run / "meeting.json"
-    meeting = None
     if meeting_candidate.exists() or meeting_candidate.is_symlink():
-        meeting = _located_input(meeting_candidate, approved_run)
-        if not meeting.is_file():
+        meeting = _located_file(meeting_candidate, approved_run, required=True)
+        assert meeting is not None
+        meetings.append(meeting)
+
+    meetings_candidate = approved_run / "meetings"
+    if meetings_candidate.exists() or meetings_candidate.is_symlink():
+        meetings_root = _located_input(meetings_candidate, approved_run)
+        if not meetings_root.is_dir():
             raise SystemExit(INPUT_PATH_MISSING)
-    if not trajectories and meeting is None and index_path is None:
+        try:
+            entries = sorted(meetings_root.iterdir())
+        except (OSError, RuntimeError):
+            raise SystemExit(INPUT_PATH_MISSING) from None
+        for entry in entries:
+            directory = _located_input(entry, approved_run)
+            if not directory.is_dir():
+                raise SystemExit(INPUT_PATH_MISSING)
+            _validated_meeting_id(directory.name)
+            meeting = _located_file(directory / "meeting.json", approved_run, required=True)
+            assert meeting is not None
+            meetings.append(meeting)
+
+    if not trajectories and not meetings and index_path is None:
         raise SystemExit(INPUT_RUN_INVALID)
-    return trajectories, meeting
+    return trajectories, meetings
 
 
 def import_run(opener, base_url: str, run: Path) -> tuple[int, int]:
-    trajectories, meeting = locate_inputs(run)
+    trajectories, meetings = locate_inputs(run)
     approved_run = _located_input(run, run)
     project_map_path = _located_file(
         approved_run / "project-map.json", approved_run, required=False
@@ -868,14 +908,18 @@ def import_run(opener, base_url: str, run: Path) -> tuple[int, int]:
     prepared_trajectories = [
         _prepare_trajectory(path, approved_run) for path in trajectories
     ]
-    meeting_dataset = _read_json_object(meeting) if meeting else None
+    prepared_meetings = [_prepare_meeting(path) for path in meetings]
+    meeting_ids = [prepared["meeting_id"] for prepared in prepared_meetings]
+    if len(set(meeting_ids)) != len(meeting_ids):
+        raise SystemExit(INPUT_MEETING_ID_DUPLICATE)
     event_count = sum(
         import_trajectory(opener, base_url, prepared, project_map)
         for prepared in prepared_trajectories
     )
-    if meeting and meeting_dataset is not None:
-        event_count += import_meeting(opener, base_url, meeting, meeting_dataset)
-    return len(trajectories) + int(meeting is not None), event_count
+    event_count += sum(
+        import_meeting(opener, base_url, prepared) for prepared in prepared_meetings
+    )
+    return len(trajectories) + len(meetings), event_count
 
 
 def complete_organization(opener, base_url: str) -> dict:
