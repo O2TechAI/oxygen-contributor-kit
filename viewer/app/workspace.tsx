@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { WorkflowProgress } from "./organization-progress";
 import { RedactionCompare, segments, type Redaction, type RedactionJob } from "./redaction-compare";
 import { ProbePanel, type Probe, type BulkDecision, type ProbeRun } from "./probe-panel";
@@ -14,7 +14,16 @@ import { emptyChapterReview, privacyDecisionKey } from "../lib/story-review";
 import { milestoneKindLabel, type EvidenceReference, type StoryLanguage } from "../lib/timeline";
 import { selectReviewableStoryTimeline } from "../lib/story-readiness";
 import { buildReviewedStoryRelease } from "../lib/story-release";
-import { phaseGroupIdentity, restoreChapterContext, type ChapterRestoreContext } from "../lib/story-navigation";
+import {
+  phaseGroupIdentity,
+  readStoryNavigation,
+  resolveStoryNavigation,
+  restoreChapterContext,
+  storyNavigationProjects,
+  writeStoryNavigation,
+  type ChapterRestoreContext,
+  type StoryNavigation,
+} from "../lib/story-navigation";
 import {
   canonicalizeStoryReviewSession,
   createStoryReviewSession,
@@ -98,6 +107,16 @@ const fmtTimelineDate = (value: string | undefined, language: StoryLanguage = "e
   ? new Date(value).toLocaleDateString(language === "zh" ? "zh-CN" : "en-US", { dateStyle:"medium" })
   : language === "zh" ? "日期不可用" : "Date unavailable";
 
+function updateStoryNavigationUrl(navigation: StoryNavigation, historyMode: "push"|"replace") {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  const search = writeStoryNavigation(url.search, navigation);
+  if (url.search === search) return;
+  url.search = search;
+  if (historyMode === "replace") window.history.replaceState(window.history.state, "", url);
+  else window.history.pushState(window.history.state, "", url);
+}
+
 export function InlineWorkspace({
   initialWorkflow,
   initialStatus,
@@ -144,7 +163,6 @@ export function InlineWorkspace({
   const storySessionLoadingRunRef = useRef("");
   const storySessionHydratedRunRef = useRef(initialStorySessionReadyRunId);
   const storyPersistenceReadyRunRef = useRef("");
-  const storyPackageReloadKeyRef = useRef("");
   const currentStoryStateRef = useRef({
     chapterReviews: initialChapterReviews,
     privacyDecisions: initialPrivacyDecisions,
@@ -295,14 +313,9 @@ export function InlineWorkspace({
     if (signal?.aborted) return next;
     setDocs(next);
     const primary = next[0]?.formatted_summary?.primary_project || "Oxygen";
-    const availableProjects = new Set(next.flatMap((doc) => (
-      doc.formatted_summary?.projects || []
-    ).map((project) => project.name)));
     setSelected((current) => {
-      const currentProject = current.startsWith("project:") ? current.slice("project:".length) : "";
-      const selectionStillExists = (Boolean(currentProject) && availableProjects.has(currentProject))
-        || next.some((doc) => doc.id === current);
-      return selectionStillExists ? current : `project:${primary}`;
+      if (current.startsWith("project:") || next.some((doc) => doc.id === current)) return current;
+      return `project:${primary}`;
     });
     return next;
   }, []);
@@ -372,6 +385,26 @@ export function InlineWorkspace({
     return () => { cancelled = true; };
   }, [selected]);
 
+  const allHighlights = useMemo(() => docs.flatMap((doc) => (
+    doc.formatted_summary?.highlights || []
+  ).map((event) => ({ ...event, documentId:doc.id })))
+    .sort((a,b) => String(a.timestamp || "").localeCompare(String(b.timestamp || ""))), [docs]);
+  const activatedStoryHighlights = useMemo(
+    () => selectReviewableStoryTimeline(allHighlights),
+    [allHighlights],
+  );
+  const projectNames = storyNavigationProjects(activatedStoryHighlights);
+  const metadataPrimaryProject = docs[0]?.formatted_summary?.primary_project || "Oxygen";
+  const primaryProject = projectNames.includes(metadataPrimaryProject)
+    ? metadataPrimaryProject
+    : projectNames[0] || metadataPrimaryProject;
+  const isProject = selected.startsWith("project:");
+  const requestedProject = isProject ? selected.slice("project:".length) : "";
+  const navigation = isProject
+    ? resolveStoryNavigation(activatedStoryHighlights, { project:requestedProject, storyKey:activeStoryKey }, primaryProject)
+    : { project:"", storyKey:"" };
+  const selectedProject = navigation.project;
+
   useEffect(() => {
     const documentsReady = status?.status === "empty"
       || (status?.status === "complete" && docs.length >= status.documentCount);
@@ -397,9 +430,7 @@ export function InlineWorkspace({
           throw new Error("Story review persistence metadata is invalid");
         }
         const canonicalSession = canonicalizeStoryReviewSession(payload.session);
-        const events = docs.flatMap((doc) => (doc.formatted_summary?.highlights || []).map((event) => ({ ...event, documentId:doc.id })))
-          .sort((a,b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
-        const restored = hydrateStoryReviewSession(canonicalSession, workflowRunId, selectReviewableStoryTimeline(events));
+        const restored = hydrateStoryReviewSession(canonicalSession, workflowRunId, activatedStoryHighlights);
         if (!cancelled) {
           storyPersistenceRef.current?.initialize({
             workflowRunId,
@@ -429,56 +460,7 @@ export function InlineWorkspace({
       cancelled = true;
       if (storySessionLoadingRunRef.current === workflowRunId) storySessionLoadingRunRef.current = "";
     };
-  }, [docs, status?.documentCount, status?.status, storyDataReadyRunId, storyReviewReady, workflowRunId]);
-
-  const hydrationProject = selected.startsWith("project:") ? selected.slice("project:".length) : "";
-  const hydrationHighlights = docs.flatMap((doc) => (doc.formatted_summary?.highlights || [])
-    .map((event) => ({ ...event, documentId:doc.id })));
-  const activatedHydrationHighlights = selectReviewableStoryTimeline(hydrationHighlights);
-  const selectedHydrationHighlights = activatedHydrationHighlights
-    .filter((event) => event.project === hydrationProject);
-
-  // A previously loaded organization snapshot can finish after the exact-run
-  // Story hydration request. Keep Progress visible and perform one bounded
-  // current-package reload instead of revealing an empty or stale Project Story.
-  useEffect(() => {
-    const reloadKey = `${workflowRunId}\u0000${hydrationProject}`;
-    const needsReload = storyReviewReady
-      && storyDataReadyRunId === workflowRunId
-      && storySessionReadyRunId === workflowRunId
-      && view === "timeline"
-      && Boolean(hydrationProject)
-      && activatedHydrationHighlights.length > 0
-      && selectedHydrationHighlights.length === 0;
-    if (!needsReload) {
-      storyPackageReloadKeyRef.current = "";
-      return;
-    }
-    if (storyPackageReloadKeyRef.current === reloadKey) return;
-    storyPackageReloadKeyRef.current = reloadKey;
-    let cancelled = false;
-    void loadDocs().then((next) => {
-      const nextHighlights = selectReviewableStoryTimeline(next.flatMap((doc) => (
-        (doc.formatted_summary?.highlights || []).map((event) => ({ ...event, documentId:doc.id }))
-      )));
-      if (!cancelled && nextHighlights.length === 0) {
-        setError("Activated Project Story could not be loaded");
-      }
-    }).catch((value) => {
-      if (!cancelled) setError(value instanceof Error ? value.message : "Project Story could not be loaded");
-    });
-    return () => { cancelled = true; };
-  }, [
-    activatedHydrationHighlights.length,
-    hydrationProject,
-    loadDocs,
-    selectedHydrationHighlights.length,
-    storyDataReadyRunId,
-    storyReviewReady,
-    storySessionReadyRunId,
-    view,
-    workflowRunId,
-  ]);
+  }, [activatedStoryHighlights, docs.length, status?.documentCount, status?.status, storyDataReadyRunId, storyReviewReady, workflowRunId]);
 
   useEffect(() => {
     if (!workflowRunId || storySessionReadyRunId !== workflowRunId
@@ -498,13 +480,6 @@ export function InlineWorkspace({
     documentCount: docs.length,
     organizationStatus: status?.status,
   });
-  const isProject = selected.startsWith("project:");
-  const selectedProject = isProject ? selected.slice("project:".length) : "";
-  const allHighlights = hydrationHighlights
-    .sort((a,b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
-  const activatedStoryHighlights = selectReviewableStoryTimeline(allHighlights);
-  const projectNames = Array.from(new Set(docs.flatMap((doc) => (doc.formatted_summary?.projects || []).map((project) => project.name))));
-  const primaryProject = docs[0]?.formatted_summary?.primary_project || projectNames[0] || "Oxygen";
   const projectCount = (name:string) => docs.reduce((sum,doc) => sum + Number((doc.formatted_summary?.projects || []).find((project) => project.name === name)?.event_count || 0), 0);
   const summary:Summary = isProject ? {
     primary_project: selectedProject,
@@ -513,9 +488,39 @@ export function InlineWorkspace({
     highlights: allHighlights.filter((event) => event.project === selectedProject),
   } : detail?.document.formatted_summary || {};
   const highlights = selectReviewableStoryTimeline(summary.highlights || []);
+  const setStoryNavigation = (
+    requested: Partial<StoryNavigation>,
+    historyMode: "push"|"replace" = "push",
+  ) => {
+    const next = resolveStoryNavigation(activatedStoryHighlights, requested, primaryProject);
+    setSelected(next.project ? `project:${next.project}` : "");
+    setActiveStoryKey(next.storyKey);
+    updateStoryNavigationUrl(next, historyMode);
+    return next;
+  };
   useEffect(() => {
     currentStoryStateRef.current = { chapterReviews, privacyDecisions, highlights };
   }, [chapterReviews, highlights, privacyDecisions]);
+  useEffect(() => {
+    if (!storyWorkspaceReady || storySessionReadyRunId !== workflowRunId
+      || view !== "timeline" || !activatedStoryHighlights.length) return;
+    const restoreFromUrl = () => {
+      const next = resolveStoryNavigation(
+        activatedStoryHighlights,
+        readStoryNavigation(window.location.search),
+        primaryProject,
+      );
+      setSelected(`project:${next.project}`);
+      setActiveStoryKey(next.storyKey);
+      updateStoryNavigationUrl(next, "replace");
+      setSourceFocus("");
+      setEvidenceReturn(null);
+      setView("timeline");
+    };
+    restoreFromUrl();
+    window.addEventListener("popstate", restoreFromUrl);
+    return () => window.removeEventListener("popstate", restoreFromUrl);
+  }, [activatedStoryHighlights, primaryProject, storySessionReadyRunId, storyWorkspaceReady, view, workflowRunId]);
   if (!storyWorkspaceReady) {
     return <WorkflowProgress workflow={workflow} status={status} error={error} language={language} />;
   }
@@ -541,7 +546,7 @@ export function InlineWorkspace({
     return groups;
   },[]);
   const milestoneNumber = new Map(highlights.map((event,index) => [event.story.key,index+1]));
-  const activeStoryIndex = highlights.findIndex((event) => event.story.key === activeStoryKey);
+  const activeStoryIndex = highlights.findIndex((event) => event.story.key === navigation.storyKey);
   const activeMilestone = activeStoryIndex >= 0 ? highlights[activeStoryIndex] : null;
   const reviewedInsights = highlights.filter((event) => Object.keys(chapterReviews[event.story.key]?.insightReviews || {}).length > 0).length;
   const confirmedChapters = buildReviewedStoryRelease(highlights,chapterReviews).chapters.length;
@@ -577,33 +582,38 @@ export function InlineWorkspace({
     clearChapterRestore();
     setEvidenceNavigationError("");
     setEvidenceReturn(null);
-    setActiveStoryKey(storyKey);
+    setStoryNavigation({ project:selectedProject, storyKey });
   };
   const navigateStory = (storyKey:string) => {
     clearChapterRestore();
     setEvidenceNavigationError("");
-    setActiveStoryKey(storyKey);
+    setStoryNavigation({ project:selectedProject, storyKey });
   };
   const openReleasePreview = () => {
     setSourceFocus("");
-    setActiveStoryKey("");
     setEvidenceReturn(null);
     if (isProject && redactionJob?.status === "complete" && docs[0]) {
-      releasePreviewReturnSelectionRef.current=selected;
+      releasePreviewReturnSelectionRef.current=`project:${selectedProject}`;
+      setStoryNavigation({ project:selectedProject, storyKey:"" });
       setDetail(null);
       setSelected(docs[0].id);
+    } else {
+      setActiveStoryKey("");
     }
     setView("redaction");
   };
   const restoreReleasePreviewSelection = () => {
     if(!releasePreviewReturnSelectionRef.current) return;
-    setSelected(releasePreviewReturnSelectionRef.current);
+    setStoryNavigation({
+      project:releasePreviewReturnSelectionRef.current.slice("project:".length),
+      storyKey:"",
+    });
     setDetail(null);
     releasePreviewReturnSelectionRef.current=null;
   };
   const closeStory = () => {
     const context=timelineContextRef.current;
-    setActiveStoryKey("");
+    setStoryNavigation({ project:selectedProject, storyKey:"" });
     requestAnimationFrame(() => {
       if(timelineScrollRef.current) timelineScrollRef.current.scrollTop=context.scrollTop;
       document.getElementById(`story-open-${context.key}`)?.focus({preventScroll:true});
@@ -624,10 +634,9 @@ export function InlineWorkspace({
   const backToChapter = () => {
     if(!evidenceReturn) return;
     setLanguage(evidenceReturn.language);
-    setSelected(`project:${evidenceReturn.projectName}`);
     setView("timeline");
     setChapterScrollRestore({storyKey:evidenceReturn.storyKey,scrollTop:evidenceReturn.scrollTop,focusOriginId:evidenceReturn.originId});
-    setActiveStoryKey(evidenceReturn.storyKey);
+    setStoryNavigation({ project:evidenceReturn.projectName, storyKey:evidenceReturn.storyKey }, "replace");
     setEvidenceReturn(null);
   };
   const updatePrivacyDecision = (storyKey:string,candidateId:string,decision?:PrivacyDecision) => setPrivacyDecisions((current) => {
@@ -707,12 +716,12 @@ export function InlineWorkspace({
     <div className={`workspace storytellingWorkspace ${activeMilestone?"episodeOpen":""}`} style={workspaceStyle}>
       <aside className="rail storyRail">
         <div className="railHead"><b>{labels.projects}</b><span>{selectedProject?highlights.length:projectNames.length}</span></div>
-        <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selected===`project:${project}`?"active":""}`} key={project} onClick={() => { releasePreviewReturnSelectionRef.current=null; setSelected(`project:${project}`); setSourceFocus(""); setActiveStoryKey(""); setEvidenceReturn(null); setView("timeline"); }}>
+        <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selectedProject===project?"active":""}`} key={project} onClick={() => { releasePreviewReturnSelectionRef.current=null; setStoryNavigation({ project, storyKey:"" }); setSourceFocus(""); setEvidenceReturn(null); setView("timeline"); }}>
           <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${labels.phases}`:`${projectCount(project).toLocaleString()} ${labels.events}`}</small>
         </button>)}{activeMilestone && <div className="chapterRailContext" aria-label={storyLanguage==="zh"?"章节选择器":"Chapter selector"}>
           <span>{storyLanguage==="zh"?`章节 ${activeStoryIndex+1} / ${highlights.length}`:`Chapters ${activeStoryIndex+1} / ${highlights.length}`}</span>
           <nav className="chapterRailList" aria-label={storyLanguage==="zh"?"章节":"Chapters"}>
-            {highlights.map((event) => { const active=event.story.key===activeStoryKey; return <button className={active?"active":""} aria-current={active?"page":undefined} ref={active?activeChapterButtonRef:undefined} key={event.story.key} onClick={() => navigateStory(event.story.key)}>
+            {highlights.map((event) => { const active=event.story.key===navigation.storyKey; return <button className={active?"active":""} aria-current={active?"page":undefined} ref={active?activeChapterButtonRef:undefined} key={event.story.key} onClick={() => navigateStory(event.story.key)}>
               <i>{milestoneNumber.get(event.story.key)}</i><b>{localized(event)?.title || event.story.title}</b>
             </button>})}
           </nav>
