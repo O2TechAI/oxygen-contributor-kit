@@ -33,6 +33,7 @@ import {
   withHumanReviewProgress,
   type WorkflowProgressState,
 } from "../lib/workflow-progress";
+import { startOrganizationPolling } from "../lib/organization-polling-lifecycle";
 import {
   parseWorkspaceStatus,
   type WorkspaceDocument,
@@ -46,12 +47,24 @@ type Summary = WorkspaceSummary;
 type Item = { id:string; sequence:number; event_type?:string; actor_id?:string; actor_type?:string; timestamp?:string; content:string; organization_category?:string; organization_confidence?:number; organization_reason?:string };
 type Detail = { document:Doc; items:Item[] };
 
+function organizationRequestError(message: string, details: { status?: number; retryable?: boolean } = {}) {
+  return Object.assign(new Error(message), details);
+}
+
 async function fetchOrganizationStatus(init?: RequestInit): Promise<Status> {
   const response = await fetch("/api/organization", { cache:"no-store", ...init });
-  if (!response.ok) throw new Error("Organization could not be prepared");
-  const payload = parseWorkspaceStatus(await response.json());
+  if (!response.ok) {
+    throw organizationRequestError("Organization could not be prepared", { status: response.status });
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw organizationRequestError("Organization returned an invalid status", { retryable: false });
+  }
+  const payload = parseWorkspaceStatus(body);
   if (!payload) {
-    throw new Error("Organization returned an invalid status");
+    throw organizationRequestError("Organization returned an invalid status", { retryable: false });
   }
   return payload;
 }
@@ -148,6 +161,7 @@ export function InlineWorkspace({
   const [railHeight,setRailHeight] = useState(280);
   const [activePhaseIndex,setActivePhaseIndex] = useState(0);
   const [error,setError] = useState("");
+  const organizationErrorRef = useRef("");
   const [redactions,setRedactions] = useState<Redaction[]>([]);
   const [redactionJob,setRedactionJob] = useState<RedactionJob>(null);
   const [redactionBusy,setRedactionBusy] = useState("");
@@ -181,13 +195,14 @@ export function InlineWorkspace({
     });
   }
 
-  const loadWorkflow = useCallback(async () => {
+  const loadWorkflow = useCallback(async (signal?: AbortSignal) => {
     const query = scopedWorkflowRunId
       ? `?workflowRunId=${encodeURIComponent(scopedWorkflowRunId)}`
       : "";
-    const response = await fetch(`/api/workflow${query}`, { cache:"no-store" });
+    const response = await fetch(`/api/workflow${query}`, { cache:"no-store", ...(signal ? { signal } : {}) });
     if (!response.ok) return null;
     const next = await response.json() as WorkflowProgressState;
+    if (signal?.aborted) return null;
     setWorkflow(next);
     return next;
   }, [scopedWorkflowRunId]);
@@ -272,11 +287,12 @@ export function InlineWorkspace({
     setProbeBusy("");
   }
 
-  const loadDocs = useCallback(async () => {
-    const response = await fetch("/api/documents", { cache:"no-store" });
+  const loadDocs = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/documents", { cache:"no-store", ...(signal ? { signal } : {}) });
     if (!response.ok) throw new Error("Could not load local records");
     const payload = await response.json() as { documents: Doc[] };
     const next = payload.documents;
+    if (signal?.aborted) return next;
     setDocs(next);
     const primary = next[0]?.formatted_summary?.primary_project || "Oxygen";
     const availableProjects = new Set(next.flatMap((doc) => (
@@ -291,26 +307,28 @@ export function InlineWorkspace({
     return next;
   }, []);
 
+  const setOrganizationPollingError = useCallback((message: string) => {
+    organizationErrorRef.current = message;
+    setError(message);
+  }, []);
+
+  const clearOrganizationPollingError = useCallback(() => {
+    const organizationError = organizationErrorRef.current;
+    if (!organizationError) return;
+    organizationErrorRef.current = "";
+    setError((current) => current === organizationError ? "" : current);
+  }, []);
+
   useEffect(() => {
-    let cancelled = false;
-    async function organize() {
-      try {
-        const currentWorkflow = await loadWorkflow();
-        if (currentWorkflow?.currentStageId === "collect"
-          || currentWorkflow?.currentStageId === "review") return;
-        let current = await fetchOrganizationStatus();
-        let passes = 0;
-        while (!cancelled && current.status !== "complete" && current.status !== "empty") {
-          current = await fetchOrganizationStatus({ method:"POST" });
-          setStatus(current);
-          passes += 1;
-          if (passes % 4 === 0) await loadWorkflow();
-        }
-        if (!cancelled) { setStatus(current); await loadDocs(); await loadWorkflow(); }
-      } catch (value) { if (!cancelled) setError(value instanceof Error ? value.message : "Organization failed"); }
-    }
-    organize(); return () => { cancelled = true; };
-  }, [loadDocs, loadWorkflow, workflow?.currentStageId]);
+    return startOrganizationPolling({
+      loadWorkflow,
+      requestOrganization: fetchOrganizationStatus,
+      loadDocuments: loadDocs,
+      onStatus: setStatus,
+      onError: setOrganizationPollingError,
+      onRecovered: clearOrganizationPollingError,
+    });
+  }, [clearOrganizationPollingError, loadDocs, loadWorkflow, setOrganizationPollingError, workflow?.currentStageId]);
 
   useEffect(() => {
     if (!workflowRunId || !storyReviewReady) {
