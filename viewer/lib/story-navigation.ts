@@ -1,3 +1,5 @@
+import type { ChapterReviewBlocker, ChapterReviewStage } from "./story-review";
+
 export type ChapterRestoreContext = {
   storyKey: string;
   scrollTop: number;
@@ -8,6 +10,47 @@ export type StoryNavigation = {
   project: string;
   storyKey: string;
 };
+
+export type StoryReviewFocusTarget = Pick<ChapterReviewBlocker, "targetKind" | "targetId" | "itemId"> & {
+  chapterKey: string;
+};
+
+export type DownloadReviewBlocker = Omit<ChapterReviewBlocker, "chapterKey" | "code"> & {
+  code: ChapterReviewBlocker["code"] | "chapter_not_confirmed";
+};
+
+export type DownloadReviewBlockerGroup = {
+  project: string;
+  chapterKey: string;
+  title: string;
+  blockers: DownloadReviewBlocker[];
+};
+
+export function groupDownloadReviewBlockers(chapters: Array<{
+  project: string;
+  chapterKey: string;
+  title: string;
+  stage: ChapterReviewStage;
+  completionBlockers: ChapterReviewBlocker[];
+}>): DownloadReviewBlockerGroup[] {
+  return chapters.flatMap((chapter) => {
+    const blockers: DownloadReviewBlocker[] = chapter.completionBlockers.map((blocker) => ({
+      code: blocker.code,
+      targetKind: blocker.targetKind,
+      ...(blocker.targetId ? { targetId: blocker.targetId } : {}),
+      ...(blocker.itemId ? { itemId: blocker.itemId } : {}),
+    }));
+    if (chapter.stage !== "human_confirmed") {
+      blockers.push({ code: "chapter_not_confirmed", targetKind: "chapter" });
+    }
+    return blockers.length ? [{
+      project: chapter.project,
+      chapterKey: chapter.chapterKey,
+      title: chapter.title,
+      blockers,
+    }] : [];
+  });
+}
 
 type StoryNavigationCandidate = {
   project?: string;

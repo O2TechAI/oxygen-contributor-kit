@@ -8,7 +8,7 @@ import {
   type StoryLanguage,
   type TimelineMilestone,
 } from "../lib/timeline";
-import { restoreEvidenceOrigin } from "../lib/story-navigation";
+import { restoreEvidenceOrigin, type StoryReviewFocusTarget } from "../lib/story-navigation";
 import {
   applyChapterReview,
   applyStoryReviewToBlock,
@@ -153,8 +153,10 @@ export function StoryChapterEditor(props: {
   chapterReview: ChapterReviewState;
   initialScrollTop?: number;
   focusOriginId?: string;
+  reviewFocus?: StoryReviewFocusTarget;
   evidenceError?: string;
   onContextRestored?: () => void;
+  onReviewFocusHandled?: () => void;
   onPrivacyDecision: (candidateId: string, decision?: PrivacyDecision) => void;
   onChapterReview: (review: ChapterReviewState) => void;
   onOpenEvidence: (evidence: EvidenceReference, context: ChapterEvidenceContext) => void;
@@ -164,7 +166,7 @@ export function StoryChapterEditor(props: {
 }) {
   const {
     milestone, position, total, language, privacyDecisions, chapterReview, initialScrollTop = 0, focusOriginId, evidenceError,
-    onContextRestored, onPrivacyDecision, onChapterReview, onOpenEvidence, onClose, onPrevious, onNext,
+    reviewFocus, onContextRestored, onReviewFocusHandled, onPrivacyDecision, onChapterReview, onOpenEvidence, onClose, onPrevious, onNext,
   } = props;
   const { story } = milestone;
   const episode = story.releaseEpisode;
@@ -235,6 +237,46 @@ export function StoryChapterEditor(props: {
     });
     return () => cancelAnimationFrame(frame);
   }, [focusOriginId, initialScrollTop, onContextRestored, story.key]);
+
+  useEffect(() => {
+    if (!reviewFocus || reviewFocus.chapterKey !== story.key) return;
+    const frame = requestAnimationFrame(() => {
+      const root = scrollRef.current;
+      const focusElement = (element: HTMLElement | null | undefined) => {
+        if (!element) return false;
+        element.scrollIntoView({ block: "center", behavior: "smooth" });
+        element.focus({ preventScroll: true });
+        return true;
+      };
+      let focused = false;
+      if (root && reviewFocus.targetKind === "story_block") {
+        if (reviewFocus.itemId) {
+          const note = Array.from(root.querySelectorAll<HTMLElement>("[data-annotation-note],[data-edit-note]")).find((element) => (
+            element.dataset.annotationNote === reviewFocus.itemId || element.dataset.editNote === reviewFocus.itemId
+          ));
+          const action = note?.querySelector<HTMLButtonElement>("button");
+          if (action) {
+            action.click();
+            focused = true;
+          }
+        }
+        if (!focused) {
+          focused = focusElement(Array.from(root.querySelectorAll<HTMLElement>("[data-story-block]")).find((element) => (
+            element.dataset.storyBlock === reviewFocus.targetId
+          )));
+        }
+      } else if (root && reviewFocus.targetKind === "insight") {
+        const disclosure = Array.from(root.querySelectorAll<HTMLDetailsElement>("[data-canonical-insight]")).find((element) => (
+          element.dataset.canonicalInsight === reviewFocus.targetId
+        ));
+        if (disclosure) disclosure.open = true;
+        focused = focusElement(disclosure?.querySelector<HTMLElement>("summary"));
+      }
+      if (!focused) focusElement(root?.querySelector<HTMLElement>("[data-chapter-completion]"));
+      onReviewFocusHandled?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [onReviewFocusHandled, reviewFocus, story.key]);
 
   const candidates = presentation?.privacy.candidates || [];
   const privacyState = privacyReviewState(candidates, privacyDecisions);
@@ -897,7 +939,7 @@ export function StoryChapterEditor(props: {
           </button>})}</div>
         </details>
 
-        <section className="chapterCompletion" aria-labelledby="review-summary-heading">
+        <section className="chapterCompletion" data-chapter-completion tabIndex={-1} aria-labelledby="review-summary-heading">
           <div><span>{reviewStageLabel(chapterReview, language)}</span><h3 id="review-summary-heading">{labels.summary}</h3></div>
           <ul><li><b>{summary.revise}</b> {labels.revisions}</li><li><b>{summary.add}</b> {labels.additions}</li><li><b>{summary.delete}</b> {labels.removals}</li><li><b>{summary.pendingInsights}</b> {labels.insightDecisions}</li><li><b>{privacyState.reviewed} / {candidates.length}</b> {labels.privacyDecisions}</li></ul>
           <p>{labels.applyingNote}</p>

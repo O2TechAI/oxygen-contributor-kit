@@ -10,19 +10,29 @@ import {
   type ChapterReviewState,
   type PrivacyDecision,
 } from "./story-chapter-editor";
-import { emptyChapterReview, privacyDecisionKey } from "../lib/story-review";
-import { milestoneKindLabel, type EvidenceReference, type StoryLanguage } from "../lib/timeline";
+import {
+  applyStoryReviewToBlock,
+  chapterReviewCompletionBlockers,
+  emptyChapterReview,
+  privacyDecisionKey,
+  type ChapterReviewBlocker,
+} from "../lib/story-review";
+import { milestoneKindLabel, storyReleaseTargetCatalog, type EvidenceReference, type StoryLanguage, type TimelineMilestone } from "../lib/timeline";
 import { selectReviewableStoryTimeline } from "../lib/story-readiness";
 import { buildReviewedStoryRelease } from "../lib/story-release";
 import {
   phaseGroupIdentity,
+  groupDownloadReviewBlockers,
   readStoryNavigation,
   resolveStoryNavigation,
   restoreChapterContext,
   storyNavigationProjects,
   writeStoryNavigation,
   type ChapterRestoreContext,
+  type DownloadReviewBlocker,
+  type DownloadReviewBlockerGroup,
   type StoryNavigation,
+  type StoryReviewFocusTarget,
 } from "../lib/story-navigation";
 import {
   canonicalizeStoryReviewSession,
@@ -87,6 +97,15 @@ const workspaceUi = {
     introTitle:"AI-selected highlights are the table of contents.", intro:"Open a chapter for People, Story, and Privacy. AI insights stay inside the narrative; local evidence stays secondary.",
     before:"BEFORE", after:"AFTER", selected:"AI-selected highlight", evidence:"reviewed evidence event", read:"Read chapter", workflow:"Workflow",
     nextStep:"Read a Chapter to review the full story, evidence, direct learning, and reusable rules.",
+    downloadReviewKicker:"Review required", downloadReviewTitle:"Review before download", downloadReviewIntro:"Complete these Chapter review items, then try the download again.", downloadReviewCount:"unresolved review items", openReview:"Open review", close:"Close",
+    downloadBlockers:{
+      review_state_invalid:"Review state needs attention", privacy_incomplete:"Privacy review is incomplete", evidence_unverified:"Evidence review is incomplete",
+      annotation_pending:"A Story review change still needs Apply Review", annotation_needs_evidence:"A Story review change needs Evidence",
+      direct_edit_pending:"A Story edit still needs Apply Review", direct_edit_needs_evidence:"A Story edit needs Evidence",
+      insight_pending:"An Insight change still needs Apply Review", privacy_decisions_stale:"Privacy decisions need to be reviewed again",
+      revision_provenance_mismatch:"This Chapter review needs to be refreshed", redaction_targets_mismatch:"Privacy redactions need review",
+      chapter_not_confirmed:"Chapter is not marked All set",
+    },
   },
   zh: {
     title:"故事审阅", local:"仅限本地 · 未上传", projects:"项目故事", total:"个项目",
@@ -96,6 +115,15 @@ const workspaceUi = {
     introTitle:"AI 选择的高光就是故事目录。", intro:"打开一章，按人物、故事和隐私阅读；AI 洞察留在叙事中，本地证据保持为次要入口。",
     before:"之前", after:"之后", selected:"AI 选择的高光", evidence:"条已审阅证据", read:"阅读章节", workflow:"工作流",
     nextStep:"阅读任一章节，完整审阅故事、证据、直接经验与可复用规则。",
+    downloadReviewKicker:"需要审阅", downloadReviewTitle:"下载前请完成审阅", downloadReviewIntro:"请完成以下章节审阅项，然后再次尝试下载。", downloadReviewCount:"项待解决审阅", openReview:"打开审阅", close:"关闭",
+    downloadBlockers:{
+      review_state_invalid:"审阅状态需要处理", privacy_incomplete:"隐私审阅尚未完成", evidence_unverified:"证据审阅尚未完成",
+      annotation_pending:"故事审阅改动仍需应用审阅", annotation_needs_evidence:"故事审阅改动需要证据",
+      direct_edit_pending:"故事编辑仍需应用审阅", direct_edit_needs_evidence:"故事编辑需要证据",
+      insight_pending:"洞察改动仍需应用审阅", privacy_decisions_stale:"需要重新审阅隐私决定",
+      revision_provenance_mismatch:"本章审阅需要刷新", redaction_targets_mismatch:"隐私移除项需要审阅",
+      chapter_not_confirmed:"本章尚未确认完成",
+    },
   },
 } as const;
 
@@ -115,6 +143,21 @@ function updateStoryNavigationUrl(navigation: StoryNavigation, historyMode: "pus
   url.search = search;
   if (historyMode === "replace") window.history.replaceState(window.history.state, "", url);
   else window.history.pushState(window.history.state, "", url);
+}
+
+function storySourceBlocks(milestone: TimelineMilestone) {
+  return (["en", "zh"] as const).reduce<Record<StoryLanguage, Record<string, string>>>((result, language) => {
+    const presentation = milestone.story.reviewPresentation?.[language];
+    if (!presentation) return result;
+    result[language] = {
+      scene: presentation.story.scene,
+      ...Object.fromEntries(presentation.story.reconstruction.map((copy, index) => [`reconstruction-${index}`, copy])),
+      ...Object.fromEntries(presentation.story.importantDetails.map((copy, index) => [`detail-${index}`, copy])),
+      outcome: presentation.story.decisionOutcome,
+      ...(presentation.story.uncertainty ? { uncertainty: presentation.story.uncertainty } : {}),
+    };
+    return result;
+  }, { en:{}, zh:{} });
 }
 
 export function InlineWorkspace({
@@ -154,6 +197,8 @@ export function InlineWorkspace({
   const [storySessionReadyRunId,setStorySessionReadyRunId] = useState(initialStorySessionReadyRunId);
   const [evidenceReturn,setEvidenceReturn] = useState<(ChapterEvidenceContext & { projectName:string })|null>(null);
   const [chapterScrollRestore,setChapterScrollRestore] = useState<ChapterRestoreContext|null>(null);
+  const [downloadBlockerGroups,setDownloadBlockerGroups] = useState<DownloadReviewBlockerGroup[]>([]);
+  const [downloadReviewFocus,setDownloadReviewFocus] = useState<StoryReviewFocusTarget|null>(null);
   const [evidenceNavigationError,setEvidenceNavigationError] = useState("");
   const timelineScrollRef = useRef<HTMLDivElement|null>(null);
   const phaseSectionRefs = useRef(new Map<number,HTMLElement>());
@@ -174,6 +219,9 @@ export function InlineWorkspace({
   }, []);
   const clearChapterRestore = useCallback(() => {
     setChapterScrollRestore(null);
+  }, []);
+  const clearDownloadReviewFocus = useCallback(() => {
+    setDownloadReviewFocus(null);
   }, []);
   const [railWidth,setRailWidth] = useState(330);
   const [railHeight,setRailHeight] = useState(280);
@@ -647,8 +695,71 @@ export function InlineWorkspace({
     return next;
   });
   const updateChapterReview = (storyKey:string,review:ChapterReviewState) => setChapterReviews((current) => ({...current,[storyKey]:review}));
+  const currentDownloadReviewBlockerGroups = () => groupDownloadReviewBlockers(activatedStoryHighlights.map((milestone) => {
+    const chapterKey=milestone.story.key;
+    const state=chapterReviews[chapterKey] || emptyChapterReview();
+    const presentation=milestone.story.reviewPresentation?.en;
+    const targetCatalog=presentation ? storyReleaseTargetCatalog(presentation) : null;
+    const invalidBlocker:ChapterReviewBlocker={code:"review_state_invalid",chapterKey,targetKind:"chapter"};
+    let completionBlockers:ChapterReviewBlocker[]=[invalidBlocker];
+    if(presentation && targetCatalog) try {
+      const currentPrivacyDecisions=presentation.privacy.candidates.reduce<Record<string,PrivacyDecision>>((result,candidate) => {
+        const decision=privacyDecisions[privacyDecisionKey(chapterKey,candidate.id)];
+        if(decision) result[candidate.id]=decision;
+        return result;
+      },{});
+      const sourceBlocks=storySourceBlocks(milestone);
+      const reviewedBlocks=(["en","zh"] as const).reduce<Record<StoryLanguage,Record<string,string>>>((result,locale) => {
+        result[locale]=Object.fromEntries(Object.entries(sourceBlocks[locale]).map(([blockId,source]) => [
+          blockId,
+          state.redactedBlocks.includes(blockId) ? "" : applyStoryReviewToBlock(source,blockId,locale,state),
+        ]));
+        return result;
+      },{en:{},zh:{}});
+      completionBlockers=chapterReviewCompletionBlockers(state,{
+        storyKey:chapterKey,
+        privacyCandidates:presentation.privacy.candidates,
+        privacyDecisions:currentPrivacyDecisions,
+        targetCatalog,
+        reviewableInsightIds:presentation.highlights.map((highlight) => highlight.id),
+        sourceBlocks,
+        reviewedBlocks,
+      });
+    } catch {
+      completionBlockers=[invalidBlocker];
+    }
+    return {
+      project:milestone.project || "",
+      chapterKey,
+      title:presentation?.title || milestone.story.title,
+      stage:state.stage,
+      completionBlockers,
+    };
+  }));
+  const openDownloadReviewBlocker = (group:DownloadReviewBlockerGroup,blocker:DownloadReviewBlocker) => {
+    setDownloadBlockerGroups([]);
+    if(!activatedStoryHighlights.some((milestone) => milestone.project===group.project && milestone.story.key===group.chapterKey)) return;
+    releasePreviewReturnSelectionRef.current=null;
+    clearChapterRestore();
+    setEvidenceNavigationError("");
+    setEvidenceReturn(null);
+    setSourceFocus("");
+    setView("timeline");
+    setDownloadReviewFocus({
+      chapterKey:group.chapterKey,
+      targetKind:blocker.targetKind,
+      ...(blocker.targetId ? {targetId:blocker.targetId} : {}),
+      ...(blocker.itemId ? {itemId:blocker.itemId} : {}),
+    });
+    setStoryNavigation({project:group.project,storyKey:group.chapterKey});
+  };
   const downloadReviewed = async (url:string,filename:string) => {
     setError("");
+    const blockerGroups=currentDownloadReviewBlockerGroups();
+    if(blockerGroups.length) {
+      setDownloadBlockerGroups(blockerGroups);
+      return;
+    }
     const persistence=storyPersistenceRef.current;
     if (!persistence || storyPersistenceReadyRunRef.current !== workflowRunId) {
       setError("Story review persistence is not ready for handoff");
@@ -698,6 +809,7 @@ export function InlineWorkspace({
   };
   const workspaceStyle={"--rail-width":`${railWidth}px`,"--rail-height":`${railHeight}px`} as CSSProperties;
   const activeChapterRestore=restoreChapterContext(chapterScrollRestore,activeMilestone?.story.key || "");
+  const downloadBlockerCount=downloadBlockerGroups.reduce((count,group) => count+group.blockers.length,0);
 
   return <main className="shell storytellingShell">
     <header className="topbar">
@@ -815,6 +927,8 @@ export function InlineWorkspace({
             initialScrollTop={activeChapterRestore.scrollTop}
             focusOriginId={activeChapterRestore.focusOriginId}
             onContextRestored={clearChapterRestore}
+            reviewFocus={downloadReviewFocus?.chapterKey===activeMilestone.story.key ? downloadReviewFocus : undefined}
+            onReviewFocusHandled={clearDownloadReviewFocus}
             onPrivacyDecision={(candidateId,decision) => updatePrivacyDecision(activeMilestone.story.key,candidateId,decision)}
             onChapterReview={(review) => updateChapterReview(activeMilestone.story.key,review)}
             evidenceError={evidenceNavigationError}
@@ -826,6 +940,24 @@ export function InlineWorkspace({
         </>}
       </section>
     </div>
+    {downloadBlockerGroups.length > 0 && <div className="workflowOverlay" onMouseDown={(event) => {
+      if(event.target===event.currentTarget) setDownloadBlockerGroups([]);
+    }}>
+      <section className="organizationCard workflowCard" role="dialog" aria-modal="true" aria-labelledby="download-review-title">
+        <button className="workflowClose" onClick={() => setDownloadBlockerGroups([])} aria-label={labels.close}>×</button>
+        <div className="organizationBrand"><span className="brandMark">O₂</span> Oxygen</div>
+        <div className="organizationKicker">{labels.downloadReviewKicker}</div>
+        <h1 id="download-review-title">{labels.downloadReviewTitle}</h1>
+        <p className="organizationIntro">{labels.downloadReviewIntro}</p>
+        <p className="workflowStatus">{downloadBlockerCount} {labels.downloadReviewCount}</p>
+        <div>{downloadBlockerGroups.map((group) => <section key={`${group.project}:${group.chapterKey}`}>
+          <h2>{group.title}</h2>
+          {group.blockers.map((blocker,index) => <button className="docCard" key={`${blocker.code}:${blocker.targetKind}:${blocker.targetId || ""}:${blocker.itemId || ""}:${index}`} onClick={() => openDownloadReviewBlocker(group,blocker)}>
+            <span className="docTitle">{labels.downloadBlockers[blocker.code]}</span><span className="kind">{labels.openReview}</span><small>{labels.openReview} →</small>
+          </button>)}
+        </section>)}</div>
+      </section>
+    </div>}
     {workflowOpen && <WorkflowProgress workflow={displayedWorkflow} status={status} error={error} language={storyLanguage} onClose={() => setWorkflowOpen(false)} />}
   </main>;
 }
