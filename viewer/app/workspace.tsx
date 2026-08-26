@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { WorkflowProgress } from "./organization-progress";
 import { RedactionCompare, segments, type Redaction, type RedactionJob } from "./redaction-compare";
 import { ProbePanel, type Probe, type BulkDecision, type ProbeRun } from "./probe-panel";
@@ -10,11 +10,30 @@ import {
   type ChapterReviewState,
   type PrivacyDecision,
 } from "./story-chapter-editor";
-import { emptyChapterReview, privacyDecisionKey } from "../lib/story-review";
-import { milestoneKindLabel, type EvidenceReference, type StoryLanguage } from "../lib/timeline";
+import {
+  applyStoryReviewToBlock,
+  chapterReviewCompletionBlockers,
+  emptyChapterReview,
+  privacyDecisionKey,
+  type ChapterReviewBlocker,
+} from "../lib/story-review";
+import { milestoneKindLabel, storyReleaseTargetCatalog, type EvidenceReference, type StoryLanguage, type TimelineMilestone } from "../lib/timeline";
 import { selectReviewableStoryTimeline } from "../lib/story-readiness";
 import { buildReviewedStoryRelease } from "../lib/story-release";
-import { phaseGroupIdentity, restoreChapterContext, type ChapterRestoreContext } from "../lib/story-navigation";
+import {
+  phaseGroupIdentity,
+  groupDownloadReviewBlockers,
+  readStoryNavigation,
+  resolveStoryNavigation,
+  restoreChapterContext,
+  storyNavigationProjects,
+  writeStoryNavigation,
+  type ChapterRestoreContext,
+  type DownloadReviewBlocker,
+  type DownloadReviewBlockerGroup,
+  type StoryNavigation,
+  type StoryReviewFocusTarget,
+} from "../lib/story-navigation";
 import {
   canonicalizeStoryReviewSession,
   createStoryReviewSession,
@@ -78,6 +97,15 @@ const workspaceUi = {
     introTitle:"AI-selected highlights are the table of contents.", intro:"Open a chapter for People, Story, and Privacy. AI insights stay inside the narrative; local evidence stays secondary.",
     before:"BEFORE", after:"AFTER", selected:"AI-selected highlight", evidence:"reviewed evidence event", read:"Read chapter", workflow:"Workflow",
     nextStep:"Read a Chapter to review the full story, evidence, direct learning, and reusable rules.",
+    downloadReviewKicker:"Review required", downloadReviewTitle:"Review before download", downloadReviewIntro:"Complete these Chapter review items, then try the download again.", downloadReviewCount:"unresolved review items", openReview:"Open review", close:"Close", chapter:"Chapter",
+    downloadBlockers:{
+      review_state_invalid:"Review state needs attention", privacy_incomplete:"Privacy review is incomplete", evidence_unverified:"Evidence review is incomplete",
+      annotation_pending:"A Story review change still needs Apply Review", annotation_needs_evidence:"A Story review change needs Evidence",
+      direct_edit_pending:"A Story edit still needs Apply Review", direct_edit_needs_evidence:"A Story edit needs Evidence",
+      insight_pending:"An Insight change still needs Apply Review", privacy_decisions_stale:"Privacy decisions need to be reviewed again",
+      revision_provenance_mismatch:"This Chapter review needs to be refreshed", redaction_targets_mismatch:"Privacy redactions need review",
+      chapter_not_confirmed:"Chapter is not marked All set",
+    },
   },
   zh: {
     title:"故事审阅", local:"仅限本地 · 未上传", projects:"项目故事", total:"个项目",
@@ -87,6 +115,15 @@ const workspaceUi = {
     introTitle:"AI 选择的高光就是故事目录。", intro:"打开一章，按人物、故事和隐私阅读；AI 洞察留在叙事中，本地证据保持为次要入口。",
     before:"之前", after:"之后", selected:"AI 选择的高光", evidence:"条已审阅证据", read:"阅读章节", workflow:"工作流",
     nextStep:"阅读任一章节，完整审阅故事、证据、直接经验与可复用规则。",
+    downloadReviewKicker:"需要审阅", downloadReviewTitle:"下载前请完成审阅", downloadReviewIntro:"请完成以下章节审阅项，然后再次尝试下载。", downloadReviewCount:"项待解决审阅", openReview:"打开审阅", close:"关闭", chapter:"章节",
+    downloadBlockers:{
+      review_state_invalid:"审阅状态需要处理", privacy_incomplete:"隐私审阅尚未完成", evidence_unverified:"证据审阅尚未完成",
+      annotation_pending:"故事审阅改动仍需应用审阅", annotation_needs_evidence:"故事审阅改动需要证据",
+      direct_edit_pending:"故事编辑仍需应用审阅", direct_edit_needs_evidence:"故事编辑需要证据",
+      insight_pending:"洞察改动仍需应用审阅", privacy_decisions_stale:"需要重新审阅隐私决定",
+      revision_provenance_mismatch:"本章审阅需要刷新", redaction_targets_mismatch:"隐私移除项需要审阅",
+      chapter_not_confirmed:"本章尚未确认完成",
+    },
   },
 } as const;
 
@@ -97,6 +134,31 @@ const fmt = (value: string | undefined, language: StoryLanguage = "en") => value
 const fmtTimelineDate = (value: string | undefined, language: StoryLanguage = "en") => value
   ? new Date(value).toLocaleDateString(language === "zh" ? "zh-CN" : "en-US", { dateStyle:"medium" })
   : language === "zh" ? "日期不可用" : "Date unavailable";
+
+function updateStoryNavigationUrl(navigation: StoryNavigation, historyMode: "push"|"replace") {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  const search = writeStoryNavigation(url.search, navigation);
+  if (url.search === search) return;
+  url.search = search;
+  if (historyMode === "replace") window.history.replaceState(window.history.state, "", url);
+  else window.history.pushState(window.history.state, "", url);
+}
+
+function storySourceBlocks(milestone: TimelineMilestone) {
+  return (["en", "zh"] as const).reduce<Record<StoryLanguage, Record<string, string>>>((result, language) => {
+    const presentation = milestone.story.reviewPresentation?.[language];
+    if (!presentation) return result;
+    result[language] = {
+      scene: presentation.story.scene,
+      ...Object.fromEntries(presentation.story.reconstruction.map((copy, index) => [`reconstruction-${index}`, copy])),
+      ...Object.fromEntries(presentation.story.importantDetails.map((copy, index) => [`detail-${index}`, copy])),
+      outcome: presentation.story.decisionOutcome,
+      ...(presentation.story.uncertainty ? { uncertainty: presentation.story.uncertainty } : {}),
+    };
+    return result;
+  }, { en:{}, zh:{} });
+}
 
 export function InlineWorkspace({
   initialWorkflow,
@@ -135,6 +197,8 @@ export function InlineWorkspace({
   const [storySessionReadyRunId,setStorySessionReadyRunId] = useState(initialStorySessionReadyRunId);
   const [evidenceReturn,setEvidenceReturn] = useState<(ChapterEvidenceContext & { projectName:string })|null>(null);
   const [chapterScrollRestore,setChapterScrollRestore] = useState<ChapterRestoreContext|null>(null);
+  const [downloadBlockerGroups,setDownloadBlockerGroups] = useState<DownloadReviewBlockerGroup[]>([]);
+  const [downloadReviewFocus,setDownloadReviewFocus] = useState<StoryReviewFocusTarget|null>(null);
   const [evidenceNavigationError,setEvidenceNavigationError] = useState("");
   const timelineScrollRef = useRef<HTMLDivElement|null>(null);
   const phaseSectionRefs = useRef(new Map<number,HTMLElement>());
@@ -144,7 +208,6 @@ export function InlineWorkspace({
   const storySessionLoadingRunRef = useRef("");
   const storySessionHydratedRunRef = useRef(initialStorySessionReadyRunId);
   const storyPersistenceReadyRunRef = useRef("");
-  const storyPackageReloadKeyRef = useRef("");
   const currentStoryStateRef = useRef({
     chapterReviews: initialChapterReviews,
     privacyDecisions: initialPrivacyDecisions,
@@ -156,6 +219,9 @@ export function InlineWorkspace({
   }, []);
   const clearChapterRestore = useCallback(() => {
     setChapterScrollRestore(null);
+  }, []);
+  const clearDownloadReviewFocus = useCallback(() => {
+    setDownloadReviewFocus(null);
   }, []);
   const [railWidth,setRailWidth] = useState(330);
   const [railHeight,setRailHeight] = useState(280);
@@ -295,14 +361,9 @@ export function InlineWorkspace({
     if (signal?.aborted) return next;
     setDocs(next);
     const primary = next[0]?.formatted_summary?.primary_project || "Oxygen";
-    const availableProjects = new Set(next.flatMap((doc) => (
-      doc.formatted_summary?.projects || []
-    ).map((project) => project.name)));
     setSelected((current) => {
-      const currentProject = current.startsWith("project:") ? current.slice("project:".length) : "";
-      const selectionStillExists = (Boolean(currentProject) && availableProjects.has(currentProject))
-        || next.some((doc) => doc.id === current);
-      return selectionStillExists ? current : `project:${primary}`;
+      if (current.startsWith("project:") || next.some((doc) => doc.id === current)) return current;
+      return `project:${primary}`;
     });
     return next;
   }, []);
@@ -372,6 +433,26 @@ export function InlineWorkspace({
     return () => { cancelled = true; };
   }, [selected]);
 
+  const allHighlights = useMemo(() => docs.flatMap((doc) => (
+    doc.formatted_summary?.highlights || []
+  ).map((event) => ({ ...event, documentId:doc.id })))
+    .sort((a,b) => String(a.timestamp || "").localeCompare(String(b.timestamp || ""))), [docs]);
+  const activatedStoryHighlights = useMemo(
+    () => selectReviewableStoryTimeline(allHighlights),
+    [allHighlights],
+  );
+  const projectNames = storyNavigationProjects(activatedStoryHighlights);
+  const metadataPrimaryProject = docs[0]?.formatted_summary?.primary_project || "Oxygen";
+  const primaryProject = projectNames.includes(metadataPrimaryProject)
+    ? metadataPrimaryProject
+    : projectNames[0] || metadataPrimaryProject;
+  const isProject = selected.startsWith("project:");
+  const requestedProject = isProject ? selected.slice("project:".length) : "";
+  const navigation = isProject
+    ? resolveStoryNavigation(activatedStoryHighlights, { project:requestedProject, storyKey:activeStoryKey }, primaryProject)
+    : { project:"", storyKey:"" };
+  const selectedProject = navigation.project;
+
   useEffect(() => {
     const documentsReady = status?.status === "empty"
       || (status?.status === "complete" && docs.length >= status.documentCount);
@@ -397,9 +478,7 @@ export function InlineWorkspace({
           throw new Error("Story review persistence metadata is invalid");
         }
         const canonicalSession = canonicalizeStoryReviewSession(payload.session);
-        const events = docs.flatMap((doc) => (doc.formatted_summary?.highlights || []).map((event) => ({ ...event, documentId:doc.id })))
-          .sort((a,b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
-        const restored = hydrateStoryReviewSession(canonicalSession, workflowRunId, selectReviewableStoryTimeline(events));
+        const restored = hydrateStoryReviewSession(canonicalSession, workflowRunId, activatedStoryHighlights);
         if (!cancelled) {
           storyPersistenceRef.current?.initialize({
             workflowRunId,
@@ -429,56 +508,7 @@ export function InlineWorkspace({
       cancelled = true;
       if (storySessionLoadingRunRef.current === workflowRunId) storySessionLoadingRunRef.current = "";
     };
-  }, [docs, status?.documentCount, status?.status, storyDataReadyRunId, storyReviewReady, workflowRunId]);
-
-  const hydrationProject = selected.startsWith("project:") ? selected.slice("project:".length) : "";
-  const hydrationHighlights = docs.flatMap((doc) => (doc.formatted_summary?.highlights || [])
-    .map((event) => ({ ...event, documentId:doc.id })));
-  const activatedHydrationHighlights = selectReviewableStoryTimeline(hydrationHighlights);
-  const selectedHydrationHighlights = activatedHydrationHighlights
-    .filter((event) => event.project === hydrationProject);
-
-  // A previously loaded organization snapshot can finish after the exact-run
-  // Story hydration request. Keep Progress visible and perform one bounded
-  // current-package reload instead of revealing an empty or stale Project Story.
-  useEffect(() => {
-    const reloadKey = `${workflowRunId}\u0000${hydrationProject}`;
-    const needsReload = storyReviewReady
-      && storyDataReadyRunId === workflowRunId
-      && storySessionReadyRunId === workflowRunId
-      && view === "timeline"
-      && Boolean(hydrationProject)
-      && activatedHydrationHighlights.length > 0
-      && selectedHydrationHighlights.length === 0;
-    if (!needsReload) {
-      storyPackageReloadKeyRef.current = "";
-      return;
-    }
-    if (storyPackageReloadKeyRef.current === reloadKey) return;
-    storyPackageReloadKeyRef.current = reloadKey;
-    let cancelled = false;
-    void loadDocs().then((next) => {
-      const nextHighlights = selectReviewableStoryTimeline(next.flatMap((doc) => (
-        (doc.formatted_summary?.highlights || []).map((event) => ({ ...event, documentId:doc.id }))
-      )));
-      if (!cancelled && nextHighlights.length === 0) {
-        setError("Activated Project Story could not be loaded");
-      }
-    }).catch((value) => {
-      if (!cancelled) setError(value instanceof Error ? value.message : "Project Story could not be loaded");
-    });
-    return () => { cancelled = true; };
-  }, [
-    activatedHydrationHighlights.length,
-    hydrationProject,
-    loadDocs,
-    selectedHydrationHighlights.length,
-    storyDataReadyRunId,
-    storyReviewReady,
-    storySessionReadyRunId,
-    view,
-    workflowRunId,
-  ]);
+  }, [activatedStoryHighlights, docs.length, status?.documentCount, status?.status, storyDataReadyRunId, storyReviewReady, workflowRunId]);
 
   useEffect(() => {
     if (!workflowRunId || storySessionReadyRunId !== workflowRunId
@@ -498,13 +528,6 @@ export function InlineWorkspace({
     documentCount: docs.length,
     organizationStatus: status?.status,
   });
-  const isProject = selected.startsWith("project:");
-  const selectedProject = isProject ? selected.slice("project:".length) : "";
-  const allHighlights = hydrationHighlights
-    .sort((a,b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
-  const activatedStoryHighlights = selectReviewableStoryTimeline(allHighlights);
-  const projectNames = Array.from(new Set(docs.flatMap((doc) => (doc.formatted_summary?.projects || []).map((project) => project.name))));
-  const primaryProject = docs[0]?.formatted_summary?.primary_project || projectNames[0] || "Oxygen";
   const projectCount = (name:string) => docs.reduce((sum,doc) => sum + Number((doc.formatted_summary?.projects || []).find((project) => project.name === name)?.event_count || 0), 0);
   const summary:Summary = isProject ? {
     primary_project: selectedProject,
@@ -513,9 +536,39 @@ export function InlineWorkspace({
     highlights: allHighlights.filter((event) => event.project === selectedProject),
   } : detail?.document.formatted_summary || {};
   const highlights = selectReviewableStoryTimeline(summary.highlights || []);
+  const setStoryNavigation = (
+    requested: Partial<StoryNavigation>,
+    historyMode: "push"|"replace" = "push",
+  ) => {
+    const next = resolveStoryNavigation(activatedStoryHighlights, requested, primaryProject);
+    setSelected(next.project ? `project:${next.project}` : "");
+    setActiveStoryKey(next.storyKey);
+    updateStoryNavigationUrl(next, historyMode);
+    return next;
+  };
   useEffect(() => {
     currentStoryStateRef.current = { chapterReviews, privacyDecisions, highlights };
   }, [chapterReviews, highlights, privacyDecisions]);
+  useEffect(() => {
+    if (!storyWorkspaceReady || storySessionReadyRunId !== workflowRunId
+      || view !== "timeline" || !activatedStoryHighlights.length) return;
+    const restoreFromUrl = () => {
+      const next = resolveStoryNavigation(
+        activatedStoryHighlights,
+        readStoryNavigation(window.location.search),
+        primaryProject,
+      );
+      setSelected(`project:${next.project}`);
+      setActiveStoryKey(next.storyKey);
+      updateStoryNavigationUrl(next, "replace");
+      setSourceFocus("");
+      setEvidenceReturn(null);
+      setView("timeline");
+    };
+    restoreFromUrl();
+    window.addEventListener("popstate", restoreFromUrl);
+    return () => window.removeEventListener("popstate", restoreFromUrl);
+  }, [activatedStoryHighlights, primaryProject, storySessionReadyRunId, storyWorkspaceReady, view, workflowRunId]);
   if (!storyWorkspaceReady) {
     return <WorkflowProgress workflow={workflow} status={status} error={error} language={language} />;
   }
@@ -541,7 +594,7 @@ export function InlineWorkspace({
     return groups;
   },[]);
   const milestoneNumber = new Map(highlights.map((event,index) => [event.story.key,index+1]));
-  const activeStoryIndex = highlights.findIndex((event) => event.story.key === activeStoryKey);
+  const activeStoryIndex = highlights.findIndex((event) => event.story.key === navigation.storyKey);
   const activeMilestone = activeStoryIndex >= 0 ? highlights[activeStoryIndex] : null;
   const reviewedInsights = highlights.filter((event) => Object.keys(chapterReviews[event.story.key]?.insightReviews || {}).length > 0).length;
   const confirmedChapters = buildReviewedStoryRelease(highlights,chapterReviews).chapters.length;
@@ -577,33 +630,38 @@ export function InlineWorkspace({
     clearChapterRestore();
     setEvidenceNavigationError("");
     setEvidenceReturn(null);
-    setActiveStoryKey(storyKey);
+    setStoryNavigation({ project:selectedProject, storyKey });
   };
   const navigateStory = (storyKey:string) => {
     clearChapterRestore();
     setEvidenceNavigationError("");
-    setActiveStoryKey(storyKey);
+    setStoryNavigation({ project:selectedProject, storyKey });
   };
   const openReleasePreview = () => {
     setSourceFocus("");
-    setActiveStoryKey("");
     setEvidenceReturn(null);
     if (isProject && redactionJob?.status === "complete" && docs[0]) {
-      releasePreviewReturnSelectionRef.current=selected;
+      releasePreviewReturnSelectionRef.current=`project:${selectedProject}`;
+      setStoryNavigation({ project:selectedProject, storyKey:"" });
       setDetail(null);
       setSelected(docs[0].id);
+    } else {
+      setActiveStoryKey("");
     }
     setView("redaction");
   };
   const restoreReleasePreviewSelection = () => {
     if(!releasePreviewReturnSelectionRef.current) return;
-    setSelected(releasePreviewReturnSelectionRef.current);
+    setStoryNavigation({
+      project:releasePreviewReturnSelectionRef.current.slice("project:".length),
+      storyKey:"",
+    });
     setDetail(null);
     releasePreviewReturnSelectionRef.current=null;
   };
   const closeStory = () => {
     const context=timelineContextRef.current;
-    setActiveStoryKey("");
+    setStoryNavigation({ project:selectedProject, storyKey:"" });
     requestAnimationFrame(() => {
       if(timelineScrollRef.current) timelineScrollRef.current.scrollTop=context.scrollTop;
       document.getElementById(`story-open-${context.key}`)?.focus({preventScroll:true});
@@ -624,10 +682,9 @@ export function InlineWorkspace({
   const backToChapter = () => {
     if(!evidenceReturn) return;
     setLanguage(evidenceReturn.language);
-    setSelected(`project:${evidenceReturn.projectName}`);
     setView("timeline");
     setChapterScrollRestore({storyKey:evidenceReturn.storyKey,scrollTop:evidenceReturn.scrollTop,focusOriginId:evidenceReturn.originId});
-    setActiveStoryKey(evidenceReturn.storyKey);
+    setStoryNavigation({ project:evidenceReturn.projectName, storyKey:evidenceReturn.storyKey }, "replace");
     setEvidenceReturn(null);
   };
   const updatePrivacyDecision = (storyKey:string,candidateId:string,decision?:PrivacyDecision) => setPrivacyDecisions((current) => {
@@ -638,8 +695,70 @@ export function InlineWorkspace({
     return next;
   });
   const updateChapterReview = (storyKey:string,review:ChapterReviewState) => setChapterReviews((current) => ({...current,[storyKey]:review}));
+  const currentDownloadReviewBlockerGroups = () => groupDownloadReviewBlockers(activatedStoryHighlights.map((milestone) => {
+    const chapterKey=milestone.story.key;
+    const state=chapterReviews[chapterKey] || emptyChapterReview();
+    const presentation=milestone.story.reviewPresentation?.en;
+    const targetCatalog=presentation ? storyReleaseTargetCatalog(presentation) : null;
+    const invalidBlocker:ChapterReviewBlocker={code:"review_state_invalid",chapterKey,targetKind:"chapter"};
+    let completionBlockers:ChapterReviewBlocker[]=[invalidBlocker];
+    if(presentation && targetCatalog) try {
+      const currentPrivacyDecisions=presentation.privacy.candidates.reduce<Record<string,PrivacyDecision>>((result,candidate) => {
+        const decision=privacyDecisions[privacyDecisionKey(chapterKey,candidate.id)];
+        if(decision) result[candidate.id]=decision;
+        return result;
+      },{});
+      const sourceBlocks=storySourceBlocks(milestone);
+      const reviewedBlocks=(["en","zh"] as const).reduce<Record<StoryLanguage,Record<string,string>>>((result,locale) => {
+        result[locale]=Object.fromEntries(Object.entries(sourceBlocks[locale]).map(([blockId,source]) => [
+          blockId,
+          state.redactedBlocks.includes(blockId) ? "" : applyStoryReviewToBlock(source,blockId,locale,state),
+        ]));
+        return result;
+      },{en:{},zh:{}});
+      completionBlockers=chapterReviewCompletionBlockers(state,{
+        storyKey:chapterKey,
+        privacyCandidates:presentation.privacy.candidates,
+        privacyDecisions:currentPrivacyDecisions,
+        targetCatalog,
+        reviewableInsightIds:presentation.highlights.map((highlight) => highlight.id),
+        sourceBlocks,
+        reviewedBlocks,
+      });
+    } catch {
+      completionBlockers=[invalidBlocker];
+    }
+    return {
+      project:milestone.project || "",
+      chapterKey,
+      stage:state.stage,
+      completionBlockers,
+    };
+  }));
+  const openDownloadReviewBlocker = (group:DownloadReviewBlockerGroup,blocker:DownloadReviewBlocker) => {
+    setDownloadBlockerGroups([]);
+    if(!activatedStoryHighlights.some((milestone) => milestone.project===group.project && milestone.story.key===group.chapterKey)) return;
+    releasePreviewReturnSelectionRef.current=null;
+    clearChapterRestore();
+    setEvidenceNavigationError("");
+    setEvidenceReturn(null);
+    setSourceFocus("");
+    setView("timeline");
+    setDownloadReviewFocus({
+      chapterKey:group.chapterKey,
+      targetKind:blocker.targetKind,
+      ...(blocker.targetId ? {targetId:blocker.targetId} : {}),
+      ...(blocker.itemId ? {itemId:blocker.itemId} : {}),
+    });
+    setStoryNavigation({project:group.project,storyKey:group.chapterKey});
+  };
   const downloadReviewed = async (url:string,filename:string) => {
     setError("");
+    const blockerGroups=currentDownloadReviewBlockerGroups();
+    if(blockerGroups.length) {
+      setDownloadBlockerGroups(blockerGroups);
+      return;
+    }
     const persistence=storyPersistenceRef.current;
     if (!persistence || storyPersistenceReadyRunRef.current !== workflowRunId) {
       setError("Story review persistence is not ready for handoff");
@@ -689,6 +808,7 @@ export function InlineWorkspace({
   };
   const workspaceStyle={"--rail-width":`${railWidth}px`,"--rail-height":`${railHeight}px`} as CSSProperties;
   const activeChapterRestore=restoreChapterContext(chapterScrollRestore,activeMilestone?.story.key || "");
+  const downloadBlockerCount=downloadBlockerGroups.reduce((count,group) => count+group.blockers.length,0);
 
   return <main className="shell storytellingShell">
     <header className="topbar">
@@ -707,12 +827,12 @@ export function InlineWorkspace({
     <div className={`workspace storytellingWorkspace ${activeMilestone?"episodeOpen":""}`} style={workspaceStyle}>
       <aside className="rail storyRail">
         <div className="railHead"><b>{labels.projects}</b><span>{selectedProject?highlights.length:projectNames.length}</span></div>
-        <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selected===`project:${project}`?"active":""}`} key={project} onClick={() => { releasePreviewReturnSelectionRef.current=null; setSelected(`project:${project}`); setSourceFocus(""); setActiveStoryKey(""); setEvidenceReturn(null); setView("timeline"); }}>
+        <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selectedProject===project?"active":""}`} key={project} onClick={() => { releasePreviewReturnSelectionRef.current=null; setStoryNavigation({ project, storyKey:"" }); setSourceFocus(""); setEvidenceReturn(null); setView("timeline"); }}>
           <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${labels.phases}`:`${projectCount(project).toLocaleString()} ${labels.events}`}</small>
         </button>)}{activeMilestone && <div className="chapterRailContext" aria-label={storyLanguage==="zh"?"章节选择器":"Chapter selector"}>
           <span>{storyLanguage==="zh"?`章节 ${activeStoryIndex+1} / ${highlights.length}`:`Chapters ${activeStoryIndex+1} / ${highlights.length}`}</span>
           <nav className="chapterRailList" aria-label={storyLanguage==="zh"?"章节":"Chapters"}>
-            {highlights.map((event) => { const active=event.story.key===activeStoryKey; return <button className={active?"active":""} aria-current={active?"page":undefined} ref={active?activeChapterButtonRef:undefined} key={event.story.key} onClick={() => navigateStory(event.story.key)}>
+            {highlights.map((event) => { const active=event.story.key===navigation.storyKey; return <button className={active?"active":""} aria-current={active?"page":undefined} ref={active?activeChapterButtonRef:undefined} key={event.story.key} onClick={() => navigateStory(event.story.key)}>
               <i>{milestoneNumber.get(event.story.key)}</i><b>{localized(event)?.title || event.story.title}</b>
             </button>})}
           </nav>
@@ -806,6 +926,8 @@ export function InlineWorkspace({
             initialScrollTop={activeChapterRestore.scrollTop}
             focusOriginId={activeChapterRestore.focusOriginId}
             onContextRestored={clearChapterRestore}
+            reviewFocus={downloadReviewFocus?.chapterKey===activeMilestone.story.key ? downloadReviewFocus : undefined}
+            onReviewFocusHandled={clearDownloadReviewFocus}
             onPrivacyDecision={(candidateId,decision) => updatePrivacyDecision(activeMilestone.story.key,candidateId,decision)}
             onChapterReview={(review) => updateChapterReview(activeMilestone.story.key,review)}
             evidenceError={evidenceNavigationError}
@@ -817,6 +939,24 @@ export function InlineWorkspace({
         </>}
       </section>
     </div>
+    {downloadBlockerGroups.length > 0 && <div className="workflowOverlay" onMouseDown={(event) => {
+      if(event.target===event.currentTarget) setDownloadBlockerGroups([]);
+    }}>
+      <section className="organizationCard workflowCard" role="dialog" aria-modal="true" aria-labelledby="download-review-title">
+        <button className="workflowClose" onClick={() => setDownloadBlockerGroups([])} aria-label={labels.close}>×</button>
+        <div className="organizationBrand"><span className="brandMark">O₂</span> Oxygen</div>
+        <div className="organizationKicker">{labels.downloadReviewKicker}</div>
+        <h1 id="download-review-title">{labels.downloadReviewTitle}</h1>
+        <p className="organizationIntro">{labels.downloadReviewIntro}</p>
+        <p className="workflowStatus">{downloadBlockerCount} {labels.downloadReviewCount}</p>
+        <div>{downloadBlockerGroups.map((group,groupIndex) => <section key={`${group.project}:${group.chapterKey}`}>
+          <h2>{labels.chapter} {groupIndex+1}</h2>
+          {group.blockers.map((blocker,index) => <button className="docCard" key={`${blocker.code}:${blocker.targetKind}:${blocker.targetId || ""}:${blocker.itemId || ""}:${index}`} onClick={() => openDownloadReviewBlocker(group,blocker)}>
+            <span className="docTitle">{labels.downloadBlockers[blocker.code]}</span><span className="kind">{labels.openReview}</span><small>{labels.openReview} →</small>
+          </button>)}
+        </section>)}</div>
+      </section>
+    </div>}
     {workflowOpen && <WorkflowProgress workflow={displayedWorkflow} status={status} error={error} language={storyLanguage} onClose={() => setWorkflowOpen(false)} />}
   </main>;
 }

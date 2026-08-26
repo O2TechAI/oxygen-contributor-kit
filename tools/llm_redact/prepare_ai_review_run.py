@@ -12,8 +12,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import shutil
 import sys
+import urllib.parse
 
 TOOLS_ROOT = Path(__file__).resolve().parents[1]
 if str(TOOLS_ROOT) not in sys.path:
@@ -51,6 +53,9 @@ SAFE_SOURCE_SYSTEMS = {
     "meeting-transcript",
     "local-agent-history",
 }
+INPUT_PATH_OUTSIDE_RUN = "INPUT_PATH_OUTSIDE_RUN"
+INPUT_MEETING_INVALID = "INPUT_MEETING_INVALID"
+INPUT_MEETING_ID_DUPLICATE = "INPUT_MEETING_ID_DUPLICATE"
 
 
 def safe_source_system(value: object) -> str:
@@ -158,13 +163,88 @@ def prepare_trajectories(source: Path, output: Path) -> list[dict]:
     return entries
 
 
-def prepare_meeting(source: Path, output: Path) -> tuple[bool, dict[str, str], int]:
-    path = source / "meeting.json"
-    if not path.is_file():
-        return False, {}, 0
-    meeting = read_json(path)
-    source_meeting_id = str(meeting.get("meeting_id") or meeting.get("id") or "meeting")
-    meeting_id = "meeting-000001"
+def _contained(candidate: Path, source: Path) -> Path:
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise SystemExit(INPUT_MEETING_INVALID) from None
+    if not resolved.is_relative_to(source.resolve(strict=True)):
+        raise SystemExit(INPUT_PATH_OUTSIDE_RUN)
+    return resolved
+
+
+def _meeting_id(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", value
+    ):
+        raise SystemExit(INPUT_MEETING_INVALID)
+    if urllib.parse.unquote(value) != value:
+        raise SystemExit(INPUT_MEETING_INVALID)
+    return value
+
+
+def discover_meetings(source: Path) -> list[dict]:
+    meetings = []
+    root_candidate = source / "meeting.json"
+    if root_candidate.exists() or root_candidate.is_symlink():
+        path = _contained(root_candidate, source)
+        if not path.is_file():
+            raise SystemExit(INPUT_MEETING_INVALID)
+        meetings.append((True, path))
+
+    plural_candidate = source / "meetings"
+    if plural_candidate.exists() or plural_candidate.is_symlink():
+        plural = _contained(plural_candidate, source)
+        if not plural.is_dir():
+            raise SystemExit(INPUT_MEETING_INVALID)
+        try:
+            entries = sorted(plural.iterdir())
+        except (OSError, RuntimeError):
+            raise SystemExit(INPUT_MEETING_INVALID) from None
+        for entry in entries:
+            directory = _contained(entry, source)
+            if not directory.is_dir():
+                raise SystemExit(INPUT_MEETING_INVALID)
+            path = _contained(directory / "meeting.json", source)
+            if not path.is_file():
+                raise SystemExit(INPUT_MEETING_INVALID)
+            meetings.append((False, path))
+
+    prepared = []
+    seen_ids = set()
+    for legacy_root, path in meetings:
+        try:
+            meeting = read_json(path)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise SystemExit(INPUT_MEETING_INVALID) from None
+        if not isinstance(meeting, dict) or not isinstance(meeting.get("records"), list):
+            raise SystemExit(INPUT_MEETING_INVALID)
+        if not all(isinstance(record, dict) for record in meeting["records"]):
+            raise SystemExit(INPUT_MEETING_INVALID)
+        source_meeting_id = _meeting_id(
+            meeting.get("meeting_id")
+            or meeting.get("id")
+            or ("meeting" if legacy_root else path.parent.name)
+        )
+        if not legacy_root and path.parent.name != source_meeting_id:
+            raise SystemExit(INPUT_MEETING_INVALID)
+        if source_meeting_id in seen_ids:
+            raise SystemExit(INPUT_MEETING_ID_DUPLICATE)
+        seen_ids.add(source_meeting_id)
+        prepared.append({
+            "dataset": meeting,
+            "legacy_root": legacy_root,
+            "path": path,
+            "source_meeting_id": source_meeting_id,
+        })
+    return prepared
+
+
+def prepare_meeting(
+    source: dict, output: Path, meeting_id: str, *, include_bare_ids: bool
+) -> tuple[dict[str, str], int]:
+    meeting = source["dataset"]
+    source_meeting_id = source["source_meeting_id"]
     source_warnings = meeting.get("warnings")
     warning_count = len(source_warnings) if isinstance(source_warnings, list) else 0
     records = []
@@ -176,7 +256,8 @@ def prepare_meeting(source: Path, output: Path) -> tuple[bool, dict[str, str], i
         record_number = len(records) + 1
         source_record_id = str(record.get("record_id") or f"record-{index:06d}")
         record_id = f"record-{record_number:06d}"
-        evidence_ids[source_record_id] = record_id
+        if include_bare_ids:
+            evidence_ids[source_record_id] = record_id
         evidence_ids[f"{source_meeting_id}:{source_record_id}"] = (
             f"{meeting_id}:{record_id}"
         )
@@ -186,7 +267,8 @@ def prepare_meeting(source: Path, output: Path) -> tuple[bool, dict[str, str], i
             "speaker": "participant",
             "text": text,
         })
-    write_json(output / "meeting.json", {
+    destination = output if source["legacy_root"] else output / "meetings" / meeting_id
+    write_json(destination / "meeting.json", {
         "schema_version": "ai-review.meeting/1",
         "meeting_id": meeting_id,
         "title": meeting_id,
@@ -195,7 +277,22 @@ def prepare_meeting(source: Path, output: Path) -> tuple[bool, dict[str, str], i
         "publication_approved": False,
         "records": records,
     })
-    return True, evidence_ids, warning_count
+    return evidence_ids, warning_count
+
+
+def prepare_meetings(meetings: list[dict], output: Path) -> tuple[dict[str, str], int]:
+    evidence_ids: dict[str, str] = {}
+    warning_count = 0
+    for index, meeting in enumerate(meetings, 1):
+        prepared_ids, prepared_warnings = prepare_meeting(
+            meeting,
+            output,
+            f"meeting-{index:06d}",
+            include_bare_ids=len(meetings) == 1,
+        )
+        evidence_ids.update(prepared_ids)
+        warning_count += prepared_warnings
+    return evidence_ids, warning_count
 
 
 def main() -> int:
@@ -210,11 +307,12 @@ def main() -> int:
         raise SystemExit(f"run not found: {source}")
     if output.exists():
         raise SystemExit(f"output already exists: {output}")
+    meetings = discover_meetings(source)
     output.mkdir(parents=True)
 
     trajectories = prepare_trajectories(source, output)
-    meeting, meeting_evidence_ids, meeting_warning_count = prepare_meeting(source, output)
-    if not trajectories and not meeting:
+    meeting_evidence_ids, meeting_warning_count = prepare_meetings(meetings, output)
+    if not trajectories and not meetings:
         shutil.rmtree(output)
         raise SystemExit(f"no trajectories or meeting found in {source}")
     project_map = source / "project-map.json"
@@ -230,7 +328,7 @@ def main() -> int:
         "schema_version": "0.2",
         "tool": "prepare_ai_review_run",
         "trajectory_count": len(trajectories),
-        "meeting_count": int(meeting),
+        "meeting_count": len(meetings),
         "source_warning_count": (
             sum(entry["source_warning_count"] for entry in trajectories)
             + meeting_warning_count
@@ -242,7 +340,7 @@ def main() -> int:
     print(json.dumps({
         "output": str(output),
         "trajectories": len(trajectories),
-        "meeting": meeting,
+        "meeting": bool(meetings),
     }, ensure_ascii=False))
     return 0
 

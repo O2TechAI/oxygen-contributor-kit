@@ -13,6 +13,8 @@ from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_local_review.py"
+KIT_ROOT = MODULE_PATH.parents[3]
+IMPORT_MEETING = KIT_ROOT / "tools" / "ingest" / "import_meeting.py"
 SPEC = importlib.util.spec_from_file_location("run_local_review", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
@@ -34,6 +36,18 @@ def write_index(run: Path, entries: list[dict]) -> None:
     (run / "index.json").write_text(
         json.dumps({"trajectories": entries}, ensure_ascii=False), encoding="utf-8"
     )
+
+
+def write_meeting(run: Path, meeting_id: str, *, root=False, directory_id=None) -> Path:
+    directory = run if root else run / "meetings" / (directory_id or meeting_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "meeting.json"
+    path.write_text(json.dumps({
+        "meeting_id": meeting_id,
+        "title": meeting_id,
+        "records": [{"record_id": "rec-00001", "order": 1, "text": "safe synthetic text"}],
+    }), encoding="utf-8")
+    return path
 
 
 def symlink_or_skip(test_case: unittest.TestCase, link: Path, target: Path, *, directory=False):
@@ -585,10 +599,10 @@ class LocateInputsContainmentTest(unittest.TestCase):
                 {"trajectory_id": "traj-beta", "ok": True},
             ])
 
-            trajectories, meeting = MODULE.locate_inputs(run)
+            trajectories, meetings = MODULE.locate_inputs(run)
 
             self.assertEqual(trajectories, [first.resolve(), second.resolve()])
-            self.assertIsNone(meeting)
+            self.assertEqual(meetings, [])
             with mock.patch.object(MODULE, "request_json") as request:
                 self.assertEqual(
                     MODULE.import_run(
@@ -597,6 +611,127 @@ class LocateInputsContainmentTest(unittest.TestCase):
                     (2, 2),
                 )
             self.assertEqual(request.call_count, 2)
+
+    def test_multi_meeting_cli_preserves_document_ids_and_qualified_records(self):
+        with tempfile.TemporaryDirectory(prefix="multi meeting ") as temporary:
+            root = Path(temporary)
+            first = root / "alpha.txt"
+            second = root / "beta.txt"
+            first.write_text("Alpha synthetic record\n", encoding="utf-8")
+            second.write_text("Beta synthetic record\n", encoding="utf-8")
+            run = root / "run"
+
+            result = subprocess.run(
+                [sys.executable, str(IMPORT_MEETING), str(first), str(second),
+                 "--out", str(run), "--date", "2026-08-25", "--no-publish"],
+                cwd=KIT_ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="strict",
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            trajectories, meetings = MODULE.locate_inputs(run)
+            self.assertEqual(trajectories, [])
+            self.assertEqual(len(meetings), 2)
+            meeting_ids = {
+                json.loads(path.read_text(encoding="utf-8"))["meeting_id"]
+                for path in meetings
+            }
+            self.assertEqual(len(meeting_ids), 2)
+
+            with mock.patch.object(MODULE, "request_json") as request:
+                self.assertEqual(
+                    MODULE.import_run(
+                        mock.sentinel.opener, "http://127.0.0.1:3298", run
+                    ),
+                    (2, 2),
+                )
+            imported = [call.kwargs["body"] for call in request.call_args_list]
+            self.assertEqual({body["document"]["id"] for body in imported}, meeting_ids)
+            for body in imported:
+                document_id = body["document"]["id"]
+                self.assertTrue(all(
+                    item["id"].startswith(f"{document_id}:") for item in body["items"]
+                ))
+
+    def test_single_root_meeting_remains_compatible(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            meeting = write_meeting(run, "meeting-legacy", root=True)
+
+            trajectories, meetings = MODULE.locate_inputs(run)
+
+            self.assertEqual(trajectories, [])
+            self.assertEqual(meetings, [meeting.resolve()])
+            with mock.patch.object(MODULE, "request_json") as request:
+                self.assertEqual(
+                    MODULE.import_run(
+                        mock.sentinel.opener, "http://127.0.0.1:3298", run
+                    ),
+                    (1, 1),
+                )
+            self.assertEqual(request.call_count, 1)
+
+    def test_multiple_trajectories_and_meetings_share_one_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_trajectory(run, "traj-alpha")
+            write_trajectory(run, "traj-beta")
+            write_index(run, [
+                {"trajectory_id": "traj-alpha", "ok": True},
+                {"trajectory_id": "traj-beta", "ok": True},
+            ])
+            write_meeting(run, "meeting-alpha")
+            write_meeting(run, "meeting-beta")
+
+            with mock.patch.object(MODULE, "request_json") as request:
+                self.assertEqual(
+                    MODULE.import_run(
+                        mock.sentinel.opener, "http://127.0.0.1:3298", run
+                    ),
+                    (4, 4),
+                )
+            self.assertEqual(request.call_count, 4)
+
+    def test_duplicate_meeting_ids_fail_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_meeting(run, "meeting-duplicate", directory_id="meeting-alpha")
+            write_meeting(run, "meeting-duplicate", directory_id="meeting-beta")
+
+            self.assert_import_fails_before_request(
+                run, MODULE.INPUT_MEETING_ID_DUPLICATE
+            )
+
+    def test_unsupported_and_malformed_meeting_entries_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            (run / "meetings").mkdir(parents=True)
+            (run / "meetings" / "unexpected.json").write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, f"^{MODULE.INPUT_PATH_MISSING}$"):
+                MODULE.locate_inputs(run)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            meeting = write_meeting(run, "meeting-malformed")
+            meeting.write_text(json.dumps({
+                "meeting_id": "meeting-malformed", "records": "not-a-list"
+            }), encoding="utf-8")
+            self.assert_import_fails_before_request(run, MODULE.INPUT_FILE_INVALID)
+
+    def test_plural_meeting_path_escape_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / "run"
+            outside = root / "outside-meeting"
+            write_meeting(outside, "meeting-escape", root=True)
+            (run / "meetings").mkdir(parents=True)
+            directory_link_or_skip(self, run / "meetings" / "meeting-escape", outside)
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_PATH_OUTSIDE_RUN)
 
     def test_traversal_absolute_drive_encoded_and_separator_ids_fail_before_selection(self):
         invalid_ids = [

@@ -147,6 +147,25 @@ export type ChapterReviewCompletionContext = {
   reviewedBlocks: StoryBlockCollection;
 };
 
+export type ChapterReviewBlocker = {
+  code:
+    | "review_state_invalid"
+    | "privacy_incomplete"
+    | "evidence_unverified"
+    | "annotation_pending"
+    | "annotation_needs_evidence"
+    | "direct_edit_pending"
+    | "direct_edit_needs_evidence"
+    | "insight_pending"
+    | "privacy_decisions_stale"
+    | "revision_provenance_mismatch"
+    | "redaction_targets_mismatch";
+  chapterKey: string;
+  targetKind: "chapter" | "story_block" | "insight";
+  targetId?: string;
+  itemId?: string;
+};
+
 export type ApplyReviewContext = ChapterReviewCompletionContext & {
   chapterEvidence: EvidenceReference[];
   evidenceResolved: boolean;
@@ -1117,27 +1136,85 @@ function sameUniqueStrings(left: unknown, right: unknown) {
     && left.every((value) => right.includes(value));
 }
 
+function evaluateChapterReviewCompletion(
+  state: ChapterReviewState,
+  context: ChapterReviewCompletionContext,
+): ChapterReviewBlocker[] {
+  const chapterKey = validStableId(context?.storyKey) ? context.storyKey : "unknown";
+  const chapterBlocker = (code: ChapterReviewBlocker["code"]): ChapterReviewBlocker => ({
+    code,
+    chapterKey,
+    targetKind: "chapter",
+  });
+
+  try {
+    if (!validStableId(context.storyKey)) return [chapterBlocker("review_state_invalid")];
+    if (!privacyComplete(context)) return [chapterBlocker("privacy_incomplete")];
+    if (!validateChapterReviewLedger(state, context.storyKey, context.sourceBlocks, context.reviewedBlocks)
+      || !validateInsightReviewLedger(state, context.reviewableInsightIds)
+      || !Array.isArray(state.staleTranslations)) return [chapterBlocker("review_state_invalid")];
+
+    const blockers: ChapterReviewBlocker[] = [];
+    if (!state.evidenceVerified) blockers.push(chapterBlocker("evidence_unverified"));
+    blockers.push(...state.annotations
+      .filter((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence")
+      .map((annotation) => ({
+        code: annotation.resolution === "pending" ? "annotation_pending" as const : "annotation_needs_evidence" as const,
+        chapterKey,
+        targetKind: "story_block" as const,
+        targetId: annotation.blockId,
+        itemId: annotation.id,
+      })));
+    blockers.push(...state.editTransactions
+      .filter((transaction) => activeEditResolution(transaction.resolution))
+      .map((transaction) => ({
+        code: transaction.resolution === "pending" ? "direct_edit_pending" as const : "direct_edit_needs_evidence" as const,
+        chapterKey,
+        targetKind: "story_block" as const,
+        targetId: transaction.blockId,
+        itemId: transaction.id,
+      })));
+    blockers.push(...Object.entries(state.insightReviews)
+      .filter(([, review]) => review.resolution === "pending")
+      .map(([insightId]) => ({
+        code: "insight_pending" as const,
+        chapterKey,
+        targetKind: "insight" as const,
+        targetId: insightId,
+      })));
+    if (!sameDecisions(state.appliedPrivacyDecisions, currentPrivacyDecisions(context))) {
+      blockers.push(chapterBlocker("privacy_decisions_stale"));
+    }
+    const latest = state.revisionHistory[state.revisionHistory.length - 1];
+    if (!latest
+      || latest.revision !== state.revision
+      || !sameDecisions(latest.privacyDecisions, state.appliedPrivacyDecisions)) {
+      blockers.push(chapterBlocker("revision_provenance_mismatch"));
+    }
+    if (!sameUniqueStrings(state.redactedBlocks, expectedRedactedBlocks(context))) {
+      blockers.push(chapterBlocker("redaction_targets_mismatch"));
+    }
+    return blockers;
+  } catch {
+    return [chapterBlocker("review_state_invalid")];
+  }
+}
+
+/** Project bounded, display-safe reasons that the current Chapter cannot complete. */
+export function chapterReviewCompletionBlockers(
+  state: ChapterReviewState,
+  context: ChapterReviewCompletionContext,
+) {
+  return evaluateChapterReviewCompletion(state, context);
+}
+
 /** Validate all state required for All set or release projection. Browser-owned
  * stage flags and cached redacted blocks are never sufficient by themselves. */
 export function validateChapterReviewCompletion(
   state: ChapterReviewState,
   context: ChapterReviewCompletionContext,
 ) {
-  if (!validStableId(context.storyKey)
-    || !privacyComplete(context)
-    || !validateChapterReviewLedger(state, context.storyKey, context.sourceBlocks, context.reviewedBlocks)
-    || !validateInsightReviewLedger(state, context.reviewableInsightIds)
-    || !state.evidenceVerified
-    || !Array.isArray(state.staleTranslations)
-    || state.annotations.some((annotation) => annotation.resolution === "pending" || annotation.resolution === "needs_evidence")
-    || state.editTransactions.some((transaction) => activeEditResolution(transaction.resolution))
-    || Object.values(state.insightReviews).some((review) => review.resolution === "pending")
-    || !sameDecisions(state.appliedPrivacyDecisions, currentPrivacyDecisions(context))) return false;
-  const latest = state.revisionHistory[state.revisionHistory.length - 1];
-  return Boolean(latest)
-    && latest.revision === state.revision
-    && sameDecisions(latest.privacyDecisions, state.appliedPrivacyDecisions)
-    && sameUniqueStrings(state.redactedBlocks, expectedRedactedBlocks(context));
+  return evaluateChapterReviewCompletion(state, context).length === 0;
 }
 
 export function applyChapterReview(

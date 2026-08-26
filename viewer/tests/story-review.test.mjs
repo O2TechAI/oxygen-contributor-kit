@@ -9,6 +9,7 @@ import {
   canMarkChapterReady,
   canUndoStoryEdit,
   cancelStoryAnnotation,
+  chapterReviewCompletionBlockers,
   chapterReviewSummary,
   createStoryAnnotation,
   directStoryEditNeedsEvidence,
@@ -32,6 +33,7 @@ import {
   sanitizeStoryPaste,
   undoStoryEdit,
   updateInsightReview,
+  validateChapterReviewCompletion,
 } from "../lib/story-review.ts";
 
 const evidence = { documentId: "doc", eventId: "event" };
@@ -65,6 +67,168 @@ const highlight = {
   noticed: "The benchmark became a shared contract.",
   lesson: "Define success before dividing the work.",
 };
+const completionBlocks = blocks({ scene: "Safe source." }, { scene: "安全来源。" });
+const completionContext = (overrides = {}) => context([], {}, [evidence], { ...completionBlocks, ...overrides });
+const completeChapterReview = (reviewContext = completionContext()) => applyChapterReview(
+  emptyChapterReview(),
+  reviewContext,
+).state;
+
+test("completion and blockers share one semantic evaluation", () => {
+  const reviewContext = completionContext();
+  const complete = completeChapterReview(reviewContext);
+  const pendingInsight = updateInsightReview(complete, reviewableInsightId, "en", {
+    status: "accepted", text: "Safe reviewed Insight.", highlight,
+  });
+  const cases = [
+    [complete, reviewContext],
+    [{ ...complete, evidenceVerified: false }, reviewContext],
+    [{ ...complete, revision: 0 }, reviewContext],
+    [pendingInsight, reviewContext],
+    [complete, context([privacyCandidate()], {}, [evidence], completionBlocks)],
+  ];
+
+  for (const [state, currentContext] of cases) {
+    const blockers = chapterReviewCompletionBlockers(state, currentContext);
+    assert.equal(validateChapterReviewCompletion(state, currentContext), blockers.length === 0);
+  }
+  assert.equal(chapterReviewCompletionBlockers(complete, reviewContext).length, 0);
+  assert.equal(validateChapterReviewCompletion(complete, reviewContext), true);
+  assert.deepEqual(complete.insightReviews, {});
+});
+
+test("pending annotation, direct edit, and current Insight blockers expose only safe stable identities", () => {
+  const source = "SENSITIVE_ANNOTATION_TEXT remains.";
+  const reviewContext = completionContext({
+    sourceBlocks: { en: { scene: source }, zh: { scene: "安全来源。" } },
+    reviewedBlocks: { en: { scene: source }, zh: { scene: "安全来源。" } },
+  });
+  const complete = completeChapterReview(reviewContext);
+  const annotation = createStoryAnnotation({
+    blockId: "scene", type: "revise", sourceLanguage: "en", baseRevision: complete.revision,
+    selection: { start: 0, end: 25, text: "SENSITIVE_ANNOTATION_TEXT" },
+    instruction: "REJECTED_ANNOTATION_COPY",
+  });
+  const annotationBlockers = chapterReviewCompletionBlockers(addStoryAnnotation(complete, annotation), reviewContext);
+  assert.deepEqual(annotationBlockers, [{
+    code: "annotation_pending",
+    chapterKey: "chapter",
+    targetKind: "story_block",
+    targetId: "scene",
+    itemId: annotation.id,
+  }]);
+
+  const editState = recordStoryEdit(complete, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: source, nextText: "SENSITIVE_DIRECT_EDIT remains.", now: 100,
+  }).state;
+  const editBlockers = chapterReviewCompletionBlockers(editState, reviewContext);
+  assert.deepEqual(editBlockers, [{
+    code: "direct_edit_pending",
+    chapterKey: "chapter",
+    targetKind: "story_block",
+    targetId: "scene",
+    itemId: editState.editTransactions[0].id,
+  }]);
+
+  const insightState = updateInsightReview(complete, reviewableInsightId, "en", {
+    status: "rejected", text: "REJECTED_INSIGHT_COPY",
+  });
+  assert.deepEqual(chapterReviewCompletionBlockers(insightState, reviewContext), [{
+    code: "insight_pending",
+    chapterKey: "chapter",
+    targetKind: "insight",
+    targetId: reviewableInsightId,
+  }]);
+
+  const serialized = JSON.stringify([...annotationBlockers, ...editBlockers,
+    ...chapterReviewCompletionBlockers(insightState, reviewContext)]);
+  for (const privateValue of ["SENSITIVE_ANNOTATION_TEXT", "REJECTED_ANNOTATION_COPY", "SENSITIVE_DIRECT_EDIT", "REJECTED_INSIGHT_COPY"]) {
+    assert.equal(serialized.includes(privateValue), false);
+  }
+});
+
+test("current incomplete completion branches produce stable bounded blocker codes", () => {
+  const reviewContext = completionContext();
+  const complete = completeChapterReview(reviewContext);
+  const needsEvidenceAnnotation = createStoryAnnotation({
+    blockId: "scene", type: "add", sourceLanguage: "en", baseRevision: complete.revision,
+    selection: { start: 0, end: 4, text: "Safe" }, instruction: "Supported later.",
+  });
+  const annotationState = {
+    ...addStoryAnnotation(complete, needsEvidenceAnnotation),
+    annotations: [{ ...needsEvidenceAnnotation, resolution: "needs_evidence" }],
+  };
+  const pendingEdit = recordStoryEdit(complete, {
+    storyKey: "chapter", blockId: "scene", sourceLanguage: "en",
+    baseText: "Safe source.", nextText: "Safe source. Score 42.", now: 100,
+  }).state;
+  const editState = {
+    ...pendingEdit,
+    editTransactions: pendingEdit.editTransactions.map((transaction) => ({
+      ...transaction, resolution: "needs_evidence", requiresEvidence: true,
+    })),
+  };
+  const invalidInsightState = {
+    ...complete,
+    insightReviews: {
+      foreign: { status: "accepted", text: "PRIVATE_FOREIGN_VALUE", localized: {}, pendingLanguages: [], resolution: "pending" },
+    },
+  };
+  const stalePrivacyContext = context([privacyCandidate()], { metric: "keep" }, [evidence], completionBlocks);
+  const provenanceState = structuredClone(complete);
+  provenanceState.revisionHistory.at(-1).privacyDecisions = { foreign: "keep" };
+  const cases = [
+    [{ ...complete, evidenceVerified: false }, reviewContext, "evidence_unverified"],
+    [annotationState, reviewContext, "annotation_needs_evidence"],
+    [editState, reviewContext, "direct_edit_needs_evidence"],
+    [complete, stalePrivacyContext, "privacy_decisions_stale"],
+    [provenanceState, reviewContext, "revision_provenance_mismatch"],
+    [{ ...complete, redactedBlocks: ["scene"] }, reviewContext, "redaction_targets_mismatch"],
+    [{ ...complete, revision: 0 }, reviewContext, "review_state_invalid"],
+    [invalidInsightState, reviewContext, "review_state_invalid"],
+    [{ ...complete, staleTranslations: null }, reviewContext, "review_state_invalid"],
+  ];
+
+  for (const [state, currentContext, expectedCode] of cases) {
+    const blockers = chapterReviewCompletionBlockers(state, currentContext);
+    assert.ok(blockers.some((blocker) => blocker.code === expectedCode), expectedCode);
+    assert.equal(validateChapterReviewCompletion(state, currentContext), false);
+  }
+});
+
+test("Privacy, Evidence, and malformed state fail closed at Chapter level without leaking values", () => {
+  const reviewContext = completionContext();
+  const complete = completeChapterReview(reviewContext);
+  const privateCandidate = {
+    ...privacyCandidate(),
+    original: { availability: "available", value: "PRIVATE_ORIGINAL_VALUE" },
+    whyFlagged: "PRIVATE_SOURCE_EXCERPT",
+  };
+  const privacyBlockers = chapterReviewCompletionBlockers(
+    complete,
+    context([privateCandidate], {}, [evidence], completionBlocks),
+  );
+  assert.deepEqual(privacyBlockers, [{
+    code: "privacy_incomplete", chapterKey: "chapter", targetKind: "chapter",
+  }]);
+  assert.deepEqual(chapterReviewCompletionBlockers({ ...complete, evidenceVerified: false }, reviewContext), [{
+    code: "evidence_unverified", chapterKey: "chapter", targetKind: "chapter",
+  }]);
+
+  const malformed = {
+    ...complete,
+    annotations: [{ id: "foreign", blockId: "scene", selection: { text: "PRIVATE_REJECTED_PAYLOAD" } }],
+  };
+  const malformedBlockers = chapterReviewCompletionBlockers(malformed, reviewContext);
+  assert.deepEqual(malformedBlockers, [{
+    code: "review_state_invalid", chapterKey: "chapter", targetKind: "chapter",
+  }]);
+  const serialized = JSON.stringify([...privacyBlockers, ...malformedBlockers]);
+  for (const privateValue of ["PRIVATE_ORIGINAL_VALUE", "PRIVATE_SOURCE_EXCERPT", "PRIVATE_REJECTED_PAYLOAD"]) {
+    assert.equal(serialized.includes(privateValue), false);
+  }
+});
 
 test("AI-directed revision immediately returns human-directed wording", () => {
   assert.equal(reviseHighlight(highlight, "   ", "en"), null);

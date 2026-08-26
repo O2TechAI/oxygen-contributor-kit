@@ -27,7 +27,8 @@ an occupied port fails closed without killing its owner or choosing another afte
 - Repository path: `tools/ingest/collect_repo_trajectories.py`
 - claude.ai ZIP, `conversations.json`, or export directory:
   `tools/ingest/import_anthropic_export.py`
-- Meeting TXT, Markdown, M4A, WAV, or MP3: `tools/ingest/import_meeting.py`
+- One or more meeting TXT, Markdown, M4A, WAV, or MP3 files:
+  `tools/ingest/import_meeting.py`
 
 ## Collect
 
@@ -37,6 +38,8 @@ python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/repo-
 python3 tools/ingest/import_anthropic_export.py export.zip --out work/claude-run
 python3 tools/ingest/import_meeting.py meeting.txt --out work/meeting-run \
   --title "Project meeting" --no-publish
+python3 tools/ingest/import_meeting.py meeting-a.txt meeting-b.txt \
+  --out work/meeting-run --no-publish
 ```
 
 On native Windows PowerShell:
@@ -50,6 +53,9 @@ python .\tools\ingest\import_anthropic_export.py `
 python .\tools\ingest\import_meeting.py `
   "D:\Meetings\meeting.txt" --out "work\meeting-run" `
   --title "Project meeting" --no-publish
+python .\tools\ingest\import_meeting.py `
+  "D:\Meetings\meeting-a.txt" "D:\Meetings\meeting-b.txt" `
+  --out "work\meeting-run" --no-publish
 ```
 
 Codex discovery defaults to the contributor's global
@@ -105,7 +111,8 @@ Do not use `--publish`. Do not copy outputs to staging or any network location.
 ## Verify
 
 - Repo/Claude export: inspect `index.json`; report counts, failures, and warnings.
-- Meeting: inspect `meeting.json`; report record and speaker counts and warnings.
+- One meeting: inspect `meeting.json`. Multiple meetings: inspect each
+  `meetings/<meeting-id>/meeting.json`. Report meeting, record, speaker, and warning counts.
 - Treat zero histories for a newly cloned repo as a valid result.
 - Confirm `publication_approved=false`.
 
