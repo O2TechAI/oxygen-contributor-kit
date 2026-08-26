@@ -17,6 +17,7 @@ import {
 import {
   SUCCESSOR_REVIEWED_STORY_SCHEMA,
   buildSuccessorReviewedStoryRelease,
+  releaseOrganizationReason,
   sanitizeSuccessorReviewedStoryRelease,
   serializeSuccessorReviewedStoryRelease,
   successorReviewedStoryPackageEntry,
@@ -465,6 +466,35 @@ test("source/session/release mixing and every extra browser authority field fail
     );
     assert.equal(result.code, RELEASE_ERROR.requestInvalid, field);
   }
+});
+
+test("unknown reserved Story versions cannot bypass live bootstrap or release selectors", async () => {
+  const originalSentinel = "PRIVATE_ORIGINAL_SENTINEL";
+  const evidenceSentinel = "PRIVATE_EVIDENCE_SENTINEL";
+  const fixture = await serverFixture();
+  const unknownReason = `oxygen.story/99:${JSON.stringify({
+    original: originalSentinel,
+    evidence: evidenceSentinel,
+  })}`;
+  fixture.db.items.push({
+    ...fixture.db.items[0],
+    id: "story-doc:unknown-story-version",
+    sequence: 2,
+    organization_reason: unknownReason,
+  });
+  fixture.db.redactionJob.source_digest = await computeSourceDigest(fixture.db.items);
+
+  assert.deepEqual(await readActiveStoryReviewContract(fixture.db, RUN_ID), {
+    ready: true,
+    sourceRevision: SOURCE_REVISION,
+    storySourceSchema: null,
+    storySessionSchema: null,
+  });
+  const release = await reconstructReviewedStoryReleaseFromDatabase(fixture.db, request());
+  assert.equal(release.code, RELEASE_ERROR.stateInvalid);
+  assert.doesNotMatch(JSON.stringify(release), new RegExp(`${originalSentinel}|${evidenceSentinel}`));
+  assert.equal(releaseOrganizationReason(unknownReason), "Reviewed project milestone");
+  assert.doesNotMatch(releaseOrganizationReason(unknownReason), new RegExp(`${originalSentinel}|${evidenceSentinel}`));
 });
 
 test("successor HTML and ZIP use the same canonical reviewed release bytes", async () => {

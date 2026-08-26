@@ -1,17 +1,33 @@
-export type TimelineCandidate = {
+export type StorySourceIdentity = {
   id: string;
   sequence?: number;
-  timestamp?: string;
+  timestamp?: string | null;
+  documentId?: string;
+  document_id?: string;
+};
+
+export type TimelineCandidate = StorySourceIdentity & {
   summary?: string;
   content?: string;
   project?: string;
-  documentId?: string;
-  document_id?: string;
 };
 
 export const STORY_PREFIX = "oxygen.story-highlight/2:";
 export const LEGACY_STORY_PREFIX = "oxygen.story-milestone/1:";
 export const SUCCESSOR_STORY_PREFIX = "oxygen.story/3:";
+
+/** Permanent total order for stored Story source identity. Missing timestamps
+ * sort first; stable row ID is the final tie-breaker. */
+export function compareStorySourceIdentity(a: StorySourceIdentity, b: StorySourceIdentity) {
+  const compareText = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
+  return compareText(String(a.timestamp || ""), String(b.timestamp || ""))
+    || compareText(
+      String(a.documentId || a.document_id || ""),
+      String(b.documentId || b.document_id || ""),
+    )
+    || Number(a.sequence || 0) - Number(b.sequence || 0)
+    || compareText(a.id, b.id);
+}
 
 export type MilestoneKind =
   | "foundation"
@@ -1116,9 +1132,7 @@ function transitionScore(event: TimelineCandidate) {
 }
 
 function eventOrder(a: TimelineCandidate, b: TimelineCandidate) {
-  return String(a.timestamp || "").localeCompare(String(b.timestamp || ""))
-    || Number(a.sequence || 0) - Number(b.sequence || 0)
-    || a.id.localeCompare(b.id);
+  return compareStorySourceIdentity(a, b);
 }
 
 function inferredTitle(event: TimelineCandidate) {

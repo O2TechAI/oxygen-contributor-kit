@@ -1,11 +1,10 @@
 import { getD1 } from "../../../db";
 import { loadWorkflowProgress } from "../../../lib/workflow-progress-server";
 import {
+  readReservedStoryCandidateRows,
   validateRecognizedStorySourcePackage,
-  type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "../../../lib/story-readiness";
-import { LEGACY_STORY_PREFIX, STORY_PREFIX, SUCCESSOR_STORY_PREFIX } from "../../../lib/timeline";
 import { isWorkflowRunId } from "../../../lib/workflow-progress";
 import {
   WORKFLOW_RUN_AUTHORITY,
@@ -14,6 +13,7 @@ import {
   requireExactWorkflowRun,
   workflowRunErrorResponse,
 } from "../../../lib/workflow-run-server";
+import { STORY_SOURCE_WRITE_STATUS } from "../../../lib/story-source-publication";
 
 const EVENTS = new Set([
   "target_confirmed",
@@ -117,10 +117,22 @@ export async function POST(request: Request) {
       return Response.json({ error: "Reviewed Story boundary is not ready" }, { status: 409 });
     }
     if (event === "story_generation_started") {
-      await db.prepare(`UPDATE workflow_runs
+      const started = await db.prepare(`UPDATE workflow_runs
         SET story_generation_status='running',story_generation_completed=0,
-            story_generation_total=0,active_story_digest=NULL,updated_at=? WHERE id=?`)
-        .bind(now, workflowRunId).run();
+            story_generation_total=0,active_story_digest=NULL,updated_at=?
+        WHERE id=?
+          AND story_generation_status NOT IN (?,?)
+          AND EXISTS (SELECT 1 FROM organization_jobs WHERE status='complete')
+          AND EXISTS (SELECT 1 FROM redaction_jobs WHERE status='complete')`)
+        .bind(
+          now,
+          workflowRunId,
+          STORY_SOURCE_WRITE_STATUS.idle,
+          STORY_SOURCE_WRITE_STATUS.resumeGeneration,
+        ).run();
+      if (Number(started.meta.changes || 0) !== 1) {
+        return Response.json({ error: "Reviewed Story boundary changed" }, { status: 409 });
+      }
       return Response.json(await loadWorkflowProgress(workflowRunId));
     }
     if (event === "story_generation_progress") {
@@ -141,13 +153,8 @@ export async function POST(request: Request) {
     if (run.story_generation_status !== "running") {
       return Response.json({ error: "Story generation is not running" }, { status: 409 });
     }
-    const [{ results: candidateRows }, { results: evidenceRows }] = await Promise.all([
-      db.prepare(`SELECT id,document_id AS documentId,organization_reason AS summary
-        FROM items
-        WHERE organization_reason LIKE ? OR organization_reason LIKE ? OR organization_reason LIKE ?
-        ORDER BY COALESCE(timestamp,''),document_id,sequence`)
-        .bind(`${SUCCESSOR_STORY_PREFIX}%`, `${STORY_PREFIX}%`, `${LEGACY_STORY_PREFIX}%`)
-        .all<StoryCandidateRow>(),
+    const [candidateRows, { results: evidenceRows }] = await Promise.all([
+      readReservedStoryCandidateRows(db),
       db.prepare(`SELECT id,document_id AS documentId,event_type AS eventType,
         actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`)
         .all<StoryEvidenceRow>(),

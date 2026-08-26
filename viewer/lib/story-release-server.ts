@@ -18,17 +18,13 @@ import {
   type AnyStoryReviewSession,
 } from "./story-review-session.ts";
 import {
+  selectReservedStorySourceItems,
   selectReviewableStoryTimeline,
   validateRecognizedStorySourcePackage,
   type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
-import {
-  LEGACY_STORY_PREFIX,
-  SUCCESSOR_STORY_PREFIX,
-  STORY_PREFIX,
-  parseSuccessorStorySource,
-} from "./timeline.ts";
+import { parseSuccessorStorySource } from "./timeline.ts";
 import { isWorkflowRunId } from "./workflow-progress.ts";
 import {
   WORKFLOW_RUN_AUTHORITY,
@@ -232,15 +228,12 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     return failure(RELEASE_ERROR.storyNotReady, boundedMetadata);
   }
 
-  const candidateItems = items.filter((item) => String(item.organization_reason || "").startsWith(STORY_PREFIX)
-    || String(item.organization_reason || "").startsWith(LEGACY_STORY_PREFIX)
-    || String(item.organization_reason || "").startsWith(SUCCESSOR_STORY_PREFIX))
-    .sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || ""))
-      || left.document_id.localeCompare(right.document_id)
-      || Number(left.sequence || 0) - Number(right.sequence || 0));
+  const candidateItems = selectReservedStorySourceItems(items);
   const candidateRows: StoryCandidateRow[] = candidateItems.map((item) => ({
     id: item.id,
     documentId: item.document_id,
+    sequence: item.sequence,
+    timestamp: item.timestamp,
     summary: String(item.organization_reason || ""),
   }));
   const evidenceRows: StoryEvidenceRow[] = items.map((item) => ({

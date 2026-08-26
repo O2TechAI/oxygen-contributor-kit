@@ -4,6 +4,12 @@ import {
   requireEstablishedWorkflowRun,
   workflowRunErrorResponse,
 } from "../../../lib/workflow-run-server";
+import {
+  abortStorySourceMutation,
+  beginStorySourceMutation,
+  isStorySourceWriteInProgress,
+  publishCompletedStorySourceMutation,
+} from "../../../lib/story-source-publication";
 
 const JOB_ID = "default";
 const BATCH_SIZE = 250;
@@ -61,103 +67,139 @@ export async function POST(request: Request) {
   }
   const now = new Date().toISOString();
   const body = await request.json().catch(() => ({})) as { restart?: boolean };
-  if (body.restart) {
-    await db.batch([
-      db.prepare("UPDATE items SET organization_category=NULL, organization_confidence=NULL, organization_reason=NULL"),
-      db.prepare("UPDATE documents SET organization_status='pending', formatted_summary_json='{}'"),
-      db.prepare("DELETE FROM organization_jobs WHERE id=?").bind(JOB_ID),
-      db.prepare(`UPDATE workflow_runs
-        SET story_generation_status=CASE WHEN story_generation_status='running' THEN 'running' ELSE 'not_started' END,
-            story_generation_completed=0,
-            story_generation_total=0,story_source_revision=story_source_revision+1,
-            active_story_digest=NULL,updated_at=?
-        WHERE id=?`).bind(now, authority.workflowRunId),
-    ]);
+  const [sourceState, existingJob] = await Promise.all([
+    db.prepare("SELECT story_generation_status FROM workflow_runs WHERE id=?")
+      .bind(authority.workflowRunId).first<{ story_generation_status: string }>(),
+    db.prepare("SELECT status,stage FROM organization_jobs WHERE id=?")
+      .bind(JOB_ID).first<{ status: string; stage: string }>(),
+  ]);
+  const continuing = existingJob?.status === "running"
+    && existingJob.stage === "classify"
+    && isStorySourceWriteInProgress(sourceState?.story_generation_status);
+  if (!continuing && !await beginStorySourceMutation(db, authority.workflowRunId, now)) {
+    return Response.json({ error: "Another Story source mutation is already running" }, { status: 409 });
   }
-  const totalRow = await db.prepare("SELECT COUNT(*) AS count FROM items").first<{ count: number }>();
-  const total = Number(totalRow?.count || 0);
-  await db.prepare(
-    `INSERT INTO organization_jobs
-      (id,status,stage,completed,total,warnings_json,started_at,updated_at)
-     VALUES (?,'running','classify',0,?,'[]',?,?)
-     ON CONFLICT(id) DO UPDATE SET status='running',stage='classify',total=excluded.total,updated_at=excluded.updated_at`
-  ).bind(JOB_ID, total, now, now).run();
-
-  const primaryRow = await db.prepare(
-    `SELECT metadata_json FROM documents ORDER BY item_count DESC LIMIT 1`
-  ).first<{ metadata_json: string }>();
-  const primaryMetadata = JSON.parse(String(primaryRow?.metadata_json || "{}"));
-  const primaryProject = String(
-    primaryMetadata?.project_organization?.primary_project || "Primary project"
-  );
-  const { results } = await db.prepare(
-    `SELECT id, document_id, event_type, actor_type, content, original_json
-       FROM items WHERE organization_category IS NULL
-      ORDER BY document_id, sequence LIMIT ?`
-  ).bind(BATCH_SIZE).all<Row>();
-  if (results.length) {
-    await db.batch(results.map((row) => {
-      const [category, confidence, reason] = classify(row, primaryProject);
-      return db.prepare(
-        "UPDATE items SET organization_category=?,organization_confidence=?,organization_reason=? WHERE id=?"
-      ).bind(category, confidence, reason, row.id);
-    }));
-  }
-
-  const remaining = await db.prepare(
-    "SELECT COUNT(*) AS count FROM items WHERE organization_category IS NULL"
-  ).first<{ count: number }>();
-  const completed = total - Number(remaining?.count || 0);
-  if (completed < total) {
-    await db.prepare("UPDATE organization_jobs SET completed=?,updated_at=? WHERE id=?")
-      .bind(completed, now, JOB_ID).run();
-    return Response.json(await status(db));
-  }
-
-  const { results: docs } = await db.prepare(
-      `SELECT id,title,kind,source_user,source_system,source_timestamp,item_count,metadata_json
-       FROM documents ORDER BY source_timestamp,title`
-  ).all<Record<string, unknown>>();
-  for (const doc of docs) {
-    const { results: categoryRows } = await db.prepare(
-      `SELECT organization_category AS category, COUNT(*) AS count
-         FROM items WHERE document_id=? GROUP BY organization_category`
-    ).bind(doc.id).all<{ category: string; count: number }>();
-    const metadata = JSON.parse(String(doc.metadata_json || "{}"));
-    const primary = String(metadata?.project_organization?.primary_project || primaryProject);
-    const { results: highlights } = await db.prepare(
-      `SELECT id,sequence,timestamp,organization_category AS project,content,
-              organization_confidence AS confidence,organization_reason AS summary
-         FROM items
-        WHERE document_id=?
-          AND event_type IN ('message','record','git') AND LENGTH(TRIM(content)) > 20
-        ORDER BY COALESCE(timestamp,''),sequence`
-    ).bind(doc.id).all();
-    const range = await db.prepare(
-      "SELECT MIN(timestamp) AS started_at,MAX(timestamp) AS ended_at FROM items WHERE document_id=? AND timestamp IS NOT NULL"
-    ).bind(doc.id).first();
-    const summary = {
-      title: doc.title, kind: doc.kind, source_user: doc.source_user,
-      source_system: doc.source_system, source_timestamp: doc.source_timestamp,
-      item_count: doc.item_count,
-      time_range: range,
-      primary_project: primary,
-      project_summary: metadata?.project_organization?.summary || "",
-      projects: categoryRows.map((row) => ({
-        name: row.category, event_count: row.count, primary: row.category === primary,
-      })).sort((a, b) => Number(b.primary) - Number(a.primary) || b.event_count - a.event_count),
-      categories: Object.fromEntries(categoryRows.map((row) => [row.category, row.count])),
-      highlights: highlights.map((value) => ({
-        ...value,
-        content: String(value.content || "").replace(/\s+/g, " ").slice(0, 320),
-      })),
-    };
+  try {
+    if (body.restart) {
+      await db.batch([
+        db.prepare("UPDATE items SET organization_category=NULL, organization_confidence=NULL, organization_reason=NULL"),
+        db.prepare("UPDATE documents SET organization_status='pending', formatted_summary_json='{}'"),
+        db.prepare("DELETE FROM organization_jobs WHERE id=?").bind(JOB_ID),
+      ]);
+    }
+    const totalRow = await db.prepare("SELECT COUNT(*) AS count FROM items").first<{ count: number }>();
+    const total = Number(totalRow?.count || 0);
     await db.prepare(
-      "UPDATE documents SET organization_status='complete',formatted_summary_json=? WHERE id=?"
-    ).bind(JSON.stringify(summary), doc.id).run();
+      `INSERT INTO organization_jobs
+        (id,status,stage,completed,total,warnings_json,started_at,updated_at)
+       VALUES (?,'running','classify',0,?,'[]',?,?)
+       ON CONFLICT(id) DO UPDATE SET
+         status='running',
+         stage=CASE WHEN organization_jobs.status='running'
+           THEN organization_jobs.stage ELSE 'classify' END,
+         total=excluded.total,updated_at=excluded.updated_at`
+    ).bind(JOB_ID, total, now, now).run();
+    const claimed = await db.prepare(`UPDATE organization_jobs
+      SET stage='classify_writing',updated_at=?
+      WHERE id=? AND status='running' AND stage='classify'`)
+      .bind(now, JOB_ID).run();
+    if (Number(claimed.meta.changes || 0) !== 1) {
+      if (!continuing) await abortStorySourceMutation(db, authority.workflowRunId, now);
+      return Response.json({ error: "Another organization source chunk is already running" }, { status: 409 });
+    }
+
+    const primaryRow = await db.prepare(
+      `SELECT metadata_json FROM documents ORDER BY item_count DESC LIMIT 1`
+    ).first<{ metadata_json: string }>();
+    const primaryMetadata = JSON.parse(String(primaryRow?.metadata_json || "{}"));
+    const primaryProject = String(
+      primaryMetadata?.project_organization?.primary_project || "Primary project"
+    );
+    const { results } = await db.prepare(
+      `SELECT id, document_id, event_type, actor_type, content, original_json
+         FROM items WHERE organization_category IS NULL
+        ORDER BY document_id, sequence LIMIT ?`
+    ).bind(BATCH_SIZE).all<Row>();
+    if (results.length) {
+      await db.batch(results.map((row) => {
+        const [category, confidence, reason] = classify(row, primaryProject);
+        return db.prepare(
+          "UPDATE items SET organization_category=?,organization_confidence=?,organization_reason=? WHERE id=?"
+        ).bind(category, confidence, reason, row.id);
+      }));
+    }
+
+    const remaining = await db.prepare(
+      "SELECT COUNT(*) AS count FROM items WHERE organization_category IS NULL"
+    ).first<{ count: number }>();
+    const completed = total - Number(remaining?.count || 0);
+    if (completed < total) {
+      await db.prepare(`UPDATE organization_jobs
+        SET stage='classify',completed=?,updated_at=?
+        WHERE id=? AND stage='classify_writing'`)
+        .bind(completed, now, JOB_ID).run();
+      return Response.json(await status(db));
+    }
+
+    const { results: docs } = await db.prepare(
+        `SELECT id,title,kind,source_user,source_system,source_timestamp,item_count,metadata_json
+         FROM documents ORDER BY source_timestamp,title`
+    ).all<Record<string, unknown>>();
+    for (const doc of docs) {
+      const { results: categoryRows } = await db.prepare(
+        `SELECT organization_category AS category, COUNT(*) AS count
+           FROM items WHERE document_id=? GROUP BY organization_category`
+      ).bind(doc.id).all<{ category: string; count: number }>();
+      const metadata = JSON.parse(String(doc.metadata_json || "{}"));
+      const primary = String(metadata?.project_organization?.primary_project || primaryProject);
+      const { results: highlights } = await db.prepare(
+        `SELECT id,sequence,timestamp,organization_category AS project,content,
+                organization_confidence AS confidence,organization_reason AS summary
+           FROM items
+          WHERE document_id=?
+            AND event_type IN ('message','record','git') AND LENGTH(TRIM(content)) > 20
+          ORDER BY COALESCE(timestamp,''),sequence`
+      ).bind(doc.id).all();
+      const range = await db.prepare(
+        "SELECT MIN(timestamp) AS started_at,MAX(timestamp) AS ended_at FROM items WHERE document_id=? AND timestamp IS NOT NULL"
+      ).bind(doc.id).first();
+      const summary = {
+        title: doc.title, kind: doc.kind, source_user: doc.source_user,
+        source_system: doc.source_system, source_timestamp: doc.source_timestamp,
+        item_count: doc.item_count,
+        time_range: range,
+        primary_project: primary,
+        project_summary: metadata?.project_organization?.summary || "",
+        projects: categoryRows.map((row) => ({
+          name: row.category, event_count: row.count, primary: row.category === primary,
+        })).sort((a, b) => Number(b.primary) - Number(a.primary) || b.event_count - a.event_count),
+        categories: Object.fromEntries(categoryRows.map((row) => [row.category, row.count])),
+        highlights: highlights.map((value) => ({
+          ...value,
+          content: String(value.content || "").replace(/\s+/g, " ").slice(0, 320),
+        })),
+      };
+      await db.prepare(
+        "UPDATE documents SET organization_status='complete',formatted_summary_json=? WHERE id=?"
+      ).bind(JSON.stringify(summary), doc.id).run();
+    }
+    const completedJob = await db.prepare(
+      `UPDATE organization_jobs
+        SET status='complete',stage='complete',completed=?,updated_at=?,completed_at=?
+        WHERE id=? AND stage='classify_writing'`
+    ).bind(total, now, now, JOB_ID).run();
+    if (Number(completedJob.meta.changes || 0) !== 1) {
+      throw new Error("Organization source publication boundary changed");
+    }
+    if (!await publishCompletedStorySourceMutation(db, authority.workflowRunId, now)) {
+      throw new Error("Story source publication boundary changed during organization");
+    }
+    return Response.json(await status(db));
+  } catch (error) {
+    await db.prepare(`UPDATE organization_jobs SET stage='classify',updated_at=?
+      WHERE id=? AND status='running' AND stage='classify_writing'`)
+      .bind(now, JOB_ID).run();
+    await abortStorySourceMutation(db, authority.workflowRunId, now);
+    throw error;
   }
-  await db.prepare(
-    "UPDATE organization_jobs SET status='complete',stage='complete',completed=?,updated_at=?,completed_at=? WHERE id=?"
-  ).bind(total, now, now, JOB_ID).run();
-  return Response.json(await status(db));
 }

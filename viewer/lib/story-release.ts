@@ -17,6 +17,7 @@ import {
   type StoryReleaseTargetDescriptor,
   type TimelineMilestone,
 } from "./timeline.ts";
+import { isReservedStoryOrganizationReason } from "./story-readiness.ts";
 
 type ReleasePerson = { releaseLabel: string; role: string; description: string };
 type ReleaseInsight = { id: string; title: string; noticed: string; lesson: string };
@@ -563,7 +564,8 @@ export function releaseOrganizationReason(value: unknown) {
     ? STORY_PREFIX
     : source.startsWith(LEGACY_STORY_PREFIX) ? LEGACY_STORY_PREFIX
       : source.startsWith(SUCCESSOR_STORY_PREFIX) ? SUCCESSOR_STORY_PREFIX : "";
-  if (!prefix) return source;
+  if (!prefix) return isReservedStoryOrganizationReason(source)
+    ? "Reviewed project milestone" : source;
   try {
     const parsed = JSON.parse(source.slice(prefix.length)) as Record<string, unknown>;
     const summary = parsed.timelineSummary ?? parsed.narrative ?? parsed.overview ?? parsed.title;

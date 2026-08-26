@@ -129,7 +129,7 @@ function buildSuccessorFixture(caseId) {
     actorId: item.actorId,
     actorType: "human",
   }));
-  const candidateRows = expectation.chapters.map((chapterItem) => {
+  const candidateRows = expectation.chapters.map((chapterItem, index) => {
     const phase = expectation.phases.find((item) => item.id === chapterItem.phaseId);
     const blocks = chapterItem.storyBlockIds.map((blockId) => {
       const recordIds = expectation.storyBlockEvidence[blockId];
@@ -179,6 +179,7 @@ function buildSuccessorFixture(caseId) {
     return {
       id: chapterItem.id,
       documentId,
+      sequence: index + 1,
       summary: SUCCESSOR_STORY_PREFIX + JSON.stringify(source),
     };
   });
@@ -521,7 +522,7 @@ test("successor packages activate only through exact permanent dispatch", async 
     "../lib/story-review-session-server.ts": /AnyStoryReviewSession/,
     "../app/api/story-review-session/route.ts": /parseStoryReviewSession/,
     "../app/story-chapter-editor.tsx": /SuccessorStoryChapterEditor/,
-    "../app/workspace.tsx": /parseSuccessorStorySource/,
+    "../app/workspace.tsx": /selectSuccessorViewerChapters/,
     "../lib/story-release.ts": /SUCCESSOR_REVIEWED_STORY_SCHEMA/,
     "../lib/story-release-server.ts": /validateRecognizedStorySourcePackage/,
     "../app/api/organization/export/route.ts": /oxygen\.reviewed-story\/2/,

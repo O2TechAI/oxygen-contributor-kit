@@ -7,11 +7,10 @@ import {
   type AnyStoryReviewSession,
 } from "./story-review-session.ts";
 import {
+  readReservedStoryCandidateRows,
   validateRecognizedStorySourcePackage,
-  type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
-import { LEGACY_STORY_PREFIX, STORY_PREFIX, SUCCESSOR_STORY_PREFIX } from "./timeline.ts";
 
 type ReviewSessionDatabase = Awaited<ReturnType<typeof getD1>>;
 
@@ -121,19 +120,14 @@ export async function readActiveStoryReviewContract(
   if (!active.ready || active.sourceRevision === null) {
     return { ...active, storySourceSchema: null, storySessionSchema: null };
   }
-  const [candidateResult, evidenceResult] = await Promise.all([
-    db.prepare(`SELECT id,document_id AS documentId,organization_reason AS summary
-      FROM items
-      WHERE organization_reason LIKE ? OR organization_reason LIKE ? OR organization_reason LIKE ?
-      ORDER BY COALESCE(timestamp,''),document_id,sequence`)
-      .bind(`${SUCCESSOR_STORY_PREFIX}%`, `${STORY_PREFIX}%`, `${LEGACY_STORY_PREFIX}%`)
-      .all<StoryCandidateRow>(),
+  const [candidateRows, evidenceResult] = await Promise.all([
+    readReservedStoryCandidateRows(db),
     db.prepare(`SELECT id,document_id AS documentId,event_type AS eventType,
       actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`)
       .all<StoryEvidenceRow>(),
   ]);
   const validation = validateRecognizedStorySourcePackage(
-    candidateResult.results || [],
+    candidateRows,
     evidenceResult.results || [],
   );
   return validation.ok

@@ -1,13 +1,16 @@
+import type { getD1 } from "../db";
 import {
   LEGACY_STORY_PREFIX,
   STORY_COVERAGE_KEYS,
   STORY_PREFIX,
   SUCCESSOR_STORY_PREFIX,
+  compareStorySourceIdentity,
   parseStorySource,
   parseStoryAnnotation,
   resolveEvidenceTarget,
   selectProjectTimeline,
   type StoryAnnotation,
+  type SuccessorStorySource,
   type TimelineCandidate,
   type TimelineMilestone,
 } from "./timeline.ts";
@@ -15,8 +18,80 @@ import {
 export type StoryCandidateRow = {
   id: string;
   documentId: string;
+  sequence?: number;
+  timestamp?: string | null;
   summary: string;
 };
+
+type StorySourceDatabase = Awaited<ReturnType<typeof getD1>>;
+
+/** Every organization reason beginning exactly with `oxygen.story` belongs to
+ * the reserved Story family. A value containing `story` elsewhere does not. */
+export const RESERVED_STORY_FAMILY_PREFIX = "oxygen.story";
+
+export function isReservedStoryOrganizationReason(value: unknown) {
+  return typeof value === "string" && value.startsWith(RESERVED_STORY_FAMILY_PREFIX);
+}
+
+/** Server-owned live selector for the complete reserved Story namespace. */
+export async function readReservedStoryCandidateRows(db: StorySourceDatabase) {
+  const result = await db.prepare(`SELECT id,document_id AS documentId,sequence,timestamp,
+      organization_reason AS summary FROM items WHERE organization_reason LIKE ?`)
+    .bind(`${RESERVED_STORY_FAMILY_PREFIX}%`)
+    .all<StoryCandidateRow>();
+  return [...(result.results || [])].sort(compareStorySourceIdentity);
+}
+
+export function selectReservedStorySourceItems<
+  T extends TimelineCandidate & { organization_reason?: string | null },
+>(items: T[]) {
+  return items.filter((item) => isReservedStoryOrganizationReason(item.organization_reason))
+    .sort(compareStorySourceIdentity);
+}
+
+export type SuccessorViewerChapter = {
+  id: string;
+  sequence: number;
+  timestamp?: string;
+  project: string;
+  documentId?: string;
+  source: SuccessorStorySource;
+  story: SuccessorStorySource;
+};
+
+export function selectSuccessorViewerChapters(
+  highlights: TimelineCandidate[] | undefined,
+  fallbackProject: string,
+): { chapters: SuccessorViewerChapter[]; invalid: boolean } {
+  const seen = new Map<string, string>();
+  const chapters: SuccessorViewerChapter[] = [];
+  for (const event of [...(highlights || [])].sort(compareStorySourceIdentity)) {
+    const source = parseStorySource(event.summary);
+    if (!source || source.schema !== "oxygen.story/3") {
+      if (String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX)) {
+        return { chapters: [], invalid: true };
+      }
+      continue;
+    }
+    const serialized = JSON.stringify(source);
+    const previous = seen.get(source.key);
+    if (previous) {
+      if (previous !== serialized) return { chapters: [], invalid: true };
+      continue;
+    }
+    seen.set(source.key, serialized);
+    chapters.push({
+      id: event.id,
+      sequence: Number(event.sequence || 0),
+      ...(event.timestamp ? { timestamp: event.timestamp } : {}),
+      project: event.project || fallbackProject,
+      ...(event.documentId ? { documentId: event.documentId } : {}),
+      source,
+      story: source,
+    });
+  }
+  return { chapters, invalid: false };
+}
 
 export type StoryEvidenceRow = {
   id: string;
@@ -278,6 +353,7 @@ export function validateStoryCandidatePackage(
   evidenceRows: StoryEvidenceRow[],
 ): StoryCandidateValidation {
   if (!candidateRows.length) return failure("STORY_CANDIDATE_MISSING");
+  const orderedCandidateRows = [...candidateRows].sort(compareStorySourceIdentity);
   const annotations: StoryAnnotation[] = [];
   const keys = new Set<string>();
   let projectSummary = "";
@@ -288,7 +364,7 @@ export function validateStoryCandidatePackage(
   const chapterOverviewsEn = new Set<string>();
   let currentStateChapterCount = 0;
 
-  for (const row of candidateRows) {
+  for (const row of orderedCandidateRows) {
     if (!row.summary.startsWith(STORY_PREFIX) || row.summary.startsWith(LEGACY_STORY_PREFIX)) {
       return failure("STORY_CHAPTER_INVALID");
     }
@@ -575,7 +651,7 @@ export function validateStoryCandidatePackage(
   return {
     ok: true,
     chapterCount: annotations.length,
-    canonicalCandidate: JSON.stringify(candidateRows.map((row) => ({ id: row.id, summary: row.summary }))),
+    canonicalCandidate: JSON.stringify(orderedCandidateRows.map((row) => ({ id: row.id, summary: row.summary }))),
   };
 }
 
@@ -593,12 +669,13 @@ export function validateSuccessorStorySourcePackage(
   evidenceRows: StoryEvidenceRow[],
 ): SuccessorStorySourceValidation {
   if (!candidateRows.length) return successorFailure("SUCCESSOR_STORY_CANDIDATE_MISSING");
+  const orderedCandidateRows = [...candidateRows].sort(compareStorySourceIdentity);
   const keys = new Set<string>();
   const completedPhases = new Set<string>();
   const phaseLabels = new Map<string, string>();
   let activePhase = "";
 
-  for (const row of candidateRows) {
+  for (const row of orderedCandidateRows) {
     if (!row.summary.startsWith(SUCCESSOR_STORY_PREFIX)) {
       return successorFailure("SUCCESSOR_STORY_CHAPTER_INVALID");
     }
@@ -710,8 +787,8 @@ export function validateSuccessorStorySourcePackage(
 
   return {
     ok: true,
-    chapterCount: candidateRows.length,
-    canonicalCandidate: JSON.stringify(candidateRows.map((row) => ({ id: row.id, summary: row.summary }))),
+    chapterCount: orderedCandidateRows.length,
+    canonicalCandidate: JSON.stringify(orderedCandidateRows.map((row) => ({ id: row.id, summary: row.summary }))),
   };
 }
 

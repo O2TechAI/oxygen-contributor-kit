@@ -22,8 +22,13 @@ import {
   type ChapterReviewBlocker,
   type SuccessorChapterReviewState,
 } from "../lib/story-review";
-import { LEGACY_STORY_PREFIX, STORY_PREFIX, SUCCESSOR_STORY_PREFIX, milestoneKindLabel, parseSuccessorStorySource, storyReleaseTargetCatalog, type EvidenceReference, type StoryLanguage, type SuccessorStorySource, type TimelineMilestone } from "../lib/timeline";
-import { selectReviewableStoryTimeline } from "../lib/story-readiness";
+import { STORY_PREFIX, SUCCESSOR_STORY_PREFIX, compareStorySourceIdentity, milestoneKindLabel, storyReleaseTargetCatalog, type EvidenceReference, type StoryLanguage, type SuccessorStorySource, type TimelineMilestone } from "../lib/timeline";
+import {
+  isReservedStoryOrganizationReason,
+  selectReviewableStoryTimeline,
+  selectSuccessorViewerChapters,
+  type SuccessorViewerChapter,
+} from "../lib/story-readiness";
 import { buildReviewedStoryRelease } from "../lib/story-release";
 import {
   phaseGroupIdentity,
@@ -75,15 +80,6 @@ type Doc = WorkspaceDocument;
 type Summary = WorkspaceSummary;
 type Item = { id:string; sequence:number; event_type?:string; actor_id?:string; actor_type?:string; timestamp?:string; content:string; organization_category?:string; organization_confidence?:number; organization_reason?:string };
 type Detail = { document:Doc; items:Item[] };
-type SuccessorViewerChapter = {
-  id: string;
-  sequence: number;
-  timestamp?: string;
-  project: string;
-  documentId?: string;
-  source: SuccessorStorySource;
-  story: SuccessorStorySource;
-};
 type ViewerChapter = {
   key: string;
   project: string;
@@ -100,44 +96,6 @@ type ViewerChapter = {
   legacy?: TimelineMilestone;
   successor?: SuccessorViewerChapter;
 };
-
-function selectSuccessorViewerChapters(
-  highlights: WorkspaceSummary["highlights"],
-  fallbackProject: string,
-): { chapters: SuccessorViewerChapter[]; invalid: boolean } {
-  const seen = new Map<string, string>();
-  const chapters: SuccessorViewerChapter[] = [];
-  for (const event of highlights || []) {
-    const source = parseSuccessorStorySource(event.summary);
-    if (!source) {
-      if (String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX)) {
-        return { chapters: [], invalid: true };
-      }
-      continue;
-    }
-    const serialized = JSON.stringify(source);
-    const previous = seen.get(source.key);
-    if (previous) {
-      if (previous !== serialized) return { chapters: [], invalid: true };
-      continue;
-    }
-    seen.set(source.key, serialized);
-    chapters.push({
-      id: event.id,
-      sequence: event.sequence,
-      ...(event.timestamp ? { timestamp: event.timestamp } : {}),
-      project: event.project || fallbackProject,
-      ...(event.documentId ? { documentId: event.documentId } : {}),
-      source,
-      story: source,
-    });
-  }
-  return {
-    chapters: chapters.sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || ""))
-      || left.sequence - right.sequence || left.id.localeCompare(right.id)),
-    invalid: false,
-  };
-}
 
 function successorCompletionContext(source: SuccessorStorySource) {
   const blocks = successorStoryBlocks(source);
@@ -536,7 +494,7 @@ export function InlineWorkspace({
   const allHighlights = useMemo(() => docs.flatMap((doc) => (
     doc.formatted_summary?.highlights || []
   ).map((event) => ({ ...event, documentId:doc.id })))
-    .sort((a,b) => String(a.timestamp || "").localeCompare(String(b.timestamp || ""))), [docs]);
+    .sort(compareStorySourceIdentity), [docs]);
   const metadataPrimaryProject = docs[0]?.formatted_summary?.primary_project || "Oxygen";
   const activatedStoryHighlights = useMemo(
     () => selectReviewableStoryTimeline(allHighlights),
@@ -546,17 +504,15 @@ export function InlineWorkspace({
     () => selectSuccessorViewerChapters(allHighlights, metadataPrimaryProject),
     [allHighlights, metadataPrimaryProject],
   );
-  const recognizedStoryCandidates = useMemo(() => allHighlights.filter((event) => (
-    String(event.summary || "").startsWith(STORY_PREFIX)
-      || String(event.summary || "").startsWith(LEGACY_STORY_PREFIX)
-      || String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX)
+  const reservedStoryCandidates = useMemo(() => allHighlights.filter((event) => (
+    isReservedStoryOrganizationReason(event.summary)
   )), [allHighlights]);
-  const compatibilityPackageReady = recognizedStoryCandidates.length > 0
-    && recognizedStoryCandidates.every((event) => String(event.summary || "").startsWith(STORY_PREFIX))
-    && activatedStoryHighlights.length === recognizedStoryCandidates.length;
-  const successorPackageReady = recognizedStoryCandidates.length > 0
-    && recognizedStoryCandidates.every((event) => String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX))
-    && successorSelection.chapters.length === recognizedStoryCandidates.length
+  const compatibilityPackageReady = reservedStoryCandidates.length > 0
+    && reservedStoryCandidates.every((event) => String(event.summary || "").startsWith(STORY_PREFIX))
+    && activatedStoryHighlights.length === reservedStoryCandidates.length;
+  const successorPackageReady = reservedStoryCandidates.length > 0
+    && reservedStoryCandidates.every((event) => String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX))
+    && successorSelection.chapters.length === reservedStoryCandidates.length
     && !successorSelection.invalid;
   const compatibilityContract = workflow.storySourceSchema === "oxygen.story-highlight/2"
     && workflow.storySessionSchema === STORY_REVIEW_SESSION_SCHEMA;
