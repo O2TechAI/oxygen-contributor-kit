@@ -940,12 +940,11 @@ test("refresh, direct navigation, activation, and progress remain persisted and 
   assert.match(workspace, /const storyReviewReady = isStoryReviewReady\(workflow\)/);
   assert.match(workspace, /const storyWorkspaceReady = isStoryWorkspaceReady\(workflow/);
   assert.match(workspace, /if \(!storyWorkspaceReady\)[\s\S]*return <WorkflowProgress/);
-  assert.match(workspace, /const activatedStoryHighlights = selectReviewableStoryTimeline\(allHighlights\)/);
-  assert.match(workspace, /const storyPackageReloadKeyRef = useRef\(""\)/);
-  assert.match(workspace, /previously loaded organization snapshot can finish after the exact-run/);
-  assert.match(workspace, /const availableProjects = new Set[\s\S]*availableProjects\.has\(currentProject\)/);
-  assert.match(workspace, /view === "timeline"[\s\S]*selectedHydrationHighlights\.length === 0/);
-  assert.match(workspace, /if \(!cancelled && nextHighlights\.length === 0\)/);
+  assert.match(workspace, /const activatedStoryHighlights = useMemo\([\s\S]*?\(\) => selectReviewableStoryTimeline\(allHighlights\),[\s\S]*?\[allHighlights\],[\s\S]*?\);/);
+  assert.match(workspace, /const projectNames = storyNavigationProjects\(activatedStoryHighlights\)/);
+  assert.match(workspace, /resolveStoryNavigation\(activatedStoryHighlights, \{ project:requestedProject, storyKey:activeStoryKey \}, primaryProject\)/);
+  assert.match(workspace, /if \(!storyWorkspaceReady \|\| storySessionReadyRunId !== workflowRunId[\s\S]*?\|\| view !== "timeline" \|\| !activatedStoryHighlights\.length\) return;/);
+  assert.match(workspace, /resolveStoryNavigation\([\s\S]*?activatedStoryHighlights,[\s\S]*?readStoryNavigation\(window\.location\.search\),[\s\S]*?primaryProject/);
   assert.match(workspace, /if \(!activatedStoryHighlights\.length[\s\S]*view === "timeline" && !highlights\.length/);
   assert.doesNotMatch(workspace, /if \(!highlights\.length \|\| storySessionReadyRunId !== workflowRunId\)/);
   assert.match(workspace, /selectReviewableStoryTimeline/);
