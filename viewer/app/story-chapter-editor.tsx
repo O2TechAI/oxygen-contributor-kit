@@ -1004,8 +1004,18 @@ const successorBlockerCopy = {
   human_insight_pending: "A human-created Insight still needs Save.",
 } as const;
 
-function successorReviewContext(source: SuccessorStorySource): SuccessorChapterReviewContext {
+function successorReviewContext(
+  source: SuccessorStorySource,
+  chapterReview?: SuccessorChapterReviewState,
+): SuccessorChapterReviewContext {
   const blocks = successorStoryBlocks(source);
+  const reviewedBlocks = chapterReview ? {
+    en: Object.fromEntries(source.story.blocks.map((block) => [
+      block.id,
+      applyStoryReviewToBlock(block.text, block.id, "en", chapterReview),
+    ])),
+    zh: {},
+  } : blocks;
   return {
     source,
     privacyCandidates: [],
@@ -1015,7 +1025,7 @@ function successorReviewContext(source: SuccessorStorySource): SuccessorChapterR
     supportedAddIds: [],
     supportedEditIds: [],
     sourceBlocks: blocks,
-    reviewedBlocks: blocks,
+    reviewedBlocks,
   };
 }
 
@@ -1301,21 +1311,38 @@ export function SuccessorStoryChapterEditor({
   const storyRef = useRef<HTMLElement | null>(null);
   const completionRef = useRef<HTMLElement | null>(null);
   const insightRefs = useRef<Record<string, HTMLElement | null>>({});
+  const editorRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const pendingDirectInputRef = useRef<PendingDirectInput | null>(null);
+  const activeCompositionRef = useRef<ActiveComposition | null>(null);
+  const completedCompositionRef = useRef<CompletedComposition | null>(null);
   const [selection, setSelection] = useState<SuccessorSelection | null>(null);
   const [selectionError, setSelectionError] = useState("");
+  const [editMode, setEditMode] = useState(false);
+  const [compositionDrafts, setCompositionDrafts] = useState<Record<string, string>>({});
   const [humanDraft, setHumanDraft] = useState<{
     id: string;
     quote: SuccessorHumanInsightContent["quote"];
     draft: SuccessorInsightDraft;
   } | null>(null);
   const [applyError, setApplyError] = useState("");
-  const context = useMemo(() => successorReviewContext(source), [source]);
+  const [applying, setApplying] = useState(false);
+  const context = useMemo(() => successorReviewContext(source, chapterReview), [chapterReview, source]);
   const blockers = useMemo(
     () => successorChapterReviewCompletionBlockers(chapterReview, context),
     [chapterReview, context],
   );
   const readingMinutes = Math.max(1, Math.ceil(source.story.blocks
     .reduce((count, block) => count + block.text.trim().split(/\s+/u).length, 0) / 220));
+  const aiInsightsByBlock = useMemo(() => source.insights.reduce<Record<string, SuccessorStoryInsight[]>>((result, insight) => {
+    const ownerBlockId = (chapterReview.sourceInsightReviews[insight.id]?.editedContent || insight).quote.storyBlockIds[0];
+    if (source.story.blocks.some((block) => block.id === ownerBlockId)) (result[ownerBlockId] ||= []).push(insight);
+    return result;
+  }, {}), [chapterReview.sourceInsightReviews, source]);
+  const humanInsightIdsByBlock = useMemo(() => Object.keys(chapterReview.humanInsights).sort().reduce<Record<string, string[]>>((result, insightId) => {
+    const ownerBlockId = chapterReview.humanInsights[insightId].content.quote.storyBlockId;
+    if (source.story.blocks.some((block) => block.id === ownerBlockId)) (result[ownerBlockId] ||= []).push(insightId);
+    return result;
+  }, {}), [chapterReview.humanInsights, source.story.blocks]);
 
   useEffect(() => {
     if (!reviewFocus) return;
@@ -1329,6 +1356,7 @@ export function SuccessorStoryChapterEditor({
   }, [onReviewFocusHandled, reviewFocus]);
 
   const captureSelection = () => {
+    if (editMode) return;
     const root = storyRef.current;
     if (!root) return;
     const current = readSuccessorSelection(root, window.getSelection());
@@ -1346,6 +1374,222 @@ export function SuccessorStoryChapterEditor({
     }
     setSelection(current);
     setSelectionError("");
+  };
+
+  const restoreEditorSelection = (blockId: string, start: number, end = start) => {
+    requestAnimationFrame(() => {
+      const editor = editorRefs.current[blockId];
+      if (!editor) return;
+      editor.focus({ preventScroll: true });
+      const boundedStart = Math.min(start, editor.value.length);
+      editor.setSelectionRange(boundedStart, Math.min(end, editor.value.length));
+    });
+  };
+
+  const enterStoryEditMode = (blockId?: string, start = 0, end = start) => {
+    if (chapterReview.stage === "human_confirmed" || humanDraft) return;
+    setSelection(null);
+    setSelectionError("");
+    setApplyError("");
+    setEditMode(true);
+    if (blockId) restoreEditorSelection(blockId, start, end);
+  };
+
+  const leaveEditMode = () => {
+    pendingDirectInputRef.current = null;
+    activeCompositionRef.current = null;
+    completedCompositionRef.current = null;
+    setCompositionDrafts({});
+    setEditMode(false);
+  };
+
+  const handleStoryDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
+    if (editMode || chapterReview.stage === "human_confirmed" || humanDraft) return;
+    const target = event.target as HTMLElement;
+    const copy = target.closest<HTMLElement>("[data-successor-story-copy]");
+    const block = copy?.closest<HTMLElement>("[data-successor-story-block]");
+    const blockId = block?.dataset.successorStoryBlock || "";
+    if (!copy || !block || !blockId || !storyRef.current?.contains(block)) return;
+    let start = 0;
+    let end = 0;
+    const currentSelection = window.getSelection();
+    if (currentSelection?.rangeCount) {
+      const range = currentSelection.getRangeAt(0);
+      if (copy.contains(range.startContainer) && copy.contains(range.endContainer)) {
+        const beforeStart = range.cloneRange();
+        beforeStart.selectNodeContents(copy);
+        beforeStart.setEnd(range.startContainer, range.startOffset);
+        const beforeEnd = range.cloneRange();
+        beforeEnd.selectNodeContents(copy);
+        beforeEnd.setEnd(range.endContainer, range.endOffset);
+        start = beforeStart.toString().length;
+        end = beforeEnd.toString().length;
+      }
+    }
+    enterStoryEditMode(blockId, Math.min(start, end), Math.max(start, end));
+  };
+
+  const commitDirectMutation = (
+    blockId: string,
+    nextText: string,
+    start: number,
+    end: number,
+    insertedText: string,
+    selectionAfter: number,
+  ) => {
+    const sourceBlock = source.story.blocks.find((block) => block.id === blockId);
+    if (!sourceBlock) return;
+    const baseText = applyStoryReviewToBlock(sourceBlock.text, blockId, "en", chapterReview);
+    const result = recordStoryEdit(chapterReview, {
+      storyKey: source.key,
+      blockId,
+      sourceLanguage: "en",
+      baseText,
+      nextText,
+      workingRange: { start, end },
+      insertedText,
+      ...(sourceBlock.evidence[0] ? { supportingEvidence: [sourceBlock.evidence[0]] } : {}),
+    });
+    if (result.blockedReason) {
+      setApplyError(result.blockedReason === "annotation"
+        ? "This Story passage already has a controlled review change. Resolve it before editing directly."
+        : "That mutation crosses or overlaps controlled edits. Undo or discard the affected edit, then change one passage at a time.");
+      restoreEditorSelection(blockId, start, end);
+      return;
+    }
+    setApplyError("");
+    onChapterReview(result.state as SuccessorChapterReviewState);
+    restoreEditorSelection(blockId, selectionAfter);
+  };
+
+  const captureDirectBeforeInput = (blockId: string, event: ReactFormEvent<HTMLTextAreaElement>) => {
+    const editor = event.currentTarget as HTMLTextAreaElement | null;
+    if (!editor) {
+      pendingDirectInputRef.current = null;
+      return;
+    }
+    const normalized = normalizeDirectBeforeInput({
+      nativeEvent: event.nativeEvent,
+      selectionStart: editor.selectionStart,
+      selectionEnd: editor.selectionEnd,
+      valueLength: editor.value.length,
+    });
+    pendingDirectInputRef.current = { blockId, mutation: normalized.mutation };
+  };
+
+  const handleDirectChange = (blockId: string, event: SyntheticEvent<HTMLTextAreaElement>) => {
+    const editor = event.currentTarget as HTMLTextAreaElement | null;
+    if (!editor) {
+      pendingDirectInputRef.current = null;
+      return;
+    }
+    const nextText = editor.value;
+    const selectionAfter = editor.selectionStart;
+    const native = event.nativeEvent && typeof event.nativeEvent === "object"
+      ? event.nativeEvent as unknown as Record<string, unknown>
+      : {};
+    const isComposing = native.isComposing === true;
+    const completedComposition = completedCompositionRef.current;
+    if (!isComposing && completedComposition) {
+      completedCompositionRef.current = null;
+      if (completedComposition.blockId === blockId && completedComposition.nextText === nextText) {
+        pendingDirectInputRef.current = null;
+        return;
+      }
+    }
+    const sourceBlock = source.story.blocks.find((block) => block.id === blockId);
+    if (!sourceBlock) return;
+    const current = storyWorkingBlock(sourceBlock.text, source.key, blockId, "en", chapterReview);
+    const activeComposition = activeCompositionRef.current?.blockId === blockId ? activeCompositionRef.current : null;
+    if (isComposing || activeComposition) {
+      if (!activeComposition) activeCompositionRef.current = { blockId, previousText: current };
+      setCompositionDrafts((drafts) => ({ ...drafts, [blockId]: nextText }));
+      pendingDirectInputRef.current = null;
+      if (isComposing) return;
+      const previousText = activeComposition?.previousText || current;
+      activeCompositionRef.current = null;
+      setCompositionDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[blockId];
+        return next;
+      });
+      const mutation = deriveDirectStoryMutation({ previousText, nextText, selectionAfter });
+      completedCompositionRef.current = { blockId, nextText };
+      if (mutation) commitDirectMutation(blockId, nextText, mutation.start, mutation.end, mutation.insertedText, selectionAfter);
+      return;
+    }
+    const pending = pendingDirectInputRef.current?.blockId === blockId ? pendingDirectInputRef.current : null;
+    pendingDirectInputRef.current = null;
+    const mutation = deriveDirectStoryMutation({
+      previousText: current,
+      nextText,
+      selectionAfter,
+      beforeInputMutation: pending?.mutation,
+    });
+    if (mutation) commitDirectMutation(blockId, nextText, mutation.start, mutation.end, mutation.insertedText, selectionAfter);
+  };
+
+  const handleCompositionStart = (blockId: string, event: ReactCompositionEvent<HTMLTextAreaElement>) => {
+    pendingDirectInputRef.current = null;
+    completedCompositionRef.current = null;
+    const editor = event.currentTarget as HTMLTextAreaElement | null;
+    const sourceBlock = source.story.blocks.find((block) => block.id === blockId);
+    if (!editor || !sourceBlock) {
+      activeCompositionRef.current = null;
+      return;
+    }
+    activeCompositionRef.current = {
+      blockId,
+      previousText: storyWorkingBlock(sourceBlock.text, source.key, blockId, "en", chapterReview),
+    };
+    const nextText = editor.value;
+    setCompositionDrafts((drafts) => ({ ...drafts, [blockId]: nextText }));
+  };
+
+  const handleCompositionEnd = (blockId: string, event: ReactCompositionEvent<HTMLTextAreaElement>) => {
+    const editor = event.currentTarget as HTMLTextAreaElement | null;
+    const active = activeCompositionRef.current?.blockId === blockId ? activeCompositionRef.current : null;
+    pendingDirectInputRef.current = null;
+    activeCompositionRef.current = null;
+    setCompositionDrafts((drafts) => {
+      const next = { ...drafts };
+      delete next[blockId];
+      return next;
+    });
+    if (!active || !editor) return;
+    const nextText = editor.value;
+    const selectionAfter = editor.selectionStart;
+    const mutation = deriveDirectStoryMutation({ previousText: active.previousText, nextText, selectionAfter });
+    completedCompositionRef.current = { blockId, nextText };
+    if (mutation) commitDirectMutation(blockId, nextText, mutation.start, mutation.end, mutation.insertedText, selectionAfter);
+  };
+
+  const handleDirectPaste = (blockId: string, event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    event.preventDefault();
+    pendingDirectInputRef.current = null;
+    if (activeCompositionRef.current) return;
+    const editor = event.currentTarget as HTMLTextAreaElement | null;
+    if (!editor) return;
+    const insertedText = sanitizeStoryPaste(event.clipboardData.getData("text/plain"));
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    const nextText = `${editor.value.slice(0, start)}${insertedText}${editor.value.slice(end)}`;
+    commitDirectMutation(blockId, nextText, start, end, insertedText, start + insertedText.length);
+  };
+
+  const handleDirectKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing || activeCompositionRef.current) return;
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "z") {
+      event.preventDefault();
+      onChapterReview((event.shiftKey
+        ? redoStoryEdit(chapterReview, "en")
+        : undoStoryEdit(chapterReview, "en")) as SuccessorChapterReviewState);
+    } else if (key === "y") {
+      event.preventDefault();
+      onChapterReview(redoStoryEdit(chapterReview, "en") as SuccessorChapterReviewState);
+    }
   };
 
   const beginHumanInsight = () => {
@@ -1391,14 +1635,46 @@ export function SuccessorStoryChapterEditor({
     setApplyError("");
   };
 
-  const applyReview = () => {
-    const result = applySuccessorChapterReview(chapterReview, context);
-    if (result.blockedReason) {
-      setApplyError("The current review could not be applied safely. Recheck the bounded review items below.");
-      return;
-    }
-    onChapterReview(result.state);
+  const applyReview = async () => {
+    setApplying(true);
     setApplyError("");
+    try {
+      const directAdditions = chapterReview.editTransactions
+        .filter((transaction) => transaction.storyKey === source.key
+          && transaction.requiresEvidence
+          && (transaction.resolution === "pending" || transaction.resolution === "needs_evidence"))
+        .map((transaction) => ({
+          annotationId: transaction.id,
+          instruction: transaction.afterText,
+          supportingEvidence: transaction.supportingEvidence || [],
+        }));
+      const response = await fetch("/api/evidence", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          chapterEvidence: [source.evidence.primary, ...source.evidence.supporting],
+          additions: directAdditions,
+        }),
+      });
+      if (!response.ok) throw new Error("The reviewed Evidence could not be verified.");
+      const verification = await response.json() as { evidenceResolved: boolean; supportedAddIds: string[] };
+      const result = applySuccessorChapterReview(chapterReview, {
+        ...context,
+        evidenceResolved: verification.evidenceResolved,
+        supportedEditIds: verification.supportedAddIds.filter((id) => directAdditions.some((addition) => addition.annotationId === id)),
+      });
+      if (result.blockedReason) {
+        if (result.blockedReason === "direct_evidence") onChapterReview(result.state);
+        setApplyError("The current review could not be applied safely. Recheck the bounded review items below.");
+        return;
+      }
+      leaveEditMode();
+      onChapterReview(result.state);
+    } catch (error) {
+      setApplyError(error instanceof Error ? error.message : "The current review could not be applied safely.");
+    } finally {
+      setApplying(false);
+    }
   };
 
   return <section className="simpleEpisode chapterEditor successorChapterEditor" role="region" aria-labelledby="successor-chapter-title">
@@ -1420,16 +1696,63 @@ export function SuccessorStoryChapterEditor({
       <div className="simpleEpisodeBody">
         <section className="episodePrimarySection peopleSection" aria-labelledby="successor-people-heading">
           <div className="simpleSectionHead"><div><h3 id="successor-people-heading">People</h3><p>Supported actors in this Chapter</p></div></div>
-          <div className="peopleList">{source.people.map((person) => <div className="personRow" key={person.id}><b aria-label={person.releaseLabel}>{person.releaseLabel}</b><div><strong>{person.role}</strong><p>{person.description}</p></div></div>)}</div>
+          <div className="successorPeopleList">{source.people.map((person) => <div className="successorPersonRow" key={person.id}><strong>{person.releaseLabel}</strong><p>{person.description}</p></div>)}</div>
           <p className="identityNote">Local identity · hidden on export</p>
         </section>
         <section className="episodePrimarySection storySection" aria-labelledby="successor-story-heading">
-          <div className="simpleSectionHead storySectionHead"><div><h3 id="successor-story-heading">Story</h3><p>Select text within one passage to author a grounded human Insight.</p></div></div>
-          <article className="chapterArticle successorStoryDocument" ref={storyRef} onMouseUp={captureSelection} onKeyUp={captureSelection}>
-            {source.story.blocks.map((block) => <div className="successorStoryBlock" data-successor-story-block={block.id} key={block.id} tabIndex={0}>
-              <p data-successor-story-copy>{applyStoryReviewToBlock(block.text, block.id, "en", chapterReview)}</p>
-              {selection?.blockId === block.id && <button className="successorAddInsight" onMouseDown={(event) => event.preventDefault()} onClick={beginHumanInsight}>+ Add Insight</button>}
-            </div>)}
+          <div className="simpleSectionHead storySectionHead"><div><h3 id="successor-story-heading">Story</h3><p>{editMode ? "Type directly in one Story passage. Undo or discard changes before Apply Review." : "Select text within one passage to author a grounded human Insight."}</p></div>{!editMode && <button className="storyEditToggle" aria-label="Edit Story" aria-pressed="false" disabled={chapterReview.stage === "human_confirmed" || Boolean(humanDraft)} onClick={() => enterStoryEditMode()}><span aria-hidden="true">✎</span>Edit Story</button>}</div>
+          {editMode && <div className="storyEditingBar" role="toolbar" aria-label="Story Edit Mode">
+            <div><b>Editing Story</b><span>Edit one Story passage at a time. Every change remains in the common review ledger until Apply Review.</span></div>
+            <div className="storyEditingActions">
+              <button disabled={!canUndoStoryEdit(chapterReview, "en")} title={canUndoStoryEdit(chapterReview, "en") ? "Undo" : "Nothing to undo"} aria-label="Undo" onClick={() => onChapterReview(undoStoryEdit(chapterReview, "en") as SuccessorChapterReviewState)}>↶ Undo</button>
+              <button disabled={!canRedoStoryEdit(chapterReview, "en")} title={canRedoStoryEdit(chapterReview, "en") ? "Redo" : "Nothing to redo"} aria-label="Redo" onClick={() => onChapterReview(redoStoryEdit(chapterReview, "en") as SuccessorChapterReviewState)}>↷ Redo</button>
+              <button className="finishEditing" onClick={leaveEditMode}>Finish editing</button>
+            </div>
+          </div>}
+          <article className={`chapterArticle successorStoryDocument ${editMode ? "editing" : "reading"}`} aria-label={editMode ? "Story Edit Mode" : "Story read mode"} ref={storyRef} onDoubleClick={handleStoryDoubleClick} onMouseUp={editMode ? undefined : captureSelection} onKeyUp={editMode ? undefined : captureSelection}>
+            {source.story.blocks.map((block) => {
+              const aiInsights = aiInsightsByBlock[block.id] || [];
+              const humanInsightIds = humanInsightIdsByBlock[block.id] || [];
+              const copy = storyWorkingBlock(block.text, source.key, block.id, "en", chapterReview);
+              return <div className="successorNarrativeRow" data-insight-owner-block={block.id} key={block.id}>
+                <div className="successorStoryBlock" data-successor-story-block={block.id} tabIndex={editMode ? -1 : 0}>
+                  {editMode ? <textarea
+                    className="storyDirectEditor"
+                    data-successor-story-copy
+                    data-successor-story-editor={block.id}
+                    ref={(node) => { editorRefs.current[block.id] = node; }}
+                    value={compositionDrafts[block.id] ?? copy}
+                    rows={Math.max(2, (compositionDrafts[block.id] ?? copy).split("\n").length)}
+                    aria-label={`Editing Story passage ${block.id}`}
+                    onBeforeInput={(event) => captureDirectBeforeInput(block.id, event)}
+                    onChange={(event) => handleDirectChange(block.id, event)}
+                    onCompositionStart={(event) => handleCompositionStart(block.id, event)}
+                    onCompositionEnd={(event) => handleCompositionEnd(block.id, event)}
+                    onPaste={(event) => handleDirectPaste(block.id, event)}
+                    onKeyDown={handleDirectKeyDown}
+                  /> : <p data-successor-story-copy>{copy}</p>}
+                  {!editMode && selection?.blockId === block.id && <button className="successorAddInsight" onMouseDown={(event) => event.preventDefault()} onClick={beginHumanInsight}>+ Add Insight</button>}
+                </div>
+                {(aiInsights.length > 0 || humanInsightIds.length > 0) && <aside className="successorAnchoredInsights" aria-label={`Insights for Story passage ${block.id}`}>
+                  {aiInsights.map((insight) => <SuccessorAiInsightCard
+                    key={insight.id}
+                    source={source}
+                    insight={insight}
+                    chapterReview={chapterReview}
+                    onChapterReview={onChapterReview}
+                    insightRef={(node) => { insightRefs.current[insight.id] = node; }}
+                  />)}
+                  {humanInsightIds.map((insightId) => <SuccessorHumanInsightCard
+                    key={insightId}
+                    source={source}
+                    insightId={insightId}
+                    chapterReview={chapterReview}
+                    onChapterReview={onChapterReview}
+                    insightRef={(node) => { insightRefs.current[insightId] = node; }}
+                  />)}
+                </aside>}
+              </div>;
+            })}
             {source.story.uncertainty && <section className="successorUncertainty"><h4>Open questions</h4><p>{source.story.uncertainty}</p></section>}
           </article>
           {selectionError && <p className="completionBlocker" role="alert">{selectionError}</p>}
@@ -1437,22 +1760,6 @@ export function SuccessorStoryChapterEditor({
             <header><span>Human Insight</span><h4 id="human-insight-heading">Add Insight from selected Story text</h4></header>
             <SuccessorInsightEditor source={source} draft={humanDraft.draft} onChange={(draft) => setHumanDraft({ ...humanDraft, draft })} onSave={saveHumanInsight} onCancel={() => setHumanDraft(null)} fixedQuote={humanDraft.quote.selection.text} />
           </section>}
-          {source.insights.map((insight) => <SuccessorAiInsightCard
-            key={insight.id}
-            source={source}
-            insight={insight}
-            chapterReview={chapterReview}
-            onChapterReview={onChapterReview}
-            insightRef={(node) => { insightRefs.current[insight.id] = node; }}
-          />)}
-          {Object.keys(chapterReview.humanInsights).sort().map((insightId) => <SuccessorHumanInsightCard
-            key={insightId}
-            source={source}
-            insightId={insightId}
-            chapterReview={chapterReview}
-            onChapterReview={onChapterReview}
-            insightRef={(node) => { insightRefs.current[insightId] = node; }}
-          />)}
         </section>
         <section className="episodePrimarySection privacySection" aria-labelledby="successor-privacy-heading">
           <div className="simpleSectionHead"><div><h3 id="successor-privacy-heading">Privacy</h3><p>Only reviewed, post-policy-safe Story content is available in this lane.</p></div></div>
@@ -1463,8 +1770,8 @@ export function SuccessorStoryChapterEditor({
           <ul><li><b>{source.insights.length}</b> source AI Insights</li><li><b>{Object.keys(chapterReview.humanInsights).length}</b> human-created Insights</li><li><b>{blockers.length}</b> bounded review blockers</li></ul>
           {blockers.length > 0 && <ul className="successorBlockerList">{blockers.map((blocker, index) => <li key={`${blocker.code}:${blocker.targetKind}:${blocker.targetId || ""}:${index}`}>{successorBlockerCopy[blocker.code]}</li>)}</ul>}
           {applyError && <p className="completionBlocker" role="alert">{applyError}</p>}
-          {chapterReview.stage === "reviewing" ? <button className="completionPrimary" onClick={applyReview}>Apply current review</button>
-            : chapterReview.stage === "revision_ready" ? <div className="completionActions"><span>{blockers.length ? "Resolve the bounded review items before All set." : "Inspect the latest revision, then choose All set."}</span><button className="completionPrimary" disabled={!canMarkSuccessorChapterReady(chapterReview, context)} onClick={() => onChapterReview(markSuccessorChapterReady(chapterReview, context))}>All set</button></div>
+          {chapterReview.stage === "reviewing" ? <button className="completionPrimary" disabled={applying} onClick={applyReview}>{applying ? "Applying review…" : "Apply current review"}</button>
+            : chapterReview.stage === "revision_ready" ? <div className="completionActions"><span>{blockers.length ? "Resolve the bounded review items before All set." : "Inspect the latest revision, then choose All set."}</span><button className="completionPrimary" disabled={!canMarkSuccessorChapterReady(chapterReview, context)} onClick={() => { leaveEditMode(); onChapterReview(markSuccessorChapterReady(chapterReview, context)); }}>All set</button></div>
               : <div className="readyConfirmation"><b>Final Release Memory</b><p>Human-confirmed locally. This is not publication approval.</p><button onClick={() => onChapterReview(returnChapterToReview(chapterReview) as SuccessorChapterReviewState)}>Reopen review</button></div>}
         </section>
       </div>

@@ -5,6 +5,8 @@ import {
   addStoryAnnotation,
   applyChapterReview,
   applySuccessorChapterReview,
+  canRedoStoryEdit,
+  canUndoStoryEdit,
   createStoryAnnotation,
   editSuccessorAiInsight,
   editSuccessorHumanInsight,
@@ -12,10 +14,13 @@ import {
   emptySuccessorChapterReview,
   recordStoryEdit,
   saveSuccessorHumanInsight,
+  storyWorkingBlock,
   successorChapterReviewCompletionBlockers,
   successorHumanQuoteText,
   successorStoryBlocks,
   updateSuccessorAiInsightDecision,
+  undoStoryEdit,
+  redoStoryEdit,
   validateChapterReviewCompletion,
   validateSuccessorChapterReviewCompletion,
 } from "../lib/story-review.ts";
@@ -367,6 +372,71 @@ test("Story changes reopen an invalidated human Quote without moving or widening
   assert.equal(successorHumanQuoteText(applied.state, currentSource, reopened.content), null);
   assert.equal(successorChapterReviewCompletionBlockers(applied.state, context(currentSource))
     .some((blocker) => blocker.code === "human_insight_pending"), true);
+});
+
+test("successor direct Story edit uses common Undo, Redo, Apply, revision, and completion semantics", () => {
+  const currentSource = source([]);
+  const initial = applyBase(currentSource);
+  const block = currentSource.story.blocks[0];
+  const before = block.text;
+  const after = before.replace("reviewer", "contributor");
+  const recorded = recordStoryEdit(initial, {
+    storyKey: currentSource.key,
+    blockId: block.id,
+    sourceLanguage: "en",
+    baseText: before,
+    nextText: after,
+    workingRange: { start: 4, end: 12 },
+    insertedText: "contributor",
+    now: 100,
+  });
+  assert.equal(recorded.blockedReason, undefined);
+  assert.equal(recorded.state.stage, "reviewing");
+  assert.equal(canUndoStoryEdit(recorded.state, "en"), true);
+  assert.equal(storyWorkingBlock(before, currentSource.key, block.id, "en", recorded.state), after);
+  assert.equal(successorChapterReviewCompletionBlockers(recorded.state, context(currentSource))[0].code, "direct_edit_pending");
+
+  const undone = undoStoryEdit(recorded.state, "en");
+  assert.equal(storyWorkingBlock(before, currentSource.key, block.id, "en", undone), before);
+  assert.equal(canRedoStoryEdit(undone, "en"), true);
+  const redone = redoStoryEdit(undone, "en");
+  assert.equal(storyWorkingBlock(before, currentSource.key, block.id, "en", redone), after);
+
+  const applied = applySuccessorChapterReview(redone, context(currentSource));
+  assert.equal(applied.blockedReason, undefined);
+  assert.equal(applied.state.revision, initial.revision + 1);
+  assert.equal(applied.state.stage, "revision_ready");
+  assert.equal(applied.state.editTransactions[0].resolution, "applied");
+  assert.equal(successorChapterReviewCompletionBlockers(applied.state, context(currentSource)).length, 0);
+});
+
+test("successor direct Story edit invalidating an exact human Quote reopens only that durable Insight", () => {
+  const currentSource = source([]);
+  const saved = saveSuccessorHumanInsight(
+    applyBase(currentSource), context(currentSource), "human:range", humanContent(currentSource),
+  ).state;
+  const block = currentSource.story.blocks[0];
+  const before = block.text;
+  const insertedText = "contributor verified";
+  const recorded = recordStoryEdit(saved, {
+    storyKey: currentSource.key,
+    blockId: block.id,
+    sourceLanguage: "en",
+    baseText: before,
+    nextText: `${before.slice(0, 4)}${insertedText}${before.slice(20)}`,
+    workingRange: { start: 4, end: 20 },
+    insertedText,
+    now: 200,
+  });
+  assert.equal(recorded.blockedReason, undefined);
+  const applied = applySuccessorChapterReview(recorded.state, context(currentSource));
+  assert.equal(applied.blockedReason, undefined);
+  const reopened = applied.state.humanInsights["human:range"];
+  assert.equal(reopened.decision, "draft");
+  assert.equal(reopened.resolution, "pending");
+  assert.equal(successorHumanQuoteText(applied.state, currentSource, reopened.content), null);
+  assert.equal(successorChapterReviewCompletionBlockers(applied.state, context(currentSource))
+    .some((blocker) => blocker.code === "human_insight_pending" && blocker.targetId === "human:range"), true);
 });
 
 test("an unrelated Story change after the selected bytes preserves the exact human Quote", () => {

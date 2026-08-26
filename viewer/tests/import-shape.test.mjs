@@ -89,7 +89,7 @@ test("Chapter Story defaults to read mode and uses controlled direct editing plu
   assert.match(episode,/enterStoryEditMode\(blockId, Math\.min\(start, end\), Math\.max\(start, end\)\)/);
   assert.match(episode,/className="chapterArticle storyDocument"[^>]*onDoubleClick=\{handleStoryDoubleClick\}/);
   assert.match(episode,/if \(editMode \|\| chapterReview\.stage === "human_confirmed"\) return/);
-  assert.equal((episode.match(/onDoubleClick=/g) || []).length, 1);
+  assert.equal((legacyEpisode.match(/onDoubleClick=/g) || []).length, 1);
   const doubleClickHandler = episode.slice(
     episode.indexOf("const handleStoryDoubleClick"),
     episode.indexOf("const commitDirectMutation"),

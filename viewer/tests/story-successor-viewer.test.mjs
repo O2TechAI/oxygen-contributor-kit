@@ -13,9 +13,47 @@ const successorEditor = editor.slice(editor.indexOf("export function SuccessorSt
 
 test("zero-Insight Story rendering is independent from Insight cardinality", () => {
   assert.match(successorEditor, /source\.story\.blocks\.map/);
-  assert.match(successorEditor, /source\.insights\.map/);
-  assert.ok(successorEditor.indexOf("source.story.blocks.map") < successorEditor.indexOf("source.insights.map"));
+  assert.match(successorEditor, /aiInsights\.length > 0 \|\| humanInsightIds\.length > 0/);
+  assert.match(successorEditor, /<aside className="successorAnchoredInsights"/);
   assert.doesNotMatch(successorEditor, /approve no Insight|placeholder Insight|fake empty Insight/i);
+});
+
+test("successor People render safe source copy once without the legacy clipped marker or generic role", () => {
+  const people = successorEditor.slice(
+    successorEditor.indexOf("successor-people-heading"),
+    successorEditor.indexOf("successor-story-heading"),
+  );
+  assert.match(people, /className="successorPeopleList"/);
+  assert.match(people, /<strong>\{person\.releaseLabel\}<\/strong>/);
+  assert.match(people, /<p>\{person\.description\}<\/p>/);
+  assert.equal((people.match(/person\.releaseLabel/g) || []).length, 1);
+  assert.equal((people.match(/person\.description/g) || []).length, 1);
+  assert.doesNotMatch(people, /person\.role|className="personRow"|aria-label=\{person\.releaseLabel\}/);
+});
+
+test("AI and human Insights are owned by their exact Story anchors and rendered once in narrative order", () => {
+  assert.match(successorEditor, /const ownerBlockId = \(chapterReview\.sourceInsightReviews\[insight\.id\]\?\.editedContent \|\| insight\)\.quote\.storyBlockIds\[0\]/);
+  assert.match(successorEditor, /\(result\[ownerBlockId\] \|\|= \[\]\)\.push\(insight\)/);
+  assert.match(successorEditor, /const ownerBlockId = chapterReview\.humanInsights\[insightId\]\.content\.quote\.storyBlockId/);
+  assert.match(successorEditor, /Object\.keys\(chapterReview\.humanInsights\)\.sort\(\)/);
+  assert.match(successorEditor, /const aiInsights = aiInsightsByBlock\[block\.id\] \|\| \[\]/);
+  assert.match(successorEditor, /const humanInsightIds = humanInsightIdsByBlock\[block\.id\] \|\| \[\]/);
+  assert.match(successorEditor, /data-insight-owner-block=\{block\.id\}/);
+  assert.match(successorEditor, /aiInsights\.map\(\(insight\) => <SuccessorAiInsightCard/);
+  assert.match(successorEditor, /humanInsightIds\.map\(\(insightId\) => <SuccessorHumanInsightCard/);
+  assert.doesNotMatch(successorEditor, /Object\.keys\(chapterReview\.humanInsights\)\.sort\(\)\.map/);
+});
+
+test("successor Story exposes explicit and double-click edit entry through the common ledger", () => {
+  assert.match(successorEditor, />Edit Story<\/button>/);
+  assert.match(successorEditor, /onDoubleClick=\{handleStoryDoubleClick\}/);
+  assert.match(successorEditor, /recordStoryEdit\(chapterReview/);
+  assert.match(successorEditor, /storyWorkingBlock\(sourceBlock\.text, source\.key, blockId, "en", chapterReview\)/);
+  assert.match(successorEditor, /undoStoryEdit\(chapterReview, "en"\)/);
+  assert.match(successorEditor, /redoStoryEdit\(chapterReview, "en"\)/);
+  assert.match(successorEditor, /applySuccessorChapterReview\(chapterReview/);
+  assert.match(successorEditor, /onMouseUp=\{editMode \? undefined : captureSelection\}/);
+  assert.match(successorEditor, /!editMode && selection\?\.blockId === block\.id/);
 });
 
 test("source and human Insight cards are keyed and focused only by stable IDs", () => {
