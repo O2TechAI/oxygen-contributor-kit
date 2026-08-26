@@ -1,8 +1,9 @@
 import type { getD1 } from "../db";
 import {
-  canonicalizeStoryReviewSession,
+  parseStoryReviewSession,
   storyReviewSessionSemanticJson,
-  type StoryReviewSession,
+  STORY_REVIEW_SESSION_SCHEMA,
+  type AnyStoryReviewSession,
 } from "./story-review-session.ts";
 
 type ReviewSessionDatabase = Awaited<ReturnType<typeof getD1>>;
@@ -30,7 +31,7 @@ export const STORY_SESSION_ERROR = {
 export type StorySessionErrorCode = typeof STORY_SESSION_ERROR[keyof typeof STORY_SESSION_ERROR];
 
 export type StoryReviewSessionRecord = {
-  session: StoryReviewSession | null;
+  session: AnyStoryReviewSession | null;
   serverVersion: number;
   sourceRevision: number | null;
   persistedAt: string | null;
@@ -38,7 +39,7 @@ export type StoryReviewSessionRecord = {
 
 type StoredStoryReviewSession = {
   sourceRevision: number;
-  session: StoryReviewSession;
+  session: AnyStoryReviewSession;
 };
 
 const validRevision = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
@@ -50,21 +51,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Read both legacy direct schema-1 rows and the source-bound internal storage
  * envelope. The public Story session schema itself remains unchanged. */
 export function parseStoredStoryReviewSession(value: unknown): {
-  session: StoryReviewSession | null;
+  session: AnyStoryReviewSession | null;
   sourceRevision: number | null;
 } {
-  const legacy = canonicalizeStoryReviewSession(value);
-  if (legacy) return { session: legacy, sourceRevision: null };
+  const direct = parseStoryReviewSession(value);
+  if (direct) return { session: direct, sourceRevision: null };
   if (!isRecord(value) || !validRevision(value.sourceRevision)) {
     return { session: null, sourceRevision: null };
   }
-  const session = canonicalizeStoryReviewSession(value.session);
+  const session = parseStoryReviewSession(value.session);
   return session
     ? { session, sourceRevision: value.sourceRevision }
     : { session: null, sourceRevision: value.sourceRevision };
 }
 
-function serializeStoredStoryReviewSession(sourceRevision: number, session: StoryReviewSession) {
+function serializeStoredStoryReviewSession(sourceRevision: number, session: AnyStoryReviewSession) {
   const stored: StoredStoryReviewSession = { sourceRevision, session };
   return JSON.stringify(stored);
 }
@@ -107,7 +108,7 @@ type CasRequest = {
   workflowRunId: string;
   expectedVersion: number;
   sourceRevision: number;
-  session: StoryReviewSession;
+  session: AnyStoryReviewSession;
 };
 
 type CasSuccess = {
@@ -127,6 +128,14 @@ type CasFailure = {
 };
 
 const changes = (result: { meta?: { changes?: number } }) => Number(result.meta?.changes || 0);
+
+function reviewSessionSemanticJson(value: unknown) {
+  const session = parseStoryReviewSession(value);
+  if (!session) return null;
+  return session.schema === STORY_REVIEW_SESSION_SCHEMA
+    ? storyReviewSessionSemanticJson(session)
+    : JSON.stringify({ ...session, updatedAt: "" });
+}
 
 function failure(
   code: StorySessionErrorCode,
@@ -159,7 +168,7 @@ async function resolveZeroChange(
     && request.expectedVersion === 0 && current.serverVersion === 1;
   if ((exactVersion || concurrentFirstCreate)
     && current.sourceRevision === request.sourceRevision
-    && storyReviewSessionSemanticJson(current.session) === storyReviewSessionSemanticJson(request.session)) {
+    && reviewSessionSemanticJson(current.session) === reviewSessionSemanticJson(request.session)) {
     return {
       ok: true,
       saved: false,
@@ -185,7 +194,7 @@ export async function persistStoryReviewSessionCas(
   if (!validRevision(request.sourceRevision)) {
     return { ok: false, code: STORY_SESSION_ERROR.sourceConflict };
   }
-  const canonical = canonicalizeStoryReviewSession(request.session);
+  const canonical = parseStoryReviewSession(request.session);
   if (!canonical || canonical.workflowRunId !== request.workflowRunId) {
     return { ok: false, code: STORY_SESSION_ERROR.stateInvalid };
   }
@@ -202,8 +211,12 @@ export async function persistStoryReviewSessionCas(
   if (request.expectedVersion !== current.serverVersion) {
     return failure(STORY_SESSION_ERROR.versionConflict, current, active.sourceRevision);
   }
+  if (current.session && current.session.schema !== canonical.schema
+    && (current.sourceRevision === null || current.sourceRevision === request.sourceRevision)) {
+    return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
+  }
 
-  const persistedSession = canonicalizeStoryReviewSession({ ...canonical, updatedAt: serverNow });
+  const persistedSession = parseStoryReviewSession({ ...canonical, updatedAt: serverNow });
   if (!persistedSession) return { ok: false, code: STORY_SESSION_ERROR.stateInvalid };
   const stateJson = serializeStoredStoryReviewSession(request.sourceRevision, persistedSession);
 
@@ -226,7 +239,7 @@ export async function persistStoryReviewSessionCas(
   }
 
   const sameMeaning = current.sourceRevision === request.sourceRevision
-    && storyReviewSessionSemanticJson(current.session) === storyReviewSessionSemanticJson(canonical);
+    && reviewSessionSemanticJson(current.session) === reviewSessionSemanticJson(canonical);
   if (sameMeaning) {
     const row = await db.prepare(`SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?`)
       .bind(request.workflowRunId).first<{ state_json?: string }>();

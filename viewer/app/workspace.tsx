@@ -6,6 +6,7 @@ import { RedactionCompare, segments, type Redaction, type RedactionJob } from ".
 import { ProbePanel, type Probe, type BulkDecision, type ProbeRun } from "./probe-panel";
 import {
   StoryChapterEditor,
+  SuccessorStoryChapterEditor,
   type ChapterEvidenceContext,
   type ChapterReviewState,
   type PrivacyDecision,
@@ -14,10 +15,14 @@ import {
   applyStoryReviewToBlock,
   chapterReviewCompletionBlockers,
   emptyChapterReview,
+  emptySuccessorChapterReview,
   privacyDecisionKey,
+  successorChapterReviewCompletionBlockers,
+  successorStoryBlocks,
   type ChapterReviewBlocker,
+  type SuccessorChapterReviewState,
 } from "../lib/story-review";
-import { milestoneKindLabel, storyReleaseTargetCatalog, type EvidenceReference, type StoryLanguage, type TimelineMilestone } from "../lib/timeline";
+import { milestoneKindLabel, parseSuccessorStorySource, storyReleaseTargetCatalog, type EvidenceReference, type StoryLanguage, type SuccessorStorySource, type TimelineMilestone } from "../lib/timeline";
 import { selectReviewableStoryTimeline } from "../lib/story-readiness";
 import { buildReviewedStoryRelease } from "../lib/story-release";
 import {
@@ -37,7 +42,12 @@ import {
 import {
   canonicalizeStoryReviewSession,
   createStoryReviewSession,
+  createSuccessorStoryReviewSession,
   hydrateStoryReviewSession,
+  hydrateSuccessorStoryReviewSession,
+  parseStoryReviewSession,
+  STORY_REVIEW_SESSION_SCHEMA,
+  SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
 } from "../lib/story-review-session";
 import {
   StoryReviewSessionPersistenceError,
@@ -65,6 +75,79 @@ type Doc = WorkspaceDocument;
 type Summary = WorkspaceSummary;
 type Item = { id:string; sequence:number; event_type?:string; actor_id?:string; actor_type?:string; timestamp?:string; content:string; organization_category?:string; organization_confidence?:number; organization_reason?:string };
 type Detail = { document:Doc; items:Item[] };
+type SuccessorViewerChapter = {
+  id: string;
+  sequence: number;
+  timestamp?: string;
+  project: string;
+  documentId?: string;
+  source: SuccessorStorySource;
+  story: SuccessorStorySource;
+};
+type ViewerChapter = {
+  key: string;
+  project: string;
+  phase: string;
+  kind: NonNullable<SuccessorStorySource["kind"]>;
+  title: string;
+  overview: string;
+  timestamp?: string;
+  evidenceCount: number;
+  readingMinutes: number;
+  before?: string;
+  after?: string;
+  chips: string[];
+  legacy?: TimelineMilestone;
+  successor?: SuccessorViewerChapter;
+};
+
+function selectSuccessorViewerChapters(
+  highlights: WorkspaceSummary["highlights"],
+  fallbackProject: string,
+): { chapters: SuccessorViewerChapter[]; invalid: boolean } {
+  const seen = new Map<string, string>();
+  const chapters: SuccessorViewerChapter[] = [];
+  for (const event of highlights || []) {
+    const source = parseSuccessorStorySource(event.summary);
+    if (!source) continue;
+    const serialized = JSON.stringify(source);
+    const previous = seen.get(source.key);
+    if (previous) {
+      if (previous !== serialized) return { chapters: [], invalid: true };
+      continue;
+    }
+    seen.set(source.key, serialized);
+    chapters.push({
+      id: event.id,
+      sequence: event.sequence,
+      ...(event.timestamp ? { timestamp: event.timestamp } : {}),
+      project: event.project || fallbackProject,
+      ...(event.documentId ? { documentId: event.documentId } : {}),
+      source,
+      story: source,
+    });
+  }
+  return {
+    chapters: chapters.sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || ""))
+      || left.sequence - right.sequence || left.id.localeCompare(right.id)),
+    invalid: false,
+  };
+}
+
+function successorCompletionContext(source: SuccessorStorySource) {
+  const blocks = successorStoryBlocks(source);
+  return {
+    source,
+    privacyCandidates: [],
+    privacyDecisions: {},
+    targetCatalog: new Map(),
+    evidenceResolved: true,
+    supportedAddIds: [],
+    supportedEditIds: [],
+    sourceBlocks: blocks,
+    reviewedBlocks: blocks,
+  };
+}
 
 function organizationRequestError(message: string, details: { status?: number; retryable?: boolean } = {}) {
   return Object.assign(new Error(message), details);
@@ -92,7 +175,7 @@ const workspaceUi = {
   en: {
     title:"Storytelling Review", local:"Local only · nothing uploaded", projects:"Project Story", total:"total",
     sources:"Source records", projectStory:"Project story", evidenceReview:"Evidence review", preferencesTitle:"Contributor preferences",
-    milestones:"meaningful milestones", phases:"narrative phases", reviewed:"highlights reviewed", retained:"source records retained",
+    milestones:"meaningful milestones", phases:"narrative phases", reviewed:"highlights reviewed", successorReviewed:"AI Insights resolved", retained:"source records retained",
     timeline:"Project Story", release:"Release preview", preferences:"Preferences", mainProject:"MAIN PROJECT", events:"events",
     introTitle:"AI-selected highlights are the table of contents.", intro:"Open a chapter for People, Story, and Privacy. AI insights stay inside the narrative; local evidence stays secondary.",
     before:"BEFORE", after:"AFTER", selected:"AI-selected highlight", evidence:"reviewed evidence event", read:"Read chapter", workflow:"Workflow",
@@ -104,13 +187,15 @@ const workspaceUi = {
       direct_edit_pending:"A Story edit still needs Apply Review", direct_edit_needs_evidence:"A Story edit needs Evidence",
       insight_pending:"An Insight change still needs Apply Review", privacy_decisions_stale:"Privacy decisions need to be reviewed again",
       revision_provenance_mismatch:"This Chapter review needs to be refreshed", redaction_targets_mismatch:"Privacy redactions need review",
+      ai_insight_decision_missing:"An AI Insight decision is missing", ai_insight_decision_pending:"An AI Insight decision still needs Apply Review",
+      ai_insight_reaccept_required:"An edited AI Insight requires a new Accept", human_insight_pending:"A human-created Insight still needs Save",
       chapter_not_confirmed:"Chapter is not marked All set",
     },
   },
   zh: {
     title:"故事审阅", local:"仅限本地 · 未上传", projects:"项目故事", total:"个项目",
     sources:"来源记录", projectStory:"项目故事", evidenceReview:"证据审阅", preferencesTitle:"贡献者偏好",
-    milestones:"个重要章节", phases:"个叙事阶段", reviewed:"个高光已审阅", retained:"条来源记录保留",
+    milestones:"个重要章节", phases:"个叙事阶段", reviewed:"个高光已审阅", successorReviewed:"项 AI 洞察已解决", retained:"条来源记录保留",
     timeline:"项目故事", release:"发布预览", preferences:"偏好", mainProject:"主要项目", events:"条事件",
     introTitle:"AI 选择的高光就是故事目录。", intro:"打开一章，按人物、故事和隐私阅读；AI 洞察留在叙事中，本地证据保持为次要入口。",
     before:"之前", after:"之后", selected:"AI 选择的高光", evidence:"条已审阅证据", read:"阅读章节", workflow:"工作流",
@@ -122,6 +207,8 @@ const workspaceUi = {
       direct_edit_pending:"故事编辑仍需应用审阅", direct_edit_needs_evidence:"故事编辑需要证据",
       insight_pending:"洞察改动仍需应用审阅", privacy_decisions_stale:"需要重新审阅隐私决定",
       revision_provenance_mismatch:"本章审阅需要刷新", redaction_targets_mismatch:"隐私移除项需要审阅",
+      ai_insight_decision_missing:"缺少一项 AI 洞察决定", ai_insight_decision_pending:"一项 AI 洞察决定仍需应用审阅",
+      ai_insight_reaccept_required:"编辑后的 AI 洞察需要重新接受", human_insight_pending:"人工创建的洞察仍需保存",
       chapter_not_confirmed:"本章尚未确认完成",
     },
   },
@@ -193,6 +280,7 @@ export function InlineWorkspace({
   const [language,setLanguage] = useState<StoryLanguage>("en");
   const [privacyDecisions,setPrivacyDecisions] = useState<Record<string,PrivacyDecision>>(initialPrivacyDecisions);
   const [chapterReviews,setChapterReviews] = useState<Record<string,ChapterReviewState>>(initialChapterReviews);
+  const [successorChapterReviews,setSuccessorChapterReviews] = useState<Record<string,SuccessorChapterReviewState>>({});
   const [storyDataReadyRunId,setStoryDataReadyRunId] = useState(initialStorySessionReadyRunId);
   const [storySessionReadyRunId,setStorySessionReadyRunId] = useState(initialStorySessionReadyRunId);
   const [evidenceReturn,setEvidenceReturn] = useState<(ChapterEvidenceContext & { projectName:string })|null>(null);
@@ -210,6 +298,7 @@ export function InlineWorkspace({
   const storyPersistenceReadyRunRef = useRef("");
   const currentStoryStateRef = useRef({
     chapterReviews: initialChapterReviews,
+    successorChapterReviews: {} as Record<string,SuccessorChapterReviewState>,
     privacyDecisions: initialPrivacyDecisions,
     highlights: [] as ReturnType<typeof selectReviewableStoryTimeline>,
   });
@@ -437,26 +526,39 @@ export function InlineWorkspace({
     doc.formatted_summary?.highlights || []
   ).map((event) => ({ ...event, documentId:doc.id })))
     .sort((a,b) => String(a.timestamp || "").localeCompare(String(b.timestamp || ""))), [docs]);
+  const metadataPrimaryProject = docs[0]?.formatted_summary?.primary_project || "Oxygen";
   const activatedStoryHighlights = useMemo(
     () => selectReviewableStoryTimeline(allHighlights),
     [allHighlights],
   );
-  const projectNames = storyNavigationProjects(activatedStoryHighlights);
-  const metadataPrimaryProject = docs[0]?.formatted_summary?.primary_project || "Oxygen";
+  const successorSelection = useMemo(
+    () => selectSuccessorViewerChapters(allHighlights, metadataPrimaryProject),
+    [allHighlights, metadataPrimaryProject],
+  );
+  const storyLane = activatedStoryHighlights.length
+    ? "legacy" as const
+    : successorSelection.chapters.length && !successorSelection.invalid ? "successor" as const : "none" as const;
+  const effectiveError = successorSelection.invalid
+    ? "Successor Story source contains a conflicting Chapter identity" : error;
+  const navigationCandidates = useMemo(() => storyLane === "legacy"
+    ? activatedStoryHighlights.map((chapter) => ({ project: chapter.project, story: { key: chapter.story.key } }))
+    : successorSelection.chapters.map((chapter) => ({ project: chapter.project, story: { key: chapter.source.key } })),
+  [activatedStoryHighlights, storyLane, successorSelection.chapters]);
+  const projectNames = storyNavigationProjects(navigationCandidates);
   const primaryProject = projectNames.includes(metadataPrimaryProject)
     ? metadataPrimaryProject
     : projectNames[0] || metadataPrimaryProject;
   const isProject = selected.startsWith("project:");
   const requestedProject = isProject ? selected.slice("project:".length) : "";
   const navigation = isProject
-    ? resolveStoryNavigation(activatedStoryHighlights, { project:requestedProject, storyKey:activeStoryKey }, primaryProject)
+    ? resolveStoryNavigation(navigationCandidates, { project:requestedProject, storyKey:activeStoryKey }, primaryProject)
     : { project:"", storyKey:"" };
   const selectedProject = navigation.project;
 
   useEffect(() => {
     const documentsReady = status?.status === "empty"
       || (status?.status === "complete" && docs.length >= status.documentCount);
-    if (!workflowRunId || !storyReviewReady || storyDataReadyRunId !== workflowRunId || !documentsReady
+    if (!workflowRunId || !storyReviewReady || storyDataReadyRunId !== workflowRunId || !documentsReady || storyLane === "none"
       || (storySessionHydratedRunRef.current === workflowRunId
         && storyPersistenceReadyRunRef.current === workflowRunId)
       || storySessionLoadingRunRef.current === workflowRunId) return;
@@ -477,8 +579,27 @@ export function InlineWorkspace({
           || (payload.persistedAt !== null && typeof payload.persistedAt !== "string")) {
           throw new Error("Story review persistence metadata is invalid");
         }
-        const canonicalSession = canonicalizeStoryReviewSession(payload.session);
-        const restored = hydrateStoryReviewSession(canonicalSession, workflowRunId, activatedStoryHighlights);
+        const parsedSession = parseStoryReviewSession(payload.session);
+        const expectedSchema = storyLane === "successor"
+          ? SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA : STORY_REVIEW_SESSION_SCHEMA;
+        if (parsedSession && parsedSession.schema !== expectedSchema) {
+          throw new Error("Story source and persisted review session versions do not match");
+        }
+        const canonicalSession = storyLane === "legacy"
+          ? canonicalizeStoryReviewSession(parsedSession)
+          : parsedSession?.schema === SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA ? parsedSession : null;
+        const successorSources = successorSelection.chapters.map((chapter) => chapter.source);
+        const restored = storyLane === "legacy"
+          ? hydrateStoryReviewSession(canonicalSession, workflowRunId, activatedStoryHighlights)
+          : parsedSession
+            ? hydrateSuccessorStoryReviewSession(parsedSession, workflowRunId, successorSources)
+            : { chapterReviews: Object.fromEntries(successorSources.map((source) => [
+              source.key, emptySuccessorChapterReview(source),
+            ])), privacyDecisions: {} };
+        if (storyLane === "successor" && parsedSession
+          && Object.keys(restored.chapterReviews).length !== successorSources.length) {
+          throw new Error("Successor Story review session is not compatible with the exact current source");
+        }
         if (!cancelled) {
           storyPersistenceRef.current?.initialize({
             workflowRunId,
@@ -487,8 +608,15 @@ export function InlineWorkspace({
             session: canonicalSession,
             persistedAt: payload.persistedAt as string|null,
           });
-          setChapterReviews(restored.chapterReviews);
-          setPrivacyDecisions(restored.privacyDecisions);
+          if (storyLane === "legacy") {
+            setChapterReviews(restored.chapterReviews as Record<string,ChapterReviewState>);
+            setSuccessorChapterReviews({});
+            setPrivacyDecisions(restored.privacyDecisions);
+          } else {
+            setChapterReviews({});
+            setSuccessorChapterReviews(restored.chapterReviews as Record<string,SuccessorChapterReviewState>);
+            setPrivacyDecisions({});
+          }
           storySessionHydratedRunRef.current = workflowRunId;
           storyPersistenceReadyRunRef.current = workflowRunId;
           setStorySessionReadyRunId(workflowRunId);
@@ -496,6 +624,7 @@ export function InlineWorkspace({
       } catch (value) {
         if (!cancelled) {
           setChapterReviews({});
+          setSuccessorChapterReviews({});
           setPrivacyDecisions({});
           setError(value instanceof Error ? value.message : "Story review persistence could not be loaded");
         }
@@ -508,19 +637,21 @@ export function InlineWorkspace({
       cancelled = true;
       if (storySessionLoadingRunRef.current === workflowRunId) storySessionLoadingRunRef.current = "";
     };
-  }, [activatedStoryHighlights, docs.length, status?.documentCount, status?.status, storyDataReadyRunId, storyReviewReady, workflowRunId]);
+  }, [activatedStoryHighlights, docs.length, status?.documentCount, status?.status, storyDataReadyRunId, storyLane, storyReviewReady, successorSelection, workflowRunId]);
 
   useEffect(() => {
     if (!workflowRunId || storySessionReadyRunId !== workflowRunId
       || storySessionHydratedRunRef.current !== workflowRunId
       || storyPersistenceReadyRunRef.current !== workflowRunId) return;
-    const session = createStoryReviewSession(workflowRunId, chapterReviews, privacyDecisions);
+    const session = storyLane === "successor"
+      ? createSuccessorStoryReviewSession(workflowRunId, successorChapterReviews, {})
+      : createStoryReviewSession(workflowRunId, chapterReviews, privacyDecisions);
     if (!session) {
       const errorTimer = setTimeout(() => setError("Story review state could not be safely persisted"), 0);
       return () => clearTimeout(errorTimer);
     }
     storyPersistenceRef.current?.schedule(session);
-  }, [chapterReviews, privacyDecisions, storySessionReadyRunId, workflowRunId]);
+  }, [chapterReviews, privacyDecisions, storyLane, storySessionReadyRunId, successorChapterReviews, workflowRunId]);
 
   const storyWorkspaceReady = isStoryWorkspaceReady(workflow, {
     storyDataReadyRunId,
@@ -536,25 +667,26 @@ export function InlineWorkspace({
     highlights: allHighlights.filter((event) => event.project === selectedProject),
   } : detail?.document.formatted_summary || {};
   const highlights = selectReviewableStoryTimeline(summary.highlights || []);
+  const successorProjectChapters = successorSelection.chapters.filter((chapter) => chapter.project === selectedProject);
   const setStoryNavigation = (
     requested: Partial<StoryNavigation>,
     historyMode: "push"|"replace" = "push",
   ) => {
-    const next = resolveStoryNavigation(activatedStoryHighlights, requested, primaryProject);
+    const next = resolveStoryNavigation(navigationCandidates, requested, primaryProject);
     setSelected(next.project ? `project:${next.project}` : "");
     setActiveStoryKey(next.storyKey);
     updateStoryNavigationUrl(next, historyMode);
     return next;
   };
   useEffect(() => {
-    currentStoryStateRef.current = { chapterReviews, privacyDecisions, highlights };
-  }, [chapterReviews, highlights, privacyDecisions]);
+    currentStoryStateRef.current = { chapterReviews, successorChapterReviews, privacyDecisions, highlights };
+  }, [chapterReviews, highlights, privacyDecisions, successorChapterReviews]);
   useEffect(() => {
     if (!storyWorkspaceReady || storySessionReadyRunId !== workflowRunId
-      || view !== "timeline" || !activatedStoryHighlights.length) return;
+      || view !== "timeline" || !navigationCandidates.length) return;
     const restoreFromUrl = () => {
       const next = resolveStoryNavigation(
-        activatedStoryHighlights,
+        navigationCandidates,
         readStoryNavigation(window.location.search),
         primaryProject,
       );
@@ -568,37 +700,84 @@ export function InlineWorkspace({
     restoreFromUrl();
     window.addEventListener("popstate", restoreFromUrl);
     return () => window.removeEventListener("popstate", restoreFromUrl);
-  }, [activatedStoryHighlights, primaryProject, storySessionReadyRunId, storyWorkspaceReady, view, workflowRunId]);
+  }, [navigationCandidates, primaryProject, storySessionReadyRunId, storyWorkspaceReady, view, workflowRunId]);
   if (!storyWorkspaceReady) {
-    return <WorkflowProgress workflow={workflow} status={status} error={error} language={language} />;
+    return <WorkflowProgress workflow={workflow} status={status} error={effectiveError} language={language} />;
   }
-  if (!activatedStoryHighlights.length
-    || (view === "timeline" && !highlights.length)
+  if (storyLane === "none"
+    || (view === "timeline" && storyLane === "legacy" && !highlights.length)
+    || (view === "timeline" && storyLane === "successor" && !successorProjectChapters.length)
     || storySessionReadyRunId !== workflowRunId) {
-    return <WorkflowProgress workflow={workflow} status={status} error={error} language={language} />;
+    return <WorkflowProgress workflow={workflow} status={status} error={effectiveError} language={language} />;
   }
-  const chineseStoryAvailable = highlights.every((event) => Boolean(event.story.reviewPresentation?.zh));
+  const chineseStoryAvailable = storyLane === "legacy" && highlights.length > 0
+    && highlights.every((event) => Boolean(event.story.reviewPresentation?.zh));
   const storyLanguage: StoryLanguage = language === "zh" && chineseStoryAvailable ? "zh" : "en";
   const labels = workspaceUi[storyLanguage];
   const localized = (event:typeof highlights[number]) => event.story.reviewPresentation?.[storyLanguage]
     || event.story.reviewPresentation?.en;
-  const projectStorySummary = highlights[0]?.story.reviewPresentation?.projectSummary?.[storyLanguage]
+  const projectStorySummary = (storyLane === "legacy" ? highlights[0]?.story.reviewPresentation?.projectSummary?.[storyLanguage] : undefined)
     || (storyLanguage === "zh"
       ? "这是一段由已审阅证据重建的项目故事：它保留关键转折、失败、决定与当前边界。"
       : summary.project_summary);
-  const phaseGroups = highlights.reduce<Array<{ name:string; events:typeof highlights }>>((groups,event) => {
-    const phase=localized(event)?.phase || event.story.phase;
+  const viewerChapters:ViewerChapter[] = storyLane === "legacy" ? highlights.map((event) => {
+    const copy=localized(event);
+    return {
+      key:event.story.key,
+      project:event.project || "",
+      phase:copy?.phase || event.story.phase,
+      kind:event.story.kind,
+      title:copy?.title || event.story.title,
+      overview:copy?.overview || event.story.narrative,
+      timestamp:event.timestamp,
+      evidenceCount:event.story.evidence ? 1+event.story.evidence.supporting.length : 1,
+      readingMinutes:event.story.releaseEpisode?.readingTimeMinutes || 1,
+      before:copy?.before || event.story.before,
+      after:copy?.after || event.story.after,
+      chips:copy?.timelineChips?.length ? copy.timelineChips : event.story.metric?.split(/\s*·\s*/).filter(Boolean) || [],
+      legacy:event,
+    };
+  }) : successorProjectChapters.map((chapter) => ({
+    key:chapter.source.key,
+    project:chapter.project,
+    phase:chapter.source.phase.label,
+    kind:chapter.source.kind || "foundation",
+    title:chapter.source.title,
+    overview:chapter.source.overview,
+    timestamp:chapter.timestamp,
+    evidenceCount:1+chapter.source.evidence.supporting.length,
+    readingMinutes:Math.max(1,Math.ceil(chapter.source.story.blocks.reduce((count,block) => count+block.text.trim().split(/\s+/u).length,0)/220)),
+    chips:[],
+    successor:chapter,
+  }));
+  const phaseGroups = viewerChapters.reduce<Array<{ name:string; events:ViewerChapter[] }>>((groups,event) => {
+    const phase=event.phase;
     const previous=groups.at(-1);
     if(previous?.name===phase) previous.events.push(event);
     else groups.push({name:phase,events:[event]});
     return groups;
   },[]);
-  const milestoneNumber = new Map(highlights.map((event,index) => [event.story.key,index+1]));
-  const activeStoryIndex = highlights.findIndex((event) => event.story.key === navigation.storyKey);
-  const activeMilestone = activeStoryIndex >= 0 ? highlights[activeStoryIndex] : null;
-  const reviewedInsights = highlights.filter((event) => Object.keys(chapterReviews[event.story.key]?.insightReviews || {}).length > 0).length;
-  const confirmedChapters = buildReviewedStoryRelease(highlights,chapterReviews).chapters.length;
-  const displayedWorkflow = workflow ? withHumanReviewProgress(workflow, confirmedChapters, highlights.length) : null;
+  const milestoneNumber = new Map(viewerChapters.map((event,index) => [event.key,index+1]));
+  const activeStoryIndex = viewerChapters.findIndex((event) => event.key === navigation.storyKey);
+  const activeChapter = activeStoryIndex >= 0 ? viewerChapters[activeStoryIndex] : null;
+  const activeMilestone = activeChapter?.legacy || null;
+  const activeSuccessorChapter = activeChapter?.successor || null;
+  const successorInsightProgress = successorProjectChapters.reduce((progress,chapter) => {
+    progress.total+=chapter.source.insights.length;
+    progress.resolved+=chapter.source.insights.filter((insight) => {
+      const review=successorChapterReviews[chapter.source.key]?.sourceInsightReviews[insight.id];
+      return review?.resolution==="applied" && review.appliedVersion===review.version;
+    }).length;
+    return progress;
+  },{resolved:0,total:0});
+  const reviewedInsights = storyLane === "legacy"
+    ? highlights.filter((event) => Object.keys(chapterReviews[event.story.key]?.insightReviews || {}).length > 0).length
+    : successorInsightProgress.resolved;
+  const reviewedInsightTotal = storyLane === "legacy" ? viewerChapters.length : successorInsightProgress.total;
+  const confirmedChapters = storyLane === "legacy"
+    ? buildReviewedStoryRelease(highlights,chapterReviews).chapters.length
+    : successorProjectChapters.filter((chapter) => successorChapterReviews[chapter.source.key]?.stage === "human_confirmed").length;
+  const displayedWorkflow = workflow ? withHumanReviewProgress(workflow, confirmedChapters, viewerChapters.length) : null;
   const phaseSectionRef = (index:number,node:HTMLElement|null) => {
     if(node) phaseSectionRefs.current.set(index,node);
     else phaseSectionRefs.current.delete(index);
@@ -695,7 +874,18 @@ export function InlineWorkspace({
     return next;
   });
   const updateChapterReview = (storyKey:string,review:ChapterReviewState) => setChapterReviews((current) => ({...current,[storyKey]:review}));
-  const currentDownloadReviewBlockerGroups = () => groupDownloadReviewBlockers(activatedStoryHighlights.map((milestone) => {
+  const updateSuccessorChapterReview = (storyKey:string,review:SuccessorChapterReviewState) => setSuccessorChapterReviews((current) => ({...current,[storyKey]:review}));
+  const currentDownloadReviewBlockerGroups = () => storyLane === "successor"
+    ? groupDownloadReviewBlockers(successorSelection.chapters.map((chapter) => {
+      const state=successorChapterReviews[chapter.source.key] || emptySuccessorChapterReview(chapter.source);
+      return {
+        project:chapter.project,
+        chapterKey:chapter.source.key,
+        stage:state.stage,
+        completionBlockers:successorChapterReviewCompletionBlockers(state,successorCompletionContext(chapter.source)),
+      };
+    }))
+    : groupDownloadReviewBlockers(activatedStoryHighlights.map((milestone) => {
     const chapterKey=milestone.story.key;
     const state=chapterReviews[chapterKey] || emptyChapterReview();
     const presentation=milestone.story.reviewPresentation?.en;
@@ -734,10 +924,10 @@ export function InlineWorkspace({
       stage:state.stage,
       completionBlockers,
     };
-  }));
+    }));
   const openDownloadReviewBlocker = (group:DownloadReviewBlockerGroup,blocker:DownloadReviewBlocker) => {
     setDownloadBlockerGroups([]);
-    if(!activatedStoryHighlights.some((milestone) => milestone.project===group.project && milestone.story.key===group.chapterKey)) return;
+    if(!navigationCandidates.some((chapter) => chapter.project===group.project && chapter.story.key===group.chapterKey)) return;
     releasePreviewReturnSelectionRef.current=null;
     clearChapterRestore();
     setEvidenceNavigationError("");
@@ -757,6 +947,10 @@ export function InlineWorkspace({
     const blockerGroups=currentDownloadReviewBlockerGroups();
     if(blockerGroups.length) {
       setDownloadBlockerGroups(blockerGroups);
+      return;
+    }
+    if(storyLane === "successor") {
+      setError("Successor download and release remain inactive in this Viewer lane");
       return;
     }
     const persistence=storyPersistenceRef.current;
@@ -807,7 +1001,7 @@ export function InlineWorkspace({
     window.addEventListener("pointermove",move);window.addEventListener("pointerup",stop);
   };
   const workspaceStyle={"--rail-width":`${railWidth}px`,"--rail-height":`${railHeight}px`} as CSSProperties;
-  const activeChapterRestore=restoreChapterContext(chapterScrollRestore,activeMilestone?.story.key || "");
+  const activeChapterRestore=restoreChapterContext(chapterScrollRestore,activeChapter?.key || "");
   const downloadBlockerCount=downloadBlockerGroups.reduce((count,group) => count+group.blockers.length,0);
 
   return <main className="shell storytellingShell">
@@ -824,16 +1018,16 @@ export function InlineWorkspace({
       <button className="download" onClick={() => downloadReviewed("/api/organization/export","oxygen-reviewed-story.html")}>Download HTML</button>
       <button className="download primary" onClick={() => downloadReviewed("/api/package","oxygen-contribution.zip")}>Download ZIP</button>
     </header>
-    <div className={`workspace storytellingWorkspace ${activeMilestone?"episodeOpen":""}`} style={workspaceStyle}>
+    <div className={`workspace storytellingWorkspace ${activeChapter?"episodeOpen":""}`} style={workspaceStyle}>
       <aside className="rail storyRail">
-        <div className="railHead"><b>{labels.projects}</b><span>{selectedProject?highlights.length:projectNames.length}</span></div>
+        <div className="railHead"><b>{labels.projects}</b><span>{selectedProject?viewerChapters.length:projectNames.length}</span></div>
         <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selectedProject===project?"active":""}`} key={project} onClick={() => { releasePreviewReturnSelectionRef.current=null; setStoryNavigation({ project, storyKey:"" }); setSourceFocus(""); setEvidenceReturn(null); setView("timeline"); }}>
           <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${labels.phases}`:`${projectCount(project).toLocaleString()} ${labels.events}`}</small>
-        </button>)}{activeMilestone && <div className="chapterRailContext" aria-label={storyLanguage==="zh"?"章节选择器":"Chapter selector"}>
-          <span>{storyLanguage==="zh"?`章节 ${activeStoryIndex+1} / ${highlights.length}`:`Chapters ${activeStoryIndex+1} / ${highlights.length}`}</span>
+        </button>)}{activeChapter && <div className="chapterRailContext" aria-label={storyLanguage==="zh"?"章节选择器":"Chapter selector"}>
+          <span>{storyLanguage==="zh"?`章节 ${activeStoryIndex+1} / ${viewerChapters.length}`:`Chapters ${activeStoryIndex+1} / ${viewerChapters.length}`}</span>
           <nav className="chapterRailList" aria-label={storyLanguage==="zh"?"章节":"Chapters"}>
-            {highlights.map((event) => { const active=event.story.key===navigation.storyKey; return <button className={active?"active":""} aria-current={active?"page":undefined} ref={active?activeChapterButtonRef:undefined} key={event.story.key} onClick={() => navigateStory(event.story.key)}>
-              <i>{milestoneNumber.get(event.story.key)}</i><b>{localized(event)?.title || event.story.title}</b>
+            {viewerChapters.map((event) => { const active=event.key===navigation.storyKey; return <button className={active?"active":""} aria-current={active?"page":undefined} ref={active?activeChapterButtonRef:undefined} key={event.key} onClick={() => navigateStory(event.key)}>
+              <i>{milestoneNumber.get(event.key)}</i><b>{event.title}</b>
             </button>})}
           </nav>
         </div>}<div className="sourceRecords"><div className="railHead evidence"><b>{labels.sources}</b><span>{docs.length}</span></div>{docs.map((doc) => <button className={`docCard ${selected===doc.id?"active":""}`} key={doc.id} onClick={() => { setSelected(doc.id); setSourceFocus(""); setActiveStoryKey(""); setEvidenceReturn(null); setView("redaction"); }}>
@@ -843,8 +1037,8 @@ export function InlineWorkspace({
       <div className="splitter" role="separator" aria-label="Resize project and source panel" aria-orientation="vertical" onPointerDown={startResize}><span /></div>
       <section className="canvas storyCanvas">
         {!ready ? <div className="empty">No organized records found.</div> : <>
-          {error && <div className="workspaceError" role="alert">{error}</div>}
-          <nav className="toolbar storyToolbar" aria-label="Record view" aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
+          {effectiveError && <div className="workspaceError" role="alert">{effectiveError}</div>}
+          <nav className="toolbar storyToolbar" aria-label="Record view" aria-hidden={activeChapter?true:undefined} inert={activeChapter?true:undefined}>
             <div className="toolbarInner"><button className={view==="timeline"?"active":""} onClick={() => { restoreReleasePreviewSelection(); setActiveStoryKey(""); setView("timeline"); }}>{labels.timeline}</button>
             <button className={view==="redaction"?"active":""} onClick={openReleasePreview}>
               {labels.release}{redactionJob?.status === "running" ? " · running"
@@ -855,32 +1049,30 @@ export function InlineWorkspace({
               {labels.preferences}{probeRun?.status === "running" ? " · running" : probes.length ? ` · ${probes.filter((p) => p.answered_at).length}/${probes.length}` : ""}
             </button></div>
           </nav>
-          {view!=="timeline" && <div className="canvasHead" aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}><div className="canvasHeadInner">
+          {view!=="timeline" && <div className="canvasHead" aria-hidden={activeChapter?true:undefined} inert={activeChapter?true:undefined}><div className="canvasHeadInner">
             <span className="eyebrow">{view==="redaction"?labels.evidenceReview:labels.preferencesTitle}</span>
             <h1>{summary.primary_project || detail?.document.title}</h1>
           </div></div>}
-          <div className={`stream ${view==="timeline" ? "storyStream" : view==="redaction" ? "reviewStream releasePreviewStream" : "reviewStream preferencesStream"}`} ref={timelineScrollRef} onScroll={updateActivePhase} aria-hidden={activeMilestone?true:undefined} inert={activeMilestone?true:undefined}>
+          <div className={`stream ${view==="timeline" ? "storyStream" : view==="redaction" ? "reviewStream releasePreviewStream" : "reviewStream preferencesStream"}`} ref={timelineScrollRef} onScroll={updateActivePhase} aria-hidden={activeChapter?true:undefined} inert={activeChapter?true:undefined}>
             {view === "timeline" ? <>
               <div className="storyCanvasGrid"><div className="storyTimelineColumn">
                 <header className="storyOrientation"><p className="eyebrow">{labels.projectStory}</p><h1>{summary.primary_project || detail?.document.title}</h1>
                   <p>{projectStorySummary}</p>
-                  <div className="storyStats"><span><b>{highlights.length}</b> {labels.milestones}</span><span><b>{phaseGroups.length}</b> {labels.phases}</span><span><b>{reviewedInsights}/{highlights.length}</b> {labels.reviewed}</span><span><b>{docs.length}</b> {labels.retained}</span></div>
+                  <div className="storyStats"><span><b>{viewerChapters.length}</b> {labels.milestones}</span><span><b>{phaseGroups.length}</b> {labels.phases}</span><span><b>{reviewedInsights}/{reviewedInsightTotal}</b> {storyLane==="successor"?labels.successorReviewed:labels.reviewed}</span><span><b>{docs.length}</b> {labels.retained}</span></div>
                   <small>{docs.length} {storyLanguage==="zh"?"条已审阅来源记录": "reviewed source records"} · {projectCount(selectedProject || primaryProject).toLocaleString()} {labels.events} · {storyLanguage==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
                 </header>
                 <p className="storyNextStep" data-story-stream-instruction>↘ {labels.nextStep}</p>
                 {phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
                   <header className="phaseHeading"><span>{String(phaseIndex+1).padStart(2,"0")}</span><div><h2>{group.name}</h2><p>{group.events.length} {storyLanguage==="zh"?"个章节":`milestone${group.events.length===1?"":"s"}`}</p></div></header>
-                  <div className="milestoneList">{group.events.map((event) => { const copy=localized(event); return <article className="milestone" data-kind={event.story.kind} data-story-key={event.story.key} key={event.story.key} aria-labelledby={`milestone-${event.id}`}>
-                    <div className="milestoneMeta"><time dateTime={event.timestamp}>{fmtTimelineDate(event.timestamp,storyLanguage)}</time><span>{milestoneKindLabel(event.story.kind,storyLanguage)}</span><strong>{labels.selected}</strong></div>
-                    <h3 id={`milestone-${event.id}`}>{copy?.title || event.story.title}</h3>
-                    {(copy?.before || event.story.before) && (copy?.after || event.story.after) && <div className="transition" aria-label={`${labels.before} to ${labels.after}`}>
-                      <div><small>{labels.before}</small><p>{copy?.before || event.story.before}</p></div><b aria-hidden="true">→</b><div><small>{labels.after}</small><p>{copy?.after || event.story.after}</p></div>
+                  <div className="milestoneList">{group.events.map((event) => <article className="milestone" data-kind={event.kind} data-story-key={event.key} key={event.key} aria-labelledby={`milestone-${event.key}`}>
+                    <div className="milestoneMeta"><time dateTime={event.timestamp}>{fmtTimelineDate(event.timestamp,storyLanguage)}</time><span>{milestoneKindLabel(event.kind,storyLanguage)}</span><strong>{storyLane==="successor"?"Story Chapter":labels.selected}</strong></div>
+                    <h3 id={`milestone-${event.key}`}>{event.title}</h3>
+                    {event.before && event.after && <div className="transition" aria-label={`${labels.before} to ${labels.after}`}>
+                      <div><small>{labels.before}</small><p>{event.before}</p></div><b aria-hidden="true">→</b><div><small>{labels.after}</small><p>{event.after}</p></div>
                     </div>}
-                    {(copy?.timelineChips?.length || event.story.metric) && <div className="milestoneChips" aria-label={storyLanguage==="zh"?"关键事实":"Key facts"}>{(copy?.timelineChips?.length?copy.timelineChips:event.story.metric?.split(/\s*·\s*/).filter(Boolean) || []).map((chip) => <span key={chip}>{chip}</span>)}</div>}
-                    <footer><span>{event.story.evidence ? `${1+event.story.evidence.supporting.length} ${labels.evidence}${storyLanguage==="en" && event.story.evidence.supporting.length ? "s" : ""}` : `Evidence · ${event.documentId} / ${event.id}`}</span>{event.story.releaseEpisode
-                      ? <button id={`story-open-${event.story.key}`} onClick={() => openStory(event.story.key)}>{labels.read} · ≈ {event.story.releaseEpisode.readingTimeMinutes} {storyLanguage==="zh"?"分钟":"min"} →</button>
-                      : <button onClick={() => { if(event.documentId) setSelected(event.documentId); setSourceFocus(event.id); setView("redaction"); }}>Open exact source event →</button>}</footer>
-                  </article>})}</div>
+                    {event.chips.length > 0 && <div className="milestoneChips" aria-label={storyLanguage==="zh"?"关键事实":"Key facts"}>{event.chips.map((chip) => <span key={chip}>{chip}</span>)}</div>}
+                    <footer><span>{event.evidenceCount} {labels.evidence}{storyLanguage==="en" && event.evidenceCount!==1?"s":""}</span><button id={`story-open-${event.key}`} onClick={() => openStory(event.key)}>{labels.read} · ≈ {event.readingMinutes} {storyLanguage==="zh"?"分钟":"min"} →</button></footer>
+                  </article>)}</div>
                 </section>)}
               </div><nav className="phaseDirectory" aria-label={storyLanguage==="zh"?"叙事阶段目录":"Narrative phase directory"}><b>{storyLanguage==="zh"?"故事阶段":"STORY PHASES"}</b>{phaseGroups.map((group,index) => <button className={activePhaseIndex===index?"active":""} aria-current={activePhaseIndex===index?"location":undefined} onClick={() => scrollToPhase(index)} key={phaseGroupIdentity(group.name,index)}>{group.name}</button>)}</nav></div>
             </> : view === "redaction" ? <>{evidenceReturn && <div className="evidenceReturnBar"><button onClick={backToChapter}>← {storyLanguage==="zh"?"返回章节":"Back to chapter"}</button><span>{storyLanguage==="zh"?"保持章节与证据来源位置":"Chapter and evidence origin preserved"}</span></div>}<RedactionCompare
@@ -919,7 +1111,7 @@ export function InlineWorkspace({
             key={`${activeMilestone.story.key}:${storyLanguage}`}
             milestone={activeMilestone}
             position={activeStoryIndex+1}
-            total={highlights.length}
+            total={viewerChapters.length}
             language={storyLanguage}
             privacyDecisions={activePrivacyReview}
             chapterReview={chapterReviews[activeMilestone.story.key] || emptyChapterReview()}
@@ -933,8 +1125,21 @@ export function InlineWorkspace({
             evidenceError={evidenceNavigationError}
             onOpenEvidence={openEvidence}
             onClose={closeStory}
-            onPrevious={() => navigateStory(highlights[activeStoryIndex-1]?.story.key || activeMilestone.story.key)}
-            onNext={() => navigateStory(highlights[activeStoryIndex+1]?.story.key || activeMilestone.story.key)}
+            onPrevious={() => navigateStory(viewerChapters[activeStoryIndex-1]?.key || activeMilestone.story.key)}
+            onNext={() => navigateStory(viewerChapters[activeStoryIndex+1]?.key || activeMilestone.story.key)}
+          />}
+          {activeSuccessorChapter && <SuccessorStoryChapterEditor
+            key={activeSuccessorChapter.source.key}
+            source={activeSuccessorChapter.source}
+            position={activeStoryIndex+1}
+            total={viewerChapters.length}
+            chapterReview={successorChapterReviews[activeSuccessorChapter.source.key] || emptySuccessorChapterReview(activeSuccessorChapter.source)}
+            reviewFocus={downloadReviewFocus?.chapterKey===activeSuccessorChapter.source.key ? downloadReviewFocus : undefined}
+            onReviewFocusHandled={clearDownloadReviewFocus}
+            onChapterReview={(review) => updateSuccessorChapterReview(activeSuccessorChapter.source.key,review)}
+            onClose={closeStory}
+            onPrevious={() => navigateStory(viewerChapters[activeStoryIndex-1]?.key || activeSuccessorChapter.source.key)}
+            onNext={() => navigateStory(viewerChapters[activeStoryIndex+1]?.key || activeSuccessorChapter.source.key)}
           />}
         </>}
       </section>
@@ -957,6 +1162,6 @@ export function InlineWorkspace({
         </section>)}</div>
       </section>
     </div>}
-    {workflowOpen && <WorkflowProgress workflow={displayedWorkflow} status={status} error={error} language={storyLanguage} onClose={() => setWorkflowOpen(false)} />}
+    {workflowOpen && <WorkflowProgress workflow={displayedWorkflow} status={status} error={effectiveError} language={storyLanguage} onClose={() => setWorkflowOpen(false)} />}
   </main>;
 }

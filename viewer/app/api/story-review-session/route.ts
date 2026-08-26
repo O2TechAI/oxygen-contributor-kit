@@ -1,7 +1,7 @@
 import { getD1 } from "../../../db";
 import {
   MAX_STORY_REVIEW_SESSION_BYTES,
-  canonicalizeStoryReviewSession,
+  parseStoryReviewSession,
 } from "../../../lib/story-review-session";
 import {
   STORY_SESSION_ERROR,
@@ -95,7 +95,7 @@ export async function POST(request: Request) {
     || !Number.isSafeInteger(body.sourceRevision) || Number(body.sourceRevision) < 0) {
     return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
-  const session = canonicalizeStoryReviewSession(body.session);
+  const session = parseStoryReviewSession(body.session);
   if (!session || session.workflowRunId !== workflowRunId) {
     return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }

@@ -31,9 +31,14 @@ The initial draft is revision 1. Each successful Apply review increments the rev
 Direct editing is the primary current lifecycle. Imported Delete/Revise/Add annotations are
 compatibility records only; they may be validated and resolved without becoming a creation toolbar.
 All set remains unavailable while any direct transaction is pending or needs evidence, any
-compatible legacy work is unresolved, Privacy is incomplete, the canonical Insight is pending, or
+compatible legacy work is unresolved, Privacy is incomplete, the legacy canonical Insight is pending, or
 evidence/ledger provenance fails validation. A stale paired locale remains visible as informational
 localization debt and never blocks canonical English review.
+
+For `oxygen.story/3`, the central successor completion evaluator replaces the exact-one Insight
+obligation: every source AI Insight must have an explicit applied Accept or Do-not-preserve decision
+for its current version, every saved human Insight must be human-approved for its current version,
+and zero source Insights create zero Insight obligations.
 
 ## Annotation model
 
@@ -223,7 +228,7 @@ Final release projection must run the same full-ledger replay validation. It mus
 The same fail-closed rule applies to non-annotation final state. Before All set and again before
 release projection, validate that:
 
-- every stored insight review belongs to the Chapter's single declared insight;
+- for legacy `/2`, every stored insight review belongs to the Chapter's single declared insight;
 - no insight review is pending;
 - the current applied insight state points to the latest revision record that names it;
 - revision history does not name an unknown insight;
@@ -231,6 +236,11 @@ release projection, validate that:
 - the latest revision record contains exactly those applied Privacy decisions;
 - the stored redacted-block set exactly equals the union of release targets for candidates whose
   latest applied decision is Redact.
+
+For successor `/3`, validate the exact source Insight ID set, stable `human:` IDs, current versions,
+source/human provenance, same-Chapter Story anchors, safe grounding Evidence, and successor revision
+history through the central successor ledger/completion evaluator. Never infer approval from a
+missing entry, pending decision, an older accepted version, or a v1 empty ledger.
 
 Never trust a browser-supplied `human_confirmed` stage, rejected insight flag, Privacy map, or
 redacted-block array without this provenance check. A mismatch blocks confirmation/release rather
@@ -266,13 +276,13 @@ Enable it only when:
 - no pending or `needs_evidence` direct transaction remains;
 - every required Privacy candidate has a Keep/Redact decision.
 - paired-locale debt, when present, remains visible and non-blocking;
-- no inline-insight operation remains pending;
+- no legacy inline-Insight operation remains pending, or for `/3` the central successor evaluator reports no Insight blocker;
 - the current Privacy decisions are the same typed decisions applied in the presented revision.
 - the latest successful Apply verified the Chapter's actual evidence references.
 
 Clicking it sets stage to human_confirmed without changing the revision or publication state. Show `Final Release Memory` plus a note that confirmation is local and not publication approval.
 
-Creating another direct edit or annotation after a revision returns the Chapter to reviewing and removes All set until the new work is applied.
+Creating another direct edit, annotation, AI Insight edit, or human Insight edit after a revision returns the Chapter to reviewing and removes All set until the new work is applied or saved under its owning semantics.
 
 ## Reopen review
 
@@ -284,8 +294,8 @@ human_confirmed → reviewing
 
 Preserve revision provenance, Story content, Privacy decisions, and one shared bilingual history. Another Apply/All set cycle can create a newer confirmed version.
 
-If the confirmed revision applied `Do not preserve` to the Chapter's insight, Reopen must make that
-same insight available for review again. A human can create a new pending Accept/override operation,
+If the confirmed revision applied `Do not preserve` to a legacy or successor source AI Insight, Reopen must make that
+same stable Insight available for review again. A human can create a new pending Accept/override operation,
 Apply it as another revision, inspect the restored insight, and then use All set. Do not erase the
 prior rejection record or restore it merely by changing the stage.
 

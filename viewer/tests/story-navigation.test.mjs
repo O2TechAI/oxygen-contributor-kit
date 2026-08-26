@@ -84,12 +84,12 @@ test("workspace wires activated navigation to native history without Review Sess
     workspace.indexOf("const setStoryNavigation"),
     workspace.indexOf("useEffect(() => {", workspace.indexOf("const setStoryNavigation")),
   );
-  assert.match(workspace, /storyNavigationProjects\(activatedStoryHighlights\)/);
-  assert.match(navigationOwner, /resolveStoryNavigation\(activatedStoryHighlights/);
+  assert.match(workspace, /storyNavigationProjects\(navigationCandidates\)/);
+  assert.match(navigationOwner, /resolveStoryNavigation\(navigationCandidates/);
   assert.match(workspace, /window\.history\.pushState/);
   assert.match(workspace, /window\.history\.replaceState/);
   assert.doesNotMatch(navigationOwner, /workflowRunId|storyPersistence|story-review-session|serverVersion|sourceRevision|active_story_digest|publication/);
-  assert.match(workspace, /if \(!storyWorkspaceReady \|\| storySessionReadyRunId !== workflowRunId[\s\S]*?!activatedStoryHighlights\.length\) return;[\s\S]*?readStoryNavigation/);
+  assert.match(workspace, /if \(!storyWorkspaceReady \|\| storySessionReadyRunId !== workflowRunId[\s\S]*?!navigationCandidates\.length\) return;[\s\S]*?readStoryNavigation/);
   assert.match(workspace, /onPrevious=\{\(\) => navigateStory/);
   assert.match(workspace, /onNext=\{\(\) => navigateStory/);
   assert.match(workspace, /if \(!storyWorkspaceReady\) \{[\s\S]*?return <WorkflowProgress/);

@@ -172,9 +172,9 @@ This panel is local reading assistance, never a second canonical Insight or runt
 must not create review state or enter release/export. On narrow screens, fold it into a compact
 inline/collapsible surface without horizontal overflow or loss of access.
 
-## Canonical AI insight
+## Legacy canonical AI insight
 
-Place the Chapter's single reviewable insight in a disclosure at the end of Story, collapsed by
+For `oxygen.story-highlight/2`, place the Chapter's single reviewable insight in a disclosure at the end of Story, collapsed by
 default. Import validation must fail closed on zero or multiple insights; do not build a
 multi-insight fallback UI. Use a restrained disclosure, not a large nested card.
 
@@ -192,13 +192,34 @@ Direct edit may expose title/observation/lesson. Human-directed revise asks how 
 
 After Accept, immediately replace or visibly change the selected action to `Accepted — pending Apply review` and announce the status accessibly. Give Do not preserve an equivalent pending state. Keep the alternate decision available until Apply. After Apply, state that the decision was applied in the current revision. Never imply Saved, Final, or Published before those states exist. Feedback and pending counts must hydrate from the shared persisted review state in both languages.
 
+## Successor sparse Insights
+
+For `oxygen.story/3`, render Story independently of Insight cardinality and render every source AI
+Insight as a stable-ID-owned card. Each card exposes `✓ Accept`, `Edit`, and `× Do not preserve` for
+that exact current version. Editing exposes optional Title plus Background, safe Story-grounded
+Quote, Directly Acquired Experience, and Principle. Saving an AI edit leaves the new version pending
+until a later explicit Accept and Apply review. One unresolved source AI Insight keeps completion
+blocked; zero source Insights create no empty card, placeholder, or approval obligation.
+
+A human may select safe reviewed Story text within exactly one current Story block and invoke a
+contextual Add Insight action. Cross-block or foreign selection is rejected without creating state.
+The selection seeds the Quote grounding; the author supplies optional Title, Background, Directly
+Acquired Experience, and Principle without a provider call. Human Save creates a stable `human:`
+Insight and approves that saved version without a redundant Accept. AI and human provenance remain
+visually distinct. All completion reasons come from the central successor evaluator and expose no
+Insight or Evidence copy.
+
 ## Text selection behavior
 
-Selecting text in Story Edit Mode is a native editor operation. Typing replaces the selection and
+For the legacy direct Story editor, selecting text in Story Edit Mode is a native editor operation. Typing replaces the selection and
 Backspace/Delete removes it; both routes create the same controlled block-local transaction and note
 as other direct edits. Focusing the owning block may synchronize passage assistance, but selection
 itself must not trigger a re-render or open a floating Delete/Revise/Add action window. Default read
 mode remains non-mutating.
+
+The successor Add Insight action above is the only `/3` exception. It is not a generic selection
+toolbar: native Selection remains transient, must resolve to one current Story block, and never
+becomes durable review authority by itself.
 
 If a safe direct mutation would cross semantic Story blocks, reject it visibly and preserve every
 block. Existing valid legacy annotation records may still render for compatibility, but the Chapter
@@ -288,8 +309,8 @@ Material equivalence requires:
 - default read mode plus a compact pencil/Edit control and zero-guesswork controlled editing surface;
 - synchronized Undo/Redo and left-margin edit/annotation notes with a compact responsive fallback;
 - secondary sticky ordered inline-AI-Insight sequence on wide layouts and inline/collapsible fallback;
-- one collapsed canonical AI Insight at the end of Story;
-- native selection replacement/deletion without a redundant action popover;
+- one collapsed canonical AI Insight at the end of legacy Story, or stable sparse AI/human Insight cards for `/3`;
+- native legacy selection replacement/deletion without a redundant action popover, plus only the bounded `/3` Add Insight exception;
 - one active Privacy interaction;
 - one focused completion area;
 - no numbered Chapter sections, separate Highlights, Release/Original cards, fake steppers, or nested dashboard cards.

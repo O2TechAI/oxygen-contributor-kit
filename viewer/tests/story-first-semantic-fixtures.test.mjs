@@ -483,26 +483,33 @@ test("successor packages fail closed on mixed source versions", () => {
   ), { ok: false, code: "SUCCESSOR_STORY_CHAPTER_INVALID" });
 });
 
-test("successor source remains staged outside activation, editor, persistence, and release consumers", async () => {
+test("successor source remains staged outside activation and release while Viewer and transport are explicit", async () => {
   const { candidateRows } = buildSuccessorFixture("one-insight");
   assert.deepEqual(selectReviewableStoryTimeline([{
     id: candidateRows[0].id,
     summary: candidateRows[0].summary,
   }]), []);
 
-  const readOnlyConsumers = [
-    "../lib/story-review-session-persistence.ts",
-    "../lib/story-review-session-server.ts",
-    "../app/api/story-review-session/route.ts",
-    "../app/story-chapter-editor.tsx",
-    "../app/workspace.tsx",
+  const laneConsumers = {
+    "../lib/story-review-session-persistence.ts": /AnyStoryReviewSession/,
+    "../lib/story-review-session-server.ts": /AnyStoryReviewSession/,
+    "../app/api/story-review-session/route.ts": /parseStoryReviewSession/,
+    "../app/story-chapter-editor.tsx": /SuccessorStoryChapterEditor/,
+    "../app/workspace.tsx": /parseSuccessorStorySource/,
+  };
+  for (const [path, pattern] of Object.entries(laneConsumers)) {
+    const source = await readFile(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+    assert.match(source, pattern, path);
+  }
+
+  const inactiveConsumers = [
     "../lib/story-release.ts",
     "../lib/story-release-server.ts",
     "../app/api/workflow/route.ts",
     "../app/api/organization/export/route.ts",
     "../app/api/package/route.ts",
   ];
-  for (const path of readOnlyConsumers) {
+  for (const path of inactiveConsumers) {
     const source = await readFile(fileURLToPath(new URL(path, import.meta.url)), "utf8");
     assert.doesNotMatch(source, /oxygen\.story\/3|SUCCESSOR_STORY_PREFIX|parseSuccessorStorySource|validateSuccessorStorySourcePackage/, path);
   }

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   createStoryReviewSession,
+  createSuccessorStoryReviewSession,
   storyReviewSessionSemanticJson,
 } from "../lib/story-review-session.ts";
 
@@ -19,6 +20,10 @@ const session = (label, updatedAt = "2099-01-01T00:00:00.000Z") => {
   value.privacyDecisions = label ? { [JSON.stringify(["chapter", label])]: "keep" } : {};
   return value;
 };
+
+const successorSession = (updatedAt = "2099-01-01T00:00:00.000Z") => (
+  createSuccessorStoryReviewSession("review-run", {}, {}, updatedAt)
+);
 
 class FakeReviewDb {
   runs = new Map([["review-run", { status: "ready_for_human_review", sourceRevision: 1 }]]);
@@ -141,6 +146,44 @@ test("semantic no-op ignores client updatedAt and does not mutate version or tim
     sourceRevision: 1, persistedAt: "2035-01-01T00:00:00.000Z",
   });
   assert.deepEqual(db.sessions.get("review-run"), before);
+});
+
+test("schema-2 uses the same CAS, server timestamp, and semantic no-op path", async () => {
+  const { persistStoryReviewSessionCas, readStoryReviewSessionRecord } = serverContract();
+  const db = new FakeReviewDb();
+  const created = await persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run", expectedVersion: 0, sourceRevision: 1,
+    session: successorSession("2999-12-31T23:59:59.999Z"),
+  }, "2035-01-01T00:00:00.000Z");
+  assert.equal(created.serverVersion, 1);
+  const stored = await readStoryReviewSessionRecord(db, "review-run");
+  assert.equal(stored.session.schema, "oxygen.story-review-session/2");
+  assert.equal(stored.session.updatedAt, "2035-01-01T00:00:00.000Z");
+  const noChange = await persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run", expectedVersion: 1, sourceRevision: 1,
+    session: successorSession("9999-12-31T23:59:59.999Z"),
+  }, "2035-01-01T00:00:09.000Z");
+  assert.equal(noChange.noChange, true);
+  assert.equal(noChange.serverVersion, 1);
+});
+
+test("CAS rejects an in-place session schema switch and permits an explicit source revision transition", async () => {
+  const { persistStoryReviewSessionCas, readStoryReviewSessionRecord, STORY_SESSION_ERROR } = serverContract();
+  const db = new FakeReviewDb();
+  await persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run", expectedVersion: 0, sourceRevision: 1, session: session("legacy"),
+  }, "2035-01-01T00:00:00.000Z");
+  const rejected = await persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run", expectedVersion: 1, sourceRevision: 1, session: successorSession(),
+  }, "2035-01-01T00:00:01.000Z");
+  assert.equal(rejected.code, STORY_SESSION_ERROR.stateInvalid);
+  assert.equal((await readStoryReviewSessionRecord(db, "review-run")).session.schema, "oxygen.story-review-session/1");
+  db.runs.get("review-run").sourceRevision = 2;
+  const transitioned = await persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run", expectedVersion: 1, sourceRevision: 2, session: successorSession(),
+  }, "2035-01-01T00:00:02.000Z");
+  assert.equal(transitioned.serverVersion, 2);
+  assert.equal((await readStoryReviewSessionRecord(db, "review-run")).session.schema, "oxygen.story-review-session/2");
 });
 
 test("semantic comparison is deterministic across record insertion order", () => {

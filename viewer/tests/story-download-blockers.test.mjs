@@ -154,8 +154,8 @@ test("blocker surface groups safe ordinal labels by Chapter and exposes only but
 test("blocker navigation stays activated-only and carries one presentation-only focus intent", async () => {
   const workspace=await read("../app/workspace.tsx");
   const navigation=workspace.slice(workspace.indexOf("const openDownloadReviewBlocker"),workspace.indexOf("const downloadReviewed"));
-  assert.match(navigation,/activatedStoryHighlights\.some/);
-  assert.match(navigation,/milestone\.project===group\.project && milestone\.story\.key===group\.chapterKey/);
+  assert.match(navigation,/navigationCandidates\.some/);
+  assert.match(navigation,/chapter\.project===group\.project && chapter\.story\.key===group\.chapterKey/);
   assert.match(navigation,/setDownloadReviewFocus\(\{/);
   assert.match(navigation,/setStoryNavigation\(\{project:group\.project,storyKey:group\.chapterKey\}\)/);
   assert.doesNotMatch(navigation,/setChapterReviews|setPrivacyDecisions|storyPersistence|serverVersion|sourceRevision/);

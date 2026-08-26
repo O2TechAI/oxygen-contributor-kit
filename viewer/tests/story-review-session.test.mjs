@@ -92,7 +92,7 @@ test("Story session API is bounded, CAS-owned, local, and excluded from workflow
     read("../db/index.ts"),
   ]);
   assert.match(route, /MAX_STORY_REVIEW_SESSION_BYTES/);
-  assert.match(route, /canonicalizeStoryReviewSession/);
+  assert.match(route, /parseStoryReviewSession/);
   assert.match(route, /persistStoryReviewSessionCas/);
   assert.match(route, /STORY_SESSION_ERROR\.versionRequired/);
   assert.match(server, /STORY_SESSION_VERSION_REQUIRED/);

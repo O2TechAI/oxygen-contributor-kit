@@ -12,6 +12,7 @@ test("viewer uses local D1 with only organization tables", async () => {
 });
 test("chapter editor retains the application rail and exposes three bilingual sections", async () => {
   const ui=await read("../app/workspace.tsx"),episode=await read("../app/story-chapter-editor.tsx"),css=await read("../app/globals.css"),progress=await read("../app/organization-progress.tsx"),evidence=await read("../app/redaction-compare.tsx"),evidenceReview=await read("../app/api/evidence/route.ts");
+  const legacyEpisode = episode.slice(episode.indexOf("export function StoryChapterEditor"), episode.indexOf("type SuccessorSelection"));
   for(const label of ["Storytelling Review","Project Story","Source records","meaningful milestones","Read chapter","Download HTML","Download ZIP","Local only"])assert.match(ui,new RegExp(label));
   for(const contract of ["storyCanvasGrid","storyOrientation","phaseHeading","milestoneList","phaseDirectory","Narrative phase directory","milestoneChips","Key facts","fmtTimelineDate"])assert.match(ui,new RegExp(contract));
   assert.match(css,/\.storyCanvasGrid>\.phaseDirectory\{position:sticky;top:34px;display:flex/);
@@ -22,7 +23,7 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(ui,/EN<\/button>/);assert.match(ui,/中文<\/button>/);
   assert.match(ui,/timelineContextRef/);assert.match(ui,/scrollTop=context\.scrollTop/);assert.match(ui,/preventScroll:true/);
   assert.match(ui,/story-chapter-editor/);assert.match(ui,/chapterRailContext/);assert.match(ui,/Back to chapter/);assert.match(ui,/focusOriginId:evidenceReturn\.originId/);
-  assert.match(ui,/restoreChapterContext\(chapterScrollRestore,activeMilestone\?\.story\.key/);assert.match(ui,/inert=\{activeMilestone\?true:undefined\}/);
+  assert.match(ui,/restoreChapterContext\(chapterScrollRestore,activeChapter\?\.key/);assert.match(ui,/inert=\{activeChapter\?true:undefined\}/);
   assert.equal((ui.match(/key=\{phaseGroupIdentity\(/g)||[]).length,2);
   assert.match(css,/\.workspace\.episodeOpen\{grid-template-columns:var\(--rail-width\)/);assert.match(css,/\.chapterRailContext/);
   assert.match(css,/\.chapterEditor\{--chapter-canvas-width:1180px/);
@@ -39,7 +40,7 @@ test("chapter editor retains the application rail and exposes three bilingual se
   assert.match(css,/Chapter sections are editorial headings, not sequential steps/);
   for(const label of ["Project story","View local evidence","Exact source language","AI insight","Privacy review complete","All set","Reopen review","Final Release Memory"])assert.match(episode,new RegExp(label));
   assert.match(episode,/data-inline-insight/);assert.match(episode,/data-story-block/);
-  assert.doesNotMatch(episode,/selectionToolbar|selectionPrompt|captureSelection|createAnnotation\(/);
+  assert.doesNotMatch(legacyEpisode,/selectionToolbar|selectionPrompt|captureSelection|createAnnotation\(/);
   assert.doesNotMatch(css,/\.selectionToolbar|\.selectionPrompt/);
   assert.match(episode,/storyAnnotatedRange/);assert.match(episode,/data-annotation-ids/);
   assert.match(css,/\.storyAnnotatedRange\{text-decoration:underline/);
@@ -70,6 +71,7 @@ test("Chapter Story defaults to read mode and uses controlled direct editing plu
     read("../lib/story-release.ts"), read("../app/workspace.tsx"),
     read("../app/organization-progress.tsx"), read("../app/api/workflow/route.ts"),
   ]);
+  const legacyEpisode = episode.slice(episode.indexOf("export function StoryChapterEditor"), episode.indexOf("type SuccessorSelection"));
   assert.match(episode,/const \[editMode, setEditMode\] = useState\(false\)/);
   assert.match(episode,/data-story-mode=\{editMode \? "edit" : "read"\}/);
   assert.match(episode,/className="storyEditingBar" role="toolbar"/);
@@ -95,7 +97,7 @@ test("Chapter Story defaults to read mode and uses controlled direct editing plu
   assert.doesNotMatch(doubleClickHandler,/recordStoryEdit|onChapterReview/);
   assert.match(episode,/type SyntheticEvent/);
   assert.doesNotMatch(episode,/captureDirectSelection|onSelect=/);
-  assert.doesNotMatch(episode,/setSelection\(/);
+  assert.doesNotMatch(legacyEpisode,/setSelection\(/);
   assert.match(episode,/data-annotation-note=\{annotation\.id\}/);
   assert.match(episode,/data-edit-note=\{transaction\.id\}/);
   assert.match(episode,/const noteAnnotationsByBlock/);assert.match(episode,/const noteEditsByBlock/);
@@ -137,7 +139,7 @@ test("Release Preview and Preferences use centered, gate-aware, locale-consisten
   assert.match(ui,/releasePreviewReturnSelectionRef\.current=`project:\$\{selectedProject\}`/);
   assert.match(ui,/const restoreReleasePreviewSelection/);
   assert.match(ui,/const restoreReleasePreviewSelection[\s\S]*?setStoryNavigation\(\{[\s\S]*?project:releasePreviewReturnSelectionRef\.current\.slice\("project:"\.length\),[\s\S]*?storyKey:""/);
-  assert.match(ui,/const setStoryNavigation[\s\S]*?resolveStoryNavigation\(activatedStoryHighlights, requested, primaryProject\)/);
+  assert.match(ui,/const setStoryNavigation[\s\S]*?resolveStoryNavigation\(navigationCandidates, requested, primaryProject\)/);
   assert.match(ui,/reviewStream releasePreviewStream/);
   assert.match(ui,/reviewStream preferencesStream/);
   assert.match(css,/\.reviewStream>\.redactionPanel\{width:min\(960px,100%\);margin-left:auto;margin-right:auto\}/);

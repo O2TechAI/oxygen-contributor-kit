@@ -941,11 +941,11 @@ test("refresh, direct navigation, activation, and progress remain persisted and 
   assert.match(workspace, /const storyWorkspaceReady = isStoryWorkspaceReady\(workflow/);
   assert.match(workspace, /if \(!storyWorkspaceReady\)[\s\S]*return <WorkflowProgress/);
   assert.match(workspace, /const activatedStoryHighlights = useMemo\([\s\S]*?\(\) => selectReviewableStoryTimeline\(allHighlights\),[\s\S]*?\[allHighlights\],[\s\S]*?\);/);
-  assert.match(workspace, /const projectNames = storyNavigationProjects\(activatedStoryHighlights\)/);
-  assert.match(workspace, /resolveStoryNavigation\(activatedStoryHighlights, \{ project:requestedProject, storyKey:activeStoryKey \}, primaryProject\)/);
-  assert.match(workspace, /if \(!storyWorkspaceReady \|\| storySessionReadyRunId !== workflowRunId[\s\S]*?\|\| view !== "timeline" \|\| !activatedStoryHighlights\.length\) return;/);
-  assert.match(workspace, /resolveStoryNavigation\([\s\S]*?activatedStoryHighlights,[\s\S]*?readStoryNavigation\(window\.location\.search\),[\s\S]*?primaryProject/);
-  assert.match(workspace, /if \(!activatedStoryHighlights\.length[\s\S]*view === "timeline" && !highlights\.length/);
+  assert.match(workspace, /const projectNames = storyNavigationProjects\(navigationCandidates\)/);
+  assert.match(workspace, /resolveStoryNavigation\(navigationCandidates, \{ project:requestedProject, storyKey:activeStoryKey \}, primaryProject\)/);
+  assert.match(workspace, /if \(!storyWorkspaceReady \|\| storySessionReadyRunId !== workflowRunId[\s\S]*?\|\| view !== "timeline" \|\| !navigationCandidates\.length\) return;/);
+  assert.match(workspace, /resolveStoryNavigation\([\s\S]*?navigationCandidates,[\s\S]*?readStoryNavigation\(window\.location\.search\),[\s\S]*?primaryProject/);
+  assert.match(workspace, /if \(storyLane === "none"[\s\S]*view === "timeline" && storyLane === "legacy" && !highlights\.length/);
   assert.doesNotMatch(workspace, /if \(!highlights\.length \|\| storySessionReadyRunId !== workflowRunId\)/);
   assert.match(workspace, /selectReviewableStoryTimeline/);
   assert.doesNotMatch(workspace, /if \(!docs\.length \|\| !status/);

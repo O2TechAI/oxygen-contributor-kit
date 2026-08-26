@@ -6,37 +6,51 @@ import {
   type EvidenceReference,
   type StoryHighlightItem,
   type StoryLanguage,
+  type SuccessorStoryInsight,
+  type SuccessorStorySource,
   type TimelineMilestone,
 } from "../lib/timeline";
 import { restoreEvidenceOrigin, type StoryReviewFocusTarget } from "../lib/story-navigation";
 import {
   applyChapterReview,
+  applySuccessorChapterReview,
   applyStoryReviewToBlock,
   canRedoStoryEdit,
   canMarkChapterReady,
+  canMarkSuccessorChapterReady,
   canUndoStoryEdit,
   cancelStoryAnnotation,
   chapterReviewSummary,
   discardStoryEdit,
   deriveDirectStoryMutation,
+  editSuccessorAiInsight,
   insightReviewFeedbackState,
   markChapterReady,
+  markSuccessorChapterReady,
   normalizeDirectBeforeInput,
   privacyReviewState,
   recordStoryEdit,
   redoStoryEdit,
   revertAppliedStoryEdit,
   returnChapterToReview,
+  saveSuccessorHumanInsight,
   reviseHighlight,
   sanitizeStoryPaste,
   storyAnnotationSegments,
   storyEditSegments,
   storyWorkingBlock,
+  successorChapterReviewCompletionBlockers,
+  successorStoryBlocks,
   undoStoryEdit,
   updateInsightReview,
+  updateSuccessorAiInsightDecision,
   type ChapterReviewState,
   type DirectStoryMutation,
   type PrivacyDecision,
+  type SuccessorChapterReviewContext,
+  type SuccessorChapterReviewState,
+  type SuccessorHumanInsightContent,
+  type SuccessorInsightContent,
   type StoryEditTransaction,
   type StoryReviewAnnotation,
 } from "../lib/story-review";
@@ -954,5 +968,467 @@ export function StoryChapterEditor(props: {
       </div>
     </div>
 
+  </section>;
+}
+
+type SuccessorInsightDraft = {
+  title: string;
+  background: string;
+  storyBlockIds: string[];
+  directlyAcquiredExperience: string;
+  principle: string;
+};
+
+type SuccessorSelection = {
+  blockId: string;
+  quote: string;
+};
+
+const successorBlockerCopy = {
+  review_state_invalid: "Review state needs attention.",
+  privacy_incomplete: "Privacy review is incomplete.",
+  evidence_unverified: "Evidence review is incomplete.",
+  annotation_pending: "A Story review change still needs Apply review.",
+  annotation_needs_evidence: "A Story review change needs reviewed Evidence.",
+  direct_edit_pending: "A Story edit still needs Apply review.",
+  direct_edit_needs_evidence: "A Story edit needs reviewed Evidence.",
+  insight_pending: "An Insight change still needs Apply review.",
+  privacy_decisions_stale: "Privacy decisions need review.",
+  revision_provenance_mismatch: "This Chapter review needs to be refreshed.",
+  redaction_targets_mismatch: "Privacy redactions need review.",
+  ai_insight_decision_missing: "An AI Insight decision is missing.",
+  ai_insight_decision_pending: "An AI Insight decision still needs Apply review.",
+  ai_insight_reaccept_required: "An edited AI Insight requires a new Accept.",
+  human_insight_pending: "A human-created Insight still needs Save.",
+} as const;
+
+function successorReviewContext(source: SuccessorStorySource): SuccessorChapterReviewContext {
+  const blocks = successorStoryBlocks(source);
+  return {
+    source,
+    privacyCandidates: [],
+    privacyDecisions: {},
+    targetCatalog: new Map(),
+    evidenceResolved: true,
+    supportedAddIds: [],
+    supportedEditIds: [],
+    sourceBlocks: blocks,
+    reviewedBlocks: blocks,
+  };
+}
+
+function insightDraft(content: SuccessorInsightContent): SuccessorInsightDraft {
+  return {
+    title: content.title || "",
+    background: content.background,
+    storyBlockIds: [...content.quote.storyBlockIds],
+    directlyAcquiredExperience: content.directlyAcquiredExperience,
+    principle: content.principle,
+  };
+}
+
+function groundedEvidence(source: SuccessorStorySource, storyBlockIds: string[]) {
+  const evidence = source.story.blocks
+    .filter((block) => storyBlockIds.includes(block.id))
+    .flatMap((block) => block.evidence);
+  return [...new Map(evidence.map((item) => [JSON.stringify([item.documentId, item.eventId]), item])).values()];
+}
+
+function contentFromDraft(source: SuccessorStorySource, draft: SuccessorInsightDraft): SuccessorInsightContent {
+  return {
+    ...(draft.title.trim() ? { title: draft.title.trim() } : {}),
+    background: draft.background.trim(),
+    quote: { storyBlockIds: draft.storyBlockIds },
+    directlyAcquiredExperience: draft.directlyAcquiredExperience.trim(),
+    principle: draft.principle.trim(),
+    evidence: groundedEvidence(source, draft.storyBlockIds),
+  };
+}
+
+function quoteText(source: SuccessorStorySource, storyBlockIds: string[]) {
+  return source.story.blocks
+    .filter((block) => storyBlockIds.includes(block.id))
+    .map((block) => block.text)
+    .join("\n\n");
+}
+
+function validInsightDraft(source: SuccessorStorySource, draft: SuccessorInsightDraft) {
+  return Boolean(draft.background.trim()
+    && draft.directlyAcquiredExperience.trim()
+    && draft.principle.trim()
+    && draft.storyBlockIds.length
+    && groundedEvidence(source, draft.storyBlockIds).length);
+}
+
+function nodeElement(node: Node | null) {
+  return node instanceof Element ? node : node?.parentElement || null;
+}
+
+function readSuccessorSelection(root: HTMLElement, selection: Selection | null): SuccessorSelection | null {
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return null;
+  const range = selection.getRangeAt(0);
+  const start = nodeElement(range.startContainer)?.closest<HTMLElement>("[data-successor-story-block]");
+  const end = nodeElement(range.endContainer)?.closest<HTMLElement>("[data-successor-story-block]");
+  if (!start || start !== end || !root.contains(start) || !root.contains(end)) return null;
+  const blockId = start.dataset.successorStoryBlock || "";
+  const quote = selection.toString().trim();
+  return blockId && quote ? { blockId, quote } : null;
+}
+
+function SuccessorQuoteFields({
+  source,
+  draft,
+  onChange,
+}: {
+  source: SuccessorStorySource;
+  draft: SuccessorInsightDraft;
+  onChange: (draft: SuccessorInsightDraft) => void;
+}) {
+  return <fieldset className="successorQuoteChoices">
+    <legend>Quote</legend>
+    <p>Select safe reviewed Story grounding. Raw Evidence is never shown.</p>
+    {source.story.blocks.map((block) => <label key={block.id}>
+      <input
+        type="checkbox"
+        checked={draft.storyBlockIds.includes(block.id)}
+        onChange={(event) => onChange({
+          ...draft,
+          storyBlockIds: event.target.checked
+            ? [...draft.storyBlockIds, block.id]
+            : draft.storyBlockIds.filter((id) => id !== block.id),
+        })}
+      />
+      <span>{block.text}</span>
+    </label>)}
+  </fieldset>;
+}
+
+function SuccessorInsightEditor({
+  source,
+  draft,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  source: SuccessorStorySource;
+  draft: SuccessorInsightDraft;
+  onChange: (draft: SuccessorInsightDraft) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return <div className="inlineInsightEdit successorInsightEditor">
+    <label>Title <small>Optional presentation metadata</small><input value={draft.title} onChange={(event) => onChange({ ...draft, title: event.target.value })} /></label>
+    <label>Background<textarea rows={3} value={draft.background} onChange={(event) => onChange({ ...draft, background: event.target.value })} /></label>
+    <SuccessorQuoteFields source={source} draft={draft} onChange={onChange} />
+    <label>Directly Acquired Experience<textarea rows={3} value={draft.directlyAcquiredExperience} onChange={(event) => onChange({ ...draft, directlyAcquiredExperience: event.target.value })} /></label>
+    <label>Principle<textarea rows={3} value={draft.principle} onChange={(event) => onChange({ ...draft, principle: event.target.value })} /></label>
+    <div className="compactActions"><button className="primary" disabled={!validInsightDraft(source, draft)} onClick={onSave}>Save</button><button onClick={onCancel}>Cancel</button></div>
+  </div>;
+}
+
+function SuccessorAiInsightCard({
+  source,
+  insight,
+  chapterReview,
+  onChapterReview,
+  insightRef,
+}: {
+  source: SuccessorStorySource;
+  insight: SuccessorStoryInsight;
+  chapterReview: SuccessorChapterReviewState;
+  onChapterReview: (review: SuccessorChapterReviewState) => void;
+  insightRef: (node: HTMLElement | null) => void;
+}) {
+  const review = chapterReview.sourceInsightReviews[insight.id];
+  const sourceContent: SuccessorInsightContent = {
+    ...(insight.title === undefined ? {} : { title: insight.title }),
+    background: insight.background,
+    quote: insight.quote,
+    directlyAcquiredExperience: insight.directlyAcquiredExperience,
+    principle: insight.principle,
+    evidence: insight.evidence,
+  };
+  const visible = review?.editedContent || sourceContent;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(() => insightDraft(visible));
+  const reopen = () => chapterReview.stage === "human_confirmed"
+    ? returnChapterToReview(chapterReview) as SuccessorChapterReviewState
+    : chapterReview;
+  const beginEdit = () => {
+    if (chapterReview.stage === "human_confirmed") onChapterReview(reopen());
+    setDraft(insightDraft(visible));
+    setEditing(true);
+  };
+  const decide = (decision: "accepted" | "rejected") => {
+    onChapterReview(updateSuccessorAiInsightDecision(reopen(), source, insight.id, decision));
+  };
+  const save = () => {
+    const next = editSuccessorAiInsight(reopen(), source, insight.id, contentFromDraft(source, draft));
+    onChapterReview(next);
+    setEditing(false);
+  };
+  const status = !review || review.decision === "pending"
+    ? review?.version && review.version > 1 ? `Edited version ${review.version} · Accept required` : "Pending"
+    : review.resolution === "pending"
+      ? `${review.decision === "accepted" ? "Accept" : "Do not preserve"} pending Apply review`
+      : `${review.decision === "accepted" ? "Accepted" : "Do not preserve"} · revision ${review.appliedRevision}`;
+  return <article className={`successorInsightCard ${review?.decision === "rejected" ? "rejected" : ""}`} data-successor-insight={insight.id} data-insight-origin="source_ai" ref={insightRef} tabIndex={-1}>
+    <header><div><span>✦ AI Insight</span><b>{visible.title || "Untitled Insight"}</b><small>AI-generated · separate from historical fact</small></div><span className="successorInsightStatus" role="status" aria-live="polite">{status}</span></header>
+    {editing ? <SuccessorInsightEditor source={source} draft={draft} onChange={setDraft} onSave={save} onCancel={() => setEditing(false)} /> : <>
+      <dl>
+        <div><dt>Background</dt><dd>{visible.background}</dd></div>
+        <div><dt>Quote</dt><dd><blockquote>{quoteText(source, visible.quote.storyBlockIds)}</blockquote></dd></div>
+        <div><dt>Directly Acquired Experience</dt><dd>{visible.directlyAcquiredExperience}</dd></div>
+        <div><dt>Principle</dt><dd>{visible.principle}</dd></div>
+      </dl>
+      <div className="inlineInsightReview successorInsightActions">
+        <button className={review?.decision === "accepted" && review.resolution === "pending" ? "selected" : ""} aria-pressed={review?.decision === "accepted" && review.resolution === "pending"} onClick={() => decide("accepted")}>✓ Accept</button>
+        <button onClick={beginEdit}>Edit</button>
+        <button className={review?.decision === "rejected" && review.resolution === "pending" ? "selected" : ""} aria-pressed={review?.decision === "rejected" && review.resolution === "pending"} onClick={() => decide("rejected")}>× Do not preserve</button>
+      </div>
+    </>}
+  </article>;
+}
+
+function SuccessorHumanInsightCard({
+  source,
+  insightId,
+  chapterReview,
+  onChapterReview,
+  insightRef,
+}: {
+  source: SuccessorStorySource;
+  insightId: string;
+  chapterReview: SuccessorChapterReviewState;
+  onChapterReview: (review: SuccessorChapterReviewState) => void;
+  insightRef: (node: HTMLElement | null) => void;
+}) {
+  const review = chapterReview.humanInsights[insightId];
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(() => insightDraft(review.content));
+  const [saveError, setSaveError] = useState("");
+  const context = useMemo(() => successorReviewContext(source), [source]);
+  const beginEdit = () => {
+    if (chapterReview.stage === "human_confirmed") {
+      onChapterReview(returnChapterToReview(chapterReview) as SuccessorChapterReviewState);
+    }
+    setDraft(insightDraft(review.content));
+    setEditing(true);
+    setSaveError("");
+  };
+  const save = () => {
+    const base = chapterReview.stage === "human_confirmed"
+      ? returnChapterToReview(chapterReview) as SuccessorChapterReviewState
+      : chapterReview;
+    const result = saveSuccessorHumanInsight(base, context, insightId, {
+      ...contentFromDraft(source, draft),
+      quote: { chapterKey: source.key, storyBlockIds: draft.storyBlockIds },
+    });
+    if (result.blockedReason) {
+      setSaveError("This human Insight could not be saved against the current Story grounding.");
+      return;
+    }
+    onChapterReview(result.state);
+    setEditing(false);
+  };
+  return <article className="successorInsightCard humanCreated" data-successor-insight={insightId} data-insight-origin="human_created" ref={insightRef} tabIndex={-1}>
+    <header><div><span>Human Insight</span><b>{review.content.title || "Untitled Insight"}</b><small>Human-created · approved on Save</small></div><span className="successorInsightStatus">Human-approved · revision {review.appliedRevision}</span></header>
+    {editing ? <SuccessorInsightEditor source={source} draft={draft} onChange={setDraft} onSave={save} onCancel={() => setEditing(false)} /> : <>
+      <dl>
+        <div><dt>Background</dt><dd>{review.content.background}</dd></div>
+        <div><dt>Quote</dt><dd><blockquote>{quoteText(source, review.content.quote.storyBlockIds)}</blockquote></dd></div>
+        <div><dt>Directly Acquired Experience</dt><dd>{review.content.directlyAcquiredExperience}</dd></div>
+        <div><dt>Principle</dt><dd>{review.content.principle}</dd></div>
+      </dl>
+      <div className="inlineInsightReview successorInsightActions"><button onClick={beginEdit}>Edit human Insight</button></div>
+    </>}
+    {saveError && <p className="completionBlocker" role="alert">{saveError}</p>}
+  </article>;
+}
+
+export function SuccessorStoryChapterEditor({
+  source,
+  position,
+  total,
+  chapterReview,
+  reviewFocus,
+  onReviewFocusHandled,
+  onChapterReview,
+  onClose,
+  onPrevious,
+  onNext,
+}: {
+  source: SuccessorStorySource;
+  position: number;
+  total: number;
+  chapterReview: SuccessorChapterReviewState;
+  reviewFocus?: StoryReviewFocusTarget;
+  onReviewFocusHandled?: () => void;
+  onChapterReview: (review: SuccessorChapterReviewState) => void;
+  onClose: () => void;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  const storyRef = useRef<HTMLElement | null>(null);
+  const completionRef = useRef<HTMLElement | null>(null);
+  const insightRefs = useRef<Record<string, HTMLElement | null>>({});
+  const [selection, setSelection] = useState<SuccessorSelection | null>(null);
+  const [selectionError, setSelectionError] = useState("");
+  const [humanDraft, setHumanDraft] = useState<{
+    id: string;
+    selectedQuote: string;
+    draft: SuccessorInsightDraft;
+  } | null>(null);
+  const [applyError, setApplyError] = useState("");
+  const context = useMemo(() => successorReviewContext(source), [source]);
+  const blockers = useMemo(
+    () => successorChapterReviewCompletionBlockers(chapterReview, context),
+    [chapterReview, context],
+  );
+  const readingMinutes = Math.max(1, Math.ceil(source.story.blocks
+    .reduce((count, block) => count + block.text.trim().split(/\s+/u).length, 0) / 220));
+
+  useEffect(() => {
+    if (!reviewFocus) return;
+    const target = reviewFocus.targetKind === "insight" && reviewFocus.targetId
+      ? insightRefs.current[reviewFocus.targetId]
+      : null;
+    const destination = target || completionRef.current;
+    destination?.scrollIntoView({ block: "center", behavior: "smooth" });
+    destination?.focus({ preventScroll: true });
+    onReviewFocusHandled?.();
+  }, [onReviewFocusHandled, reviewFocus]);
+
+  const captureSelection = () => {
+    const root = storyRef.current;
+    if (!root) return;
+    const current = readSuccessorSelection(root, window.getSelection());
+    if (!current || !source.story.blocks.some((block) => block.id === current.blockId
+      && block.text.includes(current.quote))) {
+      setSelection(null);
+      setSelectionError(window.getSelection()?.isCollapsed
+        ? ""
+        : "Select text within one current Story passage to add an Insight.");
+      return;
+    }
+    setSelection(current);
+    setSelectionError("");
+  };
+
+  const beginHumanInsight = () => {
+    if (!selection) return;
+    if (chapterReview.stage === "human_confirmed") {
+      onChapterReview(returnChapterToReview(chapterReview) as SuccessorChapterReviewState);
+    }
+    setHumanDraft({
+      id: `human:${crypto.randomUUID()}`,
+      selectedQuote: selection.quote,
+      draft: {
+        title: "",
+        background: "",
+        storyBlockIds: [selection.blockId],
+        directlyAcquiredExperience: "",
+        principle: "",
+      },
+    });
+    setSelection(null);
+  };
+
+  const saveHumanInsight = () => {
+    if (!humanDraft) return;
+    const base = chapterReview.stage === "human_confirmed"
+      ? returnChapterToReview(chapterReview) as SuccessorChapterReviewState
+      : chapterReview;
+    const content: SuccessorHumanInsightContent = {
+      ...contentFromDraft(source, humanDraft.draft),
+      quote: { chapterKey: source.key, storyBlockIds: humanDraft.draft.storyBlockIds },
+    };
+    const result = saveSuccessorHumanInsight(base, context, humanDraft.id, content);
+    if (result.blockedReason) {
+      setApplyError("This human Insight could not be saved against the current Story grounding.");
+      return;
+    }
+    onChapterReview(result.state);
+    setHumanDraft(null);
+    setApplyError("");
+  };
+
+  const applyReview = () => {
+    const result = applySuccessorChapterReview(chapterReview, context);
+    if (result.blockedReason) {
+      setApplyError("The current review could not be applied safely. Recheck the bounded review items below.");
+      return;
+    }
+    onChapterReview(result.state);
+    setApplyError("");
+  };
+
+  return <section className="simpleEpisode chapterEditor successorChapterEditor" role="region" aria-labelledby="successor-chapter-title">
+    <div className="simpleEpisodeChrome"><div className="chapterCanvas chapterChromeCanvas">
+      <button className="episodeBackLink" onClick={onClose}>← Project story</button>
+      <div className="simpleEpisodePosition">Chapter {position} / {total}</div>
+      <div className="simpleEpisodeNav"><button onClick={onPrevious} disabled={position === 1} aria-label="Previous chapter">←</button><button onClick={onNext} disabled={position === total} aria-label="Next chapter">→</button></div>
+    </div></div>
+    <div className="simpleEpisodeScroll">
+      <header className="simpleEpisodeHero">
+        <div className="releaseDraftLabel"><b>{chapterReview.stage === "human_confirmed" ? "Final Release Memory" : chapterReview.stage === "revision_ready" ? `Latest revision ready · Revision ${chapterReview.revision}` : chapterReview.revision > 1 ? `Review in progress · Revision ${chapterReview.revision}` : "Initial AI draft"}</b><span>Story-first review · human-authoritative</span></div>
+        <div className="simpleEpisodeMeta"><span>{source.phase.label}</span><span>≈ {readingMinutes} min read</span></div>
+        <h2 id="successor-chapter-title">{source.title}</h2>
+        <p className="episodeOverview">{source.overview}</p>
+        <p className="chapterReviewGuide">Read the Story, resolve each AI Insight independently, and add a human Insight from one selected Story passage when useful.</p>
+      </header>
+      <div className="simpleEpisodeBody">
+        <section className="episodePrimarySection peopleSection" aria-labelledby="successor-people-heading">
+          <div className="simpleSectionHead"><div><h3 id="successor-people-heading">People</h3><p>Supported actors in this Chapter</p></div></div>
+          <div className="peopleList">{source.people.map((person) => <div className="personRow" key={person.id}><b aria-label={person.releaseLabel}>{person.releaseLabel}</b><div><strong>{person.role}</strong><p>{person.description}</p></div></div>)}</div>
+          <p className="identityNote">Local identity · hidden on export</p>
+        </section>
+        <section className="episodePrimarySection storySection" aria-labelledby="successor-story-heading">
+          <div className="simpleSectionHead storySectionHead"><div><h3 id="successor-story-heading">Story</h3><p>Select text within one passage to author a grounded human Insight.</p></div></div>
+          <article className="chapterArticle successorStoryDocument" ref={storyRef} onMouseUp={captureSelection} onKeyUp={captureSelection}>
+            {source.story.blocks.map((block) => <div className="successorStoryBlock" data-successor-story-block={block.id} key={block.id} tabIndex={0}>
+              <p>{block.text}</p>
+              {selection?.blockId === block.id && <button className="successorAddInsight" onMouseDown={(event) => event.preventDefault()} onClick={beginHumanInsight}>+ Add Insight</button>}
+            </div>)}
+            {source.story.uncertainty && <section className="successorUncertainty"><h4>Open questions</h4><p>{source.story.uncertainty}</p></section>}
+          </article>
+          {selectionError && <p className="completionBlocker" role="alert">{selectionError}</p>}
+          {humanDraft && <section className="successorHumanComposer" aria-labelledby="human-insight-heading">
+            <header><span>Human Insight</span><h4 id="human-insight-heading">Add Insight from selected Story text</h4></header>
+            <div className="successorSelectedQuote"><b>Quote</b><blockquote>{humanDraft.selectedQuote}</blockquote></div>
+            <SuccessorInsightEditor source={source} draft={humanDraft.draft} onChange={(draft) => setHumanDraft({ ...humanDraft, draft })} onSave={saveHumanInsight} onCancel={() => setHumanDraft(null)} />
+          </section>}
+          {source.insights.map((insight) => <SuccessorAiInsightCard
+            key={insight.id}
+            source={source}
+            insight={insight}
+            chapterReview={chapterReview}
+            onChapterReview={onChapterReview}
+            insightRef={(node) => { insightRefs.current[insight.id] = node; }}
+          />)}
+          {Object.keys(chapterReview.humanInsights).sort().map((insightId) => <SuccessorHumanInsightCard
+            key={insightId}
+            source={source}
+            insightId={insightId}
+            chapterReview={chapterReview}
+            onChapterReview={onChapterReview}
+            insightRef={(node) => { insightRefs.current[insightId] = node; }}
+          />)}
+        </section>
+        <section className="episodePrimarySection privacySection" aria-labelledby="successor-privacy-heading">
+          <div className="simpleSectionHead"><div><h3 id="successor-privacy-heading">Privacy</h3><p>Only reviewed, post-policy-safe Story content is available in this lane.</p></div></div>
+          <p className="privacySummary">Raw Evidence and suppressed content are not exposed by Insight review or selection.</p>
+        </section>
+        <section className="chapterCompletion" data-chapter-completion ref={completionRef} tabIndex={-1} aria-labelledby="successor-review-summary-heading">
+          <div><span>{chapterReview.stage.replaceAll("_", " ")} · Revision {chapterReview.revision}</span><h3 id="successor-review-summary-heading">Review summary</h3></div>
+          <ul><li><b>{source.insights.length}</b> source AI Insights</li><li><b>{Object.keys(chapterReview.humanInsights).length}</b> human-created Insights</li><li><b>{blockers.length}</b> bounded review blockers</li></ul>
+          {blockers.length > 0 && <ul className="successorBlockerList">{blockers.map((blocker, index) => <li key={`${blocker.code}:${blocker.targetKind}:${blocker.targetId || ""}:${index}`}>{successorBlockerCopy[blocker.code]}</li>)}</ul>}
+          {applyError && <p className="completionBlocker" role="alert">{applyError}</p>}
+          {chapterReview.stage === "reviewing" ? <button className="completionPrimary" onClick={applyReview}>Apply current review</button>
+            : chapterReview.stage === "revision_ready" ? <div className="completionActions"><span>{blockers.length ? "Resolve the bounded review items before All set." : "Inspect the latest revision, then choose All set."}</span><button className="completionPrimary" disabled={!canMarkSuccessorChapterReady(chapterReview, context)} onClick={() => onChapterReview(markSuccessorChapterReady(chapterReview, context))}>All set</button></div>
+              : <div className="readyConfirmation"><b>Final Release Memory</b><p>Human-confirmed locally. This is not publication approval, and successor release remains inactive.</p><button onClick={() => onChapterReview(returnChapterToReview(chapterReview) as SuccessorChapterReviewState)}>Reopen review</button></div>}
+        </section>
+      </div>
+    </div>
   </section>;
 }
