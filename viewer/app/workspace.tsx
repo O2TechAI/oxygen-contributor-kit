@@ -22,7 +22,7 @@ import {
   type ChapterReviewBlocker,
   type SuccessorChapterReviewState,
 } from "../lib/story-review";
-import { milestoneKindLabel, parseSuccessorStorySource, storyReleaseTargetCatalog, type EvidenceReference, type StoryLanguage, type SuccessorStorySource, type TimelineMilestone } from "../lib/timeline";
+import { LEGACY_STORY_PREFIX, STORY_PREFIX, SUCCESSOR_STORY_PREFIX, milestoneKindLabel, parseSuccessorStorySource, storyReleaseTargetCatalog, type EvidenceReference, type StoryLanguage, type SuccessorStorySource, type TimelineMilestone } from "../lib/timeline";
 import { selectReviewableStoryTimeline } from "../lib/story-readiness";
 import { buildReviewedStoryRelease } from "../lib/story-release";
 import {
@@ -109,7 +109,12 @@ function selectSuccessorViewerChapters(
   const chapters: SuccessorViewerChapter[] = [];
   for (const event of highlights || []) {
     const source = parseSuccessorStorySource(event.summary);
-    if (!source) continue;
+    if (!source) {
+      if (String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX)) {
+        return { chapters: [], invalid: true };
+      }
+      continue;
+    }
     const serialized = JSON.stringify(source);
     const previous = seen.get(source.key);
     if (previous) {
@@ -258,7 +263,7 @@ export function InlineWorkspace({
   initialWorkflow: WorkflowProgressState;
   initialStatus: WorkspaceStatus | null;
   initialDocuments: WorkspaceDocument[];
-  initialChapterReviews: Record<string,ChapterReviewState>;
+  initialChapterReviews: Record<string,ChapterReviewState|SuccessorChapterReviewState>;
   initialPrivacyDecisions: Record<string,PrivacyDecision>;
   initialStorySessionReadyRunId: string;
 }) {
@@ -278,9 +283,15 @@ export function InlineWorkspace({
   const [sourceFocus,setSourceFocus] = useState("");
   const [activeStoryKey,setActiveStoryKey] = useState("");
   const [language,setLanguage] = useState<StoryLanguage>("en");
+  const initialSuccessorContract = initialWorkflow.storySourceSchema === "oxygen.story/3"
+    && initialWorkflow.storySessionSchema === SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA;
+  const initialCurrentChapterReviews = initialSuccessorContract
+    ? {} : initialChapterReviews as Record<string,ChapterReviewState>;
+  const initialSuccessorChapterReviews = initialSuccessorContract
+    ? initialChapterReviews as Record<string,SuccessorChapterReviewState> : {};
   const [privacyDecisions,setPrivacyDecisions] = useState<Record<string,PrivacyDecision>>(initialPrivacyDecisions);
-  const [chapterReviews,setChapterReviews] = useState<Record<string,ChapterReviewState>>(initialChapterReviews);
-  const [successorChapterReviews,setSuccessorChapterReviews] = useState<Record<string,SuccessorChapterReviewState>>({});
+  const [chapterReviews,setChapterReviews] = useState<Record<string,ChapterReviewState>>(initialCurrentChapterReviews);
+  const [successorChapterReviews,setSuccessorChapterReviews] = useState<Record<string,SuccessorChapterReviewState>>(initialSuccessorChapterReviews);
   const [storyDataReadyRunId,setStoryDataReadyRunId] = useState(initialStorySessionReadyRunId);
   const [storySessionReadyRunId,setStorySessionReadyRunId] = useState(initialStorySessionReadyRunId);
   const [evidenceReturn,setEvidenceReturn] = useState<(ChapterEvidenceContext & { projectName:string })|null>(null);
@@ -297,8 +308,8 @@ export function InlineWorkspace({
   const storySessionHydratedRunRef = useRef(initialStorySessionReadyRunId);
   const storyPersistenceReadyRunRef = useRef("");
   const currentStoryStateRef = useRef({
-    chapterReviews: initialChapterReviews,
-    successorChapterReviews: {} as Record<string,SuccessorChapterReviewState>,
+    chapterReviews: initialCurrentChapterReviews,
+    successorChapterReviews: initialSuccessorChapterReviews,
     privacyDecisions: initialPrivacyDecisions,
     highlights: [] as ReturnType<typeof selectReviewableStoryTimeline>,
   });
@@ -535,11 +546,27 @@ export function InlineWorkspace({
     () => selectSuccessorViewerChapters(allHighlights, metadataPrimaryProject),
     [allHighlights, metadataPrimaryProject],
   );
-  const storyLane = activatedStoryHighlights.length
+  const recognizedStoryCandidates = useMemo(() => allHighlights.filter((event) => (
+    String(event.summary || "").startsWith(STORY_PREFIX)
+      || String(event.summary || "").startsWith(LEGACY_STORY_PREFIX)
+      || String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX)
+  )), [allHighlights]);
+  const compatibilityPackageReady = recognizedStoryCandidates.length > 0
+    && recognizedStoryCandidates.every((event) => String(event.summary || "").startsWith(STORY_PREFIX))
+    && activatedStoryHighlights.length === recognizedStoryCandidates.length;
+  const successorPackageReady = recognizedStoryCandidates.length > 0
+    && recognizedStoryCandidates.every((event) => String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX))
+    && successorSelection.chapters.length === recognizedStoryCandidates.length
+    && !successorSelection.invalid;
+  const compatibilityContract = workflow.storySourceSchema === "oxygen.story-highlight/2"
+    && workflow.storySessionSchema === STORY_REVIEW_SESSION_SCHEMA;
+  const successorContract = workflow.storySourceSchema === "oxygen.story/3"
+    && workflow.storySessionSchema === SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA;
+  const storyLane = compatibilityContract && compatibilityPackageReady
     ? "legacy" as const
-    : successorSelection.chapters.length && !successorSelection.invalid ? "successor" as const : "none" as const;
-  const effectiveError = successorSelection.invalid
-    ? "Successor Story source contains a conflicting Chapter identity" : error;
+    : successorContract && successorPackageReady ? "successor" as const : "none" as const;
+  const effectiveError = storyReviewReady && storyLane === "none"
+    ? "The active Story contract does not match the exact reviewed source package" : error;
   const navigationCandidates = useMemo(() => storyLane === "legacy"
     ? activatedStoryHighlights.map((chapter) => ({ project: chapter.project, story: { key: chapter.story.key } }))
     : successorSelection.chapters.map((chapter) => ({ project: chapter.project, story: { key: chapter.source.key } })),
@@ -573,11 +600,17 @@ export function InlineWorkspace({
           serverVersion?: unknown;
           sourceRevision?: unknown;
           persistedAt?: unknown;
+          storySourceSchema?: unknown;
+          storySessionSchema?: unknown;
         };
         if (!Number.isSafeInteger(payload.serverVersion) || Number(payload.serverVersion) < 0
           || !Number.isSafeInteger(payload.sourceRevision) || Number(payload.sourceRevision) < 0
           || (payload.persistedAt !== null && typeof payload.persistedAt !== "string")) {
           throw new Error("Story review persistence metadata is invalid");
+        }
+        if (payload.storySourceSchema !== workflow.storySourceSchema
+          || payload.storySessionSchema !== workflow.storySessionSchema) {
+          throw new Error("Story source and server-owned review contracts do not match");
         }
         const parsedSession = parseStoryReviewSession(payload.session);
         const expectedSchema = storyLane === "successor"
@@ -637,7 +670,7 @@ export function InlineWorkspace({
       cancelled = true;
       if (storySessionLoadingRunRef.current === workflowRunId) storySessionLoadingRunRef.current = "";
     };
-  }, [activatedStoryHighlights, docs.length, status?.documentCount, status?.status, storyDataReadyRunId, storyLane, storyReviewReady, successorSelection, workflowRunId]);
+  }, [activatedStoryHighlights, docs.length, status?.documentCount, status?.status, storyDataReadyRunId, storyLane, storyReviewReady, successorSelection, workflow.storySessionSchema, workflow.storySourceSchema, workflowRunId]);
 
   useEffect(() => {
     if (!workflowRunId || storySessionReadyRunId !== workflowRunId
@@ -666,8 +699,9 @@ export function InlineWorkspace({
     projects: [{ name:selectedProject, event_count:projectCount(selectedProject), primary:selectedProject === primaryProject }],
     highlights: allHighlights.filter((event) => event.project === selectedProject),
   } : detail?.document.formatted_summary || {};
-  const highlights = selectReviewableStoryTimeline(summary.highlights || []);
-  const successorProjectChapters = successorSelection.chapters.filter((chapter) => chapter.project === selectedProject);
+  const highlights = storyLane === "legacy" ? selectReviewableStoryTimeline(summary.highlights || []) : [];
+  const successorProjectChapters = storyLane === "successor"
+    ? successorSelection.chapters.filter((chapter) => chapter.project === selectedProject) : [];
   const setStoryNavigation = (
     requested: Partial<StoryNavigation>,
     historyMode: "push"|"replace" = "push",
@@ -679,8 +713,11 @@ export function InlineWorkspace({
     return next;
   };
   useEffect(() => {
-    currentStoryStateRef.current = { chapterReviews, successorChapterReviews, privacyDecisions, highlights };
-  }, [chapterReviews, highlights, privacyDecisions, successorChapterReviews]);
+    const currentHighlights = storyLane === "legacy" ? selectReviewableStoryTimeline(isProject
+      ? allHighlights.filter((event) => event.project === selectedProject)
+      : detail?.document.formatted_summary?.highlights || []) : [];
+    currentStoryStateRef.current = { chapterReviews, successorChapterReviews, privacyDecisions, highlights:currentHighlights };
+  }, [allHighlights, chapterReviews, detail, isProject, privacyDecisions, selectedProject, storyLane, successorChapterReviews]);
   useEffect(() => {
     if (!storyWorkspaceReady || storySessionReadyRunId !== workflowRunId
       || view !== "timeline" || !navigationCandidates.length) return;
@@ -949,10 +986,6 @@ export function InlineWorkspace({
       setDownloadBlockerGroups(blockerGroups);
       return;
     }
-    if(storyLane === "successor") {
-      setError("Successor download and release remain inactive in this Viewer lane");
-      return;
-    }
     const persistence=storyPersistenceRef.current;
     if (!persistence || storyPersistenceReadyRunRef.current !== workflowRunId) {
       setError("Story review persistence is not ready for handoff");
@@ -964,7 +997,9 @@ export function InlineWorkspace({
         persistence,
         currentSession: () => {
           const current=currentStoryStateRef.current;
-          return createStoryReviewSession(workflowRunId,current.chapterReviews,current.privacyDecisions);
+          return storyLane === "successor"
+            ? createSuccessorStoryReviewSession(workflowRunId,current.successorChapterReviews,{})
+            : createStoryReviewSession(workflowRunId,current.chapterReviews,current.privacyDecisions);
         },
         handoff: ({workflowRunId,serverVersion,sourceRevision}) => fetch(url,{
           method:"POST",

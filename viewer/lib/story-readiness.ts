@@ -68,6 +68,26 @@ export type SuccessorStorySourceValidation =
   | { ok: true; chapterCount: number; canonicalCandidate: string }
   | { ok: false; code: SuccessorStorySourceFailureCode };
 
+export type RecognizedStorySourceValidation =
+  | {
+      ok: true;
+      sourceSchema: "oxygen.story/3";
+      sessionSchema: "oxygen.story-review-session/2";
+      chapterCount: number;
+      canonicalCandidate: string;
+    }
+  | {
+      ok: true;
+      sourceSchema: "oxygen.story-highlight/2";
+      sessionSchema: "oxygen.story-review-session/1";
+      chapterCount: number;
+      canonicalCandidate: string;
+    }
+  | {
+      ok: false;
+      code: StoryCandidateFailureCode | SuccessorStorySourceFailureCode | "STORY_SOURCE_PACKAGE_INVALID";
+    };
+
 const successorFailure = (
   code: SuccessorStorySourceFailureCode,
 ): SuccessorStorySourceValidation => ({ ok: false, code });
@@ -567,8 +587,7 @@ const successorGenericPhases = new Set([
 ]);
 const successorPhaseLabelPattern = /^[\p{L}\p{N}]+(?:[-'][\p{L}\p{N}]+)*(?:\s+[\p{L}\p{N}]+(?:[-'][\p{L}\p{N}]+)*)?$/u;
 
-/** Validate staged Story-First source semantics without activating the result
- * into current Review Session, Viewer, or release consumers. */
+/** Validate Story-First source semantics without widening current contracts. */
 export function validateSuccessorStorySourcePackage(
   candidateRows: StoryCandidateRow[],
   evidenceRows: StoryEvidenceRow[],
@@ -694,6 +713,36 @@ export function validateSuccessorStorySourcePackage(
     chapterCount: candidateRows.length,
     canonicalCandidate: JSON.stringify(candidateRows.map((row) => ({ id: row.id, summary: row.summary }))),
   };
+}
+
+/** Permanently dispatch one complete homogeneous review package by exact source
+ * version. Historical, mixed, malformed, unknown, and empty packages fail closed. */
+export function validateRecognizedStorySourcePackage(
+  candidateRows: StoryCandidateRow[],
+  evidenceRows: StoryEvidenceRow[],
+): RecognizedStorySourceValidation {
+  if (!candidateRows.length) return { ok: false, code: "STORY_SOURCE_PACKAGE_INVALID" };
+  if (candidateRows.every((row) => row.summary.startsWith(SUCCESSOR_STORY_PREFIX))) {
+    const validation = validateSuccessorStorySourcePackage(candidateRows, evidenceRows);
+    return validation.ok
+      ? {
+          ...validation,
+          sourceSchema: "oxygen.story/3",
+          sessionSchema: "oxygen.story-review-session/2",
+        }
+      : validation;
+  }
+  if (candidateRows.every((row) => row.summary.startsWith(STORY_PREFIX))) {
+    const validation = validateStoryCandidatePackage(candidateRows, evidenceRows);
+    return validation.ok
+      ? {
+          ...validation,
+          sourceSchema: "oxygen.story-highlight/2",
+          sessionSchema: "oxygen.story-review-session/1",
+        }
+      : validation;
+  }
+  return { ok: false, code: "STORY_SOURCE_PACKAGE_INVALID" };
 }
 
 /** Render only explicit v2 Chapters. Fallback/legacy milestones are never a review-ready Story. */

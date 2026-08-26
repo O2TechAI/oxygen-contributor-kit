@@ -1426,7 +1426,7 @@ export function SuccessorStoryChapterEditor({
           {applyError && <p className="completionBlocker" role="alert">{applyError}</p>}
           {chapterReview.stage === "reviewing" ? <button className="completionPrimary" onClick={applyReview}>Apply current review</button>
             : chapterReview.stage === "revision_ready" ? <div className="completionActions"><span>{blockers.length ? "Resolve the bounded review items before All set." : "Inspect the latest revision, then choose All set."}</span><button className="completionPrimary" disabled={!canMarkSuccessorChapterReady(chapterReview, context)} onClick={() => onChapterReview(markSuccessorChapterReady(chapterReview, context))}>All set</button></div>
-              : <div className="readyConfirmation"><b>Final Release Memory</b><p>Human-confirmed locally. This is not publication approval, and successor release remains inactive.</p><button onClick={() => onChapterReview(returnChapterToReview(chapterReview) as SuccessorChapterReviewState)}>Reopen review</button></div>}
+              : <div className="readyConfirmation"><b>Final Release Memory</b><p>Human-confirmed locally. This is not publication approval.</p><button onClick={() => onChapterReview(returnChapterToReview(chapterReview) as SuccessorChapterReviewState)}>Reopen review</button></div>}
         </section>
       </div>
     </div>

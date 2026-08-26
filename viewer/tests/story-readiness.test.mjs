@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { syntheticStoryEvents } from "./fixtures/synthetic-story-project.mjs";
 import {
   selectReviewableStoryTimeline,
+  validateRecognizedStorySourcePackage,
   validateStoryCandidatePackage,
 } from "../lib/story-readiness.ts";
 import { STORY_PREFIX } from "../lib/timeline.ts";
@@ -153,6 +154,14 @@ test("the complete package validator rejects partial Chapter structures and unre
   assert.deepEqual(validateStoryCandidatePackage(candidates, evidence.slice(1)), {
     ok: false, code: "STORY_EVIDENCE_UNRESOLVED",
   });
+});
+
+test("recognized package dispatch preserves exact current compatibility", () => {
+  const validation = validateRecognizedStorySourcePackage(candidates, evidence);
+  assert.equal(validation.ok, true);
+  assert.equal(validation.sourceSchema, "oxygen.story-highlight/2");
+  assert.equal(validation.sessionSchema, "oxygen.story-review-session/1");
+  assert.equal(validation.canonicalCandidate, JSON.stringify(candidates.map(({ id, summary }) => ({ id, summary }))));
 });
 
 test("new Story candidates require fully qualified Evidence identities", () => {
@@ -905,6 +914,8 @@ test("ordered explicit Phases and one complete canonical English Chapter per mil
 
   const ready = deriveWorkflowProgress(reviewedFacts({
     storyGenerationStatus: "ready_for_human_review",
+    storySourceSchema: "oxygen.story-highlight/2",
+    storySessionSchema: "oxygen.story-review-session/1",
     storyGenerationCompleted: milestones.length,
     storyGenerationTotal: milestones.length,
   }));
@@ -960,7 +971,7 @@ test("refresh, direct navigation, activation, and progress remain persisted and 
   assert.doesNotMatch(workflowLoader, /SELECT\s+content|original_json|reasoning|prompt|tool.?arg/i);
   assert.match(database, /story_generation_status TEXT NOT NULL DEFAULT 'not_started'/);
   assert.match(database, /active_story_digest TEXT/);
-  assert.match(workflowRoute, /validateStoryCandidatePackage/);
+  assert.match(workflowRoute, /validateRecognizedStorySourcePackage/);
   assert.match(workflowRoute, /story_source_revision=\?/);
   assert.match(workflowRoute, /story_generation_status='ready_for_human_review'/);
   assert.match(workflowRoute, /Cache-Control": "no-store, max-age=0"/);

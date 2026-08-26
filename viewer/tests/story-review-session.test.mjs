@@ -94,11 +94,15 @@ test("Story session API is bounded, CAS-owned, local, and excluded from workflow
   assert.match(route, /MAX_STORY_REVIEW_SESSION_BYTES/);
   assert.match(route, /parseStoryReviewSession/);
   assert.match(route, /persistStoryReviewSessionCas/);
+  assert.match(route, /readActiveStoryReviewContract/);
+  assert.match(route, /storySourceSchema: active\.storySourceSchema/);
+  assert.match(route, /session\.schema !== active\.storySessionSchema/);
   assert.match(route, /STORY_SESSION_ERROR\.versionRequired/);
   assert.match(server, /STORY_SESSION_VERSION_REQUIRED/);
   assert.doesNotMatch(route, /excluded\.updated_at|saved:\s*true,\s*updatedAt/);
   assert.match(server, /server_version=server_version\+1/);
   assert.match(server, /story_source_revision=\?/);
+  assert.match(server, /validateRecognizedStorySourcePackage/);
   assert.match(server, /Number\(result\.meta\?\.changes \|\| 0\)/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS story_review_sessions/);
   assert.doesNotMatch(workflowRoute, /story_review_sessions|state_json/);

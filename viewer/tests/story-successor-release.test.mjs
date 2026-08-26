@@ -25,8 +25,9 @@ import {
   RELEASE_ERROR,
   reconstructReviewedStoryReleaseFromDatabase,
 } from "../lib/story-release-server.ts";
+import { readActiveStoryReviewContract } from "../lib/story-review-session-server.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
-import { validateSuccessorStorySourcePackage } from "../lib/story-readiness.ts";
+import { validateRecognizedStorySourcePackage } from "../lib/story-readiness.ts";
 import { SUCCESSOR_STORY_PREFIX } from "../lib/timeline.ts";
 
 const RUN_ID = "successor-release-run";
@@ -270,6 +271,13 @@ class FakeSuccessorReleaseDb {
         if (/SELECT id FROM workflow_runs ORDER BY id LIMIT 2/.test(sql)) {
           return { results: [...this.runs.keys()].sort().slice(0, 2).map((id) => ({ id })) };
         }
+        if (/organization_reason AS summary/.test(sql)) return { results: this.items.map((item) => ({
+          id: item.id, documentId: item.document_id, summary: item.organization_reason,
+        })) };
+        if (/event_type AS eventType/.test(sql)) return { results: this.items.map((item) => ({
+          id: item.id, documentId: item.document_id, eventType: item.event_type,
+          actorId: item.actor_id, actorType: item.actor_type,
+        })) };
         if (/FROM items/.test(sql)) return { results: structuredClone(this.items) };
         if (/FROM redactions/.test(sql)) return { results: structuredClone(this.redactions) };
         throw new Error(`Unexpected successor release all SQL: ${sql}`);
@@ -296,12 +304,18 @@ class FakeSuccessorReleaseDb {
   }
 }
 
-async function serverFixture() {
-  const currentSource = source([
+async function serverFixture({
+  sourceInsights = [
     insight("insight-private-anchor", "story-block-private"),
     insight("insight-safe-anchor", "story-block-safe"),
-  ]);
-  const state = reviewedState(currentSource);
+  ],
+  decisions = {},
+  includeHuman = false,
+} = {}) {
+  const currentSource = source(sourceInsights);
+  const humans = includeHuman
+    ? [["human:approved", humanContent(currentSource)]] : [];
+  const state = reviewedState(currentSource, decisions, humans);
   const session = createSuccessorStoryReviewSession(RUN_ID, { [currentSource.key]: state }, {});
   const item = {
     id: evidence.eventId,
@@ -322,8 +336,10 @@ async function serverFixture() {
     actorId: item.actor_id,
     actorType: item.actor_type,
   }];
-  const validation = validateSuccessorStorySourcePackage(candidateRows, evidenceRows);
+  const validation = validateRecognizedStorySourcePackage(candidateRows, evidenceRows);
   assert.equal(validation.ok, true);
+  assert.equal(validation.sourceSchema, "oxygen.story/3");
+  assert.equal(validation.sessionSchema, "oxygen.story-review-session/2");
   const sourceDigest = await computeSourceDigest([item]);
   const db = new FakeSuccessorReleaseDb({
     items: [item],
@@ -365,6 +381,12 @@ const request = (overrides = {}) => ({
 
 test("server accepts only exact /3 + /2 and rechecks run, version, source, and digest", async () => {
   const { db } = await serverFixture();
+  assert.deepEqual(await readActiveStoryReviewContract(db, RUN_ID), {
+    ready: true,
+    sourceRevision: SOURCE_REVISION,
+    storySourceSchema: "oxygen.story/3",
+    storySessionSchema: "oxygen.story-review-session/2",
+  });
   const release = await reconstructReviewedStoryReleaseFromDatabase(db, request());
   assert.equal(release.ok, true);
   assert.equal(release.story.schema_version, SUCCESSOR_REVIEWED_STORY_SCHEMA);
@@ -380,6 +402,34 @@ test("server accepts only exact /3 + /2 and rechecks run, version, source, and d
     request({ sourceRevision: SOURCE_REVISION - 1 }))).code, RELEASE_ERROR.sourceConflict);
   db.runs.get(RUN_ID).activeStoryDigest = "0".repeat(64);
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request())).code, RELEASE_ERROR.stateInvalid);
+});
+
+test("synthetic live server flow releases zero, one, and mixed multiple Insights with byte parity", async () => {
+  const scenarios = [
+    { options: { sourceInsights: [] }, expected: [] },
+    { options: { sourceInsights: [insight("insight-one")] }, expected: ["insight-one"] },
+    {
+      options: {
+        sourceInsights: [insight("insight-accepted"), insight("insight-rejected")],
+        decisions: { "insight-rejected": "rejected" },
+        includeHuman: true,
+      },
+      expected: ["human:approved", "insight-accepted"],
+    },
+  ];
+  const { renderReviewedStoryHtml } = await import("../app/api/organization/export/route.ts");
+  for (const { options, expected } of scenarios) {
+    const { db } = await serverFixture(options);
+    const release = await reconstructReviewedStoryReleaseFromDatabase(db, request());
+    assert.equal(release.ok, true);
+    assert.deepEqual(release.story.chapters[0].en.insights.map((item) => item.id), expected);
+    const zipEntry = successorReviewedStoryPackageEntry(release.story);
+    assert.equal(zipEntry.data, release.serializedStory);
+    const embedded = renderReviewedStoryHtml(release.serializedStory)
+      .match(/const STORY=([\s\S]*?);const view=/)?.[1];
+    assert.deepEqual(JSON.parse(embedded), JSON.parse(zipEntry.data));
+    assert.equal(release.story.publication_approved, false);
+  }
 });
 
 test("source/session/release mixing and every extra browser authority field fail closed", async () => {

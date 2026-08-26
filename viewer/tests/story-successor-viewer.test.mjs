@@ -66,13 +66,15 @@ test("completion and blocker focus consume the central successor evaluator with 
   assert.match(navigation, /SuccessorChapterReviewBlocker/);
 });
 
-test("workspace exact-dispatches v1 and v2, preserves legacy priority, and never releases successor", () => {
-  assert.match(workspace, /const storyLane = activatedStoryHighlights\.length[\s\S]*?"legacy"[\s\S]*?"successor"/);
+test("workspace consumes the server-owned exact contract and releases both mapped versions", () => {
+  assert.match(workspace, /const storyLane = compatibilityContract && compatibilityPackageReady[\s\S]*?successorContract && successorPackageReady/);
   assert.match(workspace, /parsedSession\.schema !== expectedSchema/);
+  assert.match(workspace, /payload\.storySourceSchema !== workflow\.storySourceSchema/);
   assert.match(workspace, /hydrateSuccessorStoryReviewSession/);
   const download = workspace.slice(workspace.indexOf("const downloadReviewed"), workspace.indexOf("const ready ="));
-  assert.ok(download.indexOf("storyLane === \"successor\"") < download.indexOf("runDurableStoryReviewHandoff"));
-  assert.match(download, /Successor download and release remain inactive/);
+  assert.match(download, /storyLane === "successor"[\s\S]*?createSuccessorStoryReviewSession/);
+  assert.match(download, /body:JSON\.stringify\(\{workflowRunId,serverVersion,sourceRevision\}\)/);
+  assert.doesNotMatch(download, /inactive in this Viewer lane/);
 });
 
 test("successor progress counts independently resolved AI Insight versions, including zero-of-zero", () => {
@@ -85,5 +87,6 @@ test("successor progress counts independently resolved AI Insight versions, incl
 
 test("the route accepts only explicit canonical schema dispatch", () => {
   assert.match(route, /parseStoryReviewSession\(body\.session\)/);
+  assert.match(route, /session\.schema !== active\.storySessionSchema/);
   assert.doesNotMatch(route, /canonicalizeStoryReviewSession\(body\.session\)/);
 });

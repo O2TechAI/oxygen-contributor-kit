@@ -11,6 +11,7 @@ import {
 } from "../lib/timeline.ts";
 import {
   selectReviewableStoryTimeline,
+  validateRecognizedStorySourcePackage,
   validateSuccessorStorySourcePackage,
 } from "../lib/story-readiness.ts";
 import { storyFirstSemanticCases } from "./fixtures/story-first-semantic-cases.mjs";
@@ -483,12 +484,37 @@ test("successor packages fail closed on mixed source versions", () => {
   ), { ok: false, code: "SUCCESSOR_STORY_CHAPTER_INVALID" });
 });
 
-test("successor source remains staged outside workflow activation while all consumer primitives are explicit", async () => {
-  const { candidateRows } = buildSuccessorFixture("one-insight");
+test("successor packages activate only through exact permanent dispatch", async () => {
+  const { candidateRows, evidenceRows } = buildSuccessorFixture("one-insight");
   assert.deepEqual(selectReviewableStoryTimeline([{
     id: candidateRows[0].id,
     summary: candidateRows[0].summary,
   }]), []);
+  assert.deepEqual(validateRecognizedStorySourcePackage(candidateRows, evidenceRows), {
+    ok: true,
+    sourceSchema: "oxygen.story/3",
+    sessionSchema: "oxygen.story-review-session/2",
+    chapterCount: candidateRows.length,
+    canonicalCandidate: JSON.stringify(candidateRows.map(({ id, summary }) => ({ id, summary }))),
+  });
+  const currentRow = {
+    id: "current-row",
+    documentId: "probe-document",
+    summary: currentRuntimeProbe([currentInsight("probe-one")]),
+  };
+  const legacyRow = {
+    id: "legacy-row",
+    documentId: "probe-document",
+    summary: "oxygen.story-milestone/1:{}",
+  };
+  for (const rows of [
+    [],
+    [legacyRow],
+    [...candidateRows, currentRow],
+    [...candidateRows, legacyRow],
+    [{ ...candidateRows[0], summary: `${SUCCESSOR_STORY_PREFIX}{` }],
+    [{ ...candidateRows[0], summary: "oxygen.story/99:{}" }],
+  ]) assert.equal(validateRecognizedStorySourcePackage(rows, evidenceRows).ok, false);
 
   const laneConsumers = {
     "../lib/story-review-session-persistence.ts": /AnyStoryReviewSession/,
@@ -497,21 +523,16 @@ test("successor source remains staged outside workflow activation while all cons
     "../app/story-chapter-editor.tsx": /SuccessorStoryChapterEditor/,
     "../app/workspace.tsx": /parseSuccessorStorySource/,
     "../lib/story-release.ts": /SUCCESSOR_REVIEWED_STORY_SCHEMA/,
-    "../lib/story-release-server.ts": /validateSuccessorStorySourcePackage/,
+    "../lib/story-release-server.ts": /validateRecognizedStorySourcePackage/,
     "../app/api/organization/export/route.ts": /oxygen\.reviewed-story\/2/,
+    "../app/api/workflow/route.ts": /validateRecognizedStorySourcePackage/,
+    "../lib/workflow-progress.ts": /storySourceSchema/,
   };
   for (const [path, pattern] of Object.entries(laneConsumers)) {
     const source = await readFile(fileURLToPath(new URL(path, import.meta.url)), "utf8");
     assert.match(source, pattern, path);
   }
 
-  const inactiveConsumers = [
-    "../app/api/workflow/route.ts",
-  ];
-  for (const path of inactiveConsumers) {
-    const source = await readFile(fileURLToPath(new URL(path, import.meta.url)), "utf8");
-    assert.doesNotMatch(source, /oxygen\.story\/3|SUCCESSOR_STORY_PREFIX|parseSuccessorStorySource|validateSuccessorStorySourcePackage/, path);
-  }
 });
 
 test("the fixture corpus is synthetic, public-safe, and free of release-visible private sentinels", () => {

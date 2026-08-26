@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { syntheticStoryEvents } from "./fixtures/synthetic-story-project.mjs";
 import {
   createStoryReviewSession,
   createSuccessorStoryReviewSession,
+  STORY_REVIEW_SESSION_SCHEMA,
+  SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
   storyReviewSessionSemanticJson,
 } from "../lib/story-review-session.ts";
 
@@ -12,7 +15,13 @@ const serverModule = await import("../lib/story-review-session-server.ts")
 
 function serverContract() {
   assert.equal(serverModule.importError, undefined, "server-owned review-session CAS helper must exist");
-  return serverModule;
+  return {
+    ...serverModule,
+    persistStoryReviewSessionCas: (db, request, serverNow) => serverModule.persistStoryReviewSessionCas(db, {
+      storySessionSchema: request.session.schema,
+      ...request,
+    }, serverNow),
+  };
 }
 
 const session = (label, updatedAt = "2099-01-01T00:00:00.000Z") => {
@@ -25,8 +34,30 @@ const successorSession = (updatedAt = "2099-01-01T00:00:00.000Z") => (
   createSuccessorStoryReviewSession("review-run", {}, {}, updatedAt)
 );
 
+const successorEvidence = { documentId: "successor-doc", eventId: "successor-doc:successor-item" };
+const successorSource = {
+  schema: "oxygen.story/3",
+  key: "successor-chapter",
+  phase: { id: "phase-review", label: "Review" },
+  title: "Synthetic successor Chapter",
+  overview: "A public-safe synthetic source exercises exact session dispatch.",
+  people: [{
+    id: "person-owner",
+    releaseLabel: "Owner",
+    role: "Reviewer",
+    description: "Reviews the synthetic package.",
+    localIdentityState: "not_identified",
+    evidence: [successorEvidence],
+  }],
+  story: { blocks: [{ id: "block-safe", text: "A synthetic Story block.", evidence: [successorEvidence] }] },
+  insights: [],
+  evidence: { primary: successorEvidence, supporting: [] },
+  contextRetention: { excluded: [] },
+};
+
 class FakeReviewDb {
   runs = new Map([["review-run", { status: "ready_for_human_review", sourceRevision: 1 }]]);
+  items = syntheticStoryEvents.map((event) => ({ ...event }));
   sessions = new Map();
   writeQueue = Promise.resolve();
 
@@ -34,6 +65,23 @@ class FakeReviewDb {
     let values = [];
     return {
       bind(...next) { values = next; return this; },
+      all: async () => {
+        if (/organization_reason AS summary/.test(sql)) return { results: this.items
+          .filter((item) => /^oxygen\.story-(?:highlight|milestone)\/|^oxygen\.story\/3:/.test(item.summary))
+          .map((item) => ({
+            id: item.id.includes(":") ? item.id : `${item.document_id}:${item.id}`,
+            documentId: item.document_id,
+            summary: item.summary,
+          })) };
+        if (/event_type AS eventType/.test(sql)) return { results: this.items.map((item) => ({
+          id: item.id.includes(":") ? item.id : `${item.document_id}:${item.id}`,
+          documentId: item.document_id,
+          eventType: item.event_type,
+          actorId: item.actor_id,
+          actorType: item.actor_type,
+        })) };
+        throw new Error(`Unexpected all SQL: ${sql}`);
+      },
       first: async () => {
         if (/FROM workflow_runs/.test(sql)) {
           const run = this.runs.get(values[0]);
@@ -97,6 +145,56 @@ class FakeReviewDb {
     };
   }
 }
+
+test("server derives the compatibility session contract from the complete validated source package", async () => {
+  const { readActiveStoryReviewContract } = serverContract();
+  const db = new FakeReviewDb();
+  assert.deepEqual(await readActiveStoryReviewContract(db, "review-run"), {
+    ready: true,
+    sourceRevision: 1,
+    storySourceSchema: "oxygen.story-highlight/2",
+    storySessionSchema: "oxygen.story-review-session/1",
+  });
+  db.items.push({
+    ...db.items[0],
+    id: "historical-row",
+    summary: "oxygen.story-milestone/1:{}",
+  });
+  assert.deepEqual(await readActiveStoryReviewContract(db, "review-run"), {
+    ready: true,
+    sourceRevision: 1,
+    storySourceSchema: null,
+    storySessionSchema: null,
+  });
+});
+
+test("successor contract creates, saves, and refreshes only a schema-2 session", async () => {
+  const { readActiveStoryReviewContract, readStoryReviewSessionRecord } = serverContract();
+  const db = new FakeReviewDb();
+  db.items = [{
+    id: successorEvidence.eventId,
+    document_id: successorEvidence.documentId,
+    event_type: "message",
+    actor_id: "owner",
+    actor_type: "user",
+    summary: `oxygen.story/3:${JSON.stringify(successorSource)}`,
+  }];
+  const active = await readActiveStoryReviewContract(db, "review-run");
+  assert.equal(active.storySourceSchema, "oxygen.story/3");
+  assert.equal(active.storySessionSchema, SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA);
+  const saved = await serverModule.persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run",
+    expectedVersion: 0,
+    sourceRevision: 1,
+    storySessionSchema: active.storySessionSchema,
+    session: successorSession(),
+  }, "2035-01-01T00:00:00.000Z");
+  assert.equal(saved.ok, true);
+  assert.equal(saved.serverVersion, 1);
+  const refreshed = await readStoryReviewSessionRecord(db, "review-run");
+  assert.equal(refreshed.session.schema, SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA);
+  assert.equal(refreshed.sourceRevision, 1);
+});
 
 test("initial metadata is version 0 and first exact create advances 0 to 1", async () => {
   const { readStoryReviewSessionRecord, persistStoryReviewSessionCas } = serverContract();
@@ -165,6 +263,21 @@ test("schema-2 uses the same CAS, server timestamp, and semantic no-op path", as
   }, "2035-01-01T00:00:09.000Z");
   assert.equal(noChange.noChange, true);
   assert.equal(noChange.serverVersion, 1);
+});
+
+test("CAS rejects a session that disagrees with the server-derived schema before writing", async () => {
+  const { STORY_SESSION_ERROR } = serverContract();
+  const db = new FakeReviewDb();
+  const result = await serverModule.persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run",
+    expectedVersion: 0,
+    sourceRevision: 1,
+    storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
+    session: successorSession(),
+  }, "2035-01-01T00:00:00.000Z");
+  assert.deepEqual(result, { ok: false, code: STORY_SESSION_ERROR.stateInvalid });
+  assert.equal(db.sessions.size, 0);
+  assert.notEqual(STORY_REVIEW_SESSION_SCHEMA, SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA);
 });
 
 test("CAS rejects an in-place session schema switch and permits an explicit source revision transition", async () => {

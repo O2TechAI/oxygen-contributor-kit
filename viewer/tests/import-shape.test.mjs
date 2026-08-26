@@ -194,7 +194,7 @@ test("HTML and ZIP downloads accept only the reviewed Story release projection",
   assert.doesNotMatch(html,/formatted_summary_json|SELECT .*content|organization_reason/);
   for(const forbidden of ["exact evidence","Privacy originals","local identities","annotations","instructions"])assert.match(release,new RegExp(forbidden,"i"));
   assert.match(release,/story\/reviewed-project-story\.json/);
-  assert.match(releaseServer,/stage !== "human_confirmed"/);assert.match(releaseServer,/validateStoryCandidatePackage/);assert.match(release,/publication_approved: false/);
+  assert.match(releaseServer,/stage !== "human_confirmed"/);assert.match(releaseServer,/validateRecognizedStorySourcePackage/);assert.match(release,/publication_approved: false/);
   assert.match(ui,/buildReviewedStoryRelease/);assert.match(ui,/JSON\.stringify\(\{workflowRunId,serverVersion,sourceRevision\}\)/);assert.match(ui,/method:"POST"/);assert.doesNotMatch(ui,/JSON\.stringify\(\{ reviewedStory/);
 });
 test("removed features and login routes stay deleted", async () => {

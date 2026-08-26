@@ -3,8 +3,15 @@ import {
   parseStoryReviewSession,
   storyReviewSessionSemanticJson,
   STORY_REVIEW_SESSION_SCHEMA,
+  SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
   type AnyStoryReviewSession,
 } from "./story-review-session.ts";
+import {
+  validateRecognizedStorySourcePackage,
+  type StoryCandidateRow,
+  type StoryEvidenceRow,
+} from "./story-readiness.ts";
+import { LEGACY_STORY_PREFIX, STORY_PREFIX, SUCCESSOR_STORY_PREFIX } from "./timeline.ts";
 
 type ReviewSessionDatabase = Awaited<ReturnType<typeof getD1>>;
 
@@ -104,10 +111,45 @@ export async function readActiveStoryReviewSource(
   };
 }
 
+/** Derive the active source/session contract from the complete recognized
+ * package. The version is never selected by the browser or persisted twice. */
+export async function readActiveStoryReviewContract(
+  db: ReviewSessionDatabase,
+  workflowRunId: string,
+) {
+  const active = await readActiveStoryReviewSource(db, workflowRunId);
+  if (!active.ready || active.sourceRevision === null) {
+    return { ...active, storySourceSchema: null, storySessionSchema: null };
+  }
+  const [candidateResult, evidenceResult] = await Promise.all([
+    db.prepare(`SELECT id,document_id AS documentId,organization_reason AS summary
+      FROM items
+      WHERE organization_reason LIKE ? OR organization_reason LIKE ? OR organization_reason LIKE ?
+      ORDER BY COALESCE(timestamp,''),document_id,sequence`)
+      .bind(`${SUCCESSOR_STORY_PREFIX}%`, `${STORY_PREFIX}%`, `${LEGACY_STORY_PREFIX}%`)
+      .all<StoryCandidateRow>(),
+    db.prepare(`SELECT id,document_id AS documentId,event_type AS eventType,
+      actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`)
+      .all<StoryEvidenceRow>(),
+  ]);
+  const validation = validateRecognizedStorySourcePackage(
+    candidateResult.results || [],
+    evidenceResult.results || [],
+  );
+  return validation.ok
+    ? {
+        ...active,
+        storySourceSchema: validation.sourceSchema,
+        storySessionSchema: validation.sessionSchema,
+      }
+    : { ...active, storySourceSchema: null, storySessionSchema: null };
+}
+
 type CasRequest = {
   workflowRunId: string;
   expectedVersion: number;
   sourceRevision: number;
+  storySessionSchema: typeof STORY_REVIEW_SESSION_SCHEMA | typeof SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA;
   session: AnyStoryReviewSession;
 };
 
@@ -195,7 +237,8 @@ export async function persistStoryReviewSessionCas(
     return { ok: false, code: STORY_SESSION_ERROR.sourceConflict };
   }
   const canonical = parseStoryReviewSession(request.session);
-  if (!canonical || canonical.workflowRunId !== request.workflowRunId) {
+  if (!canonical || canonical.workflowRunId !== request.workflowRunId
+    || canonical.schema !== request.storySessionSchema) {
     return { ok: false, code: STORY_SESSION_ERROR.stateInvalid };
   }
   const [active, current] = await Promise.all([

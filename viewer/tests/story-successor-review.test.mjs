@@ -405,7 +405,7 @@ test("v1 exact-one silence remains historically complete and is not successor co
   assert.equal(validateSuccessorChapterReviewCompletion(applyBase(successor), context(successor)), false);
 });
 
-test("successor Review Session is wired through Viewer, transport, and release but not workflow activation", async () => {
+test("successor Review Session is wired through exact workflow, Viewer, transport, and release dispatch", async () => {
   const wiredPaths = [
     "../app/story-chapter-editor.tsx",
     "../app/workspace.tsx",
@@ -414,6 +414,7 @@ test("successor Review Session is wired through Viewer, transport, and release b
     "../app/api/story-review-session/route.ts",
     "../lib/story-release.ts",
     "../lib/story-release-server.ts",
+    "../app/api/workflow/route.ts",
   ];
   const wiredSources = await Promise.all(wiredPaths.map((path) => readFile(new URL(path, import.meta.url), "utf8")));
   assert.match(wiredSources[0], /SuccessorStoryChapterEditor/);
@@ -423,12 +424,5 @@ test("successor Review Session is wired through Viewer, transport, and release b
   assert.match(wiredSources[4], /parseStoryReviewSession/);
   assert.match(wiredSources[5], /SUCCESSOR_REVIEWED_STORY_SCHEMA/);
   assert.match(wiredSources[6], /hydrateSuccessorStoryReviewSession/);
-
-  const inactivePaths = [
-    "../app/api/workflow/route.ts",
-  ];
-  const sources = await Promise.all(inactivePaths.map((path) => readFile(new URL(path, import.meta.url), "utf8")));
-  for (const text of sources) {
-    assert.doesNotMatch(text, /SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA|oxygen\.story-review-session\/2|hydrateSuccessorStoryReviewSession/);
-  }
+  assert.match(wiredSources[7], /validateRecognizedStorySourcePackage/);
 });

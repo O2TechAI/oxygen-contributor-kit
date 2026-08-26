@@ -89,7 +89,8 @@ test("workflow progress derives completed, current, next, waiting, and blocked s
   const reviewing = deriveWorkflowProgress(facts({
     organizedItemCount: 10, organizationStatus: "complete", redactionStatus: "complete",
     storyGenerationStatus: "ready_for_human_review", storyGenerationCompleted: 14,
-    storyGenerationTotal: 14,
+    storyGenerationTotal: 14, storySourceSchema: "oxygen.story/3",
+    storySessionSchema: "oxygen.story-review-session/2",
   }));
   assert.equal(reviewing.currentStageId, "review");
   assert.equal(reviewing.status, "waiting");
@@ -106,11 +107,22 @@ test("workflow progress is a strict sanitized operational projection", () => {
   const state = deriveWorkflowProgress(facts({
     organizedItemCount: 10, organizationStatus: "complete", redactionStatus: "complete",
     storyGenerationStatus: "ready_for_human_review",
+    storySourceSchema: "oxygen.story/3", storySessionSchema: "oxygen.story-review-session/2",
   }));
   assert.deepEqual(Object.keys(state).sort(), [
     "completedStages", "currentStageId", "requiresHumanAction", "safeStatusCode", "stages",
-    "status", "storyGenerationStatus", "totalStages", "updatedAt", "workflowRunId",
+    "status", "storyGenerationStatus", "storySessionSchema", "storySourceSchema",
+    "totalStages", "updatedAt", "workflowRunId",
   ]);
+  assert.equal(state.storySourceSchema, "oxygen.story/3");
+  assert.equal(state.storySessionSchema, "oxygen.story-review-session/2");
+  const mixed = deriveWorkflowProgress(facts({
+    organizedItemCount: 10, organizationStatus: "complete", redactionStatus: "complete",
+    storyGenerationStatus: "ready_for_human_review",
+    storySourceSchema: "oxygen.story/3", storySessionSchema: "oxygen.story-review-session/1",
+  }));
+  assert.equal(mixed.storySourceSchema, null);
+  assert.equal(mixed.storySessionSchema, null);
   const serialized = JSON.stringify(state);
   assert.doesNotMatch(serialized, /reasoning|chain.of.thought|prompt|tool.?arg|private.?message|story.?payload|evidence.?payload|removed.?content/i);
   assert.ok(state.stages.every((stage) => Object.keys(stage).every((key) => ["id", "status", "progress"].includes(key))));
@@ -131,7 +143,7 @@ test("workflow route hydrates count-only persistent state and the shell can reop
   assert.match(loader, /SELECT COUNT\(\*\)/);
   assert.match(route, /export async function POST/);
   assert.match(route, /workflow_runs/);
-  assert.match(route, /validateStoryCandidatePackage/);
+  assert.match(route, /validateRecognizedStorySourcePackage/);
   assert.match(route, /story_source_revision/);
   assert.match(route, /BODY_KEYS/);
   assert.doesNotMatch(`${route}\n${loader}`, /original_json|SELECT\s+content|safeStatusMessage|reasoning|prompt/i);

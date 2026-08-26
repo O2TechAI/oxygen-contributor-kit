@@ -19,8 +19,7 @@ import {
 } from "./story-review-session.ts";
 import {
   selectReviewableStoryTimeline,
-  validateStoryCandidatePackage,
-  validateSuccessorStorySourcePackage,
+  validateRecognizedStorySourcePackage,
   type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
@@ -251,22 +250,17 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     actorId: item.actor_id,
     actorType: item.actor_type,
   }));
-  const successorSource = candidateRows.length > 0
-    && candidateRows.every((row) => row.summary.startsWith(SUCCESSOR_STORY_PREFIX));
-  const legacySource = candidateRows.length > 0
-    && candidateRows.every((row) => row.summary.startsWith(STORY_PREFIX)
-      || row.summary.startsWith(LEGACY_STORY_PREFIX));
-  if (successorSource === legacySource) {
+  const validation = validateRecognizedStorySourcePackage(candidateRows, evidenceRows);
+  if (!validation.ok || !run.active_story_digest
+    || await sha256(validation.canonicalCandidate) !== run.active_story_digest) {
+    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  }
+  if (record.session.schema !== validation.sessionSchema) {
     return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
   }
 
-  if (successorSource) {
+  if (validation.sourceSchema === "oxygen.story/3") {
     if (record.session.schema !== SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA) {
-      return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
-    }
-    const validation = validateSuccessorStorySourcePackage(candidateRows, evidenceRows);
-    if (!validation.ok || !run.active_story_digest
-      || await sha256(validation.canonicalCandidate) !== run.active_story_digest) {
       return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
     }
     const sources = candidateRows.map((row) => parseSuccessorStorySource(row.summary));
@@ -316,11 +310,6 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
   }
 
   if (record.session.schema !== STORY_REVIEW_SESSION_SCHEMA) {
-    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
-  }
-  const validation = validateStoryCandidatePackage(candidateRows, evidenceRows);
-  if (!validation.ok || !run.active_story_digest
-    || await sha256(validation.canonicalCandidate) !== run.active_story_digest) {
     return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
   }
   const milestones = selectReviewableStoryTimeline(candidateItems.map((item) => ({

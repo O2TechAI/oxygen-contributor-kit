@@ -1,11 +1,11 @@
 import { getD1 } from "../../../db";
 import { loadWorkflowProgress } from "../../../lib/workflow-progress-server";
 import {
-  validateStoryCandidatePackage,
+  validateRecognizedStorySourcePackage,
   type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "../../../lib/story-readiness";
-import { LEGACY_STORY_PREFIX, STORY_PREFIX } from "../../../lib/timeline";
+import { LEGACY_STORY_PREFIX, STORY_PREFIX, SUCCESSOR_STORY_PREFIX } from "../../../lib/timeline";
 import { isWorkflowRunId } from "../../../lib/workflow-progress";
 import {
   WORKFLOW_RUN_AUTHORITY,
@@ -144,14 +144,15 @@ export async function POST(request: Request) {
     const [{ results: candidateRows }, { results: evidenceRows }] = await Promise.all([
       db.prepare(`SELECT id,document_id AS documentId,organization_reason AS summary
         FROM items
-        WHERE organization_reason LIKE ? OR organization_reason LIKE ?
+        WHERE organization_reason LIKE ? OR organization_reason LIKE ? OR organization_reason LIKE ?
         ORDER BY COALESCE(timestamp,''),document_id,sequence`)
-        .bind(`${STORY_PREFIX}%`, `${LEGACY_STORY_PREFIX}%`).all<StoryCandidateRow>(),
+        .bind(`${SUCCESSOR_STORY_PREFIX}%`, `${STORY_PREFIX}%`, `${LEGACY_STORY_PREFIX}%`)
+        .all<StoryCandidateRow>(),
       db.prepare(`SELECT id,document_id AS documentId,event_type AS eventType,
         actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`)
         .all<StoryEvidenceRow>(),
     ]);
-    const validation = validateStoryCandidatePackage(candidateRows, evidenceRows);
+    const validation = validateRecognizedStorySourcePackage(candidateRows, evidenceRows);
     if (!validation.ok) {
       await db.prepare(`UPDATE workflow_runs
         SET story_generation_status='blocked',active_story_digest=NULL,updated_at=? WHERE id=?`)

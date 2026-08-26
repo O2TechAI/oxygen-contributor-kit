@@ -1,10 +1,27 @@
 import { getD1 } from "../db";
 import { selectReviewableStoryTimeline } from "./story-readiness";
-import { hydrateStoryReviewSession } from "./story-review-session";
 import {
-  readActiveStoryReviewSource,
+  hydrateStoryReviewSession,
+  hydrateSuccessorStoryReviewSession,
+  STORY_REVIEW_SESSION_SCHEMA,
+  SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
+} from "./story-review-session";
+import {
+  emptySuccessorChapterReview,
+  type ChapterReviewState,
+  type PrivacyDecision,
+  type SuccessorChapterReviewState,
+} from "./story-review";
+import {
+  readActiveStoryReviewContract,
   readStoryReviewSessionRecord,
 } from "./story-review-session-server";
+import {
+  LEGACY_STORY_PREFIX,
+  STORY_PREFIX,
+  SUCCESSOR_STORY_PREFIX,
+  parseSuccessorStorySource,
+} from "./timeline";
 import { deriveWorkflowProgress, isStoryReviewReady } from "./workflow-progress";
 import {
   WORKFLOW_RUN_AUTHORITY,
@@ -64,6 +81,9 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     .filter((value): value is string => Boolean(value))
     .sort()
     .at(-1) || null;
+  const activeContract = run?.story_generation_status === "ready_for_human_review"
+    ? await readActiveStoryReviewContract(db, authority.workflowRunId)
+    : null;
   return deriveWorkflowProgress({
     workflowRunId: run?.id || authority.workflowRunId,
     targetConfirmed: Boolean(run?.target_confirmed),
@@ -78,6 +98,8 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     storyGenerationStatus: run?.story_generation_status || "not_started",
     storyGenerationCompleted: Number(run?.story_generation_completed || 0),
     storyGenerationTotal: Number(run?.story_generation_total || 0),
+    storySourceSchema: activeContract?.storySourceSchema || null,
+    storySessionSchema: activeContract?.storySessionSchema || null,
     updatedAt,
   });
 }
@@ -128,7 +150,7 @@ export async function loadWorkspaceBootstrap() {
       updated_at,organization_status,formatted_summary_json
       FROM documents ORDER BY source_timestamp,title`).all<WorkspaceDocumentRow>(),
     readStoryReviewSessionRecord(db, workflow.workflowRunId),
-    readActiveStoryReviewSource(db, workflow.workflowRunId),
+    readActiveStoryReviewContract(db, workflow.workflowRunId),
   ]);
   const total = Number(items?.total || 0);
   const completed = Number(items?.completed || 0);
@@ -150,22 +172,71 @@ export async function loadWorkspaceBootstrap() {
   };
   const events = documents.flatMap((document) => (document.formatted_summary?.highlights || [])
     .map((event) => ({ ...event, documentId: document.id })))
-    .sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || "")));
-  const milestones = selectReviewableStoryTimeline(events);
-  const persistedSession = session.sourceRevision === null
-    || session.sourceRevision === activeSource.sourceRevision
+    .sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || ""))
+      || left.documentId.localeCompare(right.documentId)
+      || Number(left.sequence || 0) - Number(right.sequence || 0));
+  const recognizedEvents = events.filter((event) => String(event.summary || "").startsWith(STORY_PREFIX)
+    || String(event.summary || "").startsWith(LEGACY_STORY_PREFIX)
+    || String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX));
+  const contractMatches = Boolean(workflow.storySourceSchema
+    && workflow.storySessionSchema
+    && activeSource.storySourceSchema === workflow.storySourceSchema
+    && activeSource.storySessionSchema === workflow.storySessionSchema);
+  const revisionMatches = session.sourceRevision === activeSource.sourceRevision
+    || (workflow.storySourceSchema === "oxygen.story-highlight/2" && session.sourceRevision === null);
+  const persistedSession = revisionMatches && session.session?.schema === workflow.storySessionSchema
     ? session.session
     : null;
-  const hydrated = hydrateStoryReviewSession(persistedSession, workflow.workflowRunId, milestones);
+  const legacyDirectConflict = workflow.storySourceSchema === "oxygen.story/3"
+    && session.persistedAt !== null && session.sourceRevision === null;
+  const storedStateValid = !legacyDirectConflict && (session.persistedAt === null
+    || !revisionMatches || Boolean(persistedSession));
+  let chapterReviews: Record<string, ChapterReviewState | SuccessorChapterReviewState> = {};
+  let privacyDecisions: Record<string, PrivacyDecision> = {};
+  let projectionReady = false;
+  if (workflow.storySourceSchema === "oxygen.story-highlight/2"
+    && workflow.storySessionSchema === STORY_REVIEW_SESSION_SCHEMA) {
+    const milestones = selectReviewableStoryTimeline(events);
+    projectionReady = recognizedEvents.length > 0
+      && recognizedEvents.every((event) => String(event.summary || "").startsWith(STORY_PREFIX))
+      && milestones.length === recognizedEvents.length;
+    const hydrated = hydrateStoryReviewSession(persistedSession, workflow.workflowRunId, milestones);
+    chapterReviews = hydrated.chapterReviews;
+    privacyDecisions = hydrated.privacyDecisions;
+  } else if (workflow.storySourceSchema === "oxygen.story/3"
+    && workflow.storySessionSchema === SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA) {
+    const parsedSources = recognizedEvents.map((event) => parseSuccessorStorySource(event.summary));
+    projectionReady = recognizedEvents.length > 0
+      && recognizedEvents.every((event) => String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX))
+      && parsedSources.every((source) => source !== null);
+    const sources = parsedSources.flatMap((source) => source ? [source] : []);
+    if (persistedSession) {
+      const hydrated = hydrateSuccessorStoryReviewSession(
+        persistedSession,
+        workflow.workflowRunId,
+        sources,
+      );
+      chapterReviews = hydrated.chapterReviews;
+      projectionReady = projectionReady
+        && Object.keys(hydrated.chapterReviews).length === sources.length;
+    } else {
+      chapterReviews = Object.fromEntries(sources.map((source) => [
+        source.key,
+        emptySuccessorChapterReview(source),
+      ]));
+    }
+  }
   const ready = documents.length > 0
     && status.status === "complete"
-    && milestones.length > 0;
+    && contractMatches
+    && projectionReady
+    && storedStateValid;
   return {
     workflow,
     status,
     documents,
-    chapterReviews: hydrated.chapterReviews,
-    privacyDecisions: hydrated.privacyDecisions,
+    chapterReviews,
+    privacyDecisions,
     storySessionReadyRunId: ready ? workflow.workflowRunId : "",
   };
 }

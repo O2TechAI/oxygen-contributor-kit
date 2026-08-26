@@ -15,6 +15,8 @@ export type StoryGenerationStatus =
   | "running"
   | "blocked"
   | "ready_for_human_review";
+export type StorySourceSchema = "oxygen.story/3" | "oxygen.story-highlight/2";
+export type StorySessionSchema = "oxygen.story-review-session/2" | "oxygen.story-review-session/1";
 export type WorkflowSafeStatusCode =
   | "target_working_folder_required"
   | "target_working_folder_confirmed"
@@ -54,6 +56,8 @@ export type WorkflowProgressState = {
   updatedAt: string | null;
   requiresHumanAction: boolean;
   storyGenerationStatus: StoryGenerationStatus;
+  storySourceSchema: StorySourceSchema | null;
+  storySessionSchema: StorySessionSchema | null;
   blockedReasonCode?:
     | "COLLECTION_FAILED"
     | "COLLECTION_EMPTY"
@@ -76,6 +80,8 @@ export type WorkflowFacts = {
   storyGenerationStatus?: string | null;
   storyGenerationCompleted?: number;
   storyGenerationTotal?: number;
+  storySourceSchema?: StorySourceSchema | null;
+  storySessionSchema?: StorySessionSchema | null;
   updatedAt?: string | null;
 };
 
@@ -105,6 +111,12 @@ function state(
   progress?: WorkflowStageProgress,
   blockedReasonCode?: WorkflowProgressState["blockedReasonCode"],
 ): WorkflowProgressState {
+  const successorContract = facts.storyGenerationStatus === "ready_for_human_review"
+    && facts.storySourceSchema === "oxygen.story/3"
+    && facts.storySessionSchema === "oxygen.story-review-session/2";
+  const compatibilityContract = facts.storyGenerationStatus === "ready_for_human_review"
+    && facts.storySourceSchema === "oxygen.story-highlight/2"
+    && facts.storySessionSchema === "oxygen.story-review-session/1";
   return {
     workflowRunId: facts.workflowRunId || "",
     status,
@@ -116,6 +128,8 @@ function state(
     updatedAt: facts.updatedAt || null,
     requiresHumanAction,
     storyGenerationStatus: normalizeStoryGenerationStatus(facts.storyGenerationStatus),
+    storySourceSchema: successorContract || compatibilityContract ? facts.storySourceSchema! : null,
+    storySessionSchema: successorContract || compatibilityContract ? facts.storySessionSchema! : null,
     ...(blockedReasonCode ? { blockedReasonCode } : {}),
   };
 }
@@ -138,6 +152,8 @@ function normalizeStoryGenerationStatus(value: unknown): StoryGenerationStatus {
 export function isStoryReviewReady(progress: WorkflowProgressState | null | undefined) {
   return Boolean(progress
     && progress.storyGenerationStatus === "ready_for_human_review"
+    && progress.storySourceSchema
+    && progress.storySessionSchema
     && progress.currentStageId === "review"
     && progress.requiresHumanAction === true);
 }

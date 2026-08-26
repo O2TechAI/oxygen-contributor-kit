@@ -6,7 +6,7 @@ import {
 import {
   STORY_SESSION_ERROR,
   persistStoryReviewSessionCas,
-  readActiveStoryReviewSource,
+  readActiveStoryReviewContract,
   readStoryReviewSessionRecord,
   type StorySessionErrorCode,
 } from "../../../lib/story-review-session-server";
@@ -55,20 +55,30 @@ export async function GET(request: Request) {
     return workflowRunErrorResponse(authority);
   }
   const [active, record] = await Promise.all([
-    readActiveStoryReviewSource(db, workflowRunId),
+    readActiveStoryReviewContract(db, workflowRunId),
     readStoryReviewSessionRecord(db, workflowRunId),
   ]);
   if (!active.ready || active.sourceRevision === null) {
     return sessionErrorResponse(STORY_SESSION_ERROR.notReady);
   }
-  const session = record.sourceRevision === null || record.sourceRevision === active.sourceRevision
+  if (!active.storySourceSchema || !active.storySessionSchema) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
+  }
+  const revisionMatches = record.sourceRevision === active.sourceRevision
+    || (active.storySourceSchema === "oxygen.story-highlight/2" && record.sourceRevision === null);
+  const session = revisionMatches
     ? record.session
     : null;
+  if (session && session.schema !== active.storySessionSchema) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
+  }
   return Response.json({
     session,
     serverVersion: record.serverVersion,
     sourceRevision: active.sourceRevision,
     persistedAt: record.persistedAt,
+    storySourceSchema: active.storySourceSchema,
+    storySessionSchema: active.storySessionSchema,
   }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }
 
@@ -105,10 +115,18 @@ export async function POST(request: Request) {
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
   }
+  const active = await readActiveStoryReviewContract(db, workflowRunId);
+  if (!active.ready || active.sourceRevision === null) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.notReady);
+  }
+  if (!active.storySessionSchema || session.schema !== active.storySessionSchema) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
+  }
   const result = await persistStoryReviewSessionCas(db, {
     workflowRunId,
     expectedVersion: Number(body.expectedVersion),
     sourceRevision: Number(body.sourceRevision),
+    storySessionSchema: active.storySessionSchema,
     session,
   }, new Date().toISOString());
   if (!result.ok) {
