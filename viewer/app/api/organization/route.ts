@@ -317,17 +317,8 @@ export async function POST(request: Request) {
         .all<{ id: string; document_id: string; sequence: number; event_type: string | null;
           actor_id: string | null; actor_type: string | null; timestamp: string | null;
           content: string; original_json: string }>(),
-      db.prepare(`SELECT r.story_source_revision,
-          (SELECT corpus_revision FROM semantic_manifests WHERE workflow_run_id=r.id)
-            AS semantic_corpus_revision,
-          (SELECT corpus_digest FROM semantic_manifests WHERE workflow_run_id=r.id)
-            AS semantic_corpus_digest
-        FROM workflow_runs r WHERE r.id=?`)
-        .bind(authority.workflowRunId).first<{
-          story_source_revision: number;
-          semantic_corpus_revision: number | null;
-          semantic_corpus_digest: string | null;
-        }>(),
+      db.prepare(`SELECT story_source_revision FROM workflow_runs WHERE id=?`)
+        .bind(authority.workflowRunId).first<{ story_source_revision: number }>(),
       readStoredSemanticManifestAuthority(db, authority.workflowRunId),
       readFinalizedCorpusAuthority(db, authority.workflowRunId),
     ]);
@@ -345,10 +336,9 @@ export async function POST(request: Request) {
         code: "FINALIZED_CORPUS_NOT_CURRENT",
       }, { status: 409 });
     }
-    const previousManifest = Number(run.semantic_corpus_revision) === leasedCorpus.corpusRevision
-      && String(run.semantic_corpus_digest || "") === leasedCorpus.corpusDigest
-      ? storedPreviousManifest
-      : null;
+    // The stored snapshot is revision lineage only. Current authority remains
+    // the leased finalized corpus and the complete next-manifest validation.
+    const previousManifest = storedPreviousManifest;
     const oversizedEvidence = itemRows.some((row) => new TextEncoder().encode(JSON.stringify({
       id: row.id,
       documentId: row.document_id,

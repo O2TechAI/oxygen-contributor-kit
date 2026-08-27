@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Extract only conversational turns (user input + model output) from a run.
+"""Extract only normalized message events from a prepared AI review run.
 
-Non-conversational events (tool_call, tool_result, artifact, git, system) are
-skipped entirely -- they are the Code/ToCode content that must never reach the
-redaction model. Output is one JSON file per trajectory, ready to hand to a
-sub-agent in a single request.
+Fixed action labels are skipped entirely. Output is one JSON file per
+trajectory, ready to hand to a sub-agent in a single request.
 """
 import argparse
 import json

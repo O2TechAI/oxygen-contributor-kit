@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,19 @@ import {
   validateSemanticRevisionTransition,
   validateSemanticManifestAuthority,
 } from "../lib/story-readiness.ts";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith(".") && !/\.[^/]+$/.test(specifier)) {
+      try {
+        return nextResolve(`${specifier}.ts`, context);
+      } catch {
+        return nextResolve(`${specifier}/index.ts`, context);
+      }
+    }
+    return nextResolve(specifier, context);
+  },
+});
 
 const hash = (value) => createHash("sha256").update(canonicalAuthorityJson(value)).digest("hex");
 const utf8Sort = (values) => [...values].sort((left, right) => Buffer.compare(
@@ -52,6 +66,99 @@ function manifest(contributionIds, units, overrides = {}) {
     units: normalizedUnits,
   };
   return { ...core, manifestDigest: hash(core), ...overrides };
+}
+
+function lineageManifest(records, revision, unitRevision) {
+  const normalizedRecords = [...records].sort((left, right) => Buffer.compare(
+    Buffer.from(left.id), Buffer.from(right.id),
+  ));
+  const units = normalizedRecords.map((record, index) => ({
+    id: `review-unit-${String(index + 1).padStart(3, "0")}`,
+    revision: unitRevision,
+    projectId: "Review Normalized Project",
+    kind: "discussion",
+    members: [record.id],
+    memberCount: 1,
+    membershipDigest: hash([record]),
+    storyProjection: {
+      label: `Review unit ${index + 1}`,
+      summary: `Bounded semantic projection ${index + 1}.`,
+    },
+  }));
+  const core = {
+    projectId: "Review Normalized Project",
+    revision,
+    sourceDigest: hash(normalizedRecords),
+    universeDigest: hash(normalizedRecords.map((record) => record.id)),
+    units,
+  };
+  return { ...core, manifestDigest: hash(core) };
+}
+
+function rehashManifest(value) {
+  const { manifestDigest, ...core } = value;
+  void manifestDigest;
+  return { ...core, manifestDigest: hash(core) };
+}
+
+function reviewCorpus(version, unitCount = 203) {
+  const documentId = "review-normalized-corpus";
+  const items = Array.from({ length: unitCount }, (_, index) => {
+    const id = `review-event-${String(index + 1).padStart(3, "0")}`;
+    return {
+      id,
+      sequence: index + 1,
+      eventType: "message",
+      actorId: "fixture-reviewer",
+      actorType: "human",
+      timestamp: "2039-01-01T00:00:00.000Z",
+      content: `Review-normalized content ${version} for unit ${index + 1}.`,
+      original: {
+        schema_version: "0.2",
+        event_id: id,
+        trajectory_id: documentId,
+        payload: { text: `Review-normalized source ${version} for unit ${index + 1}.` },
+      },
+    };
+  });
+  return { documents: [{
+    document: {
+      id: documentId,
+      kind: "trajectory",
+      title: `Review-normalized corpus ${version}`,
+      sourceUser: "fixture-reviewer",
+      sourceSystem: "synthetic",
+      sourceTimestamp: "2039-01-01T00:00:00.000Z",
+      itemCount: items.length,
+    },
+    items,
+  }] };
+}
+
+async function storedContributionRecords(db) {
+  const { results } = await db.prepare(`SELECT id,document_id,sequence,event_type,actor_id,
+      actor_type,timestamp,content,original_json FROM items ORDER BY id`).all();
+  return Promise.all(results.map(async (row) => ({
+    id: row.id,
+    sourceDigest: await contributionRecordSourceDigest(JSON.parse(row.original_json), {
+      id: row.id,
+      documentId: row.document_id,
+      sequence: Number(row.sequence),
+      eventType: row.event_type,
+      actorId: row.actor_id,
+      actorType: row.actor_type,
+      timestamp: row.timestamp,
+      content: row.content,
+    }),
+  })));
+}
+
+function postJson(route, path, payload) {
+  return route.POST(new Request(`http://localhost${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
 }
 
 test("semantic manifest is the exact disjoint union of the contribution universe", async () => {
@@ -351,6 +458,150 @@ test("semantic revisions are tool-owned and advance only affected authority", as
   changed.units[0].revision = 2;
   changed.units[0].storyProjection.summary = "A changed bounded projection.";
   assert.equal(validateSemanticRevisionTransition(changed, first.authority), null);
+});
+
+test("Organization carries same-workflow semantic lineage across full-corpus replacement", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "oxygen-organization-lineage-"));
+  const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
+  process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
+
+  try {
+    const [{ getLocalDatabase }, { establishWorkflowRun }, documentsRoute, organizationRoute] =
+      await Promise.all([
+        import("../db/index.ts"),
+        import("../lib/workflow-run-server.ts"),
+        import("../app/api/documents/route.ts"),
+        import("../app/api/organization/route.ts"),
+      ]);
+    const db = await getLocalDatabase();
+    const workflowRunId = "review-normalized-lineage";
+    assert.deepEqual(
+      await establishWorkflowRun(db, workflowRunId, "2039-01-01T00:00:00.000Z"),
+      { state: "EXACT_RUN_ESTABLISHED", workflowRunId },
+    );
+
+    const firstCorpusResponse = await postJson(
+      documentsRoute, "/api/documents", reviewCorpus("revision-1"),
+    );
+    assert.equal(firstCorpusResponse.status, 200);
+    const firstCorpusAuthority = await firstCorpusResponse.json();
+    assert.equal(firstCorpusAuthority.corpusRevision, 1);
+
+    const firstRecords = await storedContributionRecords(db);
+    const firstManifest = lineageManifest(firstRecords, 1, 1);
+    const firstOrganizationResponse = await postJson(
+      organizationRoute, "/api/organization", { semanticManifest: firstManifest },
+    );
+    assert.equal(firstOrganizationResponse.status, 200);
+    const firstOrganization = await firstOrganizationResponse.json();
+    assert.equal(firstOrganization.semanticManifest.revision, 1);
+    assert.equal(firstOrganization.semanticManifest.finalizedCorpus.revision, 1);
+    assert.equal(firstOrganization.completed, 203);
+
+    const replacementResponse = await postJson(
+      documentsRoute, "/api/documents", reviewCorpus("revision-2"),
+    );
+    assert.equal(replacementResponse.status, 200);
+    const replacementAuthority = await replacementResponse.json();
+    assert.equal(replacementAuthority.corpusRevision, 2);
+    assert.notEqual(replacementAuthority.corpusDigest, firstCorpusAuthority.corpusDigest);
+
+    const staleStatusResponse = await organizationRoute.GET(
+      new Request("http://localhost/api/organization"),
+    );
+    assert.equal(staleStatusResponse.status, 200);
+    const staleStatus = await staleStatusResponse.json();
+    assert.equal(staleStatus.semanticManifest, null);
+    assert.equal(staleStatus.semanticProjection, null);
+
+    const replacementRecords = await storedContributionRecords(db);
+    const nextManifest = lineageManifest(replacementRecords, 2, 2);
+    assert.notEqual(nextManifest.sourceDigest, firstManifest.sourceDigest);
+    assert.notEqual(
+      nextManifest.units[0].membershipDigest,
+      firstManifest.units[0].membershipDigest,
+    );
+    const expectFailure = async (candidate, code) => {
+      const response = await postJson(
+        organizationRoute, "/api/organization", { semanticManifest: candidate },
+      );
+      assert.equal(response.status, 409);
+      assert.equal((await response.json()).code, code);
+    };
+
+    const reset = structuredClone(nextManifest);
+    reset.revision = 1;
+    await expectFailure(rehashManifest(reset), "SEMANTIC_REVISION_STALE");
+
+    const skipped = structuredClone(nextManifest);
+    skipped.revision = 3;
+    await expectFailure(rehashManifest(skipped), "SEMANTIC_REVISION_STALE");
+
+    const staleSource = structuredClone(nextManifest);
+    staleSource.sourceDigest = firstManifest.sourceDigest;
+    const staleSourceManifest = rehashManifest(staleSource);
+    assert.equal(
+      (await validateSemanticManifestAuthority(staleSourceManifest, replacementRecords)).code,
+      "SEMANTIC_MANIFEST_DIGEST_STALE",
+    );
+    await expectFailure(staleSourceManifest, "SEMANTIC_MANIFEST_DIGEST_STALE");
+
+    const staleMembership = structuredClone(nextManifest);
+    staleMembership.units[0].membershipDigest = firstManifest.units[0].membershipDigest;
+    await expectFailure(rehashManifest(staleMembership), "SEMANTIC_MEMBERSHIP_DIGEST_STALE");
+
+    const wrongPrevious = lineageManifest(firstRecords, 2, 1);
+    await db.prepare(`UPDATE semantic_manifests SET revision=?,manifest_digest=?
+      WHERE workflow_run_id=?`).bind(
+      wrongPrevious.revision, wrongPrevious.manifestDigest, workflowRunId,
+    ).run();
+    await expectFailure(nextManifest, "SEMANTIC_REVISION_STALE");
+    await db.prepare(`UPDATE semantic_manifests SET revision=?,manifest_digest=?
+      WHERE workflow_run_id=?`).bind(
+      firstManifest.revision, firstManifest.manifestDigest, workflowRunId,
+    ).run();
+
+    const foreignWorkflowRunId = "foreign-review-lineage";
+    await db.prepare(`UPDATE semantic_manifests SET workflow_run_id=?
+      WHERE workflow_run_id=?`).bind(foreignWorkflowRunId, workflowRunId).run();
+    await expectFailure(nextManifest, "SEMANTIC_REVISION_STALE");
+    assert.deepEqual(await db.prepare(`SELECT revision FROM semantic_manifests
+      WHERE workflow_run_id=?`).bind(foreignWorkflowRunId).first(), { revision: 1 });
+    await db.prepare(`UPDATE semantic_manifests SET workflow_run_id=?
+      WHERE workflow_run_id=?`).bind(workflowRunId, foreignWorkflowRunId).run();
+
+    const nextOrganizationResponse = await postJson(
+      organizationRoute, "/api/organization", { semanticManifest: nextManifest },
+    );
+    assert.equal(nextOrganizationResponse.status, 200);
+    const nextOrganization = await nextOrganizationResponse.json();
+    assert.equal(nextOrganization.semanticManifest.revision, 2);
+    const currentOrganizationResponse = await organizationRoute.GET(
+      new Request("http://localhost/api/organization"),
+    );
+    assert.equal(currentOrganizationResponse.status, 200);
+    const currentOrganization = await currentOrganizationResponse.json();
+    assert.deepEqual(currentOrganization.semanticProjection.units.map((row) => row.revision),
+      Array(203).fill(2));
+    assert.deepEqual(nextOrganization.semanticManifest.finalizedCorpus, {
+      revision: 2,
+      digest: replacementAuthority.corpusDigest,
+      documentCount: 1,
+      itemCount: 203,
+    });
+    assert.deepEqual(await db.prepare(`SELECT revision,corpus_revision,corpus_digest
+      FROM semantic_manifests WHERE workflow_run_id=?`).bind(workflowRunId).first(), {
+      revision: 2,
+      corpus_revision: 2,
+      corpus_digest: replacementAuthority.corpusDigest,
+    });
+  } finally {
+    globalThis.__oxygenLocalSqlite?.database.close();
+    delete globalThis.__oxygenLocalSqlite;
+    if (previousStateDir === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
+    else process.env.OXYGEN_VIEWER_STATE_DIR = previousStateDir;
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 });
 
 test("unit-count and serialized-byte bounds fail before semantic processing", async () => {

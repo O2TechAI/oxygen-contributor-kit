@@ -13,7 +13,6 @@ import argparse
 import json
 from pathlib import Path
 import re
-import shutil
 import sys
 import urllib.parse
 
@@ -22,9 +21,13 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
+from ingest.human_source_projection import POLICY_ID, digest_events
 
 
-CONVERSATIONAL_TYPES = {"message", "user", "assistant", "agent"}
+CONVERSATIONAL_TYPES = {
+    "message", "user", "assistant", "agent", "reasoning", "progress",
+    "status", "record", "speech",
+}
 ACTION_TYPES = {
     "system": "system",
     "tool_call": "tool_call",
@@ -56,6 +59,7 @@ SAFE_SOURCE_SYSTEMS = {
 INPUT_PATH_OUTSIDE_RUN = "INPUT_PATH_OUTSIDE_RUN"
 INPUT_MEETING_INVALID = "INPUT_MEETING_INVALID"
 INPUT_MEETING_ID_DUPLICATE = "INPUT_MEETING_ID_DUPLICATE"
+INPUT_PROJECTION_INVALID = "INPUT_PROJECTION_INVALID"
 
 
 def safe_source_system(value: object) -> str:
@@ -80,10 +84,11 @@ def conversation(event: dict) -> tuple[str, str] | None:
     payload = event.get("payload") or {}
     if event_type not in CONVERSATIONAL_TYPES or not isinstance(payload, dict):
         return None
-    role = str(payload.get("role") or (event.get("actor") or {}).get("type") or "").lower()
-    if role in {"human", "user"}:
+    actor = event.get("actor") if isinstance(event.get("actor"), dict) else {}
+    role = str(payload.get("role") or actor.get("type") or "").lower()
+    if role in {"human", "speaker", "user"}:
         role = "user"
-    elif role in {"assistant", "agent", "model"}:
+    elif role in {"ai", "assistant", "agent", "model"}:
         role = "assistant"
     else:
         return None
@@ -101,7 +106,7 @@ def normalize_event(event: dict, trajectory_id: str, index: int) -> dict:
         "event_id": event_id,
         "trajectory_id": trajectory_id,
         "turn_id": None,
-        "sequence": int(index if sequence is None else sequence),
+        "sequence": index if sequence is None else sequence,
         "event_type": "action_label",
         "actor": {"type": "tool"},
         # The release policy permits only the fixed action kind for
@@ -117,7 +122,7 @@ def normalize_event(event: dict, trajectory_id: str, index: int) -> dict:
             turn_id=str(event.get("turn_id") or f"turn-{index:06d}"),
             event_type="message",
             actor={"type": role},
-            timestamp=event.get("timestamp") or event.get("started_at"),
+            timestamp=event.get("timestamp"),
             payload={"role": role, "text": text},
         )
         return base
@@ -127,18 +132,82 @@ def normalize_event(event: dict, trajectory_id: str, index: int) -> dict:
     return base
 
 
+def validated_trajectory(events_path: Path) -> tuple[dict, list[dict], dict]:
+    manifest_path = events_path.parent / "manifest.json"
+    try:
+        manifest = read_json(manifest_path)
+        events = [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        projected_digest = digest_events(events)
+    except (OSError, UnicodeError, ValueError):
+        raise SystemExit(INPUT_PROJECTION_INVALID) from None
+    if not isinstance(manifest, dict) or not all(isinstance(event, dict) for event in events):
+        raise SystemExit(INPUT_PROJECTION_INVALID)
+    projection = manifest.get("contribution_projection")
+    manifest_count = manifest.get("event_count")
+    counts = (
+        projection.get("raw_event_count") if isinstance(projection, dict) else None,
+        projection.get("normalized_event_count") if isinstance(projection, dict) else None,
+        projection.get("kept_event_count") if isinstance(projection, dict) else None,
+        projection.get("dropped_event_count") if isinstance(projection, dict) else None,
+        projection.get("cross_trajectory_semantic_replay_count")
+        if isinstance(projection, dict) else None,
+    )
+    if (
+        not isinstance(projection, dict)
+        or projection.get("policy_id") != POLICY_ID
+        or not re.fullmatch(r"[0-9a-f]{64}", str(projection.get("raw_source_digest") or ""))
+        or projection.get("projected_universe_digest") != projected_digest
+        or not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in counts
+        )
+        or not isinstance(manifest_count, int) or isinstance(manifest_count, bool)
+        or manifest_count != len(events)
+        or counts[0] - counts[4] != counts[1]
+        or counts[1] - counts[2] != counts[3]
+        or counts[2] != len(events)
+    ):
+        raise SystemExit(INPUT_PROJECTION_INVALID)
+    return manifest, events, projection
+
+
 def prepare_trajectories(source: Path, output: Path) -> list[dict]:
-    entries: list[dict] = []
+    prepared: list[tuple[str, dict, list[dict], dict, int]] = []
     for events_path in sorted((source / "trajectories").glob("*/events.jsonl")):
         trajectory_id = events_path.parent.name
-        manifest_path = events_path.parent / "manifest.json"
-        source_manifest = read_json(manifest_path) if manifest_path.is_file() else {}
+        source_manifest, source_events, source_projection = validated_trajectory(events_path)
         source_warnings = source_manifest.get("warnings")
         warning_count = len(source_warnings) if isinstance(source_warnings, list) else 0
-        events = []
-        for index, line in enumerate(events_path.read_text(encoding="utf-8").splitlines(), 1):
-            if line.strip():
-                events.append(normalize_event(json.loads(line), trajectory_id, index))
+        events = [
+            normalize_event(event, trajectory_id, index)
+            for index, event in enumerate(source_events, 1)
+        ]
+        dropped_count = source_projection["normalized_event_count"] - len(events)
+        if (
+            len(events) != source_projection["kept_event_count"]
+            or dropped_count != source_projection["dropped_event_count"]
+        ):
+            raise SystemExit(INPUT_PROJECTION_INVALID)
+        projection = {
+            "policy_id": source_projection["policy_id"],
+            "raw_source_digest": source_projection["raw_source_digest"],
+            "projected_universe_digest": digest_events(events),
+            "raw_event_count": source_projection["raw_event_count"],
+            "normalized_event_count": source_projection["normalized_event_count"],
+            "kept_event_count": len(events),
+            "dropped_event_count": dropped_count,
+            "cross_trajectory_semantic_replay_count": source_projection[
+                "cross_trajectory_semantic_replay_count"
+            ],
+        }
+        prepared.append((trajectory_id, source_manifest, events, projection, warning_count))
+
+    entries: list[dict] = []
+    for trajectory_id, source_manifest, events, projection, warning_count in prepared:
         destination = output / "trajectories" / trajectory_id
         destination.mkdir(parents=True, exist_ok=True)
         (destination / "events.jsonl").write_text(
@@ -151,6 +220,8 @@ def prepare_trajectories(source: Path, output: Path) -> list[dict]:
             "title": trajectory_id,
             "source_system": safe_source_system(source_manifest.get("source_system")),
             "source_warning_count": warning_count,
+            "event_count": len(events),
+            "contribution_projection": projection,
             "review_status": "pending",
             "publication_approved": False,
         })
@@ -308,12 +379,10 @@ def main() -> int:
     if output.exists():
         raise SystemExit(f"output already exists: {output}")
     meetings = discover_meetings(source)
-    output.mkdir(parents=True)
 
     trajectories = prepare_trajectories(source, output)
     meeting_evidence_ids, meeting_warning_count = prepare_meetings(meetings, output)
     if not trajectories and not meetings:
-        shutil.rmtree(output)
         raise SystemExit(f"no trajectories or meeting found in {source}")
     project_map = source / "project-map.json"
     if project_map.is_file():
