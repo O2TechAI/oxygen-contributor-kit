@@ -14,6 +14,7 @@ MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+from ingest import secret_safety
 
 PROJECTION_PATH = Path(__file__).resolve().parents[1] / "human_source_projection.py"
 PROJECTION_SPEC = importlib.util.spec_from_file_location(
@@ -26,19 +27,43 @@ PROJECTION_SPEC.loader.exec_module(PROJECTION)
 
 class PlatformFilterTest(unittest.TestCase):
     def test_secret_sanitizer_closes_worker_grammar_and_preserves_safe_text(self):
-        unsafe = [
-            "prefix -----BEGIN SYNTHETIC PRIVATE KEY----- suffix",
-            "TOKEN : synthetic-sentinel, suffix",
-            "password=\"synthetic-sentinel\"",
-            "authorization\t=\tsynthetic-sentinel",
-            "unicode 😀 API key: synthetic-sentinel 二",
-            "first line\nSeCrEt=synthetic-sentinel\nlast line",
-            "sk-syntheticvalue",
-            "ghp-syntheticvalue",
-            "xoxb-syntheticvalue",
-            "AKIAABCDEFGHIJKLMNOP",
-            "https://synthetic-user:synthetic-password@example.invalid/path",
-        ]
+        assignments = {
+            'password="longsecret secondword"': 'password="<REDACTED>"',
+            "password='longsecret secondword'": "password='<REDACTED>'",
+            'password="longsecret, secondword; tail"': 'password="<REDACTED>"',
+            'password="longsecret \\"quoted\\" tail"': 'password="<REDACTED>"',
+            'prefix password="longsecret secondword': 'prefix password=<REDACTED>',
+            "prefix password='longsecret secondword": 'prefix password=<REDACTED>',
+            'token=<redacted>': 'token=<REDACTED>',
+            'token=<ReDaCtEd>': 'token=<REDACTED>',
+            'token=[redacted]': 'token=<REDACTED>',
+            'token=<REDACTED>-stillsecret': 'token=<REDACTED>',
+            'token=[redacted]-stillsecret': 'token=<REDACTED>',
+            'token="<REDACTED>-stillsecret"': 'token="<REDACTED>"',
+            'token="<REDACTED>"-stillsecret': 'token=<REDACTED>',
+            (
+                "前文 α token=firstsecret, password='second secret'; "
+                'authorization="third; secret" 后文 Ω'
+            ): (
+                "前文 α token=<REDACTED>, password='<REDACTED>'; "
+                'authorization="<REDACTED>" 后文 Ω'
+            ),
+        }
+        unsafe = {
+            "prefix -----BEGIN SYNTHETIC PRIVATE KEY----- suffix": None,
+            "TOKEN : synthetic-sentinel, suffix": "TOKEN : <REDACTED>, suffix",
+            "authorization\t=\tsynthetic-sentinel": "authorization\t=\t<REDACTED>",
+            "unicode 😀 API key: synthetic-sentinel 二": "unicode 😀 API key: <REDACTED> 二",
+            "first line\nSeCrEt=synthetic-sentinel\nlast line": (
+                "first line\nSeCrEt=<REDACTED>\nlast line"
+            ),
+            "sk-syntheticvalue": None,
+            "ghp-syntheticvalue": None,
+            "xoxb-syntheticvalue": None,
+            "AKIAABCDEFGHIJKLMNOP": None,
+            "https://synthetic-user:synthetic-password@example.invalid/path": None,
+            **assignments,
+        }
         safe = [
             "The token count is a public metric.",
             "api_key != synthetic-sentinel",
@@ -47,25 +72,32 @@ class PlatformFilterTest(unittest.TestCase):
             "authorization headers are discussed without a value.",
             "x == y",
             "token=<REDACTED>",
-            "password=[redacted]",
             'token="<REDACTED>"',
-            'password="[redacted]"',
         ]
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
-            for value in unsafe:
-                with self.subTest(kind="unsafe", index=unsafe.index(value)):
+            for value, expected in unsafe.items():
+                with self.subTest(kind="unsafe", value=value[:24]):
+                    self.assertTrue(secret_safety.secret_like_text(value))
                     redacted = MODULE.redact_text(value, home)
                     self.assertNotEqual(redacted, value)
+                    if expected is not None:
+                        self.assertEqual(redacted, expected)
+                    self.assertFalse(secret_safety.secret_like_text(redacted))
                     self.assertEqual(MODULE.redact_text(redacted, home), redacted)
-                    if value == 'password="synthetic-sentinel"':
-                        self.assertEqual(redacted, 'password="<REDACTED>"')
             for value in safe:
-                with self.subTest(kind="safe", index=safe.index(value)):
+                with self.subTest(kind="safe", value=value):
+                    self.assertFalse(secret_safety.secret_like_text(value))
                     self.assertEqual(MODULE.redact_text(value, home), value)
 
-            with self.assertRaisesRegex(TypeError, "must be text"):
-                MODULE.redact_secret_like_text(None)
+            class NonText:
+                def __repr__(self):
+                    return "password=must-not-echo"
+
+            with self.assertRaises(TypeError) as raised:
+                MODULE.redact_secret_like_text(NonText())
+            self.assertEqual(str(raised.exception), "secret safety input must be text")
+            self.assertNotIn("must-not-echo", str(raised.exception))
 
     def test_secret_sanitization_changes_only_projected_content_authority(self):
         raw = {

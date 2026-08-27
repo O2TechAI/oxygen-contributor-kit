@@ -170,6 +170,18 @@ class SemanticUnitTransportTests(unittest.TestCase):
             "xoxb-syntheticvalue",
             "AKIAABCDEFGHIJKLMNOP",
             "https://synthetic-user:synthetic-password@example.invalid/path",
+            'password="synthetic-sentinel secondword"',
+            "password='synthetic-sentinel secondword'",
+            'password="synthetic-sentinel, secondword; tail"',
+            'password="synthetic-sentinel \\"quoted\\" tail"',
+            'password="synthetic-sentinel secondword',
+            "password='synthetic-sentinel secondword",
+            "token=<redacted>",
+            "token=[redacted]",
+            "token=<REDACTED>-stillsecret",
+            "token=[redacted]-stillsecret",
+            'token="<REDACTED>-stillsecret"',
+            "前文 token=synthetic-sentinel; password='secondword secret' 后文",
         ]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -194,10 +206,16 @@ class SemanticUnitTransportTests(unittest.TestCase):
             serialized = builder.canonical_json({
                 "context": prepared["context"], "inputs": prepared["inputs"],
             })
-            self.assertNotIn("synthetic-sentinel", serialized)
-            self.assertNotIn("syntheticvalue", serialized)
-            self.assertNotIn("synthetic-user", serialized)
-            self.assertNotIn("synthetic-password", serialized)
+            for residual in (
+                "synthetic-sentinel", "syntheticvalue", "synthetic-user",
+                "synthetic-password", "secondword", "stillsecret", "quoted",
+                "[redacted]", "<redacted>",
+            ):
+                self.assertNotIn(residual, serialized)
+            self.assertTrue(all(
+                not preparer.secret_like_text(record["content"])
+                for shard in prepared["inputs"] for record in shard["contributions"]
+            ))
 
     def test_one_multi_and_mixed_current_runs_finalize_without_project_map_editing(self):
         cases = ((["one"], []), (["one", "two", "three"], []), (["one", "two"], ["meeting"]))
