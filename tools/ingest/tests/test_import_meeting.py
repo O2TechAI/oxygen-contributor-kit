@@ -13,6 +13,7 @@ from unittest import mock
 KIT_ROOT = Path(__file__).resolve().parents[3]
 MODULE_PATH = KIT_ROOT / "tools" / "ingest" / "import_meeting.py"
 sys.path.insert(0, str(MODULE_PATH.parent))
+import oxygen_common as COMMON
 SPEC = importlib.util.spec_from_file_location("oxygen_import_meeting_test", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -28,6 +29,15 @@ def run_main(*arguments: object) -> dict:
     return json.loads(output.getvalue().strip().splitlines()[-1])
 
 
+def tree_snapshot(root: Path) -> list[tuple[str, str, bytes | None]]:
+    snapshot = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        snapshot.append((relative, "dir" if path.is_dir() else "file",
+                         None if path.is_dir() else path.read_bytes()))
+    return snapshot
+
+
 class ImportMeetingTopologyTest(unittest.TestCase):
     def test_single_explicit_output_uses_plural_topology_and_all_files(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -38,7 +48,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
 
             result = run_main(
                 source, "--out", run, "--meeting-id", "meeting-stable",
-                "--title", "Stable meeting", "--date", "2026-08-27", "--no-publish",
+                "--title", "Stable meeting", "--date", "2026-08-27",
             )
 
             meeting = run / "meetings" / "meeting-stable"
@@ -46,6 +56,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             self.assertEqual(result["meeting_count"], 1)
             self.assertEqual(result["meetings"][0]["meeting_id"], "meeting-stable")
             self.assertEqual(result["meetings"][0]["output"], str(meeting))
+            self.assertNotIn("staged", result["meetings"][0])
             for name in ("meeting.json", "raw.md", "timestamped.txt"):
                 self.assertFalse((run / name).exists())
             self.assertEqual(
@@ -58,7 +69,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             self.assertFalse(dataset["publication_approved"])
             self.assertEqual((meeting / "timestamped.txt").read_text(encoding="utf-8"), "")
 
-    def test_default_output_is_a_run_with_one_plural_meeting(self):
+    def test_output_is_required_before_any_run_is_created(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fake_module = root / "tools" / "ingest" / "import_meeting.py"
@@ -66,21 +77,13 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             source = root / "timestamped.txt"
             source.write_text("0:01Speaker Ahello\n", encoding="utf-8")
 
-            with mock.patch.object(MODULE, "__file__", str(fake_module)):
-                result = run_main(
-                    source, "--meeting-id", "meeting-default", "--no-publish",
-                )
+            with (
+                mock.patch.object(MODULE, "__file__", str(fake_module)),
+                self.assertRaises(SystemExit),
+            ):
+                run_main(source, "--meeting-id", "meeting-default")
 
-            run = fake_module.parent / "out" / "meeting-default"
-            meeting = run / "meetings" / "meeting-default"
-            self.assertEqual(result["output"], str(run))
-            self.assertTrue((meeting / "meeting.json").is_file())
-            self.assertTrue((meeting / "raw.md").is_file())
-            self.assertEqual(
-                (meeting / "timestamped.txt").read_text(encoding="utf-8"),
-                "0:01Speaker Ahello\n",
-            )
-            self.assertFalse((run / "meeting.json").exists())
+            self.assertFalse((fake_module.parent / "out").exists())
 
     def test_audio_cli_uses_temporary_asr_scratch_and_leaves_only_canonical_files(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -109,7 +112,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
 
             with mock.patch.object(MODULE.subprocess, "Popen", side_effect=run_mock_asr):
                 result = run_main(
-                    source, "--out", run, "--meeting-id", "meeting-audio", "--no-publish",
+                    source, "--out", run, "--meeting-id", "meeting-audio",
                 )
 
             meeting = run / "meetings" / "meeting-audio"
@@ -132,7 +135,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             second.write_text("beta private text\n", encoding="utf-8")
             run = root / "run"
 
-            result = run_main(first, second, "--out", run, "--no-publish")
+            result = run_main(first, second, "--out", run)
 
             expected_ids = [
                 f"meeting-alpha-{hashlib.sha256(first.read_bytes()).hexdigest()}",
@@ -159,8 +162,8 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             source = root / "same name.txt"
             source.write_text("same content\n", encoding="utf-8")
 
-            first = run_main(source, "--out", root / "first", "--no-publish")
-            second = run_main(source, "--out", root / "second", "--no-publish")
+            first = run_main(source, "--out", root / "first")
+            second = run_main(source, "--out", root / "second")
             first_id = first["meetings"][0]["meeting_id"]
             self.assertEqual(second["meetings"][0]["meeting_id"], first_id)
             self.assertEqual(
@@ -172,23 +175,33 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             self.assertEqual(first_output.parent.name, "meetings")
 
             source.write_text("changed content\n", encoding="utf-8")
-            changed = run_main(source, "--out", root / "changed", "--no-publish")
+            changed = run_main(source, "--out", root / "changed")
             self.assertNotEqual(changed["meetings"][0]["meeting_id"], first_id)
 
-    def test_staging_receives_each_canonical_meeting_directory(self):
+    def test_writable_historical_shared_locations_remain_byte_for_byte_unchanged(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "meeting.txt"
             source.write_text("plain record\n", encoding="utf-8")
             run = root / "run"
+            shared = root.joinpath("srv", "shared", "oxygen", "data", "ingest" + "-staging")
+            (shared / "existing-run").mkdir(parents=True)
+            (shared / "existing-run" / "private.bin").write_bytes(b"private\x00bytes")
+            (shared / "INBOX.md").write_bytes(b"existing inbox\n")
+            webapp_data = root / ("webapp" + "-data")
+            webapp_data.mkdir()
+            (webapp_data / "sentinel.json").write_bytes(b'{"unchanged":true}\n')
+            before_shared = tree_snapshot(shared)
+            before_webapp = tree_snapshot(webapp_data)
 
-            with mock.patch.object(MODULE, "publish_to_staging", return_value="staged") as publish:
+            with mock.patch.object(COMMON, "STAGING_DIR", shared, create=True):
                 result = run_main(
-                    source, "--out", run, "--meeting-id", "meeting-stage",
+                    source, "--out", run, "--meeting-id", "meeting-local",
                 )
 
-            publish.assert_called_once_with(run / "meetings" / "meeting-stage", "meeting-stage")
-            self.assertEqual(result["meetings"][0]["staged"], "staged")
+            self.assertEqual(result["meeting_count"], 1)
+            self.assertEqual(tree_snapshot(shared), before_shared)
+            self.assertEqual(tree_snapshot(webapp_data), before_webapp)
 
     def test_explicit_identity_cannot_escape_the_run(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -198,7 +211,6 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 run_main(
                     source, "--out", root / "run", "--meeting-id", "../outside",
-                    "--no-publish",
                 )
             self.assertFalse((root / "outside").exists())
 

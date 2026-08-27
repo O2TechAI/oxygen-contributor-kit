@@ -49,7 +49,6 @@ class UnicodeWorkflowTest(unittest.TestCase):
                 meeting_out,
                 "--title",
                 "会议 标题 😀",
-                "--no-publish",
             )
             self.assertEqual(meeting.returncode, 0, meeting.stderr)
             summary = json.loads(meeting.stdout.strip().splitlines()[-1])
@@ -179,7 +178,6 @@ class UnicodeWorkflowTest(unittest.TestCase):
                 source,
                 "--out",
                 Path(temporary, "out"),
-                "--no-publish",
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("UnicodeDecodeError", result.stderr)

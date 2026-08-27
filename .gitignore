@@ -19,7 +19,6 @@ redaction-diff.html
 node_modules/
 
 tools/ingest/out/
-tools/ingest/webapp-data/
 tools/ingest/.venv-audio/
 __pycache__/
 .venv/

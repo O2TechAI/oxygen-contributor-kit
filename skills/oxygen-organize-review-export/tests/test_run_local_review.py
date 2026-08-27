@@ -1084,7 +1084,7 @@ class LocateInputsContainmentTest(unittest.TestCase):
 
             result = subprocess.run(
                 [sys.executable, str(IMPORT_MEETING), str(first), str(second),
-                 "--out", str(run), "--date", "2026-08-25", "--no-publish"],
+                 "--out", str(run), "--date", "2026-08-25"],
                 cwd=KIT_ROOT,
                 capture_output=True,
                 text=True,

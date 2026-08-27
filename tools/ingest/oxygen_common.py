@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-import getpass
 import hashlib
 import json
-import os
 import re
 import sys
 import unicodedata
@@ -57,7 +55,7 @@ def safe_slug(value: str) -> str:
 
 
 def progress(pct: float | None, stage: str, detail: str = "") -> None:
-    """Machine-readable progress line consumed by webapp.py; human-readable too."""
+    """Emit a machine-readable, human-readable progress line."""
     record = {"stage": stage, "detail": detail}
     if pct is not None:
         record["pct"] = round(max(0.0, min(100.0, pct)), 1)
@@ -73,25 +71,3 @@ def fail(message: str, code: int = 1) -> "SystemExit":
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
-STAGING_DIR = Path("/srv/shared/oxygen/data/ingest-staging")
-
-
-def publish_to_staging(src: Path, name: str) -> str | None:
-    """Copy a finished output dir into the shared oxygen_collab staging area.
-
-    Returns the destination path, or None when staging is unavailable (e.g. the
-    tools run on a user's own machine). Files inherit the oxygen_collab group
-    via the setgid staging dir, so the public dropbox guard keeps them hidden.
-    """
-    import shutil
-
-    if not STAGING_DIR.is_dir() or not os.access(STAGING_DIR, os.W_OK):
-        return None
-    dest = STAGING_DIR / safe_slug(name)
-    shutil.copytree(src, dest, dirs_exist_ok=True)
-    with (STAGING_DIR / "INBOX.md").open("a", encoding="utf-8") as handle:
-        handle.write(f"- [{utc_now()}] {getpass.getuser()} staged `{dest.name}` "
-                     f"(from {src}) — pending Inline import, unredacted, do not publish\n")
-    return str(dest)

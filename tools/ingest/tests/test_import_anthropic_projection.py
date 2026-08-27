@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 INGEST_ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +26,42 @@ sys.modules[BUILD_SPEC.name] = BUILD
 BUILD_SPEC.loader.exec_module(BUILD)
 
 
+def tree_snapshot(root: Path) -> list[tuple[str, str, bytes | None]]:
+    snapshot = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        snapshot.append((relative, "dir" if path.is_dir() else "file",
+                         None if path.is_dir() else path.read_bytes()))
+    return snapshot
+
+
 class AnthropicProjectionTest(unittest.TestCase):
+    def test_writable_historical_shared_location_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "conversations.json"
+            source.write_text("[]", encoding="utf-8")
+            out = root / "run"
+            shared = root.joinpath("srv", "shared", "oxygen", "data", "ingest" + "-staging")
+            (shared / "existing-run").mkdir(parents=True)
+            (shared / "existing-run" / "private.bin").write_bytes(b"private\x00export")
+            (shared / "INBOX.md").write_bytes(b"existing inbox\n")
+            before = tree_snapshot(shared)
+
+            with mock.patch("builtins.print"):
+                result = MODULE.main([str(source), "--out", str(out)])
+
+            self.assertEqual(result, 0)
+            self.assertTrue((out / "index.json").is_file())
+            self.assertEqual(tree_snapshot(shared), before)
+
+    def test_output_is_required_before_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary, "conversations.json")
+            source.write_text("[]", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                MODULE.main([str(source)])
+
     def test_conversation_and_design_chat_enter_the_same_projected_universe(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

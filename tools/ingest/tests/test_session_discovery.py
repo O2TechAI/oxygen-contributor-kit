@@ -45,6 +45,15 @@ def write_jsonl(path: Path, records: list[dict]) -> None:
     )
 
 
+def tree_snapshot(root: Path) -> list[tuple[str, str, bytes | None]]:
+    snapshot = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        snapshot.append((relative, "dir" if path.is_dir() else "file",
+                         None if path.is_dir() else path.read_bytes()))
+    return snapshot
+
+
 class BoundedMetadataScanTest(unittest.TestCase):
     def test_codex_container_identity_does_not_collapse_shared_parent_thread(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -273,6 +282,36 @@ class DiscoveryContractTest(unittest.TestCase):
 
 
 class CollectorMainBoundaryTest(unittest.TestCase):
+    def test_writable_historical_shared_location_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            home = root / "home"
+            out = root / "run"
+            repo.mkdir()
+            shared = root.joinpath("srv", "shared", "oxygen", "data", "ingest" + "-staging")
+            (shared / "existing-run").mkdir(parents=True)
+            (shared / "existing-run" / "events.jsonl").write_bytes(b"private\x00trajectory")
+            (shared / "INBOX.md").write_bytes(b"existing inbox\n")
+            before = tree_snapshot(shared)
+
+            with mock.patch("builtins.print"):
+                result = MODULE.main([
+                    str(repo), "--out", str(out), "--home", str(home),
+                    "--agents", "", "--user", "synthetic",
+                ])
+
+            self.assertEqual(result, 0)
+            self.assertTrue((out / "index.json").is_file())
+            self.assertEqual(tree_snapshot(shared), before)
+
+    def test_output_is_required_before_collection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary, "repo")
+            repo.mkdir()
+            with self.assertRaises(SystemExit):
+                MODULE.main([str(repo)])
+
     def test_rerun_prunes_only_stale_derived_trajectory_directories(self):
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary, "collector-output")
@@ -303,7 +342,7 @@ class CollectorMainBoundaryTest(unittest.TestCase):
                 MODULE.validate_rerunnable_output(out)
             self.assertEqual((out / "preserve.txt").read_text(encoding="utf-8"), "preserve\n")
 
-    def test_default_cli_keeps_cwd_filtering_and_excludes_global_memory(self):
+    def test_cli_keeps_cwd_filtering_and_excludes_global_memory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             home = root / "home"

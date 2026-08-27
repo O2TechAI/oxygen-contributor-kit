@@ -40,7 +40,6 @@ from oxygen_common import (
     fail,
     is_sensitive_name,
     progress,
-    run_stamp,
     safe_slug,
     sha256_file,
     configure_utf8_stdio,
@@ -539,6 +538,31 @@ def validate_rerunnable_output(out: Path) -> bool:
     return True
 
 
+def validate_output_tree(out: Path) -> None:
+    """Reject any existing entry that can redirect writes outside the run."""
+    if not out.exists():
+        if out.is_symlink():
+            raise ValueError("output path must not be a symbolic link")
+        return
+    if out.is_symlink() or not out.is_dir():
+        raise ValueError("output path must be a real directory")
+    resolved_out = out.resolve(strict=True)
+    pending = [out]
+    while pending:
+        directory = pending.pop()
+        for entry in directory.iterdir():
+            if entry.is_symlink():
+                raise ValueError("output directory must not contain symbolic links")
+            try:
+                resolved_entry = entry.resolve(strict=True)
+            except (OSError, RuntimeError) as error:
+                raise ValueError(f"output directory contains an invalid entry: {entry}") from error
+            if not resolved_entry.is_relative_to(resolved_out):
+                raise ValueError("output directory contains an entry outside the run")
+            if entry.is_dir():
+                pending.append(entry)
+
+
 def prune_stale_trajectory_outputs(out: Path, successful_ids: set[str]) -> int:
     """Remove only obsolete derived trajectory directories from a proven run."""
     root = out / "trajectories"
@@ -794,7 +818,8 @@ def main(argv=None) -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", type=Path, help="repo the trajectories should relate to")
-    parser.add_argument("--out", type=Path, help="output dir (default tools/out/repo-<name>-<ts>)")
+    parser.add_argument("--out", type=Path, required=True,
+                        help="explicit local run output directory")
     parser.add_argument("--home", type=Path, default=Path.home())
     parser.add_argument(
         "--source-home",
@@ -833,8 +858,6 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--agents", default="claude,codex", help="comma list among: claude,codex"
     )
-    parser.add_argument("--publish", action="store_true",
-                        help="copy the result into the shared ingest-staging area")
     args = parser.parse_args(argv)
     if bool(args.progress_url) != bool(args.workflow_run_id):
         parser.error("--progress-url and --workflow-run-id must be supplied together")
@@ -843,12 +866,12 @@ def main(argv=None) -> int:
     if not repo.is_dir():
         raise fail(f"repo not found: {repo}")
     agents = {a.strip() for a in args.agents.split(",") if a.strip()}
-    out = (
-        args.out.expanduser().resolve()
-        if args.out
-        else Path(__file__).resolve().parent / "out" / f"repo-{safe_slug(repo.name)}-{run_stamp()}"
-    )
+    requested_out = args.out.expanduser()
+    if requested_out.is_symlink():
+        raise fail("output path must not be a symbolic link")
+    out = requested_out.resolve()
     try:
+        validate_output_tree(out)
         replacing_existing_output = validate_rerunnable_output(out)
     except ValueError as error:
         raise fail(str(error)) from error
@@ -969,11 +992,6 @@ def main(argv=None) -> int:
         "contribution_projection": aggregate_projection(trajectories),
     }
     write_json(out / "index.json", index)
-    if args.publish and index["trajectory_failures"] == 0:
-        from oxygen_common import publish_to_staging
-        staged = publish_to_staging(out, out.name)
-        if staged:
-            progress(98, "publish", f"staged: {staged}")
     progress(
         100,
         "done",

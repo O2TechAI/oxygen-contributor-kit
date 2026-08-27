@@ -34,8 +34,8 @@ Meeting audio uses faster-whisper locally. Speaker diarization is optional and r
 current user's accepted access to the gated pyannote model. Without a token, the tool still
 produces a single-speaker transcript and records a warning.
 
-Multi-meeting import requires an explicit shared `--out`. Each source keeps its own stable meeting
-ID and records; transcript contents are never concatenated. With exactly one source, `--meeting-id`
-and `--title` can override its generated identity and source-derived title.
+Every ingest command requires an explicit local `--out`. For meetings, each source keeps its own
+stable meeting ID and records; transcript contents are never concatenated. With exactly one source,
+`--meeting-id` and `--title` can override its generated identity and source-derived title.
 
 All outputs default to `review_status=pending` and `publication_approved=false`.

@@ -8,7 +8,7 @@
     2. "Speaker A: text" / "说话人0: text" / "张三: text"
     3. plain lines (no speaker structure)
 
-Every source is stored under the same run topology (default tools/out/meeting-<id>/):
+Every source is stored under the explicitly requested run directory:
     meetings/<meeting-id>/meeting.json     canonical records
     meetings/<meeting-id>/raw.md           internal raw markdown
     meetings/<meeting-id>/timestamped.txt  timestamped records when available
@@ -27,14 +27,39 @@ import sys
 import tempfile
 from pathlib import Path
 
-from oxygen_common import (configure_utf8_stdio, fail, progress, publish_to_staging, safe_slug,
-                           sha256_file, text_subprocess_options, utc_now, write_json)
+from oxygen_common import (configure_utf8_stdio, fail, progress, safe_slug, sha256_file,
+                           text_subprocess_options, utc_now, write_json)
 
 AUDIO_SUFFIXES = {".m4a", ".wav", ".mp3", ".flac", ".ogg", ".aac", ".mp4"}
 TIMESTAMPED_RE = re.compile(r"^(\d{1,3}:\d{2})Speaker\s+([A-Z])\s*(.*)$")
 SPEAKER_RE = re.compile(r"^(?:\[(\d{1,3}:\d{2}(?::\d{2})?)\]\s*)?([^\s:：]{1,24})[:：]\s*(.+)$")
 MEETING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 MEETING_ID_DIGEST_LENGTH = 64
+
+
+def validate_output_tree(out: Path) -> None:
+    """Reject any existing entry that can redirect writes outside the run."""
+    if not out.exists():
+        if out.is_symlink():
+            raise fail("output path must not be a symbolic link")
+        return
+    if out.is_symlink() or not out.is_dir():
+        raise fail("output path must be a real directory")
+    resolved_out = out.resolve(strict=True)
+    pending = [out]
+    while pending:
+        directory = pending.pop()
+        for entry in directory.iterdir():
+            if entry.is_symlink():
+                raise fail("output directory must not contain symbolic links")
+            try:
+                resolved_entry = entry.resolve(strict=True)
+            except (OSError, RuntimeError) as error:
+                raise fail(f"output directory contains an invalid entry: {entry}") from error
+            if not resolved_entry.is_relative_to(resolved_out):
+                raise fail("output directory contains an entry outside the run")
+            if entry.is_dir():
+                pending.append(entry)
 
 
 def run_asr(audio: Path, scratch: Path, model: str, language: str | None,
@@ -132,7 +157,10 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
 
     if source.suffix.lower() in AUDIO_SUFFIXES:
         progress(2, "asr", f"audio input — running local transcription for {source.name}")
-        with tempfile.TemporaryDirectory(prefix="oxygen-asr-") as temporary:
+        scratch_root = Path(tempfile.gettempdir()).resolve()
+        if scratch_root == out or scratch_root.is_relative_to(out):
+            raise fail("operating-system scratch directory must be outside the meeting output")
+        with tempfile.TemporaryDirectory(prefix="oxygen-asr-", dir=scratch_root) as temporary:
             text_path = run_asr(
                 source, Path(temporary), args.model, args.language, args.hf_token
             )
@@ -182,13 +210,8 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
             if record["timestamp"] and record["speaker"]:
                 handle.write(f"{record['timestamp']}Speaker {record['speaker']}{record['text']}\n")
 
-    staged = None
-    if not args.no_publish:
-        staged = publish_to_staging(out, meeting_id)
-        if staged:
-            progress(98, "publish", f"staged for Inline import: {staged}")
     progress(100, "done", f"{len(records)} records ({detected}) -> {out}")
-    return {"output": str(out), "meeting_id": meeting_id, "staged": staged,
+    return {"output": str(out), "meeting_id": meeting_id,
             "record_count": len(records), "detected_format": detected}
 
 
@@ -197,23 +220,20 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, nargs="+",
                         help="one or more txt/md transcripts or m4a/wav/mp3 audio files")
-    parser.add_argument("--out", type=Path)
+    parser.add_argument("--out", type=Path, required=True,
+                        help="explicit local run output directory")
     parser.add_argument("--meeting-id", default=None)
     parser.add_argument("--title", default=None)
     parser.add_argument("--date", default=None, help="YYYY-MM-DD (default today)")
     parser.add_argument("--model", default="small", help="ASR model when source is audio")
     parser.add_argument("--language", default=None)
     parser.add_argument("--hf-token", default=None)
-    parser.add_argument("--no-publish", action="store_true",
-                        help="do not copy the result into the shared ingest-staging area")
     args = parser.parse_args(argv)
 
     sources = [source.expanduser().resolve() for source in args.source]
     for source in sources:
         if not source.is_file():
             raise fail(f"source not found: {source}")
-    if len(sources) > 1 and args.out is None:
-        raise fail("--out is required when importing multiple meetings")
     if len(sources) > 1 and (args.meeting_id or args.title):
         raise fail("--meeting-id and --title require exactly one source")
     if args.meeting_id is not None and not MEETING_ID_RE.fullmatch(args.meeting_id):
@@ -227,11 +247,16 @@ def main(argv=None) -> int:
         raise fail("duplicate meeting IDs in one collection run")
 
     date = args.date or dt.date.today().isoformat()
-    base_out = args.out.expanduser().resolve() if args.out else (
-        Path(__file__).resolve().parent / "out" / meeting_ids[0])
+    requested_out = args.out.expanduser()
+    if requested_out.is_symlink():
+        raise fail("output path must not be a symbolic link")
+    base_out = requested_out.resolve()
+    validate_output_tree(base_out)
     results = []
     for source, meeting_id in zip(sources, meeting_ids):
-        out = base_out / "meetings" / meeting_id
+        out = (base_out / "meetings" / meeting_id).resolve()
+        if not out.is_relative_to(base_out):
+            raise fail("meeting output must remain inside the requested run")
         results.append(import_source(
             source, out, meeting_id, args.title or source.stem, date, args
         ))

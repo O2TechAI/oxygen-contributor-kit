@@ -31,7 +31,6 @@ from oxygen_common import (  # noqa: E402
     configure_utf8_stdio,
     fail,
     progress,
-    run_stamp,
     safe_slug,
     utc_now,
     write_json,
@@ -51,6 +50,31 @@ def locate_export(source: Path, scratch: Path) -> Path:
         if hits:
             return hits[0].parent
     raise fail(f"could not find conversations.json under {source}")
+
+
+def validate_output_tree(out: Path) -> None:
+    """Reject any existing entry that can redirect writes outside the run."""
+    if not out.exists():
+        if out.is_symlink():
+            raise fail("output path must not be a symbolic link")
+        return
+    if out.is_symlink() or not out.is_dir():
+        raise fail("output path must be a real directory")
+    resolved_out = out.resolve(strict=True)
+    pending = [out]
+    while pending:
+        directory = pending.pop()
+        for entry in directory.iterdir():
+            if entry.is_symlink():
+                raise fail("output directory must not contain symbolic links")
+            try:
+                resolved_entry = entry.resolve(strict=True)
+            except (OSError, RuntimeError) as error:
+                raise fail(f"output directory contains an invalid entry: {entry}") from error
+            if not resolved_entry.is_relative_to(resolved_out):
+                raise fail("output directory contains an entry outside the run")
+            if entry.is_dir():
+                pending.append(entry)
 
 
 def message_text(message: dict) -> str:
@@ -369,20 +393,19 @@ def main(argv=None) -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="export zip, conversations.json, or folder")
-    parser.add_argument("--out", type=Path, help="output dir (default tools/out/claudeai-<ts>)")
+    parser.add_argument("--out", type=Path, required=True,
+                        help="explicit local run output directory")
     parser.add_argument("--home", type=Path, default=Path.home(), help="home path to mask in text")
-    parser.add_argument("--publish", action="store_true",
-                        help="copy the result into the shared ingest-staging area")
     args = parser.parse_args(argv)
 
     source = args.source.expanduser().resolve()
     if not source.exists():
         raise fail(f"source not found: {source}")
-    out = (
-        args.out.expanduser().resolve()
-        if args.out
-        else Path(__file__).resolve().parent / "out" / f"claudeai-{run_stamp()}"
-    )
+    requested_out = args.out.expanduser()
+    if requested_out.is_symlink():
+        raise fail("output path must not be a symbolic link")
+    out = requested_out.resolve()
+    validate_output_tree(out)
     out.mkdir(parents=True, exist_ok=True)
     home = args.home.expanduser().resolve()
 
@@ -438,11 +461,6 @@ def main(argv=None) -> int:
             "trajectories": converted,
         },
     )
-    if args.publish:
-        from oxygen_common import publish_to_staging
-        staged = publish_to_staging(out, out.name)
-        if staged:
-            progress(98, "publish", f"staged: {staged}")
     progress(100, "done", f"{len(converted)} conversations, {memory_count} memory docs -> {out}")
     print(json.dumps({"output": str(out)}, ensure_ascii=False))
     return 0
