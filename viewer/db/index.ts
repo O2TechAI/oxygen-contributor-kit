@@ -150,9 +150,9 @@ const statements = [
     PRIMARY KEY (workflow_run_id, lane)
   )`,
   `CREATE TABLE IF NOT EXISTS story_privacy_candidates (
-    workflow_run_id TEXT NOT NULL, story_key TEXT NOT NULL,
-    candidate_id TEXT NOT NULL, candidate_json TEXT NOT NULL,
-    PRIMARY KEY (workflow_run_id, story_key, candidate_id)
+    workflow_run_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
+    candidate_json TEXT NOT NULL,
+    PRIMARY KEY (workflow_run_id, candidate_id)
   )`,
 ];
 

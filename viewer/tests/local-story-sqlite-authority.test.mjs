@@ -82,8 +82,8 @@ async function activationSnapshot(db) {
     db.prepare(`SELECT id,organization_reason FROM items ORDER BY id`).all(),
     db.prepare(`SELECT lane,source_revision FROM story_preparation_receipts
       WHERE workflow_run_id=? ORDER BY lane`).bind(RUN_ID).all(),
-    db.prepare(`SELECT story_key,candidate_id FROM story_privacy_candidates
-      WHERE workflow_run_id=? ORDER BY story_key,candidate_id`).bind(RUN_ID).all(),
+    db.prepare(`SELECT candidate_id,candidate_json FROM story_privacy_candidates
+      WHERE workflow_run_id=? ORDER BY candidate_id`).bind(RUN_ID).all(),
     db.prepare(`SELECT source_revision,output_digest,output_count FROM probe_runs
       WHERE workflow_run_id=?`).bind(RUN_ID).first(),
   ]);
@@ -225,9 +225,8 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
         )
       )),
       db.prepare(`INSERT INTO story_privacy_candidates
-        (workflow_run_id,story_key,candidate_id,candidate_json) VALUES (?,?,?,?)`).bind(
+        (workflow_run_id,candidate_id,candidate_json) VALUES (?,?,?)`).bind(
         RUN_ID,
-        "story-authority",
         "privacy-authority",
         JSON.stringify({ id: "privacy-authority" }),
       ),
@@ -296,8 +295,8 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
       { lane: "story_privacy", source_revision: INITIAL_SOURCE_REVISION + 1 },
     ]);
     assert.deepEqual(activated.candidates, [{
-      story_key: "story-authority",
       candidate_id: "privacy-authority",
+      candidate_json: JSON.stringify({ id: "privacy-authority" }),
     }]);
     assert.deepEqual(activated.probeRun, {
       source_revision: INITIAL_SOURCE_REVISION + 1,
@@ -389,6 +388,215 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
         persistedAt: record.persistedAt,
       },
     }));
+  } finally {
+    globalThis.__oxygenLocalSqlite?.database.close();
+    delete globalThis.__oxygenLocalSqlite;
+    if (previousStateDir === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
+    else process.env.OXYGEN_VIEWER_STATE_DIR = previousStateDir;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("workflow POST atomically activates coverage, Story preparation, flat Privacy, and Preference", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "oxygen-workflow-route-sqlite-"));
+  const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
+  process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
+  try {
+    const [
+      { getLocalDatabase },
+      workflowRoute,
+      {
+        canonicalAuthorityJson,
+        validateSemanticManifestAuthority,
+        finalizeCoverageManifestAuthority,
+      },
+      { deriveStoryReleaseTargetCatalog, storyPreparationDigest },
+    ] = await Promise.all([
+      import("../db/index.ts"),
+      import("../app/api/workflow/route.ts"),
+      import("../lib/story-readiness.ts"),
+      import("../lib/story-preparation.ts"),
+    ]);
+    const db = await getLocalDatabase();
+    const timestamp = "2041-01-01T00:00:00.000Z";
+    await db.prepare(`INSERT INTO workflow_runs
+      (id,target_confirmed,collection_status,collection_completed,collection_total,
+       story_generation_status,story_source_revision,created_at,updated_at)
+      VALUES (?,1,'complete',1,1,'running',?,?,?)`)
+      .bind(RUN_ID, INITIAL_SOURCE_REVISION, timestamp, timestamp).run();
+    await db.prepare(`INSERT INTO organization_jobs
+      (id,status,stage,completed,total,warnings_json,started_at,updated_at,completed_at)
+      VALUES ('organization','complete','done',1,1,'[]',?,?,?)`)
+      .bind(timestamp, timestamp, timestamp).run();
+    await db.prepare(`INSERT INTO redaction_jobs
+      (id,status,stage,completed,total,rejected,started_at,updated_at,completed_at)
+      VALUES ('redaction','complete','done',1,1,0,?,?,?)`)
+      .bind(timestamp, timestamp, timestamp).run();
+    await db.prepare(`INSERT INTO documents
+      (id,kind,title,item_count,formatted_summary_json,imported_at,updated_at)
+      VALUES (?,'trajectory','Synthetic route Story',1,'{}',?,?)`)
+      .bind(DOCUMENT_ID, timestamp, timestamp).run();
+    await db.prepare(`INSERT INTO items
+      (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,
+       original_json,organization_category,organization_reason)
+      VALUES (?,?,1,'decision','reviewer','human',?,'Synthetic route event.','{}','project',NULL)`)
+      .bind(STORY_ITEM_ID, DOCUMENT_ID, timestamp).run();
+
+    const hash = (value) => sha256(canonicalAuthorityJson(value));
+    const sourceDigest = await hash({ id: STORY_ITEM_ID });
+    const contributionRecords = [{ id: STORY_ITEM_ID, sourceDigest }];
+    const unit = {
+      id: "unit-route", revision: 1, projectId: "route-project", kind: "progression",
+      members: [STORY_ITEM_ID], memberCount: 1,
+      membershipDigest: await hash([{ id: STORY_ITEM_ID, sourceDigest }]),
+    };
+    const semanticCore = {
+      projectId: "route-project",
+      revision: 1,
+      sourceDigest: await hash(contributionRecords),
+      universeDigest: await hash([STORY_ITEM_ID]),
+      units: [unit],
+    };
+    const semanticValidation = await validateSemanticManifestAuthority({
+      ...semanticCore,
+      manifestDigest: await hash(semanticCore),
+    }, contributionRecords);
+    assert.equal(semanticValidation.ok, true, semanticValidation.code);
+    const semantic = semanticValidation.authority;
+    await db.prepare(`INSERT INTO semantic_manifests
+      (workflow_run_id,project_id,revision,source_revision,source_digest,universe_digest,
+       manifest_digest,unit_count,serialized_bytes,story_projection_bytes,corpus_revision,
+       corpus_digest,corpus_document_count,corpus_item_count,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+      RUN_ID, semantic.projectId, semantic.revision, INITIAL_SOURCE_REVISION,
+      semantic.sourceDigest, semantic.universeDigest, semantic.manifestDigest,
+      semantic.units.length, semantic.serializedBytes, semanticValidation.storyProjectionBytes,
+      1, "c".repeat(64), 1, 1, timestamp, timestamp,
+    ).run();
+    await db.prepare(`INSERT INTO semantic_units
+      (id,workflow_run_id,revision,project_id,kind,member_count,membership_digest,
+       story_projection_json) VALUES (?,?,?,?,?,?,?,'{}')`).bind(
+      unit.id, RUN_ID, unit.revision, unit.projectId, unit.kind,
+      unit.memberCount, unit.membershipDigest,
+    ).run();
+    await db.prepare(`INSERT INTO semantic_unit_members
+      (item_id,workflow_run_id,unit_id,source_digest) VALUES (?,?,?,?)`)
+      .bind(STORY_ITEM_ID, RUN_ID, unit.id, sourceDigest).run();
+
+    const coverageValidation = await finalizeCoverageManifestAuthority({ rows: [{
+      unitId: unit.id, disposition: "represented", ownerId: "story-authority",
+    }] }, semantic);
+    assert.equal(coverageValidation.ok, true, coverageValidation.code);
+    const coverage = coverageValidation.authority;
+    const coverageInput = {
+      revision: coverage.revision,
+      semanticManifestRevision: coverage.semanticManifestRevision,
+      semanticManifestDigest: coverage.semanticManifestDigest,
+      coverageDigest: coverage.coverageDigest,
+      rows: coverage.rows.map(({ unitId, disposition, ownerId }) => ({ unitId, disposition, ownerId })),
+    };
+    const storySource = JSON.parse(currentStorySource().slice("oxygen.story:".length));
+    storySource.coverage = {
+      semanticManifest: { revision: semantic.revision, digest: semantic.manifestDigest },
+      coverageManifest: { revision: coverage.revision, digest: coverage.coverageDigest },
+      representedUnitIds: [unit.id],
+      excludedUnits: [],
+    };
+    const storySummary = `oxygen.story:${JSON.stringify(storySource)}`;
+    const storyCandidates = [{ id: STORY_ITEM_ID, summary: storySummary }];
+    const stories = [storySource];
+    const storyOutput = [{ id: STORY_ITEM_ID, story: { ...storySource, insights: [] } }];
+    const completeStoryOutput = [{ id: STORY_ITEM_ID, story: storySource }];
+    const targetCatalog = deriveStoryReleaseTargetCatalog(stories);
+    assert.ok(targetCatalog);
+    const privacyCandidates = [{
+      id: "privacy-route",
+      reviewState: "deterministic",
+      title: "Route Privacy check",
+      whyFlagged: "The final title requires a deterministic local check.",
+      uncertaintyReason: null,
+      releaseTargets: ["story-authority::title"],
+    }];
+    const preferenceInputDigest = await storyPreparationDigest([]);
+    await db.prepare(`INSERT INTO probe_runs
+      (workflow_run_id,id,source_revision,input_digest,output_digest,output_count,
+       status,stage,generated,set_aside,auto_removed_json,started_at,updated_at,completed_at)
+      VALUES (?,?,?,?,?,0,'complete','preference',0,0,'{"total":0,"reversible":true,"categories":[]}',?,?,?)`)
+      .bind(
+        RUN_ID, RUN_ID, INITIAL_SOURCE_REVISION, preferenceInputDigest, EMPTY_DIGEST,
+        timestamp, timestamp, timestamp,
+      ).run();
+    const preparationManifest = {
+      schema: "oxygen.story-preparation",
+      workflowRunId: RUN_ID,
+      sourceRevision: INITIAL_SOURCE_REVISION,
+      receipts: [{
+        lane: "story", status: "complete", inputDigest: semantic.manifestDigest,
+        scopeDigest: await storyPreparationDigest([unit.id]), scopeCount: 1,
+        outputDigest: await storyPreparationDigest(storyOutput), outputCount: 1,
+      }, {
+        lane: "insight", status: "complete",
+        inputDigest: await storyPreparationDigest(storyOutput),
+        scopeDigest: await storyPreparationDigest(["story-authority"]), scopeCount: 1,
+        outputDigest: EMPTY_DIGEST, outputCount: 0,
+      }, {
+        lane: "story_privacy", status: "complete",
+        inputDigest: await storyPreparationDigest(completeStoryOutput),
+        scopeDigest: await storyPreparationDigest(targetCatalog.map((target) => target.id)),
+        scopeCount: targetCatalog.length,
+        outputDigest: await storyPreparationDigest(privacyCandidates), outputCount: 1,
+      }, {
+        lane: "preference", status: "complete", inputDigest: preferenceInputDigest,
+        scopeDigest: EMPTY_DIGEST, scopeCount: 0, outputDigest: EMPTY_DIGEST, outputCount: 0,
+      }],
+      storyPrivacyCandidates: privacyCandidates,
+    };
+    const body = {
+      workflowRunId: RUN_ID,
+      event: "story_ready_for_human_review",
+      coverageManifest: coverageInput,
+      storyCandidates,
+      preparationManifest,
+    };
+
+    const realBatch = db.batch.bind(db);
+    db.batch = async (statements) => {
+      await db.prepare(`UPDATE workflow_runs SET story_source_revision=? WHERE id=?`)
+        .bind(INITIAL_SOURCE_REVISION + 1, RUN_ID).run();
+      return realBatch(statements);
+    };
+    await assert.rejects(() => workflowRoute.POST(new Request("http://localhost/api/workflow", {
+      method: "POST", body: JSON.stringify(body),
+    })));
+    const rolledBack = await activationSnapshot(db);
+    assert.equal(rolledBack.coverage, null);
+    assert.deepEqual(rolledBack.receipts, []);
+    assert.deepEqual(rolledBack.candidates, []);
+    assert.equal(rolledBack.probeRun.source_revision, INITIAL_SOURCE_REVISION);
+    assert.equal(rolledBack.items[0].organization_reason, null);
+
+    db.batch = realBatch;
+    await db.prepare(`UPDATE workflow_runs
+      SET story_generation_status='running',story_source_revision=? WHERE id=?`)
+      .bind(INITIAL_SOURCE_REVISION, RUN_ID).run();
+    const response = await workflowRoute.POST(new Request("http://localhost/api/workflow", {
+      method: "POST", body: JSON.stringify(body),
+    }));
+    assert.equal(response.status, 200, await response.text());
+    const activated = await activationSnapshot(db);
+    assert.equal(activated.run.story_generation_status, "ready_for_human_review");
+    assert.equal(activated.run.story_source_revision, INITIAL_SOURCE_REVISION + 1);
+    assert.deepEqual(activated.receipts.map((receipt) => receipt.lane), [
+      "insight", "preference", "story", "story_privacy",
+    ]);
+    assert.deepEqual(activated.candidates, [{
+      candidate_id: "privacy-route",
+      candidate_json: JSON.stringify(privacyCandidates[0]),
+    }]);
+    assert.equal(activated.probeRun.source_revision, INITIAL_SOURCE_REVISION + 1);
+    assert.equal(activated.probeRun.output_digest, EMPTY_DIGEST);
+    assert.equal(activated.probeRun.output_count, 0);
+    assert.match(activated.items[0].organization_reason, /^oxygen\.story:/);
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
     delete globalThis.__oxygenLocalSqlite;

@@ -443,18 +443,14 @@ export async function POST(request: Request) {
         receiptPayload,
         ...leaseBindings,
       ));
-      const privacyRows = preparation.privacyCandidates.flatMap((group) => (
-        group.candidates.map((candidate) => ({
-          storyKey: group.storyKey,
-          candidateId: candidate.id,
-          candidateJson: JSON.stringify(candidate),
-        }))
-      ));
+      const privacyRows = preparation.privacyCandidates.map((candidate) => ({
+        candidateId: candidate.id,
+        candidateJson: JSON.stringify(candidate),
+      }));
       const privacyPayload = JSON.stringify(privacyRows);
       statements.push(db.prepare(`INSERT INTO story_privacy_candidates
-          (workflow_run_id,story_key,candidate_id,candidate_json)
-          SELECT ?,json_extract(value,'$.storyKey'),json_extract(value,'$.candidateId'),
-            json_extract(value,'$.candidateJson')
+          (workflow_run_id,candidate_id,candidate_json)
+          SELECT ?,json_extract(value,'$.candidateId'),json_extract(value,'$.candidateJson')
           FROM json_each(?) WHERE ${leaseSql}`).bind(
         workflowRunId,
         privacyPayload,

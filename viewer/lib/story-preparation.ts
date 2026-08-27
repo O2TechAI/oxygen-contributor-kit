@@ -43,10 +43,7 @@ export type StoryPreparationManifest = {
   workflowRunId: string;
   sourceRevision: number;
   receipts: StoryPreparationReceipt[];
-  storyPrivacyCandidates: Array<{
-    storyKey: string;
-    candidates: StoryPreparationPrivacyCandidate[];
-  }>;
+  storyPrivacyCandidates: StoryPreparationPrivacyCandidate[];
 };
 
 export type PreferenceBatchAuthority = {
@@ -67,10 +64,8 @@ export type StoryPreparationContext = {
 };
 
 export type StoryPreparationAuthority = {
-  manifest: StoryPreparationManifest;
   receipts: StoryPreparationReceipt[];
   privacyCandidates: StoryPreparationManifest["storyPrivacyCandidates"];
-  targetCatalog: StoryReleaseTargetDescriptor[];
   preference: PreferenceBatchAuthority;
 };
 
@@ -188,19 +183,23 @@ function parseStories(rows: StoryCandidateRow[]) {
   return stories;
 }
 
-export function storyLaneOutput(rows: StoryCandidateRow[], stories: StorySource[]) {
+function storyLaneOutput(rows: StoryCandidateRow[], stories: StorySource[]) {
   return rows.map((row, index) => ({
     id: row.id,
     story: { ...stories[index], insights: [] },
   }));
 }
 
-export function insightLaneOutput(rows: StoryCandidateRow[], stories: StorySource[]) {
-  const insightCount = stories.reduce((total, story) => total + story.insights.length, 0);
-  return insightCount === 0 ? [] : rows.map((row, index) => ({ id: row.id, story: stories[index] }));
+function finalStoryOutput(rows: StoryCandidateRow[], stories: StorySource[]) {
+  return rows.map((row, index) => ({ id: row.id, story: stories[index] }));
 }
 
-export function reusableLessonOutput(stories: StorySource[]) {
+function insightLaneOutput(rows: StoryCandidateRow[], stories: StorySource[]) {
+  const insightCount = stories.reduce((total, story) => total + story.insights.length, 0);
+  return insightCount === 0 ? [] : finalStoryOutput(rows, stories);
+}
+
+function reusableLessonOutput(stories: StorySource[]) {
   return stories.flatMap((story) => story.insights.map((insight) => ({
     storyKey: story.key,
     insightId: insight.id,
@@ -227,51 +226,39 @@ function parseReceipt(value: unknown): StoryPreparationReceipt | null {
 
 function parsePrivacyCandidates(
   value: unknown,
-  storyKeys: Set<string>,
   targetCatalog: StoryReleaseTargetDescriptor[],
 ): StoryPreparationManifest["storyPrivacyCandidates"] | null {
   if (!Array.isArray(value)) return null;
   const validTargets = new Set(targetCatalog.map((target) => target.id));
   const targetOrder = new Map(targetCatalog.map((target, index) => [target.id, index]));
-  const seenStoryKeys = new Set<string>();
   const seenCandidateIds = new Set<string>();
-  const groups: StoryPreparationManifest["storyPrivacyCandidates"] = [];
-  for (const item of value) {
-    if (!isObject(item) || !onlyKeys(item, ["storyKey", "candidates"])
-      || !stableId(item.storyKey) || !storyKeys.has(item.storyKey)
-      || seenStoryKeys.has(item.storyKey) || !Array.isArray(item.candidates)
-      || item.candidates.length === 0) return null;
-    seenStoryKeys.add(item.storyKey);
-    const candidates: StoryPreparationPrivacyCandidate[] = [];
-    for (const candidate of item.candidates) {
-      if (!isObject(candidate) || !onlyKeys(candidate, [
-        "id", "reviewState", "title", "whyFlagged", "uncertaintyReason", "releaseTargets",
-      ]) || !stableId(candidate.id) || seenCandidateIds.has(candidate.id)
-        || (candidate.reviewState !== "deterministic" && candidate.reviewState !== "needs_confirmation")
-        || !safeText(candidate.title) || !safeText(candidate.whyFlagged)
-        || (candidate.reviewState === "deterministic" && candidate.uncertaintyReason !== null)
-        || (candidate.reviewState === "needs_confirmation" && !safeText(candidate.uncertaintyReason))
-        || !Array.isArray(candidate.releaseTargets) || candidate.releaseTargets.length === 0
-        || !candidate.releaseTargets.every((target) => (
-          typeof target === "string" && validTargets.has(target as StoryReleaseTarget)
-        )) || new Set(candidate.releaseTargets).size !== candidate.releaseTargets.length) return null;
-      seenCandidateIds.add(candidate.id);
-      candidates.push({
-        id: candidate.id,
-        reviewState: candidate.reviewState,
-        title: candidate.title,
-        whyFlagged: candidate.whyFlagged,
-        uncertaintyReason: candidate.uncertaintyReason as string | null,
-        releaseTargets: [...candidate.releaseTargets]
-          .sort((left, right) => Number(targetOrder.get(left as StoryReleaseTarget))
-            - Number(targetOrder.get(right as StoryReleaseTarget))) as StoryReleaseTarget[],
-      });
-    }
-    candidates.sort((left, right) => compareUtf8(left.id, right.id));
-    groups.push({ storyKey: item.storyKey, candidates });
+  const candidates: StoryPreparationPrivacyCandidate[] = [];
+  for (const candidate of value) {
+    if (!isObject(candidate) || !onlyKeys(candidate, [
+      "id", "reviewState", "title", "whyFlagged", "uncertaintyReason", "releaseTargets",
+    ]) || !stableId(candidate.id) || seenCandidateIds.has(candidate.id)
+      || (candidate.reviewState !== "deterministic" && candidate.reviewState !== "needs_confirmation")
+      || !safeText(candidate.title) || !safeText(candidate.whyFlagged)
+      || (candidate.reviewState === "deterministic" && candidate.uncertaintyReason !== null)
+      || (candidate.reviewState === "needs_confirmation" && !safeText(candidate.uncertaintyReason))
+      || !Array.isArray(candidate.releaseTargets) || candidate.releaseTargets.length === 0
+      || !candidate.releaseTargets.every((target) => (
+        typeof target === "string" && validTargets.has(target as StoryReleaseTarget)
+      )) || new Set(candidate.releaseTargets).size !== candidate.releaseTargets.length) return null;
+    seenCandidateIds.add(candidate.id);
+    candidates.push({
+      id: candidate.id,
+      reviewState: candidate.reviewState,
+      title: candidate.title,
+      whyFlagged: candidate.whyFlagged,
+      uncertaintyReason: candidate.uncertaintyReason as string | null,
+      releaseTargets: [...candidate.releaseTargets]
+        .sort((left, right) => Number(targetOrder.get(left as StoryReleaseTarget))
+          - Number(targetOrder.get(right as StoryReleaseTarget))) as StoryReleaseTarget[],
+    });
   }
-  groups.sort((left, right) => compareUtf8(left.storyKey, right.storyKey));
-  return groups;
+  candidates.sort((left, right) => compareUtf8(left.id, right.id));
+  return candidates;
 }
 
 const mismatch = (code: string): StoryPreparationValidation => ({ ok: false, code });
@@ -304,13 +291,17 @@ export async function validateStoryPreparationManifest(
     return mismatch("STORY_PREPARATION_STORY_INVALID");
   }
   const storyKeys = sortedUniqueIds(stories.map((story) => story.key));
-  const insightIds = sortedUniqueIds(stories.flatMap((story) => story.insights.map((insight) => insight.id)));
-  if (!storyKeys || !insightIds) return mismatch("STORY_PREPARATION_SCOPE_INVALID");
+  if (!storyKeys) return mismatch("STORY_PREPARATION_SCOPE_INVALID");
+  const insightIdentities = stories.flatMap((story) => story.insights.map((insight) => ({
+    storyKey: story.key,
+    insightId: insight.id,
+  }))).sort((left, right) => (
+    compareUtf8(left.storyKey, right.storyKey) || compareUtf8(left.insightId, right.insightId)
+  ));
   const targetCatalog = deriveStoryReleaseTargetCatalog(stories);
   if (!targetCatalog) return mismatch("STORY_PREPARATION_TARGET_CATALOG_INVALID");
   const privacyCandidates = parsePrivacyCandidates(
     input.storyPrivacyCandidates,
-    new Set(storyKeys),
     targetCatalog,
   );
   if (!privacyCandidates) return mismatch("STORY_PREPARATION_PRIVACY_CANDIDATES_INVALID");
@@ -324,6 +315,7 @@ export async function validateStoryPreparationManifest(
   }
 
   const storyOutput = storyLaneOutput(context.storyCandidates, stories);
+  const completeStoryOutput = finalStoryOutput(context.storyCandidates, stories);
   const insightOutput = insightLaneOutput(context.storyCandidates, stories);
   const insightCount = stories.reduce((total, story) => total + story.insights.length, 0);
   const lessonOutput = reusableLessonOutput(stories);
@@ -349,18 +341,18 @@ export async function validateStoryPreparationManifest(
     story_privacy: {
       lane: "story_privacy",
       status: "complete",
-      inputDigest: await storyPreparationDigest(insightOutput),
+      inputDigest: await storyPreparationDigest(completeStoryOutput),
       scopeDigest: await storyPreparationDigest(targetCatalog.map((target) => target.id)),
       scopeCount: targetCatalog.length,
       outputDigest: await storyPreparationDigest(privacyCandidates),
-      outputCount: privacyCandidates.reduce((total, group) => total + group.candidates.length, 0),
+      outputCount: privacyCandidates.length,
     },
     preference: {
       lane: "preference",
       status: "complete",
       inputDigest: await storyPreparationDigest(lessonOutput),
-      scopeDigest: await storyPreparationDigest(insightIds),
-      scopeCount: insightIds.length,
+      scopeDigest: await storyPreparationDigest(insightIdentities),
+      scopeCount: insightIdentities.length,
       outputDigest: context.preference.outputDigest,
       outputCount: context.preference.outputCount,
     },
@@ -378,8 +370,6 @@ export async function validateStoryPreparationManifest(
       return mismatch(`STORY_PREPARATION_${lane.toUpperCase()}_ZERO_INVALID`);
     }
   }
-  if (expected.story.outputCount === 0) return mismatch("STORY_PREPARATION_STORY_ZERO_INVALID");
-
   const manifest: StoryPreparationManifest = {
     schema: STORY_PREPARATION_SCHEMA,
     workflowRunId: context.workflowRunId,
@@ -390,10 +380,8 @@ export async function validateStoryPreparationManifest(
   return {
     ok: true,
     authority: {
-      manifest,
       receipts: manifest.receipts,
       privacyCandidates,
-      targetCatalog,
       preference: context.preference,
     },
   };

@@ -23,7 +23,7 @@ const SIGNALS = new Set([
 ]);
 const BODY_KEYS = new Set([
   "workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount",
-  "probes", "bulkDecisions", "autoRemoved",
+  "setAside", "probes", "bulkDecisions", "autoRemoved",
 ]);
 const PROBE_KEYS = new Set([
   "id", "documentId", "documentKind", "eventIds", "timestamp", "signal", "score",
@@ -55,13 +55,15 @@ const safeText = (value: unknown): value is string => (
   typeof value === "string" && Boolean(value.trim())
   && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
 );
-const stableId = (value: unknown): value is string => safeText(value);
+const stableId = (value: unknown): value is string => (
+  safeText(value) && !/[\u0000-\u001f\u007f]/u.test(value)
+);
 const nonNegativeInteger = (value: unknown): value is number => (
   Number.isSafeInteger(value) && Number(value) >= 0
 );
 
 function normalizeOptions(value: unknown): PreferenceOption[] | null {
-  if (!Array.isArray(value)) return null;
+  if (!Array.isArray(value) || (value.length !== 2 && value.length !== 3)) return null;
   const options: PreferenceOption[] = [];
   const ids = new Set<string>();
   for (const option of value) {
@@ -75,43 +77,44 @@ function normalizeOptions(value: unknown): PreferenceOption[] | null {
 }
 
 function normalizeProbe(value: unknown): AcceptedProbe | null {
-  if (!isObject(value) || !onlyKnownKeys(value, PROBE_KEYS)
+  if (!isObject(value) || Object.keys(value).length !== PROBE_KEYS.size
+    || !onlyKnownKeys(value, PROBE_KEYS)
     || !stableId(value.id) || !stableId(value.documentId)
-    || (value.documentKind !== undefined && !safeText(value.documentKind))
-    || !Array.isArray(value.eventIds) || !value.eventIds.every(stableId)
+    || (value.documentKind !== "trajectory" && value.documentKind !== "meeting")
+    || !Array.isArray(value.eventIds) || value.eventIds.length === 0
+    || !value.eventIds.every(stableId)
     || new Set(value.eventIds).size !== value.eventIds.length
-    || (value.timestamp !== undefined && value.timestamp !== null && !safeText(value.timestamp))
-    || !SIGNALS.has(String(value.signal)) || !nonNegativeInteger(value.score ?? 0)
-    || !nonNegativeInteger(value.turns ?? 0) || !safeText(value.recap)
+    || (value.timestamp !== null && !safeText(value.timestamp))
+    || !SIGNALS.has(String(value.signal)) || !nonNegativeInteger(value.score)
+    || Number(value.score) > 100 || !nonNegativeInteger(value.turns) || !safeText(value.recap)
     || !safeText(value.question)
-    || (value.allowOther !== undefined && typeof value.allowOther !== "boolean")
-    || (value.allowSkip !== undefined && typeof value.allowSkip !== "boolean")) return null;
-  const options = normalizeOptions(value.options ?? []);
+    || value.allowOther !== true || value.allowSkip !== true) return null;
+  const options = normalizeOptions(value.options);
   if (!options) return null;
   const presentations = normalizeProbePresentations(value.presentations, options);
   if (!presentations) return null;
   return {
     id: value.id,
     documentId: value.documentId,
-    documentKind: value.documentKind === undefined ? "trajectory" : value.documentKind,
+    documentKind: value.documentKind,
     eventIds: [...value.eventIds],
-    timestamp: value.timestamp === undefined ? null : value.timestamp as string | null,
+    timestamp: value.timestamp as string | null,
     signal: value.signal as string,
-    score: Number(value.score ?? 0),
-    turns: Number(value.turns ?? 0),
+    score: Number(value.score),
+    turns: Number(value.turns),
     recap: value.recap,
     question: value.question,
     options,
     presentations,
-    allowOther: value.allowOther === undefined ? true : value.allowOther,
-    allowSkip: value.allowSkip === undefined ? true : value.allowSkip,
+    allowOther: true,
+    allowSkip: true,
   };
 }
 
 function normalizeBulkDecision(value: unknown): AcceptedBulkDecision | null {
   if (!isObject(value)) return null;
-  const evidenceSample = value.evidenceSample ?? [];
-  if (!onlyKnownKeys(value, BULK_KEYS)
+  const evidenceSample = value.evidenceSample;
+  if (Object.keys(value).length !== BULK_KEYS.size || !onlyKnownKeys(value, BULK_KEYS)
     || !stableId(value.id) || !safeText(value.kind) || !nonNegativeInteger(value.count)
     || !safeText(value.question) || !Array.isArray(evidenceSample)
     || !evidenceSample.every(stableId)
@@ -145,11 +148,22 @@ export async function GET() {
   const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) return workflowRunErrorResponse(authority);
-  const [probes, bulk, run] = await Promise.all([
-    db.prepare("SELECT * FROM probes ORDER BY score DESC, created_at ASC").all(),
-    db.prepare("SELECT * FROM probe_bulk_decisions ORDER BY count DESC").all(),
-    db.prepare("SELECT * FROM probe_runs WHERE workflow_run_id=?")
-      .bind(authority.workflowRunId).first(),
+  const currentAuthority = `EXISTS (SELECT 1 FROM workflow_runs workflow
+    JOIN probe_runs probe_run ON probe_run.workflow_run_id=workflow.id
+    WHERE workflow.id=? AND workflow.story_generation_status='ready_for_human_review'
+      AND probe_run.status='complete' AND probe_run.stage='preference'
+      AND probe_run.source_revision=workflow.story_source_revision)`;
+  const [probes, bulk, runs] = await db.batch([
+    db.prepare(`SELECT * FROM probes WHERE ${currentAuthority}
+      ORDER BY score DESC,created_at ASC`).bind(authority.workflowRunId),
+    db.prepare(`SELECT * FROM probe_bulk_decisions WHERE ${currentAuthority}
+      ORDER BY count DESC`).bind(authority.workflowRunId),
+    db.prepare(`SELECT probe_run.* FROM probe_runs probe_run
+      JOIN workflow_runs workflow ON workflow.id=probe_run.workflow_run_id
+      WHERE workflow.id=? AND workflow.story_generation_status='ready_for_human_review'
+        AND probe_run.status='complete' AND probe_run.stage='preference'
+        AND probe_run.source_revision=workflow.story_source_revision`)
+      .bind(authority.workflowRunId),
   ]);
   return Response.json({
     probes: (probes.results || []).map((row) => {
@@ -167,7 +181,7 @@ export async function GET() {
         presentations: JSON.parse(String(decision.presentations_json || "{}")),
       };
     }),
-    run: run || null,
+    run: runs.results?.[0] || null,
   });
 }
 
@@ -184,6 +198,7 @@ export async function POST(request: Request) {
     || typeof body.inputDigest !== "string" || !DIGEST.test(body.inputDigest)
     || typeof body.outputDigest !== "string" || !DIGEST.test(body.outputDigest)
     || !nonNegativeInteger(body.outputCount)
+    || !nonNegativeInteger(body.setAside)
     || !Array.isArray(body.probes) || !Array.isArray(body.bulkDecisions)) {
     return Response.json({ error: "Invalid Preference batch" }, { status: 400 });
   }
@@ -197,6 +212,9 @@ export async function POST(request: Request) {
   const ids = [...acceptedProbes, ...acceptedBulk].map((item) => item.id);
   if (new Set(ids).size !== ids.length || body.outputCount !== ids.length) {
     return Response.json({ error: "Invalid Preference question count or identity" }, { status: 400 });
+  }
+  if (body.outputCount === 0 && body.setAside !== 0) {
+    return Response.json({ error: "Completed-zero Preference batch cannot set questions aside" }, { status: 400 });
   }
   let autoRemoved: ReturnType<typeof canonicalizeAutoRemoved>;
   try {
@@ -230,37 +248,74 @@ export async function POST(request: Request) {
     || Number(run.story_source_revision) !== body.sourceRevision) {
     return Response.json({ error: "Preference source authority is stale" }, { status: 409 });
   }
+  const [{ results: documents }, { results: items }] = await Promise.all([
+    db.prepare("SELECT id,kind FROM documents").all<{ id: string; kind: string }>(),
+    db.prepare("SELECT id,document_id FROM items").all<{ id: string; document_id: string }>(),
+  ]);
+  const documentKinds = new Map(documents.map((document) => [document.id, document.kind]));
+  const itemOwners = new Map(items.map((item) => [item.id, item.document_id]));
+  if (acceptedProbes.some((probe) => documentKinds.get(probe.documentId) !== probe.documentKind
+    || probe.eventIds.some((eventId) => itemOwners.get(eventId) !== probe.documentId))
+    || acceptedBulk.some((decision) => decision.evidenceSample.some((eventId) => !itemOwners.has(eventId)))) {
+    return Response.json({ error: "Invalid Preference evidence authority" }, { status: 400 });
+  }
 
   const now = new Date().toISOString();
+  const leaseSql = `EXISTS (SELECT 1 FROM workflow_runs
+    WHERE id=? AND story_generation_status='running' AND story_source_revision=?)`;
+  const leaseBindings = [body.workflowRunId, body.sourceRevision];
   const statements = [
-    db.prepare("DELETE FROM probes"),
-    db.prepare("DELETE FROM probe_bulk_decisions"),
-    db.prepare("DELETE FROM probe_runs"),
+    db.prepare(`DELETE FROM probes WHERE ${leaseSql}`).bind(...leaseBindings),
+    db.prepare(`DELETE FROM probe_bulk_decisions WHERE ${leaseSql}`).bind(...leaseBindings),
+    db.prepare(`DELETE FROM probe_runs WHERE workflow_run_id=? AND ${leaseSql}`)
+      .bind(body.workflowRunId, ...leaseBindings),
     ...acceptedProbes.map((probe) => db.prepare(
       `INSERT INTO probes
         (id,document_id,document_kind,event_ids_json,timestamp,signal,score,turns,
          recap,question,options_json,presentations_json,allow_other,allow_skip,created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ${leaseSql}`,
     ).bind(
       probe.id, probe.documentId, probe.documentKind, JSON.stringify(probe.eventIds),
       probe.timestamp, probe.signal, probe.score, probe.turns, probe.recap, probe.question,
       JSON.stringify(probe.options), JSON.stringify(probe.presentations),
       probe.allowOther ? 1 : 0, probe.allowSkip ? 1 : 0, now,
+      ...leaseBindings,
     )),
     ...acceptedBulk.map((decision) => db.prepare(
       `INSERT INTO probe_bulk_decisions
         (id,kind,count,question,default_answer,evidence_sample_json,presentations_json,created_at)
-       VALUES (?,?,?,?,'keep',?,?,?)`,
+       SELECT ?,?,?,?,'keep',?,?,? WHERE ${leaseSql}`,
     ).bind(
       decision.id, decision.kind, decision.count, decision.question,
       JSON.stringify(decision.evidenceSample), JSON.stringify(decision.presentations), now,
+      ...leaseBindings,
     )),
     db.prepare(`INSERT INTO probe_runs
       (workflow_run_id,id,source_revision,input_digest,output_digest,output_count,
        status,stage,generated,set_aside,auto_removed_json,started_at,updated_at,completed_at)
-      VALUES (?,?,?,?,?,?,'complete','preference',?,0,?,?,?,?)`).bind(
+       SELECT ?,?,?,?,?,?,'complete','preference',?,?,?, ?,?,? WHERE ${leaseSql}`).bind(
       body.workflowRunId, body.workflowRunId, body.sourceRevision, body.inputDigest, body.outputDigest,
-      body.outputCount, body.outputCount, JSON.stringify(autoRemoved), now, now, now,
+      body.outputCount, body.outputCount, body.setAside, JSON.stringify(autoRemoved), now, now, now,
+      ...leaseBindings,
+    ),
+    db.prepare(`SELECT json_extract(CASE WHEN
+      ${leaseSql}
+      AND EXISTS (SELECT 1 FROM probe_runs
+        WHERE workflow_run_id=? AND id=? AND source_revision=?
+          AND input_digest=? AND output_digest=? AND output_count=?
+          AND status='complete' AND stage='preference' AND generated=? AND set_aside=?)
+      AND (SELECT COUNT(*) FROM probes) + (SELECT COUNT(*) FROM probe_bulk_decisions)=?
+      THEN '{}' ELSE '' END,'$.preference_authority') AS preference_authority_assertion`).bind(
+      ...leaseBindings,
+      body.workflowRunId,
+      body.workflowRunId,
+      body.sourceRevision,
+      body.inputDigest,
+      body.outputDigest,
+      body.outputCount,
+      body.outputCount,
+      body.setAside,
+      body.outputCount,
     ),
   ];
   try {
