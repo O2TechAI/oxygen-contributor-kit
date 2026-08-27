@@ -6,13 +6,12 @@ from typing import Any, Callable
 
 
 CANONICAL_SECRET_MARKER = "<REDACTED>"
-MINIMUM_SECRET_VALUE_LENGTH = 6
 
 Replacement = str | Callable[[re.Match[str]], str]
 
 ASSIGNMENT_PREFIX = re.compile(
     r"\b(?:api[_ -]?key|access[_ -]?token|token|password|passwd|secret|authorization)"
-    r"\s*(?::|=(?!=))\s*",
+    r"[^\S\r\n]*(?::|=(?!=))[^\S\r\n]*",
     re.IGNORECASE,
 )
 
@@ -41,30 +40,29 @@ SECRET_RULES: tuple[tuple[re.Pattern[str], Replacement], ...] = (
 )
 
 
-def _assignment_value(text: str, start: int) -> tuple[int, str, bool] | None:
-    """Return lexical end, replacement, and whether the value is already safe."""
-    if start >= len(text) or text[start] in "\r\n":
-        return None
+def _trailing_whitespace(value: str) -> str:
+    end = len(value)
+    while end > 0 and value[end - 1].isspace():
+        end -= 1
+    return value[end:]
 
-    first_end = start
-    while (
-        first_end < len(text)
-        and not text[first_end].isspace()
-        and text[first_end] not in ",;"
-    ):
-        first_end += 1
-    if first_end - start < MINIMUM_SECRET_VALUE_LENGTH:
-        return first_end, CANONICAL_SECRET_MARKER, True
+
+def _assignment_value(text: str, start: int) -> tuple[int, str, bool] | None:
+    """Return the assignment's lexical end, replacement, and safe-marker state."""
+    if start >= len(text) or text[start] in ",;\r\n":
+        return None
 
     quote = text[start] if text[start] in {'"', "'"} else None
     if quote is None:
         end = start
-        while end < len(text) and not text[end].isspace() and text[end] not in ",;":
+        while end < len(text) and text[end] not in ",;\r\n":
             end += 1
-        if end == start:
-            return None
         value = text[start:end]
-        return end, CANONICAL_SECRET_MARKER, value == CANONICAL_SECRET_MARKER
+        stripped = value.strip()
+        if not stripped:
+            return None
+        replacement = CANONICAL_SECRET_MARKER + _trailing_whitespace(value)
+        return end, replacement, stripped == CANONICAL_SECRET_MARKER
 
     escaped = False
     close = start + 1
@@ -79,16 +77,27 @@ def _assignment_value(text: str, start: int) -> tuple[int, str, bool] | None:
         close += 1
 
     if close >= len(text) or text[close] in "\r\n":
-        return close, CANONICAL_SECRET_MARKER, False
+        value = text[start + 1:close]
+        stripped = value.strip()
+        if not stripped:
+            return close, CANONICAL_SECRET_MARKER, True
+        replacement = CANONICAL_SECRET_MARKER + _trailing_whitespace(value)
+        return close, replacement, False
 
-    end = close + 1
-    while end < len(text) and not text[end].isspace() and text[end] not in ",;":
-        end += 1
-    fully_quoted = end == close + 1
-    value = text[start:end]
-    replacement = f"{quote}{CANONICAL_SECRET_MARKER}{quote}" if fully_quoted else CANONICAL_SECRET_MARKER
-    safe = fully_quoted and value == replacement
-    return end, replacement, safe
+    boundary = close + 1
+    while boundary < len(text) and text[boundary] not in ",;\r\n":
+        boundary += 1
+    suffix = text[close + 1:boundary]
+    if any(not character.isspace() for character in suffix):
+        replacement = CANONICAL_SECRET_MARKER + _trailing_whitespace(suffix)
+        return boundary, replacement, False
+
+    value = text[start + 1:close]
+    stripped = value.strip()
+    if not stripped:
+        return close + 1, f"{quote}{CANONICAL_SECRET_MARKER}{quote}", True
+    replacement = f"{quote}{CANONICAL_SECRET_MARKER}{quote}"
+    return close + 1, replacement, stripped == CANONICAL_SECRET_MARKER
 
 
 def _unsafe_assignment(text: str) -> bool:
