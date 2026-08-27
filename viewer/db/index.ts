@@ -1,7 +1,6 @@
-import { env } from "cloudflare:workers";
-
-let initialized = false;
-let initialization: Promise<void> | null = null;
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 const statements = [
   `CREATE TABLE IF NOT EXISTS documents (
@@ -136,73 +135,90 @@ const statements = [
   )`,
 ];
 
-export async function getD1() {
-  if (!env.DB) throw new Error("D1 binding DB is unavailable");
-  if (!initialized) {
-    initialization ??= (async () => {
-      await env.DB.batch(statements.map((sql) => env.DB.prepare(sql)));
-      const columns = await env.DB.prepare("PRAGMA table_info(redaction_jobs)")
-        .all<{ name: string }>();
-      if (!columns.results.some((column: { name: string }) => column.name === "source_digest")) {
-        await env.DB.prepare("ALTER TABLE redaction_jobs ADD COLUMN source_digest TEXT").run();
-      }
-      const probeColumns = await env.DB.prepare("PRAGMA table_info(probes)")
-        .all<{ name: string }>();
-      if (!probeColumns.results.some((column: { name: string }) => column.name === "presentations_json")) {
-        await env.DB.prepare("ALTER TABLE probes ADD COLUMN presentations_json TEXT NOT NULL DEFAULT '{}'").run();
-      }
-      const bulkColumns = await env.DB.prepare("PRAGMA table_info(probe_bulk_decisions)")
-        .all<{ name: string }>();
-      if (!bulkColumns.results.some((column: { name: string }) => column.name === "presentations_json")) {
-        await env.DB.prepare("ALTER TABLE probe_bulk_decisions ADD COLUMN presentations_json TEXT NOT NULL DEFAULT '{}'").run();
-      }
-      const workflowColumns = await env.DB.prepare("PRAGMA table_info(workflow_runs)")
-        .all<{ name: string }>();
-      const workflowNames = new Set(workflowColumns.results.map((column: { name: string }) => column.name));
-      const workflowMigrations = [
-        ["story_generation_status", "ALTER TABLE workflow_runs ADD COLUMN story_generation_status TEXT NOT NULL DEFAULT 'not_started'"],
-        ["story_generation_completed", "ALTER TABLE workflow_runs ADD COLUMN story_generation_completed INTEGER NOT NULL DEFAULT 0"],
-        ["story_generation_total", "ALTER TABLE workflow_runs ADD COLUMN story_generation_total INTEGER NOT NULL DEFAULT 0"],
-        ["story_source_revision", "ALTER TABLE workflow_runs ADD COLUMN story_source_revision INTEGER NOT NULL DEFAULT 0"],
-        ["active_story_digest", "ALTER TABLE workflow_runs ADD COLUMN active_story_digest TEXT"],
-      ] as const;
-      for (const [name, sql] of workflowMigrations) {
-        if (!workflowNames.has(name)) await env.DB.prepare(sql).run();
-      }
-      const semanticMemberColumns = await env.DB.prepare("PRAGMA table_info(semantic_unit_members)")
-        .all<{ name: string }>();
-      if (!semanticMemberColumns.results.some((column: { name: string }) => column.name === "source_digest")) {
-        await env.DB.prepare(
-          "ALTER TABLE semantic_unit_members ADD COLUMN source_digest TEXT NOT NULL DEFAULT ''",
-        ).run();
-      }
-      const semanticManifestColumns = await env.DB.prepare("PRAGMA table_info(semantic_manifests)")
-        .all<{ name: string }>();
-      const semanticManifestNames = new Set(
-        semanticManifestColumns.results.map((column: { name: string }) => column.name),
-      );
-      const semanticManifestMigrations = [
-        ["corpus_revision", "ALTER TABLE semantic_manifests ADD COLUMN corpus_revision INTEGER NOT NULL DEFAULT 0"],
-        ["corpus_digest", "ALTER TABLE semantic_manifests ADD COLUMN corpus_digest TEXT NOT NULL DEFAULT ''"],
-        ["corpus_document_count", "ALTER TABLE semantic_manifests ADD COLUMN corpus_document_count INTEGER NOT NULL DEFAULT 0"],
-        ["corpus_item_count", "ALTER TABLE semantic_manifests ADD COLUMN corpus_item_count INTEGER NOT NULL DEFAULT 0"],
-      ] as const;
-      for (const [name, sql] of semanticManifestMigrations) {
-        if (!semanticManifestNames.has(name)) await env.DB.prepare(sql).run();
-      }
-      const sessionColumns = await env.DB.prepare("PRAGMA table_info(story_review_sessions)")
-        .all<{ name: string }>();
-      if (!sessionColumns.results.some((column: { name: string }) => column.name === "server_version")) {
-        await env.DB.prepare(
-          "ALTER TABLE story_review_sessions ADD COLUMN server_version INTEGER NOT NULL DEFAULT 0",
-        ).run();
-      }
-      initialized = true;
-    })().catch((error) => {
-      initialization = null;
-      throw error;
-    });
-    await initialization;
+type Row = Record<string, unknown>;
+type StatementResult = { success: true; meta: { changes: number }; results?: Row[] };
+
+const ordinaryRow = <T>(row: Row): T => ({ ...row }) as T;
+
+class LocalStatement {
+  private values: unknown[] = [];
+  private readonly statement: StatementSync;
+
+  constructor(statement: StatementSync) {
+    this.statement = statement;
   }
-  return env.DB;
+
+  bind(...values: unknown[]) {
+    this.values = values;
+    return this;
+  }
+
+  async first<T = Row>(): Promise<T | null> {
+    const row = this.statement.get(...(this.values as never[])) as Row | undefined;
+    return row ? ordinaryRow<T>(row) : null;
+  }
+
+  async all<T = Row>(): Promise<{ results: T[] }> {
+    return { results: this.statement.all(...(this.values as never[])).map(ordinaryRow<T>) };
+  }
+
+  async run() {
+    return this.runSync();
+  }
+
+  execute(): StatementResult {
+    return this.statement.columns().length
+      ? {
+        success: true as const,
+        meta: { changes: 0 },
+        results: this.statement.all(...(this.values as never[])).map(ordinaryRow<Row>),
+      }
+      : this.runSync();
+  }
+
+  private runSync() {
+    const { changes } = this.statement.run(...(this.values as never[]));
+    return { success: true as const, meta: { changes: Number(changes) } };
+  }
+}
+
+class LocalDatabase {
+  private readonly database: DatabaseSync;
+
+  constructor(database: DatabaseSync) {
+    this.database = database;
+  }
+
+  prepare(sql: string) {
+    return new LocalStatement(this.database.prepare(sql));
+  }
+
+  async batch(statements: LocalStatement[]) {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const results = statements.map((statement) => statement.execute());
+      this.database.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+}
+
+type LocalSqliteGlobal = typeof globalThis & { __oxygenLocalSqlite?: LocalDatabase };
+
+// Temporary residual: Wave 2 removes the D1-era export name after composition.
+export async function getD1() {
+  const runtime = globalThis as LocalSqliteGlobal;
+  if (runtime.__oxygenLocalSqlite) return runtime.__oxygenLocalSqlite;
+
+  const stateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
+  const databasePath = stateDir === undefined ? ":memory:" : join(stateDir, "oxygen.sqlite");
+  if (stateDir !== undefined) mkdirSync(stateDir, { recursive: true });
+
+  const database = new DatabaseSync(databasePath);
+  database.exec(statements.join(";\n"));
+  runtime.__oxygenLocalSqlite = new LocalDatabase(database);
+  return runtime.__oxygenLocalSqlite;
 }
