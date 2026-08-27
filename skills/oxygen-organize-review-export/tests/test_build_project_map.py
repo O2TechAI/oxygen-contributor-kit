@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -55,6 +56,27 @@ def write_meeting(run: Path, directory_id: str, meeting_id: str | None = None) -
         "records": [{"record_id": "record-1", "text": f"Review in {directory_id}."}],
     }), encoding="utf-8")
     return path
+
+
+def directory_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return
+    except OSError:
+        pass
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+    test_case.skipTest("directory link creation is unavailable")
 
 
 def semantic_source_digest(ids, source_digests):
@@ -114,6 +136,15 @@ class BuildProjectMapTests(unittest.TestCase):
             run = Path(temporary)
             write_meeting(run, "alpha", "../outside")
             with self.assertRaisesRegex(ValueError, "meeting source identity is invalid"):
+                MODULE.source_inventory(run)
+
+    def test_contained_meeting_directory_alias_fails_project_map_inventory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            target = write_meeting(run, "real-id", "real-id").parent
+            directory_link_or_skip(self, run / "meetings" / "alias-id", target)
+
+            with self.assertRaisesRegex(ValueError, "meeting source path is aliased"):
                 MODULE.source_inventory(run)
 
     def test_raw_mechanical_digest_drift_does_not_invalidate_semantic_authority(self):

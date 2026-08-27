@@ -244,6 +244,13 @@ def _contained(candidate: Path, source: Path) -> Path:
     return resolved
 
 
+def _direct_physical_child(candidate: Path, parent: Path, source: Path) -> Path:
+    resolved = _contained(candidate, source)
+    if resolved != parent / candidate.name:
+        raise SystemExit(INPUT_MEETING_INVALID)
+    return resolved
+
+
 def _meeting_id(value: object) -> str:
     if not isinstance(value, str) or not re.fullmatch(
         r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", value
@@ -259,28 +266,29 @@ def discover_meetings(source: Path) -> list[dict]:
     if root_candidate.exists() or root_candidate.is_symlink():
         raise SystemExit(INPUT_MEETING_INVALID)
 
-    meetings = []
+    meetings: list[tuple[Path, str]] = []
     plural_candidate = source / "meetings"
     if plural_candidate.exists() or plural_candidate.is_symlink():
         plural = _contained(plural_candidate, source)
         if not plural.is_dir():
             raise SystemExit(INPUT_MEETING_INVALID)
         try:
-            entries = sorted(plural.iterdir())
+            entries = sorted(plural_candidate.iterdir())
         except (OSError, RuntimeError):
             raise SystemExit(INPUT_MEETING_INVALID) from None
         for entry in entries:
-            directory = _contained(entry, source)
+            literal_meeting_id = entry.name
+            directory = _direct_physical_child(entry, plural, source)
             if not directory.is_dir():
                 raise SystemExit(INPUT_MEETING_INVALID)
-            path = _contained(directory / "meeting.json", source)
+            path = _direct_physical_child(entry / "meeting.json", directory, source)
             if not path.is_file():
                 raise SystemExit(INPUT_MEETING_INVALID)
-            meetings.append(path)
+            meetings.append((path, literal_meeting_id))
 
     prepared = []
     seen_ids = set()
-    for path in meetings:
+    for path, literal_meeting_id in meetings:
         try:
             meeting = read_json(path)
         except (OSError, UnicodeError, json.JSONDecodeError):
@@ -292,9 +300,9 @@ def discover_meetings(source: Path) -> list[dict]:
         source_meeting_id = _meeting_id(
             meeting.get("meeting_id")
             or meeting.get("id")
-            or path.parent.name
+            or literal_meeting_id
         )
-        if path.parent.name != source_meeting_id:
+        if literal_meeting_id != source_meeting_id:
             raise SystemExit(INPUT_MEETING_INVALID)
         if source_meeting_id in seen_ids:
             raise SystemExit(INPUT_MEETING_ID_DUPLICATE)

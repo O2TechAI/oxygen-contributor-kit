@@ -104,6 +104,27 @@ def directory_link_or_skip(test_case: unittest.TestCase, link: Path, target: Pat
     test_case.skipTest("directory link creation is unavailable")
 
 
+def file_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+        return
+    except OSError:
+        pass
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+    test_case.skipTest("file link creation is unavailable")
+
+
 class PrepareAiReviewRunTest(unittest.TestCase):
     def assert_projection_invalid(self, mutate):
         with TemporaryDirectory() as temp:
@@ -549,6 +570,36 @@ class PrepareAiReviewRunTest(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 SystemExit, f"^{MODULE.INPUT_PATH_OUTSIDE_RUN}$"
+            ):
+                MODULE.discover_meetings(source)
+
+    def test_contained_meeting_directory_alias_is_rejected(self):
+        with TemporaryDirectory() as temp:
+            source = Path(temp, "source")
+            target = write_meeting(source, "real-id").parent
+            directory_link_or_skip(
+                self, source / "meetings" / "alias-id", target,
+            )
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$"
+            ):
+                MODULE.discover_meetings(source)
+
+    def test_contained_meeting_file_alias_is_rejected(self):
+        with TemporaryDirectory() as temp:
+            source = Path(temp, "source")
+            directory = source / "meetings" / "meeting-one"
+            directory.mkdir(parents=True)
+            target = directory / "payload.json"
+            target.write_text(json.dumps({
+                "meeting_id": "meeting-one",
+                "records": [{"record_id": "record-one", "text": "safe text"}],
+            }), encoding="utf-8")
+            file_link_or_skip(self, directory / "meeting.json", target)
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$"
             ):
                 MODULE.discover_meetings(source)
 

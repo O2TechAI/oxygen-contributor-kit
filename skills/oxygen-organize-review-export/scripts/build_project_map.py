@@ -68,6 +68,22 @@ def contained_file(path: Path, run: Path) -> Path:
     return resolved
 
 
+def direct_physical_child(path: Path, parent: Path, run: Path, *, directory: bool) -> Path:
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise ValueError(f"meeting source path is invalid: {path}") from None
+    if not resolved.is_relative_to(run.resolve(strict=True)):
+        raise ValueError(f"source path leaves approved run: {path}")
+    if resolved != parent / path.name:
+        raise ValueError(f"meeting source path is aliased: {path}")
+    if directory and not resolved.is_dir():
+        raise ValueError(f"meeting source is not a directory: {path}")
+    if not directory and not resolved.is_file():
+        raise ValueError(f"meeting source is not a file: {path}")
+    return resolved
+
+
 def source_inventory(
     run: Path,
 ) -> tuple[list[str], list[dict[str, Any]], dict[str, str]]:
@@ -139,27 +155,31 @@ def source_inventory(
     root_meeting = run / "meeting.json"
     if root_meeting.exists() or root_meeting.is_symlink():
         raise ValueError("root meeting source is not supported")
-    meeting_candidates: list[Path] = []
+    meeting_candidates: list[tuple[str, Path]] = []
     meetings_root = run / "meetings"
     if meetings_root.exists() or meetings_root.is_symlink():
         resolved_meetings = meetings_root.resolve(strict=True)
         if not resolved_meetings.is_relative_to(run.resolve(strict=True)) or not resolved_meetings.is_dir():
             raise ValueError("meetings path leaves approved run")
-        for entry in sorted(resolved_meetings.iterdir()):
-            if not entry.is_dir():
-                raise ValueError(f"meeting source is not a directory: {entry}")
-            meeting_candidates.append(entry / "meeting.json")
+        for entry in sorted(meetings_root.iterdir()):
+            literal_meeting_id = entry.name
+            directory = direct_physical_child(
+                entry, resolved_meetings, run, directory=True,
+            )
+            meeting_path = direct_physical_child(
+                entry / "meeting.json", directory, run, directory=False,
+            )
+            meeting_candidates.append((literal_meeting_id, meeting_path))
 
-    for candidate in meeting_candidates:
-        meeting_path = contained_file(candidate, run)
+    for literal_meeting_id, meeting_path in meeting_candidates:
         meeting = read_object(meeting_path)
-        meeting_id = meeting.get("meeting_id") or meeting.get("id") or meeting_path.parent.name
+        meeting_id = meeting.get("meeting_id") or meeting.get("id") or literal_meeting_id
         records = meeting.get("records")
         if not isinstance(meeting_id, str) or not meeting_id or not isinstance(records, list):
             raise ValueError("meeting source is invalid")
         if (
             not SOURCE_ID_PATTERN.fullmatch(meeting_id)
-            or meeting_path.parent.name != meeting_id
+            or literal_meeting_id != meeting_id
         ):
             raise ValueError("meeting source identity is invalid")
         sources.append({

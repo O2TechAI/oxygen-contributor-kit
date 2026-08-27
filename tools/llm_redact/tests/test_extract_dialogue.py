@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
@@ -35,6 +37,27 @@ def write_trajectory(run: Path) -> None:
         "event_type": "message",
         "payload": {"role": "user", "text": "safe trajectory text"},
     }) + "\n", encoding="utf-8")
+
+
+def directory_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return
+    except OSError:
+        pass
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+    test_case.skipTest("directory link creation is unavailable")
 
 
 class ExtractDialogueTest(unittest.TestCase):
@@ -145,6 +168,15 @@ class ExtractDialogueTest(unittest.TestCase):
         with TemporaryDirectory() as temp:
             run = Path(temp, "review")
             write_meeting(run, "meeting-000001", records="not-a-list")
+            with self.assertRaisesRegex(SystemExit, "^INPUT_MEETING_INVALID$"):
+                MODULE.extract_bundles(run)
+
+    def test_contained_meeting_directory_alias_fails_at_extraction(self):
+        with TemporaryDirectory() as temp:
+            run = Path(temp, "review")
+            target = write_meeting(run, "real-id").parent
+            directory_link_or_skip(self, run / "meetings" / "alias-id", target)
+
             with self.assertRaisesRegex(SystemExit, "^INPUT_MEETING_INVALID$"):
                 MODULE.extract_bundles(run)
 
