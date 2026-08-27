@@ -129,6 +129,27 @@ test("successor progress counts resolved AI versions and presents zero as affirm
   assert.doesNotMatch(successorEditor, /source\.insights\.length\s*\?\s*"No AI Insights required"/);
 });
 
+test("successor Timeline preserves source metadata without manufacturing markers or labels", () => {
+  const successorTimeline = workspace.slice(
+    workspace.indexOf("}) : successorProjectChapters.map"),
+    workspace.indexOf("const phaseGroups"),
+  );
+  const timelineRows = workspace.slice(
+    workspace.indexOf('<div className="milestoneMeta">'),
+    workspace.indexOf("<footer>"),
+  );
+  assert.match(successorTimeline, /kind:chapter\.source\.kind,/);
+  assert.match(successorTimeline, /before:chapter\.source\.transition\?\.before,/);
+  assert.match(successorTimeline, /after:chapter\.source\.transition\?\.after,/);
+  assert.match(successorTimeline, /chips:chapter\.source\.chips,/);
+  assert.doesNotMatch(successorTimeline, /kind:chapter\.source\.kind \|\| "foundation"|chips:\[\]/);
+  assert.doesNotMatch(successorTimeline, /transition\?\.(?:before|after)\s*\|\||chips:chapter\.source\.chips\s*\|\|/);
+  assert.match(timelineRows, /event\.kind && <span>\{milestoneKindLabel\(event\.kind,storyLanguage\)\}<\/span>/);
+  assert.match(timelineRows, /storyLane==="successor" && event\.successor && event\.successor\.source\.insights\.length > 0 && <strong>AI Insight<\/strong>/);
+  assert.doesNotMatch(timelineRows, /Story Chapter|successorChapterReviews/);
+  assert.match(timelineRows, /storyLane==="legacy" && <strong>\{labels\.selected\}<\/strong>/);
+});
+
 test("successor handoff progress uses the canonical completion evaluator", () => {
   assert.match(workspace, /state\?\.stage === "human_confirmed"[\s\S]*successorChapterReviewCompletionBlockers\(state,successorCompletionContext\(chapter\.source\)\)\.length === 0/);
   assert.doesNotMatch(workspace, /successorProjectChapters\.filter\(\(chapter\) => successorChapterReviews\[chapter\.source\.key\]\?\.stage === "human_confirmed"\)/);

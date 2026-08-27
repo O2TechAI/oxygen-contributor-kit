@@ -84,7 +84,7 @@ type ViewerChapter = {
   key: string;
   project: string;
   phase: string;
-  kind: NonNullable<SuccessorStorySource["kind"]>;
+  kind?: NonNullable<SuccessorStorySource["kind"]>;
   title: string;
   overview: string;
   timestamp?: string;
@@ -92,7 +92,7 @@ type ViewerChapter = {
   readingMinutes: number;
   before?: string;
   after?: string;
-  chips: string[];
+  chips?: string[];
   legacy?: TimelineMilestone;
   successor?: SuccessorViewerChapter;
 };
@@ -734,13 +734,15 @@ export function InlineWorkspace({
     key:chapter.source.key,
     project:chapter.project,
     phase:chapter.source.phase.label,
-    kind:chapter.source.kind || "foundation",
+    kind:chapter.source.kind,
     title:chapter.source.title,
     overview:chapter.source.overview,
     timestamp:chapter.timestamp,
     evidenceCount:1+chapter.source.evidence.supporting.length,
     readingMinutes:Math.max(1,Math.ceil(chapter.source.story.blocks.reduce((count,block) => count+block.text.trim().split(/\s+/u).length,0)/220)),
-    chips:[],
+    before:chapter.source.transition?.before,
+    after:chapter.source.transition?.after,
+    chips:chapter.source.chips,
     successor:chapter,
   }));
   const phaseGroups = viewerChapters.reduce<Array<{ name:string; events:ViewerChapter[] }>>((groups,event) => {
@@ -1060,12 +1062,12 @@ export function InlineWorkspace({
                 {phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
                   <header className="phaseHeading"><span>{String(phaseIndex+1).padStart(2,"0")}</span><div><h2>{group.name}</h2><p>{group.events.length} {storyLanguage==="zh"?"个章节":`milestone${group.events.length===1?"":"s"}`}</p></div></header>
                   <div className="milestoneList">{group.events.map((event) => <article className="milestone" data-kind={event.kind} data-story-key={event.key} key={event.key} aria-labelledby={`milestone-${event.key}`}>
-                    <div className="milestoneMeta"><time dateTime={event.timestamp}>{fmtTimelineDate(event.timestamp,storyLanguage)}</time><span>{milestoneKindLabel(event.kind,storyLanguage)}</span><strong>{storyLane==="successor"?"Story Chapter":labels.selected}</strong></div>
+                    <div className="milestoneMeta"><time dateTime={event.timestamp}>{fmtTimelineDate(event.timestamp,storyLanguage)}</time>{event.kind && <span>{milestoneKindLabel(event.kind,storyLanguage)}</span>}{storyLane==="legacy" && <strong>{labels.selected}</strong>}{storyLane==="successor" && event.successor && event.successor.source.insights.length > 0 && <strong>AI Insight</strong>}</div>
                     <h3 id={`milestone-${event.key}`}>{event.title}</h3>
                     {event.before && event.after && <div className="transition" aria-label={`${labels.before} to ${labels.after}`}>
                       <div><small>{labels.before}</small><p>{event.before}</p></div><b aria-hidden="true">→</b><div><small>{labels.after}</small><p>{event.after}</p></div>
                     </div>}
-                    {event.chips.length > 0 && <div className="milestoneChips" aria-label={storyLanguage==="zh"?"关键事实":"Key facts"}>{event.chips.map((chip) => <span key={chip}>{chip}</span>)}</div>}
+                    {event.chips && event.chips.length > 0 && <div className="milestoneChips" aria-label={storyLanguage==="zh"?"关键事实":"Key facts"}>{event.chips.map((chip) => <span key={chip}>{chip}</span>)}</div>}
                     <footer><span>{event.evidenceCount} {labels.evidence}{storyLanguage==="en" && event.evidenceCount!==1?"s":""}</span><button id={`story-open-${event.key}`} onClick={() => openStory(event.key)}>{labels.read} · ≈ {event.readingMinutes} {storyLanguage==="zh"?"分钟":"min"} →</button></footer>
                   </article>)}</div>
                 </section>)}
