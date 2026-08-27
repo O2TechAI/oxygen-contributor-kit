@@ -99,9 +99,10 @@ test("fresh SQLite defaults, immutable CAS, replacement reset, and mutation-boun
   const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
   process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
   try {
-    const [{ getLocalDatabase }, candidateRoute] = await Promise.all([
+    const [{ getLocalDatabase }, candidateRoute, { readStoryPrivacyAuthority }] = await Promise.all([
       import("../db/index.ts"),
       import("../app/api/story-privacy/[id]/route.ts"),
+      import("../lib/story-privacy-authority.ts"),
     ]);
     const db = await getLocalDatabase();
     const columns = (await db.prepare("PRAGMA table_info(story_privacy_candidates)").all()).results;
@@ -123,12 +124,15 @@ test("fresh SQLite defaults, immutable CAS, replacement reset, and mutation-boun
        event_type,actor_id,actor_type)
       VALUES ('event-a','doc',0,'source','{}',?,'message','contributor-a','human')`)
       .bind(STORY_SUMMARY).run();
-    let candidateDigest = await putReceipt(db, candidate);
+    let receiptOutputDigest = await putReceipt(db, candidate);
 
     // This is the unchanged Core activation insert shape.
     await db.prepare(`INSERT INTO story_privacy_candidates
       (workflow_run_id,candidate_id,candidate_json) VALUES (?,?,?)`)
       .bind(RUN_ID, candidate.id, JSON.stringify(candidate)).run();
+    let currentAuthority = await readStoryPrivacyAuthority(db, RUN_ID);
+    assert.equal(currentAuthority.ok, true);
+    let candidateDigest = currentAuthority.authority.candidateDigest;
     assert.deepEqual(await db.prepare(`SELECT decision,decision_version,decided_at
       FROM story_privacy_candidates WHERE candidate_id=?`).bind(candidate.id).first(), {
       decision: null, decision_version: 0, decided_at: null,
@@ -176,7 +180,10 @@ test("fresh SQLite defaults, immutable CAS, replacement reset, and mutation-boun
     await db.prepare(`INSERT INTO story_privacy_candidates
       (workflow_run_id,candidate_id,candidate_json) VALUES (?,?,?)`)
       .bind(RUN_ID, replacement.id, JSON.stringify(replacement)).run();
-    candidateDigest = await putReceipt(db, replacement);
+    receiptOutputDigest = await putReceipt(db, replacement);
+    currentAuthority = await readStoryPrivacyAuthority(db, RUN_ID);
+    assert.equal(currentAuthority.ok, true);
+    candidateDigest = currentAuthority.authority.candidateDigest;
     assert.equal((await patch(candidateRoute, oldBrowserBody)).status, 409);
     assert.deepEqual(await db.prepare(`SELECT decision,decision_version,decided_at
       FROM story_privacy_candidates WHERE candidate_id=?`).bind(candidate.id).first(), {
@@ -208,7 +215,7 @@ test("fresh SQLite defaults, immutable CAS, replacement reset, and mutation-boun
       mutate: "UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=?",
       bindings: ["0".repeat(64), RUN_ID],
       restore: "UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=?",
-      restoreBindings: [candidateDigest, RUN_ID],
+      restoreBindings: [receiptOutputDigest, RUN_ID],
     }, {
       mutate: "UPDATE items SET organization_reason=? WHERE id='event-a'",
       bindings: [MUTATED_STORY_SUMMARY],

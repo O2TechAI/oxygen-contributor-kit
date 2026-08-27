@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { existsSync } from "node:fs";
-import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
@@ -95,13 +95,16 @@ function context(state = null, supportedEditIds = []) {
   };
 }
 
-function reviewedState() {
+function reviewedState(
+  blockText = "The first block is reviewed.",
+  insightTitle = "Edited insight title",
+) {
   let state = emptyChapterReview(source);
   state = updateAiInsightDecision(state, source, sourceInsight.id, "accepted");
   state = applyChapterReview(state, context(state)).state;
   state.stage = "revision_ready";
   const edited = { ...sourceInsight,
-    title: "Edited insight title", background: "Edited source insight background" };
+    title: insightTitle, background: "Edited source insight background" };
   delete edited.id;
   state = editAiInsight(state, source, sourceInsight.id, edited);
   state = updateAiInsightDecision(state, source, sourceInsight.id, "accepted");
@@ -121,7 +124,7 @@ function reviewedState() {
   const edit = recordStoryEdit(state, {
     storyKey: source.key, blockId: "block-one", sourceLanguage: "en",
     baseText: source.story.blocks[0].text,
-    nextText: "The first block is reviewed.", supportingEvidence: [evidence], now: 100,
+    nextText: blockText, supportingEvidence: [evidence], now: 100,
   });
   assert.ok(edit.transactionId);
   state = applyChapterReview(edit.state, context(edit.state, [edit.transactionId])).state;
@@ -134,6 +137,18 @@ function reviewedState() {
 function unchangedReviewedState() {
   let state = updateAiInsightDecision(emptyChapterReview(source), source, sourceInsight.id, "accepted");
   state = applyChapterReview(state, context(state)).state;
+  return markChapterReady(state, context(state));
+}
+
+function blockOnlyReviewedState(blockText) {
+  let state = updateAiInsightDecision(emptyChapterReview(source), source, sourceInsight.id, "rejected");
+  state = applyChapterReview(state, context(state)).state;
+  const edit = recordStoryEdit(state, {
+    storyKey: source.key, blockId: "block-one", sourceLanguage: "en",
+    baseText: source.story.blocks[0].text, nextText: blockText,
+    supportingEvidence: [evidence], now: 200,
+  });
+  state = applyChapterReview(edit.state, context(edit.state, [edit.transactionId])).state;
   return markChapterReady(state, context(state));
 }
 
@@ -179,9 +194,10 @@ async function insertInitial(db) {
 
 function bundle(snapshot, candidates, completedAt = "2044-01-02T00:00:00.000Z") {
   return (async () => {
+    candidates = [...candidates].sort((left, right) => Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)));
     const terminalReceipt = {
       schema: "oxygen.reviewed-story-privacy-terminal-receipt", status: "complete",
-      ...Object.fromEntries(Object.entries(snapshot.binding).filter(([key]) => key !== "previousBatchDigest")),
+      ...Object.fromEntries(Object.entries(snapshot.binding).filter(([key]) => key !== "previousCandidateDigest")),
       outputDigest: await storyPreparationDigest(candidates), outputCount: candidates.length, completedAt,
     };
     const receiptDigest = await storyPreparationDigest(terminalReceipt);
@@ -190,7 +206,7 @@ function bundle(snapshot, candidates, completedAt = "2044-01-02T00:00:00.000Z") 
       receiptDigest, candidates,
     };
     return { schema: core.schema, binding: core.binding, terminalReceipt, receiptDigest,
-      candidates, batchDigest: await storyPreparationDigest(core) };
+      candidates, importDigest: await storyPreparationDigest(core) };
   })();
 }
 
@@ -239,11 +255,21 @@ test("reviewed Story changes use one atomic current Privacy authority", async ()
 
     const pending = await readStoryPrivacyAuthority(db, RUN_ID);
     assert.equal(pending.ok, true);
+    assert.deepEqual(Object.keys(pending.authority), [
+      "workflowRunId", "sourceRevision", "activeStoryDigest", "candidateDigest", "status", "candidates",
+    ]);
     assert.equal(pending.authority.status, "preparation_required");
     assert.deepEqual(pending.authority.candidates.map((item) => [item.id, item.decision]), [[unchanged.id, "keep"]]);
     const prepared = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN_ID);
     assert.equal(prepared.ok, true);
     assert.equal(JSON.stringify(pending.authority).includes("PRIVATE_REVIEWED_TEXT_SENTINEL"), false);
+    const exportScript = join(process.cwd(), "..", "skills", "oxygen-storytelling-review", "scripts",
+      "export_reviewed_story_privacy_snapshot.mjs");
+    const exportedPath = join(stateDir, "reviewed-privacy-snapshot.json");
+    const exported = await execFile(process.execPath, [exportScript, "--workflow-run-id", RUN_ID,
+      "--output", exportedPath], { env: { ...process.env, OXYGEN_VIEWER_STATE_DIR: stateDir } });
+    assert.doesNotMatch(exported.stdout, /PRIVATE_SOURCE_SENTINEL|PRIVATE_REVIEWED_TEXT_SENTINEL/u);
+    assert.deepEqual(JSON.parse(await readFile(exportedPath, "utf8")), prepared.snapshot);
 
     const replacement = {
       ...changed, title: "Replacement current finding",
@@ -273,14 +299,93 @@ test("reviewed Story changes use one atomic current Privacy authority", async ()
       ORDER BY candidate_id`).all()).results, before.results);
 
     const completedZero = await bundle(prepared.snapshot, []);
-    assert.equal((await importReviewedStoryPrivacyAuthority(db, completedZero, NOW)).ok, true);
+    const completedZeroResult = await importReviewedStoryPrivacyAuthority(db, completedZero, NOW);
+    assert.equal(completedZeroResult.ok, true, JSON.stringify(completedZeroResult));
     assert.deepEqual((await db.prepare(`SELECT candidate_id,decision FROM story_privacy_candidates
       ORDER BY candidate_id`).all()).results, [{ candidate_id: unchanged.id, decision: "keep" }]);
+    const editedAgainSession = createStoryReviewSession(
+      RUN_ID, { [source.key]: reviewedState(
+        "The first block is reviewed again.", "Edited insight title again",
+      ) }, {},
+    );
+    await db.prepare(`UPDATE story_review_sessions SET state_json=?,server_version=3 WHERE workflow_run_id=?`)
+      .bind(JSON.stringify({ sourceRevision: SOURCE_REVISION, session: editedAgainSession }), RUN_ID).run();
     const replacementPreparation = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN_ID);
     assert.equal(replacementPreparation.ok, true);
-    const validBundle = await bundle(replacementPreparation.snapshot, [replacement]);
+    const insightReplacement = {
+      id: "current-insight-finding", reviewState: "needs_confirmation",
+      title: "Current insight finding", whyFlagged: "The current edited Insight requires confirmation.",
+      uncertaintyReason: "Contributor confirmation is required.",
+      releaseTargets: ["chapter-one::insight:source-insight:title"],
+    };
+    const validBundle = await bundle(replacementPreparation.snapshot, [replacement, insightReplacement]);
     const beforeReplacement = await db.prepare(`SELECT candidate_id,decision FROM story_privacy_candidates
       ORDER BY candidate_id`).all();
+
+    const realTransaction = db.transaction.bind(db);
+    let decisionInjected = false;
+    db.transaction = async (operation) => {
+      if (!decisionInjected) {
+        decisionInjected = true;
+        await db.prepare(`UPDATE story_privacy_candidates SET decision='redact',decided_at=?
+          WHERE candidate_id=?`).bind("2044-01-02T12:00:00.000Z", unchanged.id).run();
+      }
+      return realTransaction(operation);
+    };
+    const lostToDecision = await importReviewedStoryPrivacyAuthority(db, validBundle, NOW);
+    db.transaction = realTransaction;
+    assert.equal(lostToDecision.ok, false);
+    assert.equal(decisionInjected, true, JSON.stringify(lostToDecision));
+    assert.deepEqual(await db.prepare(`SELECT decision,decision_version,decided_at
+      FROM story_privacy_candidates WHERE candidate_id=?`).bind(unchanged.id).first(), {
+      decision: "redact", decision_version: 1, decided_at: "2044-01-02T12:00:00.000Z",
+    });
+    await db.prepare(`UPDATE story_privacy_candidates SET decision='keep',decided_at=?
+      WHERE candidate_id=?`).bind(NOW, unchanged.id).run();
+
+    const mutationCases = [{
+      table: "workflow_runs", column: "updated_at", where: "id=?", bindings: [RUN_ID],
+      injected: "2044-01-02T13:00:00.000Z",
+    }, {
+      table: "story_review_sessions", column: "updated_at", where: "workflow_run_id=?", bindings: [RUN_ID],
+      injected: "2044-01-02T14:00:00.000Z",
+    }, {
+      table: "items", column: "timestamp", where: "id=?", bindings: [evidence.eventId],
+      injected: "2044-01-02T15:00:00.000Z",
+    }, {
+      table: "story_privacy_authorities", column: "target_catalog_json", where: "workflow_run_id=?",
+      bindings: [RUN_ID], injected: "[]",
+    }, {
+      table: "story_preparation_receipts", column: "completed_at",
+      where: "workflow_run_id=? AND lane='story_privacy'", bindings: [RUN_ID],
+      injected: "2044-01-02T16:00:00.000Z",
+    }, {
+      table: "story_privacy_authorities", column: "batch_digest", where: "workflow_run_id=?",
+      bindings: [RUN_ID], injected: "0".repeat(64),
+    }, {
+      table: "story_privacy_candidates", column: "candidate_json", where: "candidate_id=?",
+      bindings: [unchanged.id], injected: JSON.stringify({ ...unchanged, title: "Concurrent mutation" }),
+    }];
+    for (const mutation of mutationCases) {
+      const original = await db.prepare(`SELECT ${mutation.column} AS value FROM ${mutation.table}
+        WHERE ${mutation.where}`).bind(...mutation.bindings).first();
+      let injected = false;
+      db.transaction = async (operation) => {
+        if (!injected) {
+          injected = true;
+          await db.prepare(`UPDATE ${mutation.table} SET ${mutation.column}=?
+            WHERE ${mutation.where}`).bind(mutation.injected, ...mutation.bindings).run();
+        }
+        return realTransaction(operation);
+      };
+      const result = await importReviewedStoryPrivacyAuthority(db, validBundle, NOW);
+      db.transaction = realTransaction;
+      assert.equal(result.ok, false, `${mutation.table}.${mutation.column}`);
+      assert.equal((await db.prepare(`SELECT ${mutation.column} AS value FROM ${mutation.table}
+        WHERE ${mutation.where}`).bind(...mutation.bindings).first()).value, mutation.injected);
+      await db.prepare(`UPDATE ${mutation.table} SET ${mutation.column}=?
+        WHERE ${mutation.where}`).bind(original.value, ...mutation.bindings).run();
+    }
 
     const realPrepare = db.prepare.bind(db);
     let injected = false;
@@ -305,9 +410,9 @@ test("reviewed Story changes use one atomic current Privacy authority", async ()
     const current = await readStoryPrivacyAuthority(db, RUN_ID);
     assert.equal(current.ok, true);
     assert.deepEqual(current.authority.candidates.map((item) => [item.id, item.decision]), [
-      [replacement.id, null], [unchanged.id, "keep"],
+      [insightReplacement.id, null], [replacement.id, null], [unchanged.id, "keep"],
     ].sort(([a], [b]) => Buffer.compare(Buffer.from(a), Buffer.from(b))));
-    assert.equal(current.authority.candidateDigest, validBundle.batchDigest);
+    assert.notEqual(current.authority.candidateDigest, validBundle.importDigest);
     assert.notEqual(current.authority.candidateDigest, oldBrowserDigest);
     assert.equal((await decideStoryPrivacyCandidate(db, {
       workflowRunId: RUN_ID, sourceRevision: SOURCE_REVISION, activeStoryDigest: activeDigest,
@@ -317,6 +422,34 @@ test("reviewed Story changes use one atomic current Privacy authority", async ()
       workflowRunId: RUN_ID, sourceRevision: SOURCE_REVISION, activeStoryDigest: activeDigest,
       candidateDigest: current.authority.candidateDigest, expectedVersion: 0, decision: "keep",
     }, replacement.id, "2044-01-03T00:00:00.000Z")).ok, true);
+    const removalSession = createStoryReviewSession(
+      RUN_ID, { [source.key]: blockOnlyReviewedState("The first block is reviewed again.") }, {},
+    );
+    await db.prepare(`UPDATE story_review_sessions SET state_json=?,server_version=4 WHERE workflow_run_id=?`)
+      .bind(JSON.stringify({ sourceRevision: SOURCE_REVISION, session: removalSession }), RUN_ID).run();
+    const removal = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN_ID);
+    assert.equal(removal.ok, true);
+    assert.equal(removal.snapshot.changedTargets.length, 0);
+    assert.ok(removal.snapshot.targetTransitions.length > 0);
+    assert.ok(removal.snapshot.targetTransitions.every((target) => target.contentDigest === null));
+    const removalZero = await bundle(removal.snapshot, []);
+    assert.equal((await importReviewedStoryPrivacyAuthority(db, removalZero,
+      "2044-01-04T00:00:00.000Z")).ok, true);
+    const afterRemoval = await readStoryPrivacyAuthority(db, RUN_ID);
+    assert.equal(afterRemoval.ok, true);
+    assert.deepEqual(afterRemoval.authority.candidates.map((item) => item.id), [
+      replacement.id, unchanged.id,
+    ].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))));
+
+    const revertedSession = createStoryReviewSession(
+      RUN_ID, { [source.key]: unchangedReviewedState() }, {},
+    );
+    await db.prepare(`UPDATE story_review_sessions SET state_json=?,server_version=5 WHERE workflow_run_id=?`)
+      .bind(JSON.stringify({ sourceRevision: SOURCE_REVISION, session: revertedSession }), RUN_ID).run();
+    const reverted = await readStoryPrivacyAuthority(db, RUN_ID);
+    assert.equal(reverted.ok, true);
+    assert.equal(reverted.authority.status, "preparation_required");
+    assert.deepEqual(reverted.authority.candidates.map((item) => item.id), [unchanged.id]);
     assert.doesNotMatch(JSON.stringify(current.authority), /PRIVATE_SOURCE_SENTINEL|PRIVATE_REVIEWED_TEXT_SENTINEL|Evidence|provider|candidate_json/iu);
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
@@ -336,13 +469,19 @@ async function createScriptFixture(directory) {
   const binding = {
     workflowRunId: "script-run", sourceRevision: 3, activeStoryDigest: "a".repeat(64),
     serverVersion: 2, reviewedStoryDigest: "b".repeat(64), targetCatalogDigest: "c".repeat(64),
-    changedTargetDigest: await storyPreparationDigest([target.id]), changedTargetCount: 1,
-    previousBatchDigest: "d".repeat(64),
+    changedTargetDigest: await storyPreparationDigest([{
+      id: target.id, previousContentDigest: "e".repeat(64), contentDigest: target.contentDigest,
+    }]), changedTargetCount: 1,
+    previousCandidateDigest: "d".repeat(64),
   };
   const snapshotPath = join(directory, "snapshot.json");
   const root = join(directory, "prepared");
   await writeFile(snapshotPath, JSON.stringify({
-    schema: "oxygen.reviewed-story-privacy-snapshot", binding, changedTargets: [target],
+    schema: "oxygen.reviewed-story-privacy-snapshot", binding,
+    targetTransitions: [{
+      id: target.id, previousContentDigest: "e".repeat(64), contentDigest: target.contentDigest,
+    }],
+    changedTargets: [target],
   }));
   const prepare = join(process.cwd(), "..", "skills", "oxygen-storytelling-review", "scripts",
     "prepare_reviewed_story_privacy.mjs");
@@ -357,17 +496,97 @@ async function createScriptFixture(directory) {
   await writeFile(outputPath, JSON.stringify(candidates));
   await writeFile(join(root, "changed-000.receipt.json"), JSON.stringify({
     schema: "oxygen.reviewed-story-privacy-shard-receipt", shardId: "changed-000",
-    status: "complete", manifestDigest: manifest.manifestDigest, targetIds: [target.id],
+    status: "complete", manifestDigest: manifest.manifestDigest,
+    inputDigest: manifest.shards[0].inputDigest, targetIds: [target.id],
     outputPath: "changed-000.output.json", outputDigest: await storyPreparationDigest(candidates),
     outputCount: candidates.length,
   }));
   await writeFile(join(root, "terminal-receipt.json"), JSON.stringify({
     schema: "oxygen.reviewed-story-privacy-terminal-receipt", status: "complete",
-    ...Object.fromEntries(Object.entries(binding).filter(([key]) => key !== "previousBatchDigest")),
+    ...Object.fromEntries(Object.entries(binding).filter(([key]) => key !== "previousCandidateDigest")),
     outputDigest: await storyPreparationDigest(candidates), outputCount: candidates.length,
     completedAt: "2044-02-01T00:00:00.000Z",
   }));
   return { root, outputPath };
+}
+
+async function createBalancedScriptFixture(directory, count = 130) {
+  await mkdir(directory);
+  const targets = await Promise.all(Array.from({ length: count }, async (_, index) => {
+    const content = `${"隐私🙂".repeat(1_700 + (index % 7))}-${index}`;
+    return {
+      id: `chapter::story:block-${String(index).padStart(3, "0")}`,
+      storyKey: "chapter", target: `story:block-${String(index).padStart(3, "0")}`,
+      content, contentDigest: await storyPreparationDigest(content),
+    };
+  }));
+  const transitions = targets.map((target) => ({
+    id: target.id, previousContentDigest: null, contentDigest: target.contentDigest,
+  }));
+  const binding = {
+    workflowRunId: "balanced-script-run", sourceRevision: 4, activeStoryDigest: "1".repeat(64),
+    serverVersion: 3, reviewedStoryDigest: "2".repeat(64), targetCatalogDigest: "3".repeat(64),
+    changedTargetDigest: await storyPreparationDigest(transitions), changedTargetCount: transitions.length,
+    previousCandidateDigest: "4".repeat(64),
+  };
+  const snapshotPath = join(directory, "snapshot.json");
+  const root = join(directory, "prepared");
+  await writeFile(snapshotPath, JSON.stringify({
+    schema: "oxygen.reviewed-story-privacy-snapshot", binding,
+    targetTransitions: transitions, changedTargets: targets,
+  }));
+  const prepare = join(process.cwd(), "..", "skills", "oxygen-storytelling-review", "scripts",
+    "prepare_reviewed_story_privacy.mjs");
+  await execFile(process.execPath, [prepare, snapshotPath, root]);
+  const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8"));
+  for (const shard of manifest.shards) {
+    const outputPath = `${shard.id}.output.json`;
+    await writeFile(join(root, outputPath), "[]");
+    await writeFile(join(root, shard.receiptPath), JSON.stringify({
+      schema: "oxygen.reviewed-story-privacy-shard-receipt", shardId: shard.id,
+      status: "complete", manifestDigest: manifest.manifestDigest,
+      inputDigest: shard.inputDigest, targetIds: shard.targetIds,
+      outputPath, outputDigest: await storyPreparationDigest([]), outputCount: 0,
+    }));
+  }
+  await writeFile(join(root, "terminal-receipt.json"), JSON.stringify({
+    schema: "oxygen.reviewed-story-privacy-terminal-receipt", status: "complete",
+    ...Object.fromEntries(Object.entries(binding).filter(([key]) => key !== "previousCandidateDigest")),
+    outputDigest: await storyPreparationDigest([]), outputCount: 0,
+    completedAt: "2044-02-02T00:00:00.000Z",
+  }));
+  return { root, manifest, snapshotPath, prepare };
+}
+
+async function createRemovalOnlyScriptFixture(directory) {
+  await mkdir(directory);
+  const transition = {
+    id: "chapter::insight:removed:background",
+    previousContentDigest: "5".repeat(64), contentDigest: null,
+  };
+  const binding = {
+    workflowRunId: "removal-script-run", sourceRevision: 5, activeStoryDigest: "6".repeat(64),
+    serverVersion: 4, reviewedStoryDigest: "7".repeat(64), targetCatalogDigest: "8".repeat(64),
+    changedTargetDigest: await storyPreparationDigest([transition]), changedTargetCount: 1,
+    previousCandidateDigest: "9".repeat(64),
+  };
+  const snapshotPath = join(directory, "snapshot.json");
+  const root = join(directory, "prepared");
+  await writeFile(snapshotPath, JSON.stringify({
+    schema: "oxygen.reviewed-story-privacy-snapshot", binding,
+    targetTransitions: [transition], changedTargets: [],
+  }));
+  const prepare = join(process.cwd(), "..", "skills", "oxygen-storytelling-review", "scripts",
+    "prepare_reviewed_story_privacy.mjs");
+  await execFile(process.execPath, [prepare, snapshotPath, root]);
+  const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8"));
+  await writeFile(join(root, "terminal-receipt.json"), JSON.stringify({
+    schema: "oxygen.reviewed-story-privacy-terminal-receipt", status: "complete",
+    ...Object.fromEntries(Object.entries(binding).filter(([key]) => key !== "previousCandidateDigest")),
+    outputDigest: await storyPreparationDigest([]), outputCount: 0,
+    completedAt: "2044-02-03T00:00:00.000Z",
+  }));
+  return { root, manifest };
 }
 
 test("local preparation/finalization is exact, terminal, and topology-contained", async (t) => {
@@ -381,6 +600,52 @@ test("local preparation/finalization is exact, terminal, and topology-contained"
   const bundleValue = JSON.parse(await readFile(bundlePath, "utf8"));
   assert.equal(bundleValue.schema, "oxygen.reviewed-story-privacy-import");
   assert.equal(bundleValue.terminalReceipt.outputCount, 1);
+
+  const balanced = await createBalancedScriptFixture(join(directory, "balanced"));
+  assert.ok(balanced.manifest.shards.length > 1);
+  assert.deepEqual(balanced.manifest.shards.flatMap((shard) => shard.targetIds).sort(),
+    [...balanced.manifest.changedTargetIds].sort());
+  for (const shard of balanced.manifest.shards) {
+    const input = JSON.parse(await readFile(join(balanced.root, shard.inputPath), "utf8"));
+    assert.ok(input.targets.length > 0 && input.targets.length <= 64);
+    assert.ok(input.targets.reduce((sum, target) => sum + Buffer.byteLength(target.content), 0)
+      <= 1_000_000);
+  }
+  await execFile(process.execPath, [finalize, balanced.root, join(directory, "balanced-bundle.json")]);
+  const firstShard = balanced.manifest.shards[0];
+  const firstInputPath = join(balanced.root, firstShard.inputPath);
+  const firstInputText = await readFile(firstInputPath, "utf8");
+  const firstInput = JSON.parse(firstInputText);
+  firstInput.targets[0].content += "tampered";
+  await writeFile(firstInputPath, JSON.stringify(firstInput));
+  await assert.rejects(execFile(process.execPath, [finalize, balanced.root,
+    join(directory, "content-tampered-bundle.json")]));
+  await writeFile(firstInputPath, firstInputText);
+  const firstReceiptPath = join(balanced.root, firstShard.receiptPath);
+  const firstReceiptText = await readFile(firstReceiptPath, "utf8");
+  const firstReceipt = JSON.parse(firstReceiptText);
+  firstReceipt.inputDigest = "0".repeat(64);
+  await writeFile(firstReceiptPath, JSON.stringify(firstReceipt));
+  await assert.rejects(execFile(process.execPath, [finalize, balanced.root,
+    join(directory, "foreign-receipt-bundle.json")]));
+  await writeFile(firstReceiptPath, firstReceiptText);
+  await rm(firstReceiptPath);
+  await assert.rejects(execFile(process.execPath, [finalize, balanced.root,
+    join(directory, "missing-receipt-bundle.json")]));
+  await writeFile(firstReceiptPath, firstReceiptText);
+
+  const removal = await createRemovalOnlyScriptFixture(join(directory, "removal"));
+  assert.deepEqual(removal.manifest.shards, []);
+  assert.deepEqual(removal.manifest.changedTargetIds, []);
+  await execFile(process.execPath, [finalize, removal.root, join(directory, "removal-bundle.json")]);
+
+  const existingOutput = join(directory, "existing-output");
+  await mkdir(existingOutput);
+  await writeFile(join(existingOutput, "sentinel.txt"), "preserve");
+  await assert.rejects(execFile(process.execPath, [balanced.prepare, balanced.snapshotPath, existingOutput]));
+  assert.equal(await readFile(join(existingOutput, "sentinel.txt"), "utf8"), "preserve");
+  assert.equal((await readdir(directory)).some((name) => name.includes("existing-output")
+    && name.endsWith(".tmp")), false);
 
   const hardlinkFixtureDir = join(directory, "hardlink");
   await mkdir(hardlinkFixtureDir);
@@ -419,6 +684,8 @@ test("local preparation/finalization is exact, terminal, and topology-contained"
     readFile(join(process.cwd(), "..", "skills", "oxygen-storytelling-review", "scripts",
       "prepare_reviewed_story_privacy.mjs"), "utf8"),
     readFile(finalize, "utf8"),
+    readFile(join(process.cwd(), "..", "skills", "oxygen-storytelling-review", "scripts",
+      "export_reviewed_story_privacy_snapshot.mjs"), "utf8"),
   ]);
   assert.doesNotMatch(sources.join("\n"), /\bfetch\b|node:https|node:http|XMLHttpRequest|WebSocket/u);
 });

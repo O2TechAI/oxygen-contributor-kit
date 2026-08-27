@@ -10,6 +10,10 @@ const exact = (value, keys) => Boolean(value) && typeof value === "object" && !A
 const fail = (code) => { throw new Error(code); };
 const safeId = (value) => typeof value === "string" && Boolean(value.trim())
   && !/[\u0000-\u001f\u007f]/u.test(value);
+const compareUtf8 = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
+const samePath = (left, right) => process.platform === "win32"
+  ? left.replaceAll("/", "\\").toLowerCase() === right.replaceAll("/", "\\").toLowerCase()
+  : left === right;
 const forbidden = new Set(["raworiginal", "original", "evidence", "provider", "model", "prompt",
   "execution", "agent", "duration", "token", "cost", "log"]);
 
@@ -25,11 +29,13 @@ function rejectExtra(value) {
 async function contained(root, value) {
   if (typeof value !== "string" || !value || isAbsolute(value) || win32.isAbsolute(value)
     || value.split(/[\\/]/u).some((part) => part === "..")) fail("PATH_NOT_CONTAINED");
-  const physical = await realpath(resolve(root, value)).catch(() => fail("FILE_UNREADABLE"));
+  const requested = resolve(root, value);
+  const physical = await realpath(requested).catch(() => fail("FILE_UNREADABLE"));
   const rel = relative(root, physical);
-  const stat = await lstat(physical).catch(() => fail("FILE_UNREADABLE"));
+  const stat = await lstat(requested).catch(() => fail("FILE_UNREADABLE"));
   if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)
-    || !stat.isFile() || stat.nlink !== 1) fail("FILE_TOPOLOGY_INVALID");
+    || stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1
+    || !samePath(physical, requested)) fail("FILE_TOPOLOGY_INVALID");
   return physical;
 }
 async function json(path) {
@@ -54,46 +60,79 @@ function candidate(value, changed) {
 
 if (!rootInput || !outputInput) fail("USAGE_FINALIZE_REVIEWED_STORY_PRIVACY_ROOT_OUTPUT");
 const root = await realpath(resolve(rootInput)).catch(() => fail("ROOT_INVALID"));
-const manifestPath = await contained(root, "manifest.json");
-const manifest = await json(manifestPath);
+const rootStat = await lstat(resolve(rootInput)).catch(() => fail("ROOT_INVALID"));
+if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) fail("ROOT_INVALID");
+if (!samePath(root, resolve(rootInput))) fail("ROOT_INVALID");
+const manifest = await json(await contained(root, "manifest.json"));
 const bindingKeys = [
   "workflowRunId", "sourceRevision", "activeStoryDigest", "serverVersion",
   "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest",
-  "changedTargetCount", "previousBatchDigest",
+  "changedTargetCount", "previousCandidateDigest",
 ];
-if (!exact(manifest, ["schema", "binding", "changedTargetIds", "shards", "manifestDigest"])
+if (!exact(manifest, ["schema", "binding", "targetTransitions", "changedTargetIds", "shardLimits",
+  "shards", "manifestDigest"])
   || manifest.schema !== "oxygen.reviewed-story-privacy-preparation"
-  || !exact(manifest.binding, bindingKeys) || !Array.isArray(manifest.changedTargetIds)
-  || !Array.isArray(manifest.shards) || manifest.shards.length === 0
+  || !exact(manifest.binding, bindingKeys) || !Array.isArray(manifest.targetTransitions)
+  || !Array.isArray(manifest.changedTargetIds) || !Array.isArray(manifest.shards)
+  || !exact(manifest.shardLimits, ["maxContentBytes", "maxTargets"])
+  || manifest.shardLimits.maxContentBytes !== 1_000_000 || manifest.shardLimits.maxTargets !== 64
   || !hex.test(manifest.manifestDigest)) fail("MANIFEST_INVALID");
 const { manifestDigest, ...manifestCore } = manifest;
 if (await storyPreparationDigest(manifestCore) !== manifestDigest
-  || manifest.binding.changedTargetCount !== manifest.changedTargetIds.length
-  || await storyPreparationDigest(manifest.changedTargetIds) !== manifest.binding.changedTargetDigest
-  || new Set(manifest.changedTargetIds).size !== manifest.changedTargetIds.length) fail("MANIFEST_STALE");
+  || manifest.binding.changedTargetCount !== manifest.targetTransitions.length
+  || await storyPreparationDigest(manifest.targetTransitions) !== manifest.binding.changedTargetDigest
+  || new Set(manifest.targetTransitions.map((target) => target.id)).size !== manifest.targetTransitions.length
+  || manifest.targetTransitions.some((target, index) => !exact(target,
+    ["id", "previousContentDigest", "contentDigest"]) || !safeId(target.id)
+    || (target.previousContentDigest !== null && !hex.test(target.previousContentDigest))
+    || (target.contentDigest !== null && !hex.test(target.contentDigest))
+    || target.previousContentDigest === target.contentDigest
+    || (index > 0 && compareUtf8(manifest.targetTransitions[index - 1].id, target.id) >= 0))) {
+  fail("MANIFEST_STALE");
+}
+const transitionById = new Map(manifest.targetTransitions.map((target) => [target.id, target]));
+const scanTransitions = manifest.targetTransitions.filter((target) => target.contentDigest !== null);
+if (JSON.stringify(manifest.changedTargetIds) !== JSON.stringify(scanTransitions.map((target) => target.id))
+  || new Set(manifest.changedTargetIds).size !== manifest.changedTargetIds.length
+  || (manifest.changedTargetIds.length === 0) !== (manifest.shards.length === 0)) {
+  fail("MANIFEST_STALE");
+}
 const changed = new Set(manifest.changedTargetIds);
 const assigned = [];
 const candidates = [];
 for (const shard of manifest.shards) {
-  if (!exact(shard, ["id", "targetIds", "inputPath", "receiptPath"])
+  if (!exact(shard, ["id", "targetIds", "inputPath", "inputDigest", "receiptPath"])
     || !safeId(shard.id) || !Array.isArray(shard.targetIds) || shard.targetIds.length === 0
+    || shard.targetIds.length > manifest.shardLimits.maxTargets || !hex.test(shard.inputDigest)
     || shard.targetIds.some((id) => !changed.has(id))
     || new Set(shard.targetIds).size !== shard.targetIds.length) fail("SHARD_INVALID");
   assigned.push(...shard.targetIds);
   const input = await json(await contained(root, shard.inputPath));
-  if (!exact(input, ["schema", "shardId", "binding", "targets"])
+  if (!exact(input, ["schema", "shardId", "binding", "targets", "inputDigest"])
     || input.schema !== "oxygen.reviewed-story-privacy-shard-input" || input.shardId !== shard.id
     || JSON.stringify(input.binding) !== JSON.stringify(manifest.binding)
     || !Array.isArray(input.targets)
-    || JSON.stringify(input.targets.map((target) => target.id)) !== JSON.stringify(shard.targetIds)) {
-    fail("SHARD_INPUT_INVALID");
+    || JSON.stringify(input.targets.map((target) => target.id)) !== JSON.stringify(shard.targetIds)
+    || input.inputDigest !== shard.inputDigest) fail("SHARD_INPUT_INVALID");
+  const { inputDigest, ...inputCore } = input;
+  if (await storyPreparationDigest(inputCore) !== inputDigest) fail("SHARD_INPUT_STALE");
+  let contentBytes = 0;
+  for (const target of input.targets) {
+    const transition = transitionById.get(target.id);
+    if (!exact(target, ["id", "storyKey", "target", "content", "contentDigest"])
+      || ![target.id, target.storyKey, target.target].every(safeId)
+      || typeof target.content !== "string" || target.content.length === 0
+      || !hex.test(target.contentDigest) || transition?.contentDigest !== target.contentDigest
+      || await storyPreparationDigest(target.content) !== target.contentDigest) fail("SHARD_TARGET_INVALID");
+    contentBytes += Buffer.byteLength(target.content, "utf8");
   }
+  if (contentBytes > manifest.shardLimits.maxContentBytes) fail("SHARD_BOUND_EXCEEDED");
   const receipt = await json(await contained(root, shard.receiptPath));
-  if (!exact(receipt, ["schema", "shardId", "status", "manifestDigest", "targetIds",
+  if (!exact(receipt, ["schema", "shardId", "status", "manifestDigest", "inputDigest", "targetIds",
     "outputPath", "outputDigest", "outputCount"])
     || receipt.schema !== "oxygen.reviewed-story-privacy-shard-receipt"
     || receipt.shardId !== shard.id || receipt.status !== "complete"
-    || receipt.manifestDigest !== manifestDigest
+    || receipt.manifestDigest !== manifestDigest || receipt.inputDigest !== shard.inputDigest
     || JSON.stringify(receipt.targetIds) !== JSON.stringify(shard.targetIds)
     || !hex.test(receipt.outputDigest) || !Number.isSafeInteger(receipt.outputCount)
     || receipt.outputCount < 0) fail("SHARD_RECEIPT_INVALID");
@@ -103,8 +142,9 @@ for (const shard of manifest.shards) {
   candidates.push(...output.map((value) => candidate(value, changed)));
 }
 if (assigned.length !== new Set(assigned).size
-  || JSON.stringify([...assigned].sort()) !== JSON.stringify([...changed].sort())) fail("SHARD_UNION_INVALID");
-candidates.sort((left, right) => Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)));
+  || JSON.stringify([...assigned].sort(compareUtf8))
+    !== JSON.stringify([...changed].sort(compareUtf8))) fail("SHARD_UNION_INVALID");
+candidates.sort((left, right) => compareUtf8(left.id, right.id));
 if (new Set(candidates.map((value) => value.id)).size !== candidates.length) fail("CANDIDATE_ID_CONFLICT");
 const outputDigest = await storyPreparationDigest(candidates);
 const terminal = await json(await contained(root, "terminal-receipt.json"));
@@ -138,13 +178,14 @@ const core = {
   candidates,
 };
 const bundle = { ...core, terminalReceipt: terminal,
-  batchDigest: await storyPreparationDigest(core) };
-// Match the API's exact key order without making order part of the semantic digest.
+  importDigest: await storyPreparationDigest(core) };
 const ordered = {
   schema: bundle.schema, binding: bundle.binding, terminalReceipt: bundle.terminalReceipt,
-  receiptDigest: bundle.receiptDigest, candidates: bundle.candidates, batchDigest: bundle.batchDigest,
+  receiptDigest: bundle.receiptDigest, candidates: bundle.candidates,
+  importDigest: bundle.importDigest,
 };
 const parent = await realpath(dirname(resolve(outputInput))).catch(() => fail("OUTPUT_PARENT_INVALID"));
+if (!samePath(parent, dirname(resolve(outputInput)))) fail("OUTPUT_PARENT_INVALID");
 const output = resolve(parent, basename(outputInput));
 if (win32.isAbsolute(basename(outputInput)) || isAbsolute(basename(outputInput))) fail("OUTPUT_INVALID");
 const temporary = resolve(parent, `.${basename(outputInput)}.${process.pid}.tmp`);
@@ -154,4 +195,5 @@ try {
 } finally {
   await rm(temporary, { force: true });
 }
-console.log(JSON.stringify({ output, batchDigest: ordered.batchDigest, outputCount: candidates.length }));
+console.log(JSON.stringify({ output, importDigest: ordered.importDigest,
+  outputCount: candidates.length }));

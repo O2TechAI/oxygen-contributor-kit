@@ -55,7 +55,10 @@ export function StoryPrivacyReview({
       <p className="storyPrivacyProgress" role="status" aria-live="polite">{resolved} / {total} resolved</p>
     </header>
     {state.message && <p className="storyPrivacyNotice" role="status" aria-live="polite">{state.message}</p>}
-    {authority.status === "completed_empty" ? <div className="storyPrivacyEmpty">
+    {authority.status === "preparation_required" ? <div className="storyPrivacyEmpty" role="alert">
+      <b>Privacy preparation required</b>
+      <p>The reviewed Story content changed. Release and review completion stay paused until an exact current terminal preparation result is imported.</p>
+    </div> : authority.status === "completed_empty" ? <div className="storyPrivacyEmpty">
       <b>0 / 0 complete</b>
       <p>The current Story has no release Privacy candidates. This completed-empty result is authoritative.</p>
     </div> : <>

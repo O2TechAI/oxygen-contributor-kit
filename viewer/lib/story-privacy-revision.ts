@@ -37,6 +37,11 @@ export type ReviewedStoryPrivacyRevision = {
   targetCatalogDigest: string;
   targetCatalog: Array<{ id: StoryReleaseTarget; contentDigest: string }>;
   changedTargetDigest: string;
+  targetTransitions: Array<{
+    id: StoryReleaseTarget;
+    previousContentDigest: string | null;
+    contentDigest: string | null;
+  }>;
   changedTargets: ReviewedStoryPrivacyTarget[];
 };
 
@@ -203,9 +208,44 @@ export async function reconstructReviewedStoryPrivacyRevision(
 
   const baseline = await digestTargets(targetValues(exactSources, null));
   const current = reviews ? await digestTargets(targetValues(exactSources, reviews)) : baseline;
-  const baselineById = new Map(baseline.map((target) => [target.id, target.contentDigest]));
-  const changedTargets = current.filter((target) => baselineById.get(target.id) !== target.contentDigest);
   const targetCatalog = current.map((target) => ({ id: target.id, contentDigest: target.contentDigest }));
+  const storedAuthority = await db.prepare(`SELECT target_catalog_json,target_catalog_digest
+    FROM story_privacy_authorities WHERE workflow_run_id=?`).bind(workflowRunId)
+    .first<{ target_catalog_json?: string; target_catalog_digest?: string }>();
+  let previousCatalog = baseline.map(({ id, contentDigest }) => ({ id, contentDigest }));
+  if (storedAuthority) {
+    try {
+      const parsed = JSON.parse(String(storedAuthority.target_catalog_json));
+      if (!Array.isArray(parsed)
+        || parsed.some((target) => !target || typeof target !== "object" || Array.isArray(target)
+          || Object.keys(target).length !== 2 || typeof target.id !== "string"
+          || typeof target.contentDigest !== "string" || !digestPattern.test(target.contentDigest))
+        || await storyPreparationDigest(parsed) !== storedAuthority.target_catalog_digest) {
+        return { ok: false, code: STORY_PRIVACY_REVISION_ERROR.invalidAuthority };
+      }
+      previousCatalog = parsed;
+    } catch {
+      return { ok: false, code: STORY_PRIVACY_REVISION_ERROR.invalidAuthority };
+    }
+  }
+  const previousById = new Map(previousCatalog.map((target) => [target.id, target.contentDigest]));
+  const currentById = new Map(targetCatalog.map((target) => [target.id, target.contentDigest]));
+  const targetTransitions = [
+    ...targetCatalog.filter((target) => previousById.get(target.id) !== target.contentDigest)
+      .map((target) => ({
+        id: target.id,
+        previousContentDigest: previousById.get(target.id) || null,
+        contentDigest: target.contentDigest,
+      })),
+    ...previousCatalog.filter((target) => !currentById.has(target.id)).map((target) => ({
+      id: target.id,
+      previousContentDigest: target.contentDigest,
+      contentDigest: null,
+    })),
+  ].sort((left, right) => compareUtf8(left.id, right.id));
+  const changedIds = new Set(targetTransitions.filter((target) => target.contentDigest !== null)
+    .map((target) => target.id));
+  const changedTargets = current.filter((target) => changedIds.has(target.id));
   return {
     ok: true,
     revision: {
@@ -216,7 +256,8 @@ export async function reconstructReviewedStoryPrivacyRevision(
       reviewedStoryDigest: await storyPreparationDigest(current.map(({ id, content }) => ({ id, content }))),
       targetCatalogDigest: await storyPreparationDigest(targetCatalog),
       targetCatalog,
-      changedTargetDigest: await storyPreparationDigest(changedTargets.map((target) => target.id)),
+      changedTargetDigest: await storyPreparationDigest(targetTransitions),
+      targetTransitions,
       changedTargets,
     },
   };

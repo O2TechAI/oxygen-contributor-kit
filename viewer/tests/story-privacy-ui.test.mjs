@@ -52,6 +52,14 @@ test("Story Privacy UI accepts only the exact safe authority and affirmative com
   };
   assert.deepEqual(parseStoryPrivacyAuthority(empty), empty);
   assert.equal(storyPrivacyAuthorityComplete(empty), true);
+  const preparationRequired = {
+    ...empty,
+    candidateDigest: "d".repeat(64),
+    status: "preparation_required",
+  };
+  assert.deepEqual(parseStoryPrivacyAuthority(preparationRequired), preparationRequired);
+  assert.equal(storyPrivacyAuthorityComplete(preparationRequired), false);
+  assert.equal(parseStoryPrivacyAuthority({ ...empty, status: "completed_with_candidates" }), null);
 });
 
 test("cross-Chapter candidates remain one global identity while Chapter references use exact prefixes", () => {
@@ -124,6 +132,9 @@ test("Release Preview source shows one pending decision without original reconst
   assert.match(component, /Uncertainty/);
   assert.equal((component.match(/>Keep<\/button>/g) || []).length, 1);
   assert.equal((component.match(/>Redact<\/button>/g) || []).length, 1);
+  assert.match(component, /Privacy preparation required/);
+  assert.match(component, /Release and review completion stay paused/);
+  assert.match(component, /authority\.status === "preparation_required"[\s\S]*authority\.status === "completed_empty"/);
   assert.doesNotMatch(component, /provider|model|confidence|recommendation|rewrite|creator|category|>Delete<|v\d/i);
 });
 

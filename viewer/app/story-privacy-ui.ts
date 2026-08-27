@@ -17,7 +17,7 @@ export type StoryPrivacyAuthority = {
   sourceRevision: number;
   activeStoryDigest: string;
   candidateDigest: string;
-  status: "completed_empty" | "completed_with_candidates";
+  status: "preparation_required" | "completed_empty" | "completed_with_candidates";
   candidates: StoryPrivacyCandidate[];
 };
 
@@ -109,7 +109,7 @@ export function parseStoryPrivacyAuthority(value: unknown): StoryPrivacyAuthorit
     || !stableId(value.workflowRunId) || !Number.isSafeInteger(value.sourceRevision) || Number(value.sourceRevision) <= 0
     || typeof value.activeStoryDigest !== "string" || !digest.test(value.activeStoryDigest)
     || typeof value.candidateDigest !== "string" || !digest.test(value.candidateDigest)
-    || (value.status !== "completed_empty" && value.status !== "completed_with_candidates")
+    || !["preparation_required", "completed_empty", "completed_with_candidates"].includes(String(value.status))
     || !Array.isArray(value.candidates)) return null;
   const candidates: StoryPrivacyCandidate[] = [];
   for (const rawCandidate of value.candidates) {
@@ -134,7 +134,8 @@ export function parseStoryPrivacyAuthority(value: unknown): StoryPrivacyAuthorit
   }
   if (new Set(candidates.map((candidate) => candidate.id)).size !== candidates.length
     || candidates.some((candidate, index) => index > 0 && compareUtf8(candidates[index - 1].id, candidate.id) >= 0)
-    || (value.status === "completed_empty") !== (candidates.length === 0)) return null;
+    || (value.status === "completed_empty" && candidates.length !== 0)
+    || (value.status === "completed_with_candidates" && candidates.length === 0)) return null;
   return { ...(value as StoryPrivacyAuthority), candidates };
 }
 
@@ -143,7 +144,8 @@ export function storyPrivacyCandidateResolved(candidate: StoryPrivacyCandidate) 
 }
 
 export function storyPrivacyAuthorityComplete(authority: StoryPrivacyAuthority | null) {
-  return Boolean(authority && authority.candidates.every(storyPrivacyCandidateResolved));
+  return Boolean(authority && authority.status !== "preparation_required"
+    && authority.candidates.every(storyPrivacyCandidateResolved));
 }
 
 export function chapterStoryPrivacyCandidates(authority: StoryPrivacyAuthority | null, storyKey: string) {

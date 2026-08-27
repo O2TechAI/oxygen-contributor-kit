@@ -36,13 +36,6 @@ export type StoryPrivacyAuthorityResponse = {
   candidateDigest: string;
   status: "preparation_required" | "completed_empty" | "completed_with_candidates";
   candidates: StoryPrivacyCandidateResponse[];
-  serverVersion?: number;
-  reviewedStoryDigest?: string;
-  targetCatalogDigest?: string;
-  changedTargetDigest?: string;
-  changedTargetCount?: number;
-  receiptDigest?: string;
-  batchDigest?: string;
 };
 
 export const STORY_PRIVACY_ERROR = {
@@ -77,8 +70,12 @@ type StoryRow = {
 type CurrentAuthority = {
   response: StoryPrivacyAuthorityResponse;
   candidateRows: CandidateRow[];
+  allCandidateRows: CandidateRow[];
   storyRows: StoryRow[];
   receiptInputDigest: string;
+  candidateOutputDigest: string;
+  receiptDigest: string;
+  revision?: ReviewedStoryPrivacyRevision;
   actionable?: boolean;
 };
 
@@ -323,8 +320,11 @@ async function captureInitialAuthority(
       candidates: parsedCandidates,
     },
     candidateRows,
+    allCandidateRows: candidateRows,
     storyRows,
     receiptInputDigest: receipt.input_digest,
+    candidateOutputDigest: receipt.output_digest,
+    receiptDigest: await storyPreparationDigest(receipt),
   };
 }
 
@@ -351,11 +351,11 @@ function revisionFields(revision: ReviewedStoryPrivacyRevision) {
     reviewedStoryDigest: revision.reviewedStoryDigest,
     targetCatalogDigest: revision.targetCatalogDigest,
     changedTargetDigest: revision.changedTargetDigest,
-    changedTargetCount: revision.changedTargets.length,
+    changedTargetCount: revision.targetTransitions.length,
   };
 }
 
-async function virtualBatchDigest(
+async function authorityDigest(
   revision: ReviewedStoryPrivacyRevision,
   receiptDigest: string,
   candidateDigest: string,
@@ -374,7 +374,7 @@ function retainedCurrentCandidates(
   current: CurrentAuthority,
   revision: ReviewedStoryPrivacyRevision,
 ) {
-  const changed = new Set(revision.changedTargets.map((target) => target.id));
+  const changed = new Set(revision.targetTransitions.map((target) => target.id));
   const valid = new Set(revision.targetCatalog.map((target) => target.id));
   const candidates = current.response.candidates.filter((candidate) => (
     candidate.releaseTargets.every((target) => valid.has(target) && !changed.has(target))
@@ -398,9 +398,9 @@ async function captureStoredAuthority(
     || Number(row.server_version) !== revision.serverVersion
     || row.reviewed_story_digest !== revision.reviewedStoryDigest
     || row.target_catalog_digest !== revision.targetCatalogDigest
-    || row.changed_target_digest !== revision.changedTargetDigest
-    || Number(row.changed_target_count) !== revision.changedTargets.length
-    || ![row.receipt_digest, row.batch_digest, row.candidate_digest].every((value) => digestPattern.test(value))
+    || !Number.isSafeInteger(Number(row.changed_target_count)) || Number(row.changed_target_count) <= 0
+    || ![row.receipt_digest, row.batch_digest, row.candidate_digest]
+      .every((value) => digestPattern.test(value))
     || !exactTimestamp(row.imported_at)) {
     return { ok: false, code: STORY_PRIVACY_ERROR.staleAuthority };
   }
@@ -439,7 +439,17 @@ async function captureStoredAuthority(
   candidateRows.sort((left, right) => compareUtf8(left.candidate_id, right.candidate_id));
   const products = parsed.map(candidateProduct);
   if (Number(row.candidate_count) !== parsed.length
-    || await storyPreparationDigest(products) !== row.candidate_digest) {
+    || await storyPreparationDigest(products) !== row.candidate_digest
+    || await storyPreparationDigest({
+      workflowRunId, sourceRevision: revision.sourceRevision,
+      activeStoryDigest: revision.activeStoryDigest, serverVersion: revision.serverVersion,
+      reviewedStoryDigest: revision.reviewedStoryDigest,
+      targetCatalogDigest: revision.targetCatalogDigest,
+      changedTargetDigest: row.changed_target_digest,
+      changedTargetCount: Number(row.changed_target_count),
+      receiptDigest: row.receipt_digest,
+      candidateDigest: row.candidate_digest,
+    }) !== row.batch_digest) {
     return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
   }
   return {
@@ -450,13 +460,14 @@ async function captureStoredAuthority(
       candidateDigest: row.batch_digest,
       status: parsed.length === 0 ? "completed_empty" : "completed_with_candidates",
       candidates: parsed,
-      ...revisionFields(revision),
-      receiptDigest: row.receipt_digest,
-      batchDigest: row.batch_digest,
     },
     candidateRows,
+    allCandidateRows: candidateRows,
     storyRows: [],
     receiptInputDigest: "",
+    candidateOutputDigest: row.candidate_digest,
+    receiptDigest: row.receipt_digest,
+    revision,
     actionable: true,
   };
 }
@@ -466,6 +477,16 @@ async function captureStoredSnapshot(
   workflowRunId: string,
   row: StoredAuthorityRow,
 ): Promise<CurrentAuthority | AuthorityFailure> {
+  if (row.workflow_run_id !== workflowRunId || !Number.isSafeInteger(Number(row.source_revision))
+    || Number(row.source_revision) <= 0 || !Number.isSafeInteger(Number(row.server_version))
+    || Number(row.server_version) < 1 || !Number.isSafeInteger(Number(row.changed_target_count))
+    || Number(row.changed_target_count) <= 0 || !Number.isSafeInteger(Number(row.candidate_count))
+    || Number(row.candidate_count) < 0 || !exactTimestamp(row.imported_at)
+    || ![row.active_story_digest, row.reviewed_story_digest, row.target_catalog_digest,
+      row.changed_target_digest, row.receipt_digest, row.batch_digest,
+      row.candidate_digest].every((value) => digestPattern.test(value))) {
+    return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
+  }
   let catalog: Array<{ id: StoryReleaseTarget; contentDigest: string }>;
   try { catalog = JSON.parse(row.target_catalog_json); } catch {
     return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
@@ -502,7 +523,17 @@ async function captureStoredSnapshot(
   candidates.sort((left, right) => compareUtf8(left.id, right.id));
   candidateRows.sort((left, right) => compareUtf8(left.candidate_id, right.candidate_id));
   if (candidates.length !== Number(row.candidate_count)
-    || await storyPreparationDigest(candidates.map(candidateProduct)) !== row.candidate_digest) {
+    || await storyPreparationDigest(candidates.map(candidateProduct)) !== row.candidate_digest
+    || await storyPreparationDigest({
+      workflowRunId, sourceRevision: Number(row.source_revision),
+      activeStoryDigest: row.active_story_digest, serverVersion: Number(row.server_version),
+      reviewedStoryDigest: row.reviewed_story_digest,
+      targetCatalogDigest: row.target_catalog_digest,
+      changedTargetDigest: row.changed_target_digest,
+      changedTargetCount: Number(row.changed_target_count),
+      receiptDigest: row.receipt_digest,
+      candidateDigest: row.candidate_digest,
+    }) !== row.batch_digest) {
     return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
   }
   return {
@@ -512,7 +543,9 @@ async function captureStoredSnapshot(
       status: candidates.length === 0 ? "completed_empty" : "completed_with_candidates",
       candidates,
     },
-    candidateRows, storyRows: [], receiptInputDigest: "", actionable: false,
+    candidateRows, allCandidateRows: candidateRows, storyRows: [], receiptInputDigest: "",
+    candidateOutputDigest: row.candidate_digest, receiptDigest: row.receipt_digest,
+    actionable: false,
   };
 }
 
@@ -540,34 +573,32 @@ async function captureCurrentAuthority(
       output_digest,output_count,completed_at FROM story_preparation_receipts
       WHERE workflow_run_id=? AND lane='story_privacy'`).bind(workflowRunId).first<Row>();
   if (!receipt) return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
-  const receiptDigest = stored?.receipt_digest || await storyPreparationDigest(receipt);
+  const receiptDigest = prior.receiptDigest || await storyPreparationDigest(receipt);
   const candidateOutputDigest = await storyPreparationDigest(retained.candidates.map((candidate) => ({
     id: candidate.id, reviewState: candidate.reviewState, title: candidate.title,
     whyFlagged: candidate.whyFlagged, uncertaintyReason: candidate.uncertaintyReason,
     releaseTargets: candidate.releaseTargets,
   })));
-  if (revision.serverVersion === 0 && revision.changedTargets.length === 0 && !stored) {
-    return { ...prior, actionable: true };
-  }
-  const batchDigest = stored?.batch_digest || await virtualBatchDigest(revision, receiptDigest, candidateOutputDigest);
+  const candidateDigest = await authorityDigest(revision, receiptDigest, candidateOutputDigest);
   return {
     response: {
       workflowRunId,
       sourceRevision: revision.sourceRevision,
       activeStoryDigest: revision.activeStoryDigest,
-      candidateDigest: batchDigest,
-      status: revision.changedTargets.length === 0
+      candidateDigest,
+      status: revision.targetTransitions.length === 0
         ? (retained.candidates.length === 0 ? "completed_empty" : "completed_with_candidates")
         : "preparation_required",
       candidates: retained.candidates,
-      ...revisionFields(revision),
-      receiptDigest,
-      batchDigest,
     },
     candidateRows: retained.rows,
+    allCandidateRows: prior.allCandidateRows,
     storyRows: prior.storyRows,
     receiptInputDigest: prior.receiptInputDigest,
-    actionable: revision.changedTargets.length === 0,
+    candidateOutputDigest,
+    receiptDigest,
+    revision,
+    actionable: revision.targetTransitions.length === 0,
   };
 }
 
@@ -592,7 +623,7 @@ export async function buildReviewedStoryPrivacyPreparationSnapshot(
   if (!revisionResult.ok) return revisionResult;
   if (!("response" in current)) return current;
   const revision = revisionResult.revision;
-  if (revision.changedTargets.length === 0) {
+  if (revision.targetTransitions.length === 0) {
     return { ok: false as const, code: STORY_PRIVACY_ERROR.notActionable };
   }
   return {
@@ -607,9 +638,10 @@ export async function buildReviewedStoryPrivacyPreparationSnapshot(
         reviewedStoryDigest: revision.reviewedStoryDigest,
         targetCatalogDigest: revision.targetCatalogDigest,
         changedTargetDigest: revision.changedTargetDigest,
-        changedTargetCount: revision.changedTargets.length,
-        previousBatchDigest: current.response.batchDigest || current.response.candidateDigest,
+        changedTargetCount: revision.targetTransitions.length,
+        previousCandidateDigest: current.response.candidateDigest,
       },
+      targetTransitions: revision.targetTransitions,
       changedTargets: revision.changedTargets,
     },
   };
@@ -618,7 +650,7 @@ export async function buildReviewedStoryPrivacyPreparationSnapshot(
 const importBindingKeys = [
   "workflowRunId", "sourceRevision", "activeStoryDigest", "serverVersion",
   "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest",
-  "changedTargetCount", "previousBatchDigest",
+  "changedTargetCount", "previousCandidateDigest",
 ];
 const terminalReceiptKeys = [
   "schema", "status", "workflowRunId", "sourceRevision", "activeStoryDigest",
@@ -637,22 +669,22 @@ type ReviewedStoryPrivacyImport = {
     targetCatalogDigest: string;
     changedTargetDigest: string;
     changedTargetCount: number;
-    previousBatchDigest: string;
+    previousCandidateDigest: string;
   };
   terminalReceipt: Record<string, unknown>;
   receiptDigest: string;
   candidates: StoryPreparationPrivacyCandidate[];
-  batchDigest: string;
+  importDigest: string;
 };
 
 function parseImportBundle(value: unknown): ReviewedStoryPrivacyImport | null {
   if (!isRecord(value) || !onlyKeys(value, [
-    "schema", "binding", "terminalReceipt", "receiptDigest", "candidates", "batchDigest",
+    "schema", "binding", "terminalReceipt", "receiptDigest", "candidates", "importDigest",
   ]) || value.schema !== "oxygen.reviewed-story-privacy-import"
     || !isRecord(value.binding) || !onlyKeys(value.binding, importBindingKeys)
     || !isRecord(value.terminalReceipt) || !onlyKeys(value.terminalReceipt, terminalReceiptKeys)
     || !Array.isArray(value.candidates)
-    || ![value.receiptDigest, value.batchDigest].every((digest) => isStoryPrivacyDigest(digest))) {
+    || ![value.receiptDigest, value.importDigest].every((digest) => isStoryPrivacyDigest(digest))) {
     return null;
   }
   const binding = value.binding;
@@ -661,14 +693,14 @@ function parseImportBundle(value: unknown): ReviewedStoryPrivacyImport | null {
     || !Number.isSafeInteger(binding.serverVersion) || Number(binding.serverVersion) < 0
     || !Number.isSafeInteger(binding.changedTargetCount) || Number(binding.changedTargetCount) < 0
     || ![binding.activeStoryDigest, binding.reviewedStoryDigest, binding.targetCatalogDigest,
-      binding.changedTargetDigest, binding.previousBatchDigest].every(isStoryPrivacyDigest)) return null;
+      binding.changedTargetDigest, binding.previousCandidateDigest].every(isStoryPrivacyDigest)) return null;
   return value as unknown as ReviewedStoryPrivacyImport;
 }
 
 function exactImportBinding(
   binding: ReviewedStoryPrivacyImport["binding"],
   revision: ReviewedStoryPrivacyRevision,
-  previousBatchDigest: string,
+  previousCandidateDigest: string,
 ) {
   return binding.workflowRunId === revision.workflowRunId
     && binding.sourceRevision === revision.sourceRevision
@@ -677,8 +709,8 @@ function exactImportBinding(
     && binding.reviewedStoryDigest === revision.reviewedStoryDigest
     && binding.targetCatalogDigest === revision.targetCatalogDigest
     && binding.changedTargetDigest === revision.changedTargetDigest
-    && binding.changedTargetCount === revision.changedTargets.length
-    && binding.previousBatchDigest === previousBatchDigest;
+    && binding.changedTargetCount === revision.targetTransitions.length
+    && binding.previousCandidateDigest === previousCandidateDigest;
 }
 
 function candidateProduct(candidate: StoryPrivacyCandidateResponse | StoryPreparationPrivacyCandidate) {
@@ -689,6 +721,50 @@ function candidateProduct(candidate: StoryPrivacyCandidateResponse | StoryPrepar
     whyFlagged: candidate.whyFlagged,
     uncertaintyReason: candidate.uncertaintyReason,
     releaseTargets: candidate.releaseTargets,
+  };
+}
+
+function candidateRowSnapshot(candidateRows: CandidateRow[]) {
+  return candidateRows.map((row) => ({
+    workflowRunId: row.workflow_run_id,
+    candidateId: row.candidate_id,
+    candidateJson: row.candidate_json,
+    decision: row.decision,
+    decisionVersion: row.decision_version,
+    decidedAt: row.decided_at,
+  }));
+}
+
+async function importGuardSnapshot(db: StoryPrivacyDatabase, workflowRunId: string) {
+  const results = await db.batch([
+    db.prepare("SELECT * FROM workflow_runs WHERE id=?").bind(workflowRunId),
+    db.prepare("SELECT * FROM story_review_sessions WHERE workflow_run_id=?").bind(workflowRunId),
+    db.prepare("SELECT * FROM story_privacy_authorities WHERE workflow_run_id=?").bind(workflowRunId),
+    db.prepare(`SELECT * FROM story_preparation_receipts
+      WHERE workflow_run_id=? AND lane='story_privacy'`).bind(workflowRunId),
+    db.prepare(`SELECT workflow_run_id,candidate_id,candidate_json,decision,decision_version,decided_at
+      FROM story_privacy_candidates WHERE workflow_run_id=? ORDER BY candidate_id`).bind(workflowRunId),
+    db.prepare(`SELECT id,document_id,sequence,timestamp,organization_reason
+      FROM items WHERE organization_reason LIKE 'oxygen.story%' ORDER BY document_id,sequence,id`),
+  ]);
+  const candidateRows = rows(results, 4).map((raw): CandidateRow => ({
+    workflow_run_id: String(raw.workflow_run_id),
+    candidate_id: String(raw.candidate_id),
+    candidate_json: String(raw.candidate_json),
+    decision: raw.decision === null ? null : String(raw.decision),
+    decision_version: Number(raw.decision_version),
+    decided_at: raw.decided_at === null ? null : String(raw.decided_at),
+  }));
+  return {
+    candidateRows,
+    digest: await storyPreparationDigest({
+      workflow: rows(results, 0),
+      session: rows(results, 1),
+      authority: rows(results, 2),
+      receipt: rows(results, 3),
+      candidates: candidateRowSnapshot(candidateRows),
+      stories: rows(results, 5),
+    }),
   };
 }
 
@@ -709,8 +785,8 @@ export async function importReviewedStoryPrivacyAuthority(
   const revision = revisionResult.revision;
   const before = await captureCurrentAuthority(db, revision.workflowRunId);
   if (!("response" in before)) return before;
-  const previousBatchDigest = before.response.batchDigest || before.response.candidateDigest;
-  if (!exactImportBinding(bundle.binding, revision, previousBatchDigest)
+  const previousCandidateDigest = before.response.candidateDigest;
+  if (!exactImportBinding(bundle.binding, revision, previousCandidateDigest)
     || bundle.binding.changedTargetCount === 0) {
     return { ok: false, code: STORY_PRIVACY_ERROR.importStale };
   }
@@ -738,7 +814,7 @@ export async function importReviewedStoryPrivacyAuthority(
     reviewedStoryDigest: revision.reviewedStoryDigest,
     targetCatalogDigest: revision.targetCatalogDigest,
     changedTargetDigest: revision.changedTargetDigest,
-    changedTargetCount: revision.changedTargets.length,
+    changedTargetCount: revision.targetTransitions.length,
     outputDigest,
     outputCount: candidates.length,
     completedAt: receipt.completedAt,
@@ -751,7 +827,7 @@ export async function importReviewedStoryPrivacyAuthority(
       binding: bundle.binding,
       receiptDigest: bundle.receiptDigest,
       candidates,
-    }) !== bundle.batchDigest) {
+    }) !== bundle.importDigest) {
     return { ok: false, code: STORY_PRIVACY_ERROR.importInvalid };
   }
   const retained = before.response.candidates;
@@ -766,14 +842,24 @@ export async function importReviewedStoryPrivacyAuthority(
     })),
   ].sort((left, right) => compareUtf8(left.id, right.id));
   const candidateDigest = await storyPreparationDigest(merged.map(candidateProduct));
+  const storedAuthorityDigest = await authorityDigest(revision, bundle.receiptDigest, candidateDigest);
 
+  const beforeGuard = await importGuardSnapshot(db, revision.workflowRunId);
+  if (await storyPreparationDigest(candidateRowSnapshot(before.allCandidateRows))
+    !== await storyPreparationDigest(candidateRowSnapshot(beforeGuard.candidateRows))) {
+    return { ok: false, code: STORY_PRIVACY_ERROR.importStale };
+  }
   try {
     await db.transaction(async () => {
       const currentRevision = await reconstructReviewedStoryPrivacyRevision(db, revision.workflowRunId);
       const current = await captureCurrentAuthority(db, revision.workflowRunId);
+      const currentGuard = await importGuardSnapshot(db, revision.workflowRunId);
+      if (currentGuard.digest !== beforeGuard.digest) {
+        throw new Error(STORY_PRIVACY_ERROR.importStale);
+      }
       if (!currentRevision.ok || !("response" in current)
         || !exactImportBinding(bundle.binding, currentRevision.revision,
-          current.response.batchDigest || current.response.candidateDigest)) {
+          current.response.candidateDigest)) {
         throw new Error(STORY_PRIVACY_ERROR.importStale);
       }
       await db.prepare("DELETE FROM story_privacy_candidates WHERE workflow_run_id=?")
@@ -789,9 +875,9 @@ export async function importReviewedStoryPrivacyAuthority(
       await db.prepare(`INSERT INTO story_privacy_authorities
         (workflow_run_id,source_revision,active_story_digest,server_version,
          reviewed_story_digest,target_catalog_json,target_catalog_digest,
-         changed_target_digest,changed_target_count,receipt_digest,batch_digest,
-         candidate_digest,candidate_count,imported_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          changed_target_digest,changed_target_count,receipt_digest,batch_digest,
+          candidate_digest,candidate_count,imported_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(workflow_run_id) DO UPDATE SET
           source_revision=excluded.source_revision,
           active_story_digest=excluded.active_story_digest,
@@ -809,8 +895,8 @@ export async function importReviewedStoryPrivacyAuthority(
           revision.workflowRunId, revision.sourceRevision, revision.activeStoryDigest,
           revision.serverVersion, revision.reviewedStoryDigest,
           JSON.stringify(revision.targetCatalog), revision.targetCatalogDigest,
-          revision.changedTargetDigest, revision.changedTargets.length,
-          bundle.receiptDigest, bundle.batchDigest, candidateDigest, merged.length, importedAt,
+          revision.changedTargetDigest, revision.targetTransitions.length,
+          bundle.receiptDigest, storedAuthorityDigest, candidateDigest, merged.length, importedAt,
         ).run();
     });
   } catch (error) {
@@ -859,16 +945,17 @@ export async function decideStoryPrivacyCandidate(
     decidedAt: row.decided_at,
   })));
   const storySnapshot = JSON.stringify(current.storyRows);
-  if (authority.serverVersion !== undefined) {
+  if (current.revision && current.revision.serverVersion > 0) {
+    const revision = current.revision;
     const sessionRow = await db.prepare(`SELECT state_json,server_version FROM story_review_sessions
       WHERE workflow_run_id=?`).bind(input.workflowRunId)
       .first<{ state_json?: string; server_version?: number }>();
     const storedAuthority = await db.prepare(`SELECT batch_digest FROM story_privacy_authorities
       WHERE workflow_run_id=?`).bind(input.workflowRunId).first<{ batch_digest?: string }>();
     const storedGuard = storedAuthority?.batch_digest === input.candidateDigest;
-    const virtualGuard = !storedAuthority && authority.batchDigest === input.candidateDigest;
+    const virtualGuard = !storedAuthority && authority.candidateDigest === input.candidateDigest;
     if ((!storedGuard && !virtualGuard) || !sessionRow
-      || Number(sessionRow.server_version) !== authority.serverVersion) {
+      || Number(sessionRow.server_version) !== revision.serverVersion) {
       return { ok: false, code: STORY_PRIVACY_ERROR.lostCas };
     }
     const result = await db.prepare(`UPDATE story_privacy_candidates
@@ -900,10 +987,10 @@ export async function decideStoryPrivacyCandidate(
         input.decision, decidedAt, input.workflowRunId, candidateId,
         candidateRow.candidate_json, candidateId,
         input.workflowRunId, input.sourceRevision, input.activeStoryDigest,
-        input.workflowRunId, authority.serverVersion, String(sessionRow.state_json || ""),
+        input.workflowRunId, revision.serverVersion, String(sessionRow.state_json || ""),
         input.workflowRunId, candidateSnapshot, input.workflowRunId, candidateSnapshot,
         storedGuard ? 1 : 0, input.workflowRunId, input.candidateDigest,
-        authority.serverVersion, authority.reviewedStoryDigest, authority.targetCatalogDigest,
+        revision.serverVersion, revision.reviewedStoryDigest, revision.targetCatalogDigest,
       ).run();
     if (Number(result.meta.changes) !== 1) {
       return { ok: false, code: STORY_PRIVACY_ERROR.lostCas };
@@ -952,7 +1039,7 @@ export async function decideStoryPrivacyCandidate(
       input.workflowRunId, candidateId, candidateRow.candidate_json, candidateId,
       input.workflowRunId, input.sourceRevision, input.activeStoryDigest,
       input.workflowRunId, input.sourceRevision, current.receiptInputDigest,
-      input.candidateDigest, input.workflowRunId,
+      current.candidateOutputDigest, input.workflowRunId,
       input.workflowRunId, candidateSnapshot,
       input.workflowRunId, candidateSnapshot,
       storySnapshot, storySnapshot,
