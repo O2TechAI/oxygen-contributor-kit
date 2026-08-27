@@ -880,7 +880,7 @@ export function StoryChapterEditor(props: {
     <div className="simpleEpisodeScroll" ref={scrollRef}>
       <header className="simpleEpisodeHero">
         <div className="releaseDraftLabel"><b>{reviewStageLabel(chapterReview, language)}</b><span>{labels.releaseNote}</span></div>
-        <div className="simpleEpisodeMeta"><span>{blockCopy("phase", presentation.phase) || labels.removedFromRelease}</span><time>{fmt(episode.startTimestamp || milestone.timestamp, language)}</time><span>≈ {episode.readingTimeMinutes} {labels.minRead}</span></div>
+        <div className="simpleEpisodeMeta"><span>{blockCopy("phase", presentation.phase) || labels.removedFromRelease}</span><time>{fmt(episode.startTimestamp || milestone.timestamp || undefined, language)}</time><span>≈ {episode.readingTimeMinutes} {labels.minRead}</span></div>
         <h2 id="episode-title">{blockCopy("title", presentation.title) || labels.removedFromRelease}</h2>
         <p className="episodeOverview">{blockCopy("overview", presentation.overview) || labels.removedFromRelease}</p>
         <p className="chapterReviewGuide">{labels.chapterGuide}</p>
