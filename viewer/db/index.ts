@@ -152,6 +152,14 @@ const statements = [
   `CREATE TABLE IF NOT EXISTS story_privacy_candidates (
     workflow_run_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
     candidate_json TEXT NOT NULL,
+    decision TEXT CHECK(decision IN ('keep','redact')),
+    decision_version INTEGER NOT NULL DEFAULT 0 CHECK(decision_version IN (0,1)),
+    decided_at TEXT,
+    CHECK (
+      (decision IS NULL AND decision_version=0 AND decided_at IS NULL)
+      OR
+      (decision IS NOT NULL AND decision_version=1 AND decided_at IS NOT NULL)
+    ),
     PRIMARY KEY (workflow_run_id, candidate_id)
   )`,
 ];
