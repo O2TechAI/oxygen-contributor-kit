@@ -1,27 +1,21 @@
 import { getLocalDatabase } from "../db";
-import { selectReviewableStoryTimeline } from "./story-readiness";
 import {
   hydrateStoryReviewSession,
-  hydrateSuccessorStoryReviewSession,
   STORY_REVIEW_SESSION_SCHEMA,
-  SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
 } from "./story-review-session";
 import {
-  emptySuccessorChapterReview,
+  emptyChapterReview,
   type ChapterReviewState,
   type PrivacyDecision,
-  type SuccessorChapterReviewState,
 } from "./story-review";
 import {
   readActiveStoryReviewContract,
   readStoryReviewSessionRecord,
 } from "./story-review-session-server";
 import {
-  LEGACY_STORY_PREFIX,
   STORY_PREFIX,
-  SUCCESSOR_STORY_PREFIX,
   compareStorySourceIdentity,
-  parseSuccessorStorySource,
+  parseStorySource,
 } from "./timeline";
 import { deriveWorkflowProgress, isStoryReviewReady } from "./workflow-progress";
 import {
@@ -174,56 +168,42 @@ export async function loadWorkspaceBootstrap() {
   const events = documents.flatMap((document) => (document.formatted_summary?.highlights || [])
     .map((event) => ({ ...event, documentId: document.id })))
     .sort(compareStorySourceIdentity);
-  const recognizedEvents = events.filter((event) => String(event.summary || "").startsWith(STORY_PREFIX)
-    || String(event.summary || "").startsWith(LEGACY_STORY_PREFIX)
-    || String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX));
+  const recognizedEvents = events.filter((event) => (
+    String(event.summary || "").startsWith(STORY_PREFIX)
+  ));
   const contractMatches = Boolean(workflow.storySourceSchema
     && workflow.storySessionSchema
     && activeSource.storySourceSchema === workflow.storySourceSchema
     && activeSource.storySessionSchema === workflow.storySessionSchema);
-  const revisionMatches = session.sourceRevision === activeSource.sourceRevision
-    || (workflow.storySourceSchema === "oxygen.story-highlight/2" && session.sourceRevision === null);
+  const revisionMatches = session.sourceRevision === activeSource.sourceRevision;
   const persistedSession = revisionMatches && session.session?.schema === workflow.storySessionSchema
     ? session.session
     : null;
-  const legacyDirectConflict = workflow.storySourceSchema === "oxygen.story/3"
-    && session.persistedAt !== null && session.sourceRevision === null;
-  const storedStateValid = !legacyDirectConflict && (session.persistedAt === null
-    || !revisionMatches || Boolean(persistedSession));
-  let chapterReviews: Record<string, ChapterReviewState | SuccessorChapterReviewState> = {};
+  const storedStateValid = session.persistedAt === null
+    || !revisionMatches || Boolean(persistedSession);
+  let chapterReviews: Record<string, ChapterReviewState> = {};
   let privacyDecisions: Record<string, PrivacyDecision> = {};
-  let projectionReady = false;
-  if (workflow.storySourceSchema === "oxygen.story-highlight/2"
-    && workflow.storySessionSchema === STORY_REVIEW_SESSION_SCHEMA) {
-    const milestones = selectReviewableStoryTimeline(events);
-    projectionReady = recognizedEvents.length > 0
-      && recognizedEvents.every((event) => String(event.summary || "").startsWith(STORY_PREFIX))
-      && milestones.length === recognizedEvents.length;
-    const hydrated = hydrateStoryReviewSession(persistedSession, workflow.workflowRunId, milestones);
+  const parsedSources = recognizedEvents.map((event) => parseStorySource(event.summary));
+  let projectionReady = workflow.storySourceSchema === "oxygen.story"
+    && workflow.storySessionSchema === STORY_REVIEW_SESSION_SCHEMA
+    && recognizedEvents.length > 0
+    && parsedSources.every((source) => source !== null);
+  const sources = parsedSources.flatMap((source) => source ? [source] : []);
+  if (persistedSession) {
+    const hydrated = hydrateStoryReviewSession(
+      persistedSession,
+      workflow.workflowRunId,
+      sources,
+    );
     chapterReviews = hydrated.chapterReviews;
     privacyDecisions = hydrated.privacyDecisions;
-  } else if (workflow.storySourceSchema === "oxygen.story/3"
-    && workflow.storySessionSchema === SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA) {
-    const parsedSources = recognizedEvents.map((event) => parseSuccessorStorySource(event.summary));
-    projectionReady = recognizedEvents.length > 0
-      && recognizedEvents.every((event) => String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX))
-      && parsedSources.every((source) => source !== null);
-    const sources = parsedSources.flatMap((source) => source ? [source] : []);
-    if (persistedSession) {
-      const hydrated = hydrateSuccessorStoryReviewSession(
-        persistedSession,
-        workflow.workflowRunId,
-        sources,
-      );
-      chapterReviews = hydrated.chapterReviews;
-      projectionReady = projectionReady
-        && Object.keys(hydrated.chapterReviews).length === sources.length;
-    } else {
-      chapterReviews = Object.fromEntries(sources.map((source) => [
-        source.key,
-        emptySuccessorChapterReview(source),
-      ]));
-    }
+    projectionReady = projectionReady
+      && Object.keys(hydrated.chapterReviews).length === sources.length;
+  } else {
+    chapterReviews = Object.fromEntries(sources.map((source) => [
+      source.key,
+      emptyChapterReview(source),
+    ]));
   }
   const ready = documents.length > 0
     && status.status === "complete"

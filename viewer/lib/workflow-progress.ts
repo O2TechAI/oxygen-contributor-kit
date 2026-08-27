@@ -15,8 +15,8 @@ export type StoryGenerationStatus =
   | "running"
   | "blocked"
   | "ready_for_human_review";
-export type StorySourceSchema = "oxygen.story/3" | "oxygen.story-highlight/2";
-export type StorySessionSchema = "oxygen.story-review-session/2" | "oxygen.story-review-session/1";
+export type StorySourceSchema = "oxygen.story";
+export type StorySessionSchema = "oxygen.story-review-session";
 export type WorkflowSafeStatusCode =
   | "target_working_folder_required"
   | "target_working_folder_confirmed"
@@ -111,12 +111,9 @@ function state(
   progress?: WorkflowStageProgress,
   blockedReasonCode?: WorkflowProgressState["blockedReasonCode"],
 ): WorkflowProgressState {
-  const successorContract = facts.storyGenerationStatus === "ready_for_human_review"
-    && facts.storySourceSchema === "oxygen.story/3"
-    && facts.storySessionSchema === "oxygen.story-review-session/2";
-  const compatibilityContract = facts.storyGenerationStatus === "ready_for_human_review"
-    && facts.storySourceSchema === "oxygen.story-highlight/2"
-    && facts.storySessionSchema === "oxygen.story-review-session/1";
+  const storyContract = facts.storyGenerationStatus === "ready_for_human_review"
+    && facts.storySourceSchema === "oxygen.story"
+    && facts.storySessionSchema === "oxygen.story-review-session";
   return {
     workflowRunId: facts.workflowRunId || "",
     status,
@@ -128,8 +125,8 @@ function state(
     updatedAt: facts.updatedAt || null,
     requiresHumanAction,
     storyGenerationStatus: normalizeStoryGenerationStatus(facts.storyGenerationStatus),
-    storySourceSchema: successorContract || compatibilityContract ? facts.storySourceSchema! : null,
-    storySessionSchema: successorContract || compatibilityContract ? facts.storySessionSchema! : null,
+    storySourceSchema: storyContract ? facts.storySourceSchema! : null,
+    storySessionSchema: storyContract ? facts.storySessionSchema! : null,
     ...(blockedReasonCode ? { blockedReasonCode } : {}),
   };
 }

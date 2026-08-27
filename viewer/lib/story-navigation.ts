@@ -1,4 +1,4 @@
-import type { ChapterReviewBlocker, ChapterReviewStage, SuccessorChapterReviewBlocker } from "./story-review";
+import type { ChapterReviewBlocker, ChapterReviewStage } from "./story-review";
 
 export type ChapterRestoreContext = {
   storyKey: string;
@@ -11,12 +11,12 @@ export type StoryNavigation = {
   storyKey: string;
 };
 
-export type StoryReviewFocusTarget = Pick<SuccessorChapterReviewBlocker, "targetKind" | "targetId" | "itemId"> & {
+export type StoryReviewFocusTarget = Pick<ChapterReviewBlocker, "targetKind" | "targetId" | "itemId"> & {
   chapterKey: string;
 };
 
-export type DownloadReviewBlocker = Omit<SuccessorChapterReviewBlocker, "chapterKey" | "code"> & {
-  code: SuccessorChapterReviewBlocker["code"] | "chapter_not_confirmed";
+export type DownloadReviewBlocker = Omit<ChapterReviewBlocker, "chapterKey" | "code"> & {
+  code: ChapterReviewBlocker["code"] | "chapter_not_confirmed";
 };
 
 export type DownloadReviewBlockerGroup = {
@@ -29,7 +29,7 @@ export function groupDownloadReviewBlockers(chapters: Array<{
   project: string;
   chapterKey: string;
   stage: ChapterReviewStage;
-  completionBlockers: SuccessorChapterReviewBlocker[] | ChapterReviewBlocker[];
+  completionBlockers: ChapterReviewBlocker[];
 }>): DownloadReviewBlockerGroup[] {
   return chapters.flatMap((chapter) => {
     const blockers: DownloadReviewBlocker[] = chapter.completionBlockers.map((blocker) => ({

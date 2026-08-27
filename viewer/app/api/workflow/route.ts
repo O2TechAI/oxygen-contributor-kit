@@ -306,7 +306,7 @@ export async function POST(request: Request) {
         }
         const formattedSummary = JSON.stringify({
           ...summary,
-          highlights: normalized.highlightsByDocument.get(document.id) || [],
+          highlights: normalized.storyItemsByDocument.get(document.id) || [],
         });
         documentSummaries.push({ id: document.id, formattedSummary });
       }
@@ -355,8 +355,8 @@ export async function POST(request: Request) {
         storyGenerationStatus: "ready_for_human_review",
         storyGenerationCompleted: validation.chapterCount,
         storyGenerationTotal: validation.chapterCount,
-        storySourceSchema: "oxygen.story/3",
-        storySessionSchema: "oxygen.story-review-session/2",
+        storySourceSchema: "oxygen.story",
+        storySessionSchema: "oxygen.story-review-session",
         updatedAt: now,
       }));
     } catch (error) {
