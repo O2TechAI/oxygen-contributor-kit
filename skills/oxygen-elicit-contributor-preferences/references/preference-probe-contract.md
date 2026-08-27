@@ -19,9 +19,13 @@ Each ordered candidate has exactly `id` and `summary`, matching the sole Story a
 `summary` is a valid `oxygen.story:` JSON source. The preparation step projects only
 `documentId`, `documentKind`, and exact imported item identities from the reviewed bundles; source
 text and redacted text never enter the Preference context. The report's per-document counts and
-category aggregate must exactly bind those bundles. A final Story Insight may cite only one of those
-reviewed records. Missing, foreign, duplicate, cross-document, raw, unreviewed, rejected, incomplete,
-stale, or malformed authority fails closed without replacing the output.
+category aggregate must exactly bind those bundles. Every redaction span must be in the producer's
+deterministic non-overlapping order and use one of its six categories: `credential`,
+`private-personal`, `sensitive`, `internal-metric`, `internal-timeline`, or
+`mosaic-reidentification`. Preparation recomputes `redacted_text` with `merge_and_apply.py`'s sole
+tag transformation and requires a byte-for-byte match. A final Story Insight may cite only one of
+those reviewed records. Missing, foreign, duplicate, cross-document, raw, unreviewed, rejected,
+incomplete, stale, or malformed authority fails closed without replacing the output.
 
 The output has exactly these fields:
 

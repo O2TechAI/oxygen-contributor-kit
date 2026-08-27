@@ -9,6 +9,8 @@ import unittest
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "scripts" / "prepare_preference_context.py"
+REPOSITORY_ROOT = ROOT.parents[1]
+MERGE_SCRIPT = REPOSITORY_ROOT / "tools" / "llm_redact" / "merge_and_apply.py"
 SPEC = importlib.util.spec_from_file_location("prepare_preference_context", SCRIPT)
 PREPARE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
@@ -47,7 +49,7 @@ def inputs(root: Path, stories=None, spans=None):
     redacted = root / "redacted"
     redacted.mkdir()
     text = "safe synthetic reviewed text"
-    redacted_text = "<redacted category=\"credential\"/> synthetic reviewed text" if spans else text
+    redacted_text = PREPARE.apply_spans(text, spans)
     bundle = {
         "trajectory": "trajectory-a", "document_kind": "trajectory",
         "turns": [{
@@ -136,6 +138,114 @@ class PrepareContextTests(unittest.TestCase):
             report.write_text(json.dumps(stale), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "inconsistent"):
                 PREPARE.prepare(candidates, redacted, report)
+
+    def test_privacy_categories_are_exactly_the_upstream_allowlist(self):
+        self.assertEqual(PREPARE.AUTO_REMOVED_KINDS, frozenset({
+            "credential", "private-personal", "sensitive", "internal-metric",
+            "internal-timeline", "mosaic-reidentification",
+        }))
+        for category in ("user_path", "third_party_contact"):
+            with self.subTest(category=category), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                span = {
+                    "start": 0, "end": 4, "category": category, "confidence": 0.9,
+                    "reason": "synthetic", "review_state": "deterministic",
+                    "uncertainty_reason": None,
+                }
+                candidates, redacted, report = inputs(root, spans=[span])
+                with self.assertRaisesRegex(ValueError, "categories are malformed"):
+                    PREPARE.prepare(candidates, redacted, report)
+
+    def test_rejects_noncanonical_spans_and_redacted_text(self):
+        spans = [
+            {
+                "start": 0, "end": 4, "category": "credential", "confidence": 0.9,
+                "reason": "synthetic", "review_state": "deterministic",
+                "uncertainty_reason": None,
+            },
+            {
+                "start": 10, "end": 18, "category": "sensitive", "confidence": 0.8,
+                "reason": "synthetic", "review_state": "needs_confirmation",
+                "uncertainty_reason": "synthetic uncertainty",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidates, redacted, report = inputs(root, spans=spans)
+            bundle_path = redacted / "trajectory-a.json"
+            bundle = json.loads(bundle_path.read_text())
+            bundle["turns"][0]["redactions"].reverse()
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "spans are not canonical"):
+                PREPARE.prepare(candidates, redacted, report)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidates, redacted, report = inputs(root, spans=spans)
+            bundle_path = redacted / "trajectory-a.json"
+            bundle = json.loads(bundle_path.read_text())
+            bundle["turns"][0]["redactions"][1]["start"] = 3
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "spans are not canonical"):
+                PREPARE.prepare(candidates, redacted, report)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidates, redacted, report = inputs(root, spans=spans)
+            bundle_path = redacted / "trajectory-a.json"
+            bundle = json.loads(bundle_path.read_text())
+            bundle["turns"][0]["redacted_text"] += "tampered"
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "text is not canonical"):
+                PREPARE.prepare(candidates, redacted, report)
+
+    def test_real_merge_and_apply_output_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dialogue = root / "dialogue"
+            findings = root / "findings"
+            merged = root / "merged"
+            dialogue.mkdir()
+            findings.mkdir()
+            text = "token safe reviewed text"
+            bundle = {
+                "trajectory": "trajectory-a", "document_kind": "trajectory",
+                "turns": [{
+                    "event_id": "event-a", "document_id": "trajectory-a",
+                    "item_id": "event-a", "role": "user", "timestamp": None,
+                    "text": text,
+                }],
+                "chars": len(text),
+            }
+            (dialogue / "trajectory-a.json").write_text(json.dumps(bundle), encoding="utf-8")
+            finding = {
+                "findings": [{
+                    "event_id": "event-a", "start": 0, "end": 5,
+                    "category": "credential", "confidence": 0.95,
+                    "reason": "synthetic", "review_state": "deterministic",
+                    "uncertainty_reason": None,
+                }],
+            }
+            (findings / "trajectory-a.json").write_text(json.dumps(finding), encoding="utf-8")
+            subprocess.run([
+                sys.executable, str(MERGE_SCRIPT), "--dialogue", str(dialogue),
+                "--findings", str(findings), "--out", str(merged),
+            ], check=True, capture_output=True, text=True)
+            candidates_path = root / "story-candidates.json"
+            candidates_path.write_text(json.dumps([{
+                "id": "candidate-a", "summary": "oxygen.story:" + json.dumps(story()),
+            }]), encoding="utf-8")
+            output = PREPARE.prepare(candidates_path, merged / "redacted", merged / "report.json")
+            reviewed = json.loads((merged / "redacted" / "trajectory-a.json").read_text())
+
+        self.assertEqual(
+            reviewed["turns"][0]["redacted_text"],
+            '<redacted category="credential"/> safe reviewed text',
+        )
+        self.assertEqual(output["autoRemoved"], {
+            "total": 1, "reversible": True,
+            "categories": [{"kind": "credential", "count": 1}],
+        })
 
     def test_meeting_evidence_uses_the_imported_qualified_item_identity(self):
         with tempfile.TemporaryDirectory() as temporary:

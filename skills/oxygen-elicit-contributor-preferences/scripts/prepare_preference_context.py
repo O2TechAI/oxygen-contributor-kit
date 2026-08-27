@@ -12,12 +12,19 @@ import tempfile
 from typing import Any
 
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from tools.llm_redact.merge_and_apply import (  # noqa: E402
+    ALLOWED as MERGE_ALLOWED,
+    REVIEW_STATES,
+    apply_spans,
+)
+
+
 CONTEXT_SCHEMA = "oxygen.preference-context"
-AUTO_REMOVED_KINDS = {
-    "credential", "private-personal", "sensitive", "internal-metric",
-    "internal-timeline", "mosaic-reidentification", "user_path", "third_party_contact",
-}
-REVIEW_STATES = {"deterministic", "needs_confirmation"}
+AUTO_REMOVED_KINDS = frozenset(MERGE_ALLOWED)
 
 
 def canonical_json(value: Any) -> str:
@@ -205,6 +212,7 @@ def read_privacy_authority(
                 raise ValueError("reviewed evidence authority is duplicated")
             events[identity] = document_kind
             character_count += len(turn["text"])
+            previous_end = 0
             for span in turn["redactions"]:
                 span_fields = {
                     "start", "end", "category", "confidence", "reason",
@@ -222,8 +230,13 @@ def read_privacy_authority(
                 if (span["review_state"] == "deterministic"
                         and span["uncertainty_reason"] is not None):
                     raise ValueError("reviewed redaction span is malformed")
+                if span["start"] < previous_end:
+                    raise ValueError("reviewed redaction spans are not canonical")
+                previous_end = span["end"]
                 observed_counts[span["category"]] = observed_counts.get(span["category"], 0) + 1
                 applied += 1
+            if turn["redacted_text"] != apply_spans(turn["text"], turn["redactions"]):
+                raise ValueError("reviewed redaction text is not canonical")
         if character_count != bundle["chars"]:
             raise ValueError("reviewed redaction bundle character count is stale")
         observed_documents[document_id] = (len(turns), applied)
