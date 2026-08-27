@@ -163,6 +163,25 @@ const statements = [
     ),
     PRIMARY KEY (workflow_run_id, candidate_id)
   )`,
+  // One unversioned Story Privacy contract covers both activation (review
+  // session version 0) and every reviewed-Story replacement. Candidate rows
+  // remain the globally decided projection; this row binds the whole set.
+  `CREATE TABLE IF NOT EXISTS story_privacy_authorities (
+    workflow_run_id TEXT PRIMARY KEY,
+    source_revision INTEGER NOT NULL CHECK(source_revision > 0),
+    active_story_digest TEXT NOT NULL,
+    server_version INTEGER NOT NULL CHECK(server_version >= 0),
+    reviewed_story_digest TEXT NOT NULL,
+    target_catalog_json TEXT NOT NULL,
+    target_catalog_digest TEXT NOT NULL,
+    changed_target_digest TEXT NOT NULL,
+    changed_target_count INTEGER NOT NULL CHECK(changed_target_count >= 0),
+    receipt_digest TEXT NOT NULL,
+    batch_digest TEXT NOT NULL,
+    candidate_digest TEXT NOT NULL,
+    candidate_count INTEGER NOT NULL CHECK(candidate_count >= 0),
+    imported_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS project_all_set (
     workflow_run_id TEXT PRIMARY KEY,
     active_story_digest TEXT NOT NULL,
