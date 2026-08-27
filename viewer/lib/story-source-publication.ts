@@ -1,6 +1,6 @@
-import type { getD1 } from "../db";
+import type { getLocalDatabase } from "../db";
 
-type SourcePublicationDatabase = Awaited<ReturnType<typeof getD1>>;
+type SourcePublicationDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 type SourcePublicationStatement = Parameters<SourcePublicationDatabase["batch"]>[0][number];
 
 export const STORY_SOURCE_LEASE_STALE_MINUTES = 30;

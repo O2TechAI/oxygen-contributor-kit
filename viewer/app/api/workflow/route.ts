@@ -1,4 +1,4 @@
-import { getD1 } from "../../../db";
+import { getLocalDatabase } from "../../../db";
 import { loadWorkflowProgress } from "../../../lib/workflow-progress-server";
 import { deriveWorkflowProgress } from "../../../lib/workflow-progress";
 import {
@@ -108,7 +108,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid workflow counts" }, { status: 400 });
   }
 
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const now = new Date().toISOString();
   if (event === "target_confirmed") {
     const authority = await establishWorkflowRun(db, workflowRunId, now);

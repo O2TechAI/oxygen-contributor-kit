@@ -10,9 +10,9 @@ test("local SQLite preserves the viewer database contract", async () => {
   process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
 
   try {
-    const { getD1 } = await import("../db/index.ts");
-    const db = await getD1();
-    assert.equal(await getD1(), db);
+    const { getLocalDatabase } = await import("../db/index.ts");
+    const db = await getLocalDatabase();
+    assert.equal(await getLocalDatabase(), db);
     assert.equal(existsSync(join(stateDir, "oxygen.sqlite")), true);
 
     const schema = await db.prepare(

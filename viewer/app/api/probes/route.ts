@@ -1,4 +1,4 @@
-import { getD1 } from "../../../db";
+import { getLocalDatabase } from "../../../db";
 import { canonicalizeAutoRemoved } from "../../../lib/auto-removed.mjs";
 import {
   normalizeBulkPreferencePresentations,
@@ -39,7 +39,7 @@ type IncomingProbe = {
 type AcceptedProbe = IncomingProbe & { normalizedPresentations: ProbePresentations };
 
 export async function GET() {
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
@@ -72,7 +72,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);

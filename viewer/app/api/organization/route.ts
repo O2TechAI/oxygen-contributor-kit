@@ -1,4 +1,4 @@
-import { getD1 } from "../../../db";
+import { getLocalDatabase } from "../../../db";
 import {
   readStoredSemanticManifestAuthority,
   contributionRecordSourceDigest,
@@ -35,7 +35,7 @@ type FinalizedCorpusAuthority = {
 };
 
 async function readFinalizedCorpusAuthority(
-  db: Awaited<ReturnType<typeof getD1>>,
+  db: Awaited<ReturnType<typeof getLocalDatabase>>,
   workflowRunId: string,
 ): Promise<FinalizedCorpusAuthority | null> {
   const row = await db.prepare(`SELECT r.story_generation_status,
@@ -63,7 +63,7 @@ function finalizedCorpusCountsMatch(authority: FinalizedCorpusAuthority) {
     && authority.itemCount === authority.currentItemCount;
 }
 
-async function status(db: Awaited<ReturnType<typeof getD1>>, workflowRunId: string) {
+async function status(db: Awaited<ReturnType<typeof getLocalDatabase>>, workflowRunId: string) {
   const [job, counts, documents, manifest] = await Promise.all([
     db.prepare("SELECT * FROM organization_jobs WHERE id=?").bind(JOB_ID)
       .first<Record<string, unknown>>(),
@@ -120,7 +120,7 @@ async function status(db: Awaited<ReturnType<typeof getD1>>, workflowRunId: stri
 }
 
 async function readSemanticProjection(
-  db: Awaited<ReturnType<typeof getD1>>,
+  db: Awaited<ReturnType<typeof getLocalDatabase>>,
   workflowRunId: string,
 ) {
   const manifest = await db.prepare(`SELECT m.project_id,m.revision,m.source_revision,m.source_digest,
@@ -178,7 +178,7 @@ async function readSemanticProjection(
 }
 
 export async function GET(request: Request) {
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
@@ -271,7 +271,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);

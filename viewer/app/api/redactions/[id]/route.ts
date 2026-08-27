@@ -1,4 +1,4 @@
-import { getD1 } from "../../../../db";
+import { getLocalDatabase } from "../../../../db";
 import {
   WORKFLOW_RUN_AUTHORITY,
   requireEstablishedWorkflowRun,
@@ -17,7 +17,7 @@ const ALLOWED_CATEGORIES = new Set([
 // Edit one decision: change its category, or reinstate one that was removed.
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
@@ -52,7 +52,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 // Pass ?hard=1 to drop the row outright.
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);

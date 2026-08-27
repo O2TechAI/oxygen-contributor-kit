@@ -208,8 +208,7 @@ class LocalDatabase {
 
 type LocalSqliteGlobal = typeof globalThis & { __oxygenLocalSqlite?: LocalDatabase };
 
-// Temporary residual: Wave 2 removes the D1-era export name after composition.
-export async function getD1() {
+export async function getLocalDatabase() {
   const runtime = globalThis as LocalSqliteGlobal;
   if (runtime.__oxygenLocalSqlite) return runtime.__oxygenLocalSqlite;
 

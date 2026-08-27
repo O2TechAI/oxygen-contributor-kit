@@ -1,4 +1,4 @@
-import { getD1 } from "../../../db";
+import { getLocalDatabase } from "../../../db";
 import {
   WORKFLOW_RUN_AUTHORITY,
   requireEstablishedWorkflowRun,
@@ -262,7 +262,7 @@ function corpusErrorResponse(error: unknown) {
 }
 
 export async function GET() {
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
@@ -302,7 +302,7 @@ export async function POST(request: Request) {
   })));
   const itemPayload = JSON.stringify(corpus.documents.flatMap((document) => document.items));
   const corpusDigest = await finalizedCorpusDigest(corpus);
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);

@@ -1,4 +1,4 @@
-import type { getD1 } from "../db";
+import type { getLocalDatabase } from "../db";
 import {
   hydrateSuccessorStoryReviewSession,
   parseStoryReviewSession,
@@ -14,7 +14,7 @@ import {
 } from "./story-readiness.ts";
 import { parseSuccessorStorySource } from "./timeline.ts";
 
-type ReviewSessionDatabase = Awaited<ReturnType<typeof getD1>>;
+type ReviewSessionDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
 type SessionRow = {
   state_json?: string;

@@ -1,4 +1,4 @@
-import { getD1 } from "../db";
+import { getLocalDatabase } from "../db";
 import { selectReviewableStoryTimeline } from "./story-readiness";
 import {
   hydrateStoryReviewSession,
@@ -50,7 +50,7 @@ type WorkflowRunRow = {
  * initial server render and the polling API. No Story or Evidence payload is
  * selected or serialized across the Server/Client boundary. */
 export async function loadWorkflowProgress(workflowRunId?: string) {
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = workflowRunId
     ? await requireExactWorkflowRun(db, workflowRunId)
     : await requireEstablishedWorkflowRun(db);
@@ -139,7 +139,7 @@ export async function loadWorkspaceBootstrap() {
     };
   }
 
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const [items, documentCount, organization, documentRows, session, activeSource] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN organization_category IS NOT NULL THEN 1 ELSE 0 END) AS completed

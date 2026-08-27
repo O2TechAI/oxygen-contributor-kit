@@ -1,4 +1,4 @@
-import type { getD1 } from "../db";
+import type { getLocalDatabase } from "../db";
 import {
   LEGACY_STORY_PREFIX,
   STORY_COVERAGE_KEYS,
@@ -102,7 +102,7 @@ export function normalizeStoryCandidateSubmission(
   return { ok: true, rows, highlightsByDocument };
 }
 
-type StorySourceDatabase = Awaited<ReturnType<typeof getD1>>;
+type StorySourceDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
 /** Every organization reason beginning exactly with `oxygen.story` belongs to
  * the reserved Story family. A value containing `story` elsewhere does not. */

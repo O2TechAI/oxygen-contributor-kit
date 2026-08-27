@@ -1,6 +1,6 @@
-import type { getD1 } from "../db";
+import type { getLocalDatabase } from "../db";
 
-type ReleaseDatabase = Awaited<ReturnType<typeof getD1>>;
+type ReleaseDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 type SnapshotRow = Record<string, unknown>;
 type BatchResult = { results?: SnapshotRow[] };
 
@@ -61,8 +61,8 @@ function rows(results: unknown[], index: number): SnapshotRow[] {
 }
 
 /** Capture every database row that governs reviewed Story reconstruction in one
- * D1 batch. D1 executes a batch transactionally, so the returned rows cannot
- * combine pre- and post-mutation Privacy state. */
+ * local SQLite transaction, so the returned rows cannot combine pre- and
+ * post-mutation Privacy state. */
 export async function captureStoryReleasePrivacySnapshot(
   db: ReleaseDatabase,
   workflowRunId: string,

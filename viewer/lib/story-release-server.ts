@@ -1,4 +1,4 @@
-import type { getD1 } from "../db";
+import type { getLocalDatabase } from "../db";
 import { computeSourceDigest, redactionReleaseError } from "./redaction-pass.mjs";
 import { activeRedactionFragments, redactKnownFragments } from "./release.mjs";
 import {
@@ -31,7 +31,7 @@ import {
   type ReleaseSnapshotTestOptions,
 } from "./release-privacy-snapshot.ts";
 
-type ReleaseDatabase = Awaited<ReturnType<typeof getD1>>;
+type ReleaseDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
 type ReleaseRunRow = {
   id?: string;
@@ -334,8 +334,8 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
 }
 
 export async function reconstructReviewedStoryRelease(input: unknown) {
-  const { getD1: getRuntimeD1 } = await import("../db/index.ts");
-  return reconstructReviewedStoryReleaseFromDatabase(await getRuntimeD1(), input);
+  const { getLocalDatabase: getRuntimeDatabase } = await import("../db/index.ts");
+  return reconstructReviewedStoryReleaseFromDatabase(await getRuntimeDatabase(), input);
 }
 
 const messages: Record<ReleaseErrorCode, string> = {

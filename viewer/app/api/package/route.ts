@@ -312,8 +312,8 @@ export async function buildPackageFromDatabase(
 }
 
 async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown) {
-  const { getD1 } = await import("../../../db/index.ts");
-  return buildPackageFromDatabase(await getD1(), reviewedStoryJson, releaseRequest);
+  const { getLocalDatabase } = await import("../../../db/index.ts");
+  return buildPackageFromDatabase(await getLocalDatabase(), reviewedStoryJson, releaseRequest);
 }
 
 export async function GET() {

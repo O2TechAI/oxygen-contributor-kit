@@ -1,4 +1,4 @@
-import { getD1 } from "../../../db";
+import { getLocalDatabase } from "../../../db";
 import {
   MAX_STORY_REVIEW_SESSION_BYTES,
   parseStoryReviewSession,
@@ -49,7 +49,7 @@ export async function GET(request: Request) {
   if (!isWorkflowRunId(workflowRunId)) {
     return Response.json({ error: "A valid workflow run is required" }, { status: 400 });
   }
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireExactWorkflowRun(db, workflowRunId);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
@@ -110,7 +110,7 @@ export async function POST(request: Request) {
     return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
 
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireExactWorkflowRun(db, workflowRunId);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
