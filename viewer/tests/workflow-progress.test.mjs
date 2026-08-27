@@ -89,8 +89,8 @@ test("workflow progress derives completed, current, next, waiting, and blocked s
   const reviewing = deriveWorkflowProgress(facts({
     organizedItemCount: 10, organizationStatus: "complete", redactionStatus: "complete",
     storyGenerationStatus: "ready_for_human_review", storyGenerationCompleted: 14,
-    storyGenerationTotal: 14, storySourceSchema: "oxygen.story/3",
-    storySessionSchema: "oxygen.story-review-session/2",
+    storyGenerationTotal: 14, storySourceSchema: "oxygen.story",
+    storySessionSchema: "oxygen.story-review-session",
   }));
   assert.equal(reviewing.currentStageId, "review");
   assert.equal(reviewing.status, "waiting");
@@ -107,19 +107,19 @@ test("workflow progress is a strict sanitized operational projection", () => {
   const state = deriveWorkflowProgress(facts({
     organizedItemCount: 10, organizationStatus: "complete", redactionStatus: "complete",
     storyGenerationStatus: "ready_for_human_review",
-    storySourceSchema: "oxygen.story/3", storySessionSchema: "oxygen.story-review-session/2",
+    storySourceSchema: "oxygen.story", storySessionSchema: "oxygen.story-review-session",
   }));
   assert.deepEqual(Object.keys(state).sort(), [
     "completedStages", "currentStageId", "requiresHumanAction", "safeStatusCode", "stages",
     "status", "storyGenerationStatus", "storySessionSchema", "storySourceSchema",
     "totalStages", "updatedAt", "workflowRunId",
   ]);
-  assert.equal(state.storySourceSchema, "oxygen.story/3");
-  assert.equal(state.storySessionSchema, "oxygen.story-review-session/2");
+  assert.equal(state.storySourceSchema, "oxygen.story");
+  assert.equal(state.storySessionSchema, "oxygen.story-review-session");
   const mixed = deriveWorkflowProgress(facts({
     organizedItemCount: 10, organizationStatus: "complete", redactionStatus: "complete",
     storyGenerationStatus: "ready_for_human_review",
-    storySourceSchema: "oxygen.story/3", storySessionSchema: "oxygen.story-review-session/1",
+    storySourceSchema: "oxygen.story", storySessionSchema: "wrong-session-schema",
   }));
   assert.equal(mixed.storySourceSchema, null);
   assert.equal(mixed.storySessionSchema, null);
@@ -159,11 +159,11 @@ test("workflow route hydrates count-only persistent state and the shell can reop
   assert.match(loader, /if \(!isStoryReviewReady\(workflow\)\)/);
   assert.match(workspace, /fetch\(`\/api\/story-review-session\?workflowRunId=/);
   assert.match(workspace, /hydrateStoryReviewSession/);
-  assert.match(workspace, /buildReviewedStoryRelease\(highlights,chapterReviews\)\.chapters\.length/);
+  assert.match(workspace, /runDurableStoryReviewHandoff/);
   assert.match(workspace, /setWorkflowOpen\(true\)/);
   assert.match(workspace, /<WorkflowProgress/);
   assert.match(workspace, /isStoryReviewReady\(workflow\)/);
-  assert.match(workspace, /selectReviewableStoryTimeline/);
+  assert.match(workspace, /selectViewerChapters/);
   assert.match(component, /data-safe-status/);
   assert.match(component, /Nothing is uploaded/);
   assert.match(component, /Collect project history/);
