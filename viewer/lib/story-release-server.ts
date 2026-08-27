@@ -215,7 +215,11 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
 
   const items = initialSnapshot.itemRows as ReleaseItemRow[];
   const currentSourceDigest = await computeSourceDigest(items);
-  if (redactionReleaseError(redactionJob, currentSourceDigest)) {
+  if (redactionReleaseError(
+    redactionJob,
+    currentSourceDigest,
+    initialSnapshot.redactionReviewRows,
+  )) {
     return failure(RELEASE_ERROR.storyNotReady, boundedMetadata);
   }
 

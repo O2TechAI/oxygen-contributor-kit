@@ -51,6 +51,7 @@ export async function buildPackageFromDatabase(
   const preliminaryError = redactionReleaseError(
     redactionJob,
     redactionJob?.source_digest,
+    privacySnapshot.redactionReviewRows,
   );
   if (preliminaryError) {
     return Response.json({ error: preliminaryError }, { status: 409 });
@@ -63,7 +64,11 @@ export async function buildPackageFromDatabase(
   const bulkResult = { results: privacySnapshot.bulkRows };
   const probeRun = privacySnapshot.probeRun;
   const currentSourceDigest = await computeSourceDigest(itemResult.results);
-  const sourceError = redactionReleaseError(redactionJob, currentSourceDigest);
+  const sourceError = redactionReleaseError(
+    redactionJob,
+    currentSourceDigest,
+    privacySnapshot.redactionReviewRows,
+  );
   if (sourceError) {
     return Response.json({ error: sourceError }, { status: 409 });
   }

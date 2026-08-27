@@ -19,6 +19,8 @@ type IncomingRedaction = {
   category: string;
   confidence?: string;
   reason?: string;
+  reviewState?: string;
+  uncertaintyReason?: string | null;
   createdBy?: string;
 };
 
@@ -32,6 +34,7 @@ const ALLOWED_CATEGORIES = new Set([
   "internal-timeline",
   "mosaic-reidentification",
 ]);
+const ALLOWED_IMPORT_REVIEW_STATES = new Set(["deterministic", "needs_confirmation"]);
 
 export async function GET() {
   const db = await getLocalDatabase();
@@ -42,8 +45,8 @@ export async function GET() {
   const [redactions, job] = await Promise.all([
     db.prepare(
       `SELECT id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
-              status,created_by,created_at,updated_at
-         FROM redactions WHERE status='active' ORDER BY item_id, start_offset`
+              review_state,uncertainty_reason,status,created_by,created_at,updated_at
+         FROM redactions ORDER BY document_id,item_id,start_offset,id`
     ).all(),
     db.prepare(
       "SELECT * FROM redaction_jobs ORDER BY started_at DESC LIMIT 1"
@@ -95,6 +98,22 @@ export async function POST(request: Request) {
     if (!ALLOWED_CATEGORIES.has(span.category)) {
       rejected.push({ itemId: span.itemId, reason: "category not in allowlist" });
       continue;
+    }
+    if (!ALLOWED_IMPORT_REVIEW_STATES.has(String(span.reviewState || ""))) {
+      rejected.push({ itemId: span.itemId, reason: "invalid or missing review state" });
+      continue;
+    }
+    if (span.reviewState === "deterministic" && span.uncertaintyReason != null) {
+      rejected.push({ itemId: span.itemId, reason: "deterministic span cannot have an uncertainty reason" });
+      continue;
+    }
+    if (span.reviewState === "needs_confirmation"
+        && (typeof span.uncertaintyReason !== "string" || !span.uncertaintyReason.trim())) {
+      rejected.push({ itemId: span.itemId, reason: "pending span requires an uncertainty reason" });
+      continue;
+    }
+    if (typeof span.uncertaintyReason === "string") {
+      span.uncertaintyReason = span.uncertaintyReason.trim();
     }
     if (!Number.isInteger(span.startOffset) || !Number.isInteger(span.endOffset)
         || !(span.startOffset >= 0 && span.endOffset > span.startOffset)) {
@@ -194,16 +213,19 @@ export async function POST(request: Request) {
     ...persistable.map((span) => db.prepare(
       `INSERT INTO redactions
         (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
-         status,created_by,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,'active',?,?,?)
+         review_state,uncertainty_reason,status,created_by,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,'active',?,?,?)
        ON CONFLICT(id) DO UPDATE SET
          start_offset=excluded.start_offset,end_offset=excluded.end_offset,
          category=excluded.category,confidence=excluded.confidence,
-         reason=excluded.reason,updated_at=excluded.updated_at`
+         reason=excluded.reason,review_state=excluded.review_state,
+         uncertainty_reason=excluded.uncertainty_reason,status='active',
+         updated_at=excluded.updated_at`
     ).bind(
       span.id || crypto.randomUUID(), span.itemId, span.documentId,
       span.startOffset, span.endOffset, span.category,
       span.confidence || null, span.reason || null,
+      span.reviewState, span.uncertaintyReason ?? null,
       span.createdBy || "llm", now, now,
     )),
     db.prepare(

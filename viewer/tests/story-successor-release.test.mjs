@@ -29,6 +29,7 @@ import {
 } from "../lib/story-release-server.ts";
 import { readActiveStoryReviewContract } from "../lib/story-review-session-server.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
+import { captureStoryReleasePrivacySnapshot } from "../lib/release-privacy-snapshot.ts";
 import { validateRecognizedStorySourcePackage } from "../lib/story-readiness.ts";
 import { SUCCESSOR_STORY_PREFIX } from "../lib/timeline.ts";
 
@@ -37,6 +38,8 @@ const SOURCE_REVISION = 9;
 const SERVER_VERSION = 6;
 const PRIVATE = "PRIVATE_STORY_SENTINEL";
 const PRIVATE_STORY_QUOTE_SENTINEL = "PRIVATE_STORY_QUOTE_SENTINEL";
+const LOCAL_REVIEW_REASON_SENTINEL = "LOCAL_REVIEW_REASON_SENTINEL";
+const LOCAL_UNCERTAINTY_SENTINEL = "LOCAL_UNCERTAINTY_SENTINEL";
 const evidence = { documentId: "story-doc", eventId: "story-doc:chapter-item" };
 
 function insight(id, blockId = "story-block-safe", overrides = {}) {
@@ -470,6 +473,72 @@ test("server accepts only exact /3 + /2 and rechecks run, version, source, and d
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request())).code, RELEASE_ERROR.stateInvalid);
 });
 
+test("pending Privacy blocks Story release while keep and redact decisions release without local metadata", async () => {
+  const keepFixture = await serverFixture({ initiallyRedacted: false });
+  const keepItem = keepFixture.db.items[0];
+  keepFixture.db.redactionJob.completed = 1;
+  keepFixture.db.redactionJob.total = 1;
+  keepFixture.db.redactions = [{
+    id: "review-keep",
+    item_id: keepItem.id,
+    document_id: keepItem.document_id,
+    start_offset: 0,
+    end_offset: PRIVATE.length,
+    category: "sensitive",
+    confidence: "high",
+    reason: LOCAL_REVIEW_REASON_SENTINEL,
+    review_state: "needs_confirmation",
+    uncertainty_reason: LOCAL_UNCERTAINTY_SENTINEL,
+    status: "active",
+    created_by: "llm",
+    created_at: "2026-08-25T00:00:03.000Z",
+    updated_at: "2026-08-25T00:00:03.000Z",
+  }];
+  const pendingSnapshot = await captureStoryReleasePrivacySnapshot(keepFixture.db, RUN_ID);
+  assert.equal((await reconstructReviewedStoryReleaseFromDatabase(
+    keepFixture.db, request(),
+  )).code, RELEASE_ERROR.storyNotReady);
+
+  keepFixture.db.redactions[0] = {
+    ...keepFixture.db.redactions[0],
+    review_state: "confirmed_keep",
+    status: "removed",
+    created_by: "contributor",
+    updated_at: "2026-08-25T00:00:04.000Z",
+  };
+  const keepSnapshot = await captureStoryReleasePrivacySnapshot(keepFixture.db, RUN_ID);
+  assert.notEqual(keepSnapshot.digest, pendingSnapshot.digest);
+  const kept = await reconstructReviewedStoryReleaseFromDatabase(keepFixture.db, request());
+  assert.equal(kept.ok, true);
+  assert.match(kept.serializedStory, new RegExp(PRIVATE));
+
+  const redactFixture = await serverFixture({ initiallyRedacted: false });
+  const redactItem = redactFixture.db.items[0];
+  redactFixture.db.redactionJob.completed = 1;
+  redactFixture.db.redactionJob.total = 1;
+  redactFixture.db.redactions = [{
+    ...keepFixture.db.redactions[0],
+    id: "review-redact",
+    item_id: redactItem.id,
+    document_id: redactItem.document_id,
+    review_state: "confirmed_redact",
+    status: "active",
+  }];
+  const redacted = await reconstructReviewedStoryReleaseFromDatabase(redactFixture.db, request());
+  assert.equal(redacted.ok, true);
+  assert.doesNotMatch(redacted.serializedStory, new RegExp(PRIVATE));
+
+  const { renderReviewedStoryHtml } = await import("../app/api/organization/export/route.ts");
+  const html = renderReviewedStoryHtml(redacted.serializedStory);
+  const zipEntry = successorReviewedStoryPackageEntry(redacted.story);
+  const publicationBytes = [redacted.serializedStory, html, zipEntry.data].join("\n");
+  assert.doesNotMatch(publicationBytes, new RegExp(
+    `${LOCAL_REVIEW_REASON_SENTINEL}|${LOCAL_UNCERTAINTY_SENTINEL}`,
+  ));
+  assert.doesNotMatch(publicationBytes, /review_state|uncertainty_reason|created_by/);
+  assert.equal(redacted.story.publication_approved, false);
+});
+
 test("synthetic live server flow releases zero, one, and mixed multiple Insights with byte parity", async () => {
   const scenarios = [
     { options: { sourceInsights: [] }, expected: [] },
@@ -597,6 +666,39 @@ test("anchored Story Privacy mutation before finalization cannot release stale Q
   );
   assert.equal(result.code, RELEASE_ERROR.privacyConflict);
   assert.doesNotMatch(JSON.stringify(result), new RegExp(PRIVATE_STORY_QUOTE_SENTINEL));
+});
+
+test("a contributor review decision during Story assembly fails the snapshot race closed", async () => {
+  const fixture = await serverFixture();
+  fixture.db.redactions[0] = {
+    ...fixture.db.redactions[0],
+    id: "decision-race",
+    document_id: fixture.db.items[0].document_id,
+    review_state: "confirmed_redact",
+    uncertainty_reason: LOCAL_UNCERTAINTY_SENTINEL,
+    reason: LOCAL_REVIEW_REASON_SENTINEL,
+    created_by: "contributor",
+    created_at: "2026-08-25T00:00:03.000Z",
+    updated_at: "2026-08-25T00:00:03.000Z",
+  };
+  const result = await reconstructReviewedStoryReleaseFromDatabase(
+    fixture.db,
+    request(),
+    {
+      beforeFinalPrivacyCheck: () => {
+        fixture.db.redactions[0] = {
+          ...fixture.db.redactions[0],
+          review_state: "confirmed_keep",
+          status: "removed",
+          updated_at: "2026-08-25T00:00:04.000Z",
+        };
+      },
+    },
+  );
+  assert.equal(result.code, RELEASE_ERROR.privacyConflict);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(
+    `${LOCAL_REVIEW_REASON_SENTINEL}|${LOCAL_UNCERTAINTY_SENTINEL}`,
+  ));
 });
 
 test("successor HTML and ZIP use the same canonical reviewed release bytes", async () => {

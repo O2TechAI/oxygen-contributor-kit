@@ -183,6 +183,27 @@ test("only internally consistent completed redaction passes are releasable", () 
     status: "complete", completed: 0, total: 0, rejected: 0,
     source_digest: digest,
   }, digest), null);
+  const completeJob = {
+    status: "complete", completed: 1, total: 1, rejected: 0,
+    source_digest: digest,
+  };
+  assert.match(redactionReleaseError(completeJob, digest, [{
+    review_state: "needs_confirmation", status: "active", confidence: "high",
+  }]), /requires contributor confirmation/);
+  assert.equal(redactionReleaseError(completeJob, digest, [{
+    review_state: "deterministic", status: "active", confidence: "low",
+  }]), null);
+  assert.equal(redactionReleaseError(completeJob, digest, [{
+    review_state: "confirmed_redact", status: "active",
+  }, {
+    review_state: "confirmed_keep", status: "removed",
+  }]), null);
+  assert.match(redactionReleaseError(completeJob, digest, [{
+    review_state: "needs_confirmation", status: "removed",
+  }]), /inconsistent/);
+  assert.match(redactionReleaseError(completeJob, digest, [{
+    review_state: "invented", status: "active",
+  }]), /invalid/);
 });
 
 test("duplicate span ids cannot inflate the persisted completion count", () => {
@@ -242,6 +263,8 @@ test("package route is gated and never selects original event JSON", async () =>
   assert.match(route, /redactionReleaseError/);
   assert.match(route, /computeSourceDigest/);
   assert.match(snapshot, /WHERE status='active'/);
+  assert.match(snapshot, /review_state/);
+  assert.match(snapshot, /redactionReviewRows/);
   assert.match(route, /capturePackageReleasePrivacySnapshot/);
   assert.match(route, /privacy\/redaction-summary\.json/);
   assert.match(route, /preference-probes\.json/);

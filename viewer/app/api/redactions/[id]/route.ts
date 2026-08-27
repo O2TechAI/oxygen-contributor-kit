@@ -5,16 +5,8 @@ import {
   workflowRunErrorResponse,
 } from "../../../../lib/workflow-run-server";
 
-const ALLOWED_CATEGORIES = new Set([
-  "credential",
-  "private-personal",
-  "sensitive",
-  "internal-metric",
-  "internal-timeline",
-  "mosaic-reidentification",
-]);
+const DECISIONS = new Set(["keep", "redact"]);
 
-// Edit one decision: change its category, or reinstate one that was removed.
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const db = await getLocalDatabase();
@@ -22,52 +14,40 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
   }
-  const body = await request.json() as { category?: string; status?: string; reason?: string };
-
-  if (body.category && !ALLOWED_CATEGORIES.has(body.category)) {
-    return Response.json({ error: "Category is not in the allowlist" }, { status: 400 });
+  const body = await request.json() as unknown;
+  if (!body || typeof body !== "object" || Array.isArray(body)
+      || Object.keys(body).length !== 1 || !("decision" in body)
+      || !DECISIONS.has(String((body as { decision?: unknown }).decision || ""))) {
+    return Response.json({ error: "Exactly one keep or redact decision is required" }, { status: 400 });
   }
-  if (body.status && !["active", "removed"].includes(body.status)) {
-    return Response.json({ error: "status must be 'active' or 'removed'" }, { status: 400 });
-  }
-
-  const existing = await db.prepare("SELECT id FROM redactions WHERE id=?").bind(id).first();
-  if (!existing) return Response.json({ error: "Redaction not found" }, { status: 404 });
-
-  await db.prepare(
+  const decision = String((body as { decision: unknown }).decision);
+  const reviewState = decision === "keep" ? "confirmed_keep" : "confirmed_redact";
+  const status = decision === "keep" ? "removed" : "active";
+  const result = await db.prepare(
     `UPDATE redactions
-        SET category=COALESCE(?,category), status=COALESCE(?,status),
-            reason=COALESCE(?,reason), created_by='contributor', updated_at=?
-      WHERE id=?`
+        SET review_state=?, status=?, created_by='contributor', updated_at=?
+      WHERE id=? AND review_state='needs_confirmation'`
   ).bind(
-    body.category || null, body.status || null, body.reason || null,
-    new Date().toISOString(), id,
+    reviewState, status, new Date().toISOString(), id,
   ).run();
+  if (Number(result.meta.changes) !== 1) {
+    const existing = await db.prepare("SELECT id,review_state FROM redactions WHERE id=?").bind(id).first();
+    if (!existing) return Response.json({ error: "Redaction not found" }, { status: 404 });
+    return Response.json({ error: "Only a pending redaction can receive a decision" }, { status: 409 });
+  }
 
   const updated = await db.prepare("SELECT * FROM redactions WHERE id=?").bind(id).first();
   return Response.json(updated);
 }
 
-// Soft delete: the span stops being applied but the decision stays auditable.
-// Pass ?hard=1 to drop the row outright.
-export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
-  const { id } = await context.params;
+export async function DELETE() {
   const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
   }
-  const hard = new URL(request.url).searchParams.get("hard") === "1";
-
-  const existing = await db.prepare("SELECT id FROM redactions WHERE id=?").bind(id).first();
-  if (!existing) return Response.json({ error: "Redaction not found" }, { status: 404 });
-
-  if (hard) {
-    await db.prepare("DELETE FROM redactions WHERE id=?").bind(id).run();
-  } else {
-    await db.prepare(
-      "UPDATE redactions SET status='removed', created_by='contributor', updated_at=? WHERE id=?"
-    ).bind(new Date().toISOString(), id).run();
-  }
-  return Response.json({ id, deleted: hard ? "hard" : "soft" });
+  return Response.json(
+    { error: "DELETE is not supported; submit one keep or redact decision" },
+    { status: 405, headers: { allow: "PATCH" } },
+  );
 }
