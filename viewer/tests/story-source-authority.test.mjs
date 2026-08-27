@@ -154,7 +154,7 @@ test("reserved Story namespace reaches activation/session classification and str
     id: "doc-unknown:item-unknown",
     document_id: "doc-unknown",
     sequence: 2,
-    organization_reason: `oxygen.story/99:${JSON.stringify({
+    organization_reason: `oxygen.story.foreign:${JSON.stringify({
       original: ORIGINAL_SENTINEL,
       evidence: EVIDENCE_SENTINEL,
     })}`,
@@ -173,7 +173,7 @@ test("reserved Story namespace reaches activation/session classification and str
   for (const value of [
     valid.organization_reason,
     unknown.organization_reason,
-    "oxygen.story-foo/4:malformed",
+    "oxygen.story-foreign:malformed",
     "oxygen.story malformed",
   ]) assert.equal(isReservedStoryOrganizationReason(value), true);
   assert.equal(isReservedStoryOrganizationReason("ordinary story project metadata"), false);

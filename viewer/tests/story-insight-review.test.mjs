@@ -118,7 +118,7 @@ function resolveAll(currentSource, decision = "accepted") {
 test("Review Session parsing accepts only the canonical schema", () => {
   const session = createStoryReviewSession("reviewed-run", {}, {}, "2026-08-25T00:00:00.000Z");
   assert.equal(parseStoryReviewSession(session).schema, STORY_REVIEW_SESSION_SCHEMA);
-  assert.equal(parseStoryReviewSession({ schema: "oxygen.story-review-session/99" }), null);
+  assert.equal(parseStoryReviewSession({ schema: "oxygen.story-review-session.foreign" }), null);
   assert.equal(parseStoryReviewSession({ ...session, chapterReviews: null }), null);
   const structurallyValid = parseStoryReviewSession({
     ...session,

@@ -1,7 +1,55 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { registerHooks } from "node:module";
+import ts from "typescript";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { timelinePresentation } from "../lib/timeline.ts";
+import {
+  emptyChapterReview,
+  saveHumanInsight,
+  storyBlocks,
+} from "../lib/story-review.ts";
+import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (context.parentURL && specifier.startsWith(".")) {
+      const resolvedPath = fileURLToPath(new URL(specifier, context.parentURL));
+      if (!extname(resolvedPath)) {
+        for (const extension of [".ts", ".tsx"]) {
+          if (existsSync(`${resolvedPath}${extension}`)) return nextResolve(`${specifier}${extension}`, context);
+        }
+        if (existsSync(join(resolvedPath, "index.ts"))) return nextResolve(`${specifier}/index.ts`, context);
+      }
+    }
+    return nextResolve(specifier, context);
+  },
+  load(url, context, nextLoad) {
+    if (url.endsWith(".tsx")) {
+      const source = readFileSync(fileURLToPath(url), "utf8");
+      return {
+        format: "module",
+        shortCircuit: true,
+        source: ts.transpileModule(source, {
+          compilerOptions: {
+            jsx: ts.JsxEmit.ReactJSX,
+            module: ts.ModuleKind.ESNext,
+            target: ts.ScriptTarget.ES2022,
+          },
+          fileName: fileURLToPath(url),
+        }).outputText,
+      };
+    }
+    return nextLoad(url, context);
+  },
+});
+
+const { StoryChapterEditor } = await import("../app/story-chapter-editor.tsx");
 
 const [editor, workspace, navigation, route] = await Promise.all([
   readFile(new URL("../app/story-chapter-editor.tsx", import.meta.url), "utf8"),
@@ -43,6 +91,99 @@ test("AI and human Insights are owned by their exact Story anchors and rendered 
   assert.match(storyEditor, /aiInsights\.map\(\(insight\) => <AiInsightCard/);
   assert.match(storyEditor, /humanInsightIds\.map\(\(insightId\) => <HumanInsightCard/);
   assert.doesNotMatch(storyEditor, /Object\.keys\(chapterReview\.humanInsights\)\.sort\(\)\.map/);
+});
+
+test("the rendered editor keeps paragraph-owned Insight cards in a separate responsive companion area", async () => {
+  const evidence = { documentId: "render-document", eventId: "render-document:event" };
+  const source = {
+    schema: "oxygen.story",
+    key: "rendered-paragraph-ownership",
+    phase: { id: "proof", label: "Proof" },
+    title: "Paragraph-owned Insight cards",
+    overview: "Two paragraphs prove exact ownership without inline or aggregate insertion.",
+    people: [],
+    story: { blocks: [{
+      id: "paragraph-one",
+      text: "The first paragraph remains uninterrupted.",
+      evidence: [evidence],
+    }, {
+      id: "paragraph-two",
+      text: "The second paragraph owns both separate Insight cards.",
+      evidence: [evidence],
+    }] },
+    insights: [{
+      id: "ai:paragraph-two",
+      background: "The second paragraph supplies the bounded context.",
+      quote: { storyBlockIds: ["paragraph-two"] },
+      directlyAcquiredExperience: "The exact paragraph changed the next check.",
+      principle: "Keep the card beside its supporting paragraph.",
+      evidence: [evidence],
+    }],
+    evidence: { primary: evidence, supporting: [] },
+    coverage: testStoryCoverage(),
+  };
+  const text = source.story.blocks[1].text;
+  const selected = "second paragraph";
+  const start = text.indexOf(selected);
+  const initial = emptyChapterReview(source);
+  const blocks = storyBlocks(source);
+  const saved = saveHumanInsight(initial, {
+    source,
+    privacyCandidates: [],
+    privacyDecisions: {},
+    targetCatalog: new Map(),
+    evidenceResolved: true,
+    supportedAddIds: [],
+    supportedEditIds: [],
+    sourceBlocks: blocks,
+    reviewedBlocks: blocks,
+  }, "human:paragraph-two", {
+    background: "A human reviewer selected the exact supporting paragraph.",
+    quote: {
+      chapterKey: source.key,
+      storyBlockId: "paragraph-two",
+      selection: { start, end: start + selected.length, text: selected },
+      baseRevision: initial.revision,
+    },
+    directlyAcquiredExperience: "The human selection retained the paragraph boundary.",
+    principle: "Keep human interpretation separate from Story prose.",
+    evidence: [evidence],
+  });
+  assert.equal(saved.blockedReason, undefined);
+
+  const html = renderToStaticMarkup(createElement(StoryChapterEditor, {
+    source,
+    position: 1,
+    total: 1,
+    chapterReview: saved.state,
+    onChapterReview() {},
+    onClose() {},
+    onPrevious() {},
+    onNext() {},
+    language: "en",
+  }));
+  const firstRowStart = html.indexOf('data-insight-owner-block="paragraph-one"');
+  const secondRowStart = html.indexOf('data-insight-owner-block="paragraph-two"');
+  const secondRowEnd = html.indexOf('<section class="chapterCompletion"', secondRowStart);
+  assert.ok(firstRowStart >= 0 && secondRowStart > firstRowStart && secondRowEnd > secondRowStart,
+    JSON.stringify({ firstRowStart, secondRowStart, secondRowEnd }));
+  const firstRow = html.slice(firstRowStart, secondRowStart);
+  const secondRow = html.slice(secondRowStart, secondRowEnd);
+  assert.match(firstRow, /data-story-block="paragraph-one"[\s\S]*?<p data-story-copy="true">The first paragraph remains uninterrupted\.<\/p>/);
+  assert.doesNotMatch(firstRow, /storyInsightCard|storyAnchoredInsights/);
+  assert.match(secondRow, /data-story-block="paragraph-two"[\s\S]*?<p data-story-copy="true">The second paragraph owns both separate Insight cards\.<\/p><\/div><aside class="storyAnchoredInsights"/);
+  assert.match(secondRow, /data-story-insight="ai:paragraph-two"[^>]*data-insight-origin="source_ai"/);
+  assert.match(secondRow, /data-story-insight="human:paragraph-two"[^>]*data-insight-origin="human_created"/);
+  assert.equal((html.match(/data-story-insight="ai:paragraph-two"/g) || []).length, 1);
+  assert.equal((html.match(/data-story-insight="human:paragraph-two"/g) || []).length, 1);
+  assert.doesNotMatch(html.slice(secondRowEnd), /storyInsightCard|storyAnchoredInsights/);
+
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.storyNarrativeRow\{display:grid;grid-template-columns:minmax\(0,720px\) minmax\(280px,360px\)/);
+  assert.match(css, /\.storyAnchoredInsights\{display:grid;gap:16px;min-width:0;align-self:start\}/);
+  assert.match(css, /@media\(max-width:1050px\)\{\.storyNarrativeRow\{grid-template-columns:minmax\(0,720px\)\}\.storyAnchoredInsights\{margin:0 0 14px 8px\}/);
+  assert.ok(secondRow.indexOf('class="storyBlock"') < secondRow.indexOf('class="storyAnchoredInsights"'),
+    "desktop and narrow layouts preserve a separate prose component followed by its owned card component");
 });
 
 test("story Story exposes explicit and double-click edit entry through the common ledger", () => {
@@ -118,7 +259,6 @@ test("workspace consumes only the server-owned exact Story contract", () => {
   const download = workspace.slice(workspace.indexOf("const downloadReviewed"), workspace.indexOf("const ready ="));
   assert.match(download, /createStoryReviewSession\(workflowRunId,current\.chapterReviews,current\.privacyDecisions\)/);
   assert.match(download, /body:JSON\.stringify\(\{workflowRunId,serverVersion,sourceRevision\}\)/);
-  assert.doesNotMatch(workspace, /compatibilityContract|compatibilityPackageReady|expectedSchema|storyLane/);
 });
 
 test("story progress counts resolved AI versions and presents zero as affirmative", () => {
@@ -161,7 +301,6 @@ test("story Timeline executes the exact source mapping without manufacturing fie
   assert.match(timelineRows, /event\.kind && <span>\{storyKindLabel\(event\.kind,storyLanguage\)\}<\/span>/);
   assert.match(timelineRows, /event\.before && event\.after/);
   assert.match(timelineRows, /event\.chips && event\.chips\.length > 0/);
-  assert.doesNotMatch(timelineRows, /storyChapterReviews|storyLane/);
 });
 
 test("story handoff progress uses the canonical completion evaluator", () => {

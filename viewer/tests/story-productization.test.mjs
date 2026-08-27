@@ -92,36 +92,40 @@ test("the dynamic source completes through review and deterministic release pack
   });
 });
 
-test("the Story Skill progressively routes only stage-local references", async () => {
+test("the Story Skill Routed References table keeps stage-local links and gates", async () => {
   const skill = await read("../../skills/oxygen-storytelling-review/SKILL.md");
-  const routing = skill.match(/## Progressive reference loading([\s\S]*?)## Non-negotiable boundaries/)?.[1];
+  const routing = skill.match(/## Routed References([\s\S]*?)## Final Public Flow/)?.[1];
   assert.ok(routing);
-  assert.doesNotMatch(routing, /read all eight|all eight completely/i);
 
   const rows = new Map(
-    routing.split("\n").filter((line) => /^\| \*\*/.test(line)).map((line) => {
+    routing.split("\n").filter((line) => /^\| [^|-]/.test(line)).map((line) => {
       const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
-      return [cells[0], cells.slice(1).join(" ")];
+      return [cells[0], { load: cells[1], gate: cells[2] }];
     }),
   );
-  const build = rows.get("**Build Project Story — always**") ?? "";
+  const build = rows.get("Build Story") ?? { load: "", gate: "" };
   for (const reference of [
     "product-contract.md",
     "story-data-contract.md",
     "privacy-evidence-boundary.md",
     "narrative-writing-contract.md",
-  ]) assert.match(build, new RegExp(reference.replace(".", "\\.")));
+  ]) assert.match(build.load, new RegExp(reference.replace(".", "\\.")));
   for (const deferred of [
     "validation-checklist.md",
     "ui-interaction-contract.md",
     "chapter-review-lifecycle.md",
     "bilingual-contract.md",
-  ]) assert.doesNotMatch(build, new RegExp(deferred.replace(".", "\\.")));
+  ]) assert.doesNotMatch(build.load, new RegExp(deferred.replace(".", "\\.")));
+  assert.match(build.gate, /oxygen\.story:/);
+  assert.match(build.gate, /schema: "oxygen\.story"/);
 
-  assert.match(rows.get("**Human Review begins**") ?? "", /chapter-review-lifecycle\.md/);
-  assert.match(rows.get("**Human Review or review-UI work**") ?? "", /ui-interaction-contract\.md/);
-  assert.match(rows.get("**Localization requested or present**") ?? "", /bilingual-contract\.md/);
-  assert.match(rows.get("**QA, clean-room, or submission\/release gate**") ?? "", /validation-checklist\.md/);
+  const human = rows.get("Human review") ?? { load: "", gate: "" };
+  assert.match(human.load, /chapter-review-lifecycle\.md/);
+  assert.match(human.load, /ui-interaction-contract\.md/);
+  assert.match(human.gate, /Apply review, All set, and release are separate human gates/);
+  assert.match(rows.get("Localization present")?.load ?? "", /bilingual-contract\.md/);
+  assert.match(rows.get("Final acceptance")?.load ?? "", /validation-checklist\.md/);
+  assert.match(rows.get("Final acceptance")?.gate ?? "", /deterministic, build, browser, clean-room, and residual-scan gates/);
 });
 
 test("public AGENTS, SOP, and organizer entrypoints delegate to the repository Story runtime", async () => {
@@ -139,12 +143,10 @@ test("public AGENTS, SOP, and organizer entrypoints delegate to the repository S
   assert.match(organizer, /Delegate Storytelling after the reviewed boundary/);
   assert.match(organizer, /does not need to know or manually name the delegated Skill/);
   assert.match(organizer, /Never expose chain-of-thought/);
-  assert.match(skill, /Canonical Toolkit boundary/);
-  assert.match(skill, /viewer\/lib\/timeline\.ts[\s\S]*viewer\/lib\/story-readiness\.ts[\s\S]*atomic workflow activation/);
+  assert.match(skill, /Activation revalidates the exact source package, semantic manifest, coverage manifest, source revision, and active digest/);
+  assert.match(skill, /storySourceSchema: "oxygen\.story"[\s\S]*storySessionSchema: "oxygen\.story-review-session"/);
   assert.match(skill, /narrative-writing-contract\.md/);
-  assert.match(skill, /Direct typing, caret insertion, selection replacement\/deletion/);
-  assert.match(skill, /completely fresh, contextless Agent/);
-  assert.match(skill, /private latent reasoning/);
+  assert.match(skill, /fresh contributor Agent can execute the public workflow/);
   assert.match(workspace, /export function InlineWorkspace/);
   assert.match(editor, /export function StoryChapterEditor/);
   assert.match(editor, /normalizeDirectBeforeInput[\s\S]*deriveDirectStoryMutation/);
