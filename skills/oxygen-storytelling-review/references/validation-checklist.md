@@ -8,8 +8,8 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Workflow progress reaches Review Story only through activation with `storySourceSchema: "oxygen.story"` and `storySessionSchema: "oxygen.story-review-session"`.
 - [ ] Public workflow order is Collect -> Organize -> upstream source Privacy preparation -> build Project Story using bounded semantic workers -> independent global sparse Insight pass -> Story/Release Privacy candidate preparation -> Preference-question generation -> Project Story human review -> Privacy Keep/Redact decisions -> Preference answers -> All set -> local reviewed release.
 - [ ] Review Story opens only after terminal results for Story generation, global Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation; completed-zero is explicit where valid.
-- [ ] Missing activation-time receipts for Insight, Story/Release Privacy, or Preference generation are reported as REQUIRED/NOT YET IMPLEMENTED Wave B dependencies, not implemented runtime behavior.
-- [ ] Preference-question validation is ordered before `--story-event ready`; on this base activation is blocked because no executable receipt validator accepts the other terminal receipts.
+- [ ] Launcher ready requires coverage, Story candidates, deterministic Preference bundle, and `oxygen.story-preparation` manifest; missing or extra authority fails before HTTP.
+- [ ] Preference bundle import to `/api/probes` precedes the exact `/api/workflow` Review Story activation; completed-zero is valid and failed import prevents activation.
 - [ ] Story generation order inside the Story lane is complete reviewed history -> Chapter arcs -> complete Story -> validation -> adjacent Phase grouping -> independent Insight pass -> zero or more Insights.
 - [ ] Every Chapter is one complete coherent arc with nonempty supported People and Story blocks.
 - [ ] Phases group adjacent completed Chapters and use precise one- or two-word labels.
@@ -17,7 +17,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Passage assistance, if any local UI later exposes it, is optional, human-facing, non-authoritative, non-readiness, and non-release.
 - [ ] Reviewed archive/input integrity, member paths, manifest counts, source hash, and `publication_approved=false` are safe.
 - [ ] Every primary/supporting/Person/Story-block/Insight Evidence reference is exact, fully qualified, same-document when required, and resolves once.
-- [ ] Bounded semantic workers preserve the desired Master-owned contract, but the provider-free deterministic shard/receipt validator and activation binding are marked REQUIRED/NOT YET IMPLEMENTED; do not claim exact union/no-overlap was executably validated.
+- [ ] Bounded semantic workers preserve the Master-owned contract; the composed preparation finalizer is a dependency, and this launcher alone does not claim exact union/no-overlap validation.
 - [ ] Semantic coverage authority represents or explicitly excludes every unit exactly once.
 - [ ] Coverage draft rows are exactly `{unitId, disposition, ownerId}` or `{unitId, disposition, exclusionReason}`.
 - [ ] No Story JSON contains raw member lists, per-event negative ledgers, Privacy candidates, source originals, prompts, hidden reasoning, or Preference answers.

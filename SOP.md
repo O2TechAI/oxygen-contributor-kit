@@ -286,20 +286,20 @@ probe batch before review.
 Opening Project Story for human review requires terminal results for Story generation, global
 Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation.
 Completed-zero is a valid terminal result for the Insight and Preference lanes when no warranted
-Insight or valid question exists. Current runtime accepts only Story candidates and coverage at
-`--story-event ready`; it does not accept terminal receipts for Insight, Story/Release Privacy, or
-Preference generation. `validate_probes.py` validates the probe file shape only. Those receipt
-validators and the Preference readiness binding are **REQUIRED/NOT YET IMPLEMENTED** Wave B
-dependencies. Until they exist and pass, activation is blocked here; do not present `--story-event
-ready` as the next executable canonical command.
+Insight or valid question exists. The composed launcher transport now requires the deterministic
+Preference bundle and the `oxygen.story-preparation` manifest with coverage and Story candidates.
+It imports the exact bundle before it requests Review Story activation, and fails closed on missing,
+foreign, stale, malformed, or digest/count-mismatched authority. The Preference producer and
+preparation finalizer are composition dependencies of this isolated branch; their files are not
+present here and no fallback or stub replaces them.
 
 Master-owned semantic work must start from deterministic input preparation, an immutable input
 digest, explicit unit IDs, and byte/content-balanced shard manifests. The desired design uses
 separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and
 Preference-question reasoning, with worker receipts, exact union coverage, no overlap,
-deterministic deduplication/composition, and fail-closed validation. The provider-free deterministic
-worker receipt validator and its activation binding are **REQUIRED/NOT YET IMPLEMENTED**. Until
-they exist, do not claim exact union/no-overlap across worker shards has been executably validated.
+deterministic deduplication/composition, and fail-closed validation. The composed preparation
+finalizer validates and binds the four terminal receipts to activation. Exact union/no-overlap across
+worker shards remains a finalizer composition dependency; do not claim it from this launcher alone.
 Revision authority remains with the owning Agent/server lane; no worker may silently expand scope
 or repair another lane.
 
@@ -339,13 +339,6 @@ owns cleanup when it stops; local database state is not reused. It reserves an O
 `127.0.0.1` port by default and announces only the exact healthy URL. There is no online deployment
 path. An explicit occupied `--port` fails immediately without killing the owning process or
 silently falling back.
-
-After the server is healthy, push the validated AI spans from another terminal:
-
-```bash
-python3 tools/llm_redact/push_redactions.py \
-  --redacted work/<run>-redaction/redacted --base-url <viewer-url>
-```
 
 ### Native Windows PowerShell sequence
 
@@ -393,11 +386,6 @@ python .\tools\llm_redact\merge_and_apply.py `
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
-# Push only validated findings to that exact Viewer.
-python .\tools\llm_redact\push_redactions.py `
-  --redacted "$Redaction\redacted" `
-  --base-url "$Viewer"
-
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --story-event started
 
@@ -409,21 +397,27 @@ node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
   "$Review\project-map.json" `
   "$Review\story-coverage-draft.json" `
   "$Review\story-coverage-manifest.json"
-
-python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py "$Review"
 ```
 
-Stop here on the current base. No executable provider-free receipt validator accepts terminal
-Insight, Story/Release Privacy, or Preference receipts, and activation must fail closed until that
-Wave B authority exists.
+## Composition sequence (implemented transport)
 
-After Wave B authority is implemented and those receipts validate, the activation command is:
+1. Prepare Preference context.
+2. Produce bounded Agent candidates.
+3. Produce the deterministic Preference bundle.
+4. Run the preparation finalizer.
+
+The producer and finalizer arrive from parallel composition lanes and are intentionally not stubbed
+in this isolated launcher branch.
+
+With those four artifacts produced and validated, launcher ready is:
 
 ```powershell
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --story-event ready `
   --coverage-manifest "$Review\story-coverage-manifest.json" `
-  --story-candidates "$Review\story-candidates.json"
+  --story-candidates "$Review\story-candidates.json" `
+  --preference-bundle "$Review\preference-bundle.json" `
+  --preparation-manifest "$Review\story-preparation-manifest.json"
 
 if ($LASTEXITCODE -eq 0) {
   Copy-Item -LiteralPath "$Review\story-coverage-manifest.json" `
@@ -512,14 +506,9 @@ confirmed preference retains its source evidence IDs. A preference answer is not
 approval. If no valid probe exists, record a validated completed-zero result; do not infer that the
 contributor has no preferences.
 
-The Viewer implements probe-answer controls in its `Preferences` tab. Generate the batch, push it
-with `tools/llm_redact/push_probes.py`, and let the contributor answer in the browser:
-
-```bash
-python3 tools/llm_redact/push_probes.py \
-  --probes work/<run>-probes --dialogue work/<run>-dialogue \
-  --summary work/<run>-review/preference-probes.json --limit 12
-```
+The Viewer implements probe-answer controls in its `Preferences` tab. The launcher imports the
+validated deterministic Preference bundle during the four-file ready transport; the contributor then
+answers in the browser.
 
 Each probe shows its recap, its offered options, `Nothing worth recording here`, a free-text
 `Something else`, and its source evidence IDs. Every recorded answer displays what was stored and

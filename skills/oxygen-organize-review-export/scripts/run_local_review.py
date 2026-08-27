@@ -1011,6 +1011,79 @@ STORY_WORKFLOW_EVENTS = {
     "ready": "story_ready_for_human_review",
 }
 
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_PREFERENCE_BUNDLE_FIELDS = {
+    "workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount",
+    "setAside", "probes", "bulkDecisions", "autoRemoved",
+}
+_PREPARATION_FIELDS = {
+    "schema", "workflowRunId", "sourceRevision", "receipts", "storyPrivacyCandidates",
+}
+_RECEIPT_FIELDS = {
+    "lane", "status", "inputDigest", "scopeDigest", "scopeCount", "outputDigest", "outputCount",
+}
+_PREPARATION_LANES = ("story", "insight", "story_privacy", "preference")
+
+
+def _nonnegative_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _digest(value: object) -> bool:
+    return isinstance(value, str) and bool(_DIGEST.fullmatch(value))
+
+
+def validate_ready_authority(
+    workflow_run_id: str,
+    preference_bundle: object,
+    preparation_manifest: object,
+) -> tuple[dict, dict]:
+    """Fail closed before transport unless the composed ready authority is exact."""
+    if not isinstance(preference_bundle, dict) or set(preference_bundle) != _PREFERENCE_BUNDLE_FIELDS:
+        raise SystemExit("Preference bundle authority is invalid")
+    if (
+        preference_bundle.get("workflowRunId") != workflow_run_id
+        or not _nonnegative_integer(preference_bundle.get("sourceRevision"))
+        or not _digest(preference_bundle.get("inputDigest"))
+        or not _digest(preference_bundle.get("outputDigest"))
+        or not _nonnegative_integer(preference_bundle.get("outputCount"))
+        or not _nonnegative_integer(preference_bundle.get("setAside"))
+        or not all(isinstance(preference_bundle.get(field), list) for field in ("probes", "bulkDecisions", "autoRemoved"))
+        or preference_bundle["outputCount"] != len(preference_bundle["probes"]) + len(preference_bundle["bulkDecisions"])
+    ):
+        raise SystemExit("Preference bundle authority is invalid")
+    if not isinstance(preparation_manifest, dict) or set(preparation_manifest) != _PREPARATION_FIELDS:
+        raise SystemExit("Story preparation authority is invalid")
+    if (
+        preparation_manifest.get("schema") != "oxygen.story-preparation"
+        or preparation_manifest.get("workflowRunId") != workflow_run_id
+        or preparation_manifest.get("sourceRevision") != preference_bundle["sourceRevision"]
+        or not isinstance(preparation_manifest.get("storyPrivacyCandidates"), list)
+        or not isinstance(preparation_manifest.get("receipts"), list)
+        or len(preparation_manifest["receipts"]) != len(_PREPARATION_LANES)
+    ):
+        raise SystemExit("Story preparation authority is invalid")
+    receipts = {}
+    for receipt in preparation_manifest["receipts"]:
+        if not isinstance(receipt, dict) or set(receipt) != _RECEIPT_FIELDS:
+            raise SystemExit("Story preparation authority is invalid")
+        lane = receipt.get("lane")
+        if (
+            lane not in _PREPARATION_LANES or lane in receipts or receipt.get("status") != "complete"
+            or not _digest(receipt.get("inputDigest")) or not _digest(receipt.get("scopeDigest"))
+            or not _digest(receipt.get("outputDigest")) or not _nonnegative_integer(receipt.get("scopeCount"))
+            or not _nonnegative_integer(receipt.get("outputCount"))
+        ):
+            raise SystemExit("Story preparation authority is invalid")
+        receipts[lane] = receipt
+    preference_receipt = receipts.get("preference")
+    if preference_receipt is None or any(
+        preference_receipt[field] != preference_bundle[field]
+        for field in ("inputDigest", "outputDigest", "outputCount")
+    ):
+        raise SystemExit("Preference receipt does not match the Preference bundle")
+    return preference_bundle, preparation_manifest
+
 
 def update_story_workflow(
     base_url: str,
@@ -1020,6 +1093,8 @@ def update_story_workflow(
     total: int | None = None,
     coverage_manifest: dict | None = None,
     story_candidates: list[dict] | None = None,
+    preference_bundle: dict | None = None,
+    preparation_manifest: dict | None = None,
 ) -> dict:
     opener = urllib.request.build_opener(
         urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
@@ -1035,8 +1110,20 @@ def update_story_workflow(
             raise SystemExit("Story activation requires a normalized coverage manifest")
         if not isinstance(story_candidates, list) or not story_candidates:
             raise SystemExit("Story activation requires bounded Story candidates")
+        preference_bundle, preparation_manifest = validate_ready_authority(
+            workflow_run_id, preference_bundle, preparation_manifest
+        )
+        preference_result = request_json(
+            opener, f"{base_url}/api/probes", method="POST", body=preference_bundle
+        )
+        if (
+            preference_result.get("imported") != preference_bundle["outputCount"]
+            or preference_result.get("bulkImported") != preference_bundle["outputCount"]
+        ):
+            raise SystemExit("The Viewer did not import the exact Preference bundle")
         payload["coverageManifest"] = coverage_manifest
         payload["storyCandidates"] = story_candidates
+        payload["preparationManifest"] = preparation_manifest
     workflow = request_json(
         opener, f"{base_url}/api/workflow", method="POST", body=payload
     )
@@ -1075,6 +1162,8 @@ def main():
     parser.add_argument("--story-total", type=int)
     parser.add_argument("--coverage-manifest", type=Path)
     parser.add_argument("--story-candidates", type=Path)
+    parser.add_argument("--preference-bundle", type=Path)
+    parser.add_argument("--preparation-manifest", type=Path)
     parser.add_argument("--port", type=int)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--skip-install", action="store_true")
@@ -1094,13 +1183,15 @@ def main():
             parser.error("Story counts are accepted only with --story-event progress")
         if args.story_event == "ready" and (
             args.coverage_manifest is None or args.story_candidates is None
+            or args.preference_bundle is None or args.preparation_manifest is None
         ):
-            parser.error("Story ready requires --coverage-manifest and --story-candidates")
+            parser.error("Story ready requires coverage, candidates, Preference bundle, and preparation manifest")
         if args.story_event != "ready" and (
             args.coverage_manifest is not None or args.story_candidates is not None
+            or args.preference_bundle is not None or args.preparation_manifest is not None
         ):
             parser.error(
-                "--coverage-manifest and --story-candidates are accepted only with --story-event ready"
+                "ready authority files are accepted only with --story-event ready"
             )
         coverage_manifest = (
             _read_json_object(args.coverage_manifest.resolve(strict=True))
@@ -1116,10 +1207,20 @@ def main():
                 raise SystemExit(INPUT_FILE_INVALID) from None
             if not isinstance(story_candidates, list):
                 raise SystemExit(INPUT_FILE_INVALID)
+        preference_bundle = (
+            _read_json_object(args.preference_bundle.resolve(strict=True))
+            if args.preference_bundle is not None else None
+        )
+        preparation_manifest = (
+            _read_json_object(args.preparation_manifest.resolve(strict=True))
+            if args.preparation_manifest is not None else None
+        )
+        if args.story_event == "ready":
+            validate_ready_authority(args.workflow_run_id, preference_bundle, preparation_manifest)
         update_story_workflow(
             normalize_local_viewer_url(args.attach_url), args.workflow_run_id,
             args.story_event, args.story_completed, args.story_total, coverage_manifest,
-            story_candidates,
+            story_candidates, preference_bundle, preparation_manifest,
         )
         return
 

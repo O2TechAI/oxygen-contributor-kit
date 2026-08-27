@@ -77,7 +77,11 @@ Opening Project Story for human review requires terminal results for all four pr
 
 Preference questions must be generated before the human review UI opens by using reusable lessons represented by generated Insight candidates. They remain unanswered questions until the contributor acts; never report them as confirmed preferences. If no valid question is warranted, validate a completed-zero probe batch before review.
 
-Current implementation accepts only Story candidates and coverage at `--story-event ready`. It does not accept terminal receipts for the Insight pass, Story/Release Privacy candidate preparation, or Preference-question generation. `validate_probes.py` validates the probe file shape only. Those receipt validators and the Preference readiness binding are **REQUIRED/NOT YET IMPLEMENTED** Wave B runtime dependencies. Until they exist and pass, activation is blocked here.
+The composed ready transport requires four files: coverage manifest, Story candidates, deterministic
+Preference bundle, and `oxygen.story-preparation` manifest. It imports the exact Preference bundle
+before it requests Review Story activation and accepts completed-zero Preference output. The
+Preference producer and preparation finalizer are parallel composition dependencies, not files in
+this isolated launcher branch; do not add a stub or fallback.
 
 ## Human Pauses
 
@@ -207,25 +211,21 @@ node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
 
 Never invent coverage revisions or digests in model output.
 
-## Activation After Wave B Authority
+## Composed Activation Transport
 
-Before any activation attempt, generate and validate Preference questions:
+The exact sequence is: prepare Preference context -> bounded Agent candidates -> deterministic
+Preference bundle -> preparation finalizer -> launcher ready with four files. The finalizer supplies
+the exact terminal receipts for story, insight, story_privacy, and preference.
 
-```powershell
-python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py "$Review"
-```
-
-Stop here on the current base. No executable provider-free receipt validator accepts terminal
-Insight, Story/Release Privacy, or Preference receipts, and `--story-event ready` must not be
-presented as the next successfully executable canonical command.
-
-After Wave B authority is implemented and those receipts validate, request atomic activation:
+Request activation only after those composition dependencies produce the four validated files:
 
 ```powershell
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --story-event ready `
   --coverage-manifest "$Review\story-coverage-manifest.json" `
-  --story-candidates "$Review\story-candidates.json"
+  --story-candidates "$Review\story-candidates.json" `
+  --preference-bundle "$Review\preference-bundle.json" `
+  --preparation-manifest "$Review\story-preparation-manifest.json"
 
 if ($LASTEXITCODE -eq 0) {
   Copy-Item -LiteralPath "$Review\story-coverage-manifest.json" `
@@ -245,7 +245,7 @@ All set confirms the current reviewed Story locally. It does not publish, upload
 
 ## Completion Standard
 
-This work is complete only when a fresh contributor Agent can execute the public workflow from the reviewed boundary without prior chat context, hidden prompts, JSON surgery, database repair, code edits, or maintainer rescue. On this base that standard is **NOT YET MET** because receipt authority, Preference readiness binding, Story/Release Privacy candidate authority, and final Chapter Privacy/Release Preview UI are missing. The final package remains local, provider-free after approved generation steps, and carries `publication_approved=false`.
+This work is complete only when a fresh contributor Agent can execute the public workflow from the reviewed boundary without prior chat context, hidden prompts, JSON surgery, database repair, code edits, or maintainer rescue. On this base that standard is **NOT YET MET** because the final Chapter Privacy/Release Preview UI, project All set, release gating, and clean-room completion remain unimplemented. The final package remains local, provider-free after approved generation steps, and carries `publication_approved=false`.
 
 Run final verification from the repository root:
 

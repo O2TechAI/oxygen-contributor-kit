@@ -58,7 +58,11 @@ The Story stage may use conceptual passes inside Build Project Story, but it mus
 
 Opening Project Story for human review requires terminal results for Story generation, the independent global sparse Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation. Completed-zero is a valid terminal result for the Insight and Preference lanes when no warranted Insight or valid question exists.
 
-Current runtime accepts only Story candidates and coverage at `--story-event ready`. It does not accept terminal receipts for Insight, Story/Release Privacy, or Preference generation. Those receipt validators and the Preference readiness binding are **REQUIRED/NOT YET IMPLEMENTED** Wave B dependencies. Until they exist and pass, a contextless contributor workflow is blocked here.
+The composed launcher requires coverage, Story candidates, a deterministic Preference bundle, and
+an `oxygen.story-preparation` manifest at `--story-event ready`. It validates the exact four
+terminal receipts and imports the unchanged Preference bundle before requesting Review Story.
+The Preference producer and preparation finalizer are composition dependencies of this isolated
+branch, not local stubs or fallback paths.
 
 Preference questions must be generated before Project Story human review opens by using reusable lessons represented by generated Insight candidates. Generated questions are not confirmed preferences; answers exist only after explicit contributor action.
 
@@ -68,7 +72,11 @@ Parallel semantic work is Master-owned. The owning Agent prepares deterministic 
 
 The desired worker contract uses separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning. Each worker returns a receipt naming the input digest, shard ID, unit IDs covered, output path, and terminal status. Exact union coverage, no overlap, no foreign unit IDs, no stale digest, deterministic deduplication, and deterministic composition remain required.
 
-The provider-free deterministic worker receipt validator and activation binding are **REQUIRED/NOT YET IMPLEMENTED**. Do not claim exact union/no-overlap has been executably validated until that validator exists and passes. Revision authority, coverage finalization, activation, human-pause enforcement, and release reconstruction stay outside worker scope. No worker may silently expand scope, reopen raw history, repair another lane, or treat another lane's failure as success.
+The composed preparation finalizer validates the receipt and activation binding. Do not claim exact
+union/no-overlap has been validated by this launcher alone. Revision authority, coverage
+finalization, activation, human-pause enforcement, and release reconstruction stay outside worker
+scope. No worker may silently expand scope, reopen raw history, repair another lane, or treat
+another lane's failure as success.
 
 ## Product Boundaries
 

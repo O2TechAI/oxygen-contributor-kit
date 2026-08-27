@@ -87,8 +87,8 @@ test("root routing is progressive and preserves the canonical stage owners", asy
       "local reviewed release",
     ]);
   }
-  assert.match(storySkill, /REQUIRED\/NOT YET IMPLEMENTED[\s\S]{0,120}Wave B runtime dependenc/);
-  assert.match(storySkill, /activation is blocked here/i);
+  assert.match(storySkill, /requires four files: coverage manifest, Story candidates, deterministic[\s\S]{0,80}Preference bundle/i);
+  assert.match(storySkill, /imports the exact Preference bundle\s+before it requests Review Story activation/i);
   assert.match(storySkill, /completed-zero[\s\S]{0,120}Preference-question generation/);
   assert.doesNotMatch([sop, storySkill].join("\n"), /when possible|when appropriate/i);
 
@@ -168,8 +168,8 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
   assert.match(productContract, /byte\/content-balanced shard manifests/i);
   assert.match(productContract, /separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning/i);
   assert.match(productContract, /worker returns a receipt[\s\S]{0,160}input digest[\s\S]{0,80}unit IDs covered/);
-  assert.match(productContract, /validator and activation binding are \*\*REQUIRED\/NOT YET IMPLEMENTED\*\*/);
-  assert.match(productContract, /Do not claim exact union\/no-overlap has been executably validated/);
+  assert.match(productContract, /composed launcher requires coverage, Story candidates, a deterministic Preference bundle/i);
+  assert.match(productContract, /Do not claim exact\s+union\/no-overlap has been validated by this launcher alone/);
   assert.match(productContract, /No worker may silently expand scope[\s\S]{0,80}repair another lane/i);
   assert.doesNotMatch(productContract, /The owning Agent validates exact union coverage/);
 
@@ -194,7 +194,8 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
   assert.doesNotMatch(sop, /controls to change the category|delete the decision|soft delete/i);
   assert.match(sop, /\$Kit = \(Get-Location\)\.Path/);
   assert.doesNotMatch(sop, /O2-Intern\\oxygen-contributor-kit/);
-  assert.match(sop, /Stop here on the current base[\s\S]{0,200}receipt validator/);
-  assert.match(sop, /After Wave B authority is implemented/);
-  assert.match(sop, /--story-event ready/);
+  assert.match(sop, /Composition sequence \(implemented transport\)/);
+  assert.match(sop, /--preference-bundle/);
+  assert.match(sop, /--preparation-manifest/);
+  assert.doesNotMatch(sop, /tools[\\/]llm_redact[\\/]push_probes\.py/);
 });

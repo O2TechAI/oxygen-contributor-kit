@@ -63,6 +63,30 @@ def write_index(run: Path, entries: list[dict]) -> None:
     )
 
 
+def ready_authority(workflow_run_id="run-1", *, output_count=1):
+    preference = {
+        "workflowRunId": workflow_run_id, "sourceRevision": 7,
+        "inputDigest": "a" * 64, "outputDigest": "b" * 64,
+        "outputCount": output_count, "setAside": 0,
+        "probes": [{}] if output_count else [], "bulkDecisions": [], "autoRemoved": [],
+    }
+    receipt = lambda lane, **values: {
+        "lane": lane, "status": "complete", "inputDigest": "c" * 64,
+        "scopeDigest": "d" * 64, "scopeCount": 0,
+        "outputDigest": "e" * 64, "outputCount": 0, **values,
+    }
+    preparation = {
+        "schema": "oxygen.story-preparation", "workflowRunId": workflow_run_id,
+        "sourceRevision": 7, "storyPrivacyCandidates": [],
+        "receipts": [
+            receipt("story"), receipt("insight"), receipt("story_privacy"),
+            receipt("preference", inputDigest=preference["inputDigest"],
+                    outputDigest=preference["outputDigest"], outputCount=output_count),
+        ],
+    }
+    return preference, preparation
+
+
 def write_meeting(run: Path, meeting_id: str, *, root=False, directory_id=None) -> Path:
     directory = run if root else run / "meetings" / (directory_id or meeting_id)
     directory.mkdir(parents=True, exist_ok=True)
@@ -320,33 +344,33 @@ class LauncherUnitTest(unittest.TestCase):
             },
         )
 
-    def test_story_ready_event_sends_only_bounded_coverage_authority(self):
+    def test_story_ready_imports_exact_preference_bundle_before_activation(self):
         coverage_manifest = {"revision": 1, "coverageDigest": "a" * 64}
         story_candidates = [{"id": "doc:item-1", "summary": "oxygen.story:{}"}]
+        preference_bundle, preparation_manifest = ready_authority()
         with (
-            mock.patch.object(MODULE, "request_json", return_value={
-                "currentStageId": "review",
-                "storyGenerationStatus": "ready_for_human_review",
-                "requiresHumanAction": True,
-            }) as request,
+            mock.patch.object(MODULE, "request_json", side_effect=[
+                {"imported": 1, "bulkImported": 1},
+                {"currentStageId": "review", "storyGenerationStatus": "ready_for_human_review",
+                 "requiresHumanAction": True},
+            ]) as request,
             mock.patch("builtins.print") as printed,
         ):
             result = MODULE.update_story_workflow(
                 "http://127.0.0.1:3298", "run-1", "ready",
                 coverage_manifest=coverage_manifest,
                 story_candidates=story_candidates,
+                preference_bundle=preference_bundle,
+                preparation_manifest=preparation_manifest,
             )
-        request.assert_called_once_with(
-            mock.ANY,
-            "http://127.0.0.1:3298/api/workflow",
-            method="POST",
-            body={
-                "workflowRunId": "run-1",
-                "event": "story_ready_for_human_review",
-                "coverageManifest": coverage_manifest,
-                "storyCandidates": story_candidates,
-            },
-        )
+        self.assertEqual(request.call_args_list[0], mock.call(
+            mock.ANY, "http://127.0.0.1:3298/api/probes", method="POST", body=preference_bundle))
+        self.assertEqual(request.call_args_list[1], mock.call(
+            mock.ANY, "http://127.0.0.1:3298/api/workflow", method="POST", body={
+                "workflowRunId": "run-1", "event": "story_ready_for_human_review",
+                "coverageManifest": coverage_manifest, "storyCandidates": story_candidates,
+                "preparationManifest": preparation_manifest,
+            }))
         self.assertEqual(result["viewer"], "http://127.0.0.1:3298")
         self.assertEqual(result["handoff_state"], "WAITING_FOR_HUMAN_STORY_REVIEW")
         self.assertFalse(result["password_required"])
@@ -356,12 +380,13 @@ class LauncherUnitTest(unittest.TestCase):
         self.assertNotIn("evidence_payload", serialized)
 
     def test_story_ready_requires_the_exact_persisted_human_boundary(self):
+        preference_bundle, preparation_manifest = ready_authority()
         with (
-            mock.patch.object(MODULE, "request_json", return_value={
-                "currentStageId": "story",
-                "storyGenerationStatus": "running",
-                "requiresHumanAction": False,
-            }),
+            mock.patch.object(MODULE, "request_json", side_effect=[
+                {"imported": 1, "bulkImported": 1},
+                {"currentStageId": "story", "storyGenerationStatus": "running",
+                 "requiresHumanAction": False},
+            ]),
             mock.patch("builtins.print") as printed,
         ):
             with self.assertRaisesRegex(SystemExit, "human Story review boundary"):
@@ -369,8 +394,39 @@ class LauncherUnitTest(unittest.TestCase):
                     "http://127.0.0.1:3298", "run-1", "ready",
                     coverage_manifest={"revision": 1},
                     story_candidates=[{"id": "doc:item-1", "summary": "oxygen.story:{}"}],
+                    preference_bundle=preference_bundle,
+                    preparation_manifest=preparation_manifest,
                 )
         printed.assert_not_called()
+
+    def test_failed_preference_import_prevents_activation_and_completed_zero_is_valid(self):
+        preference_bundle, preparation_manifest = ready_authority(output_count=0)
+        with mock.patch.object(MODULE, "request_json", return_value={"imported": 0, "bulkImported": 1}) as request:
+            with self.assertRaisesRegex(SystemExit, "did not import"):
+                MODULE.update_story_workflow(
+                    "http://127.0.0.1:3298", "run-1", "ready",
+                    coverage_manifest={}, story_candidates=[{"id": "doc:item-1"}],
+                    preference_bundle=preference_bundle, preparation_manifest=preparation_manifest,
+                )
+        request.assert_called_once_with(
+            mock.ANY, "http://127.0.0.1:3298/api/probes", method="POST", body=preference_bundle)
+
+    def test_ready_authority_rejects_identity_revision_and_receipt_mismatches_before_http(self):
+        preference_bundle, preparation_manifest = ready_authority()
+        for mutate in (
+            lambda: preference_bundle.__setitem__("workflowRunId", "foreign"),
+            lambda: preparation_manifest.__setitem__("sourceRevision", 8),
+            lambda: preparation_manifest["receipts"][3].__setitem__("outputDigest", "f" * 64),
+        ):
+            preference_bundle, preparation_manifest = ready_authority()
+            mutate()
+            with mock.patch.object(MODULE, "request_json") as request:
+                with self.assertRaises(SystemExit):
+                    MODULE.update_story_workflow(
+                        "http://127.0.0.1:3298", "run-1", "ready", coverage_manifest={},
+                        story_candidates=[{"id": "doc:item-1"}], preference_bundle=preference_bundle,
+                        preparation_manifest=preparation_manifest)
+            request.assert_not_called()
 
     def test_cli_accepts_documented_story_started_command(self):
         with (
@@ -384,7 +440,7 @@ class LauncherUnitTest(unittest.TestCase):
         ):
             MODULE.main()
         update.assert_called_once_with(
-            "http://127.0.0.1:3298", "run-1", "started", None, None, None, None
+            "http://127.0.0.1:3298", "run-1", "started", None, None, None, None, None, None
         )
 
     def test_cli_accepts_documented_story_progress_command(self):
@@ -401,7 +457,7 @@ class LauncherUnitTest(unittest.TestCase):
         ):
             MODULE.main()
         update.assert_called_once_with(
-            "http://127.0.0.1:3298", "run-1", "progress", 4, 4, None, None
+            "http://127.0.0.1:3298", "run-1", "progress", 4, 4, None, None, None, None
         )
 
     def test_cli_accepts_documented_story_ready_command_and_loads_payloads(self):
@@ -415,10 +471,15 @@ class LauncherUnitTest(unittest.TestCase):
                 "rows": [],
             }
             story_candidates = [{"id": "doc:item-1", "summary": "oxygen.story:{}"}]
+            preference_bundle, preparation_manifest = ready_authority()
             coverage_path = root / "story-coverage-manifest.json"
             candidates_path = root / "story-candidates.json"
+            preference_path = root / "preference-bundle.json"
+            preparation_path = root / "story-preparation-manifest.json"
             coverage_path.write_text(json.dumps(coverage_manifest), encoding="utf-8")
             candidates_path.write_text(json.dumps(story_candidates), encoding="utf-8")
+            preference_path.write_text(json.dumps(preference_bundle), encoding="utf-8")
+            preparation_path.write_text(json.dumps(preparation_manifest), encoding="utf-8")
 
             with (
                 mock.patch.object(sys, "argv", [
@@ -428,14 +489,26 @@ class LauncherUnitTest(unittest.TestCase):
                     "--story-event", "ready",
                     "--coverage-manifest", str(coverage_path),
                     "--story-candidates", str(candidates_path),
+                    "--preference-bundle", str(preference_path),
+                    "--preparation-manifest", str(preparation_path),
                 ]),
                 mock.patch.object(MODULE, "update_story_workflow") as update,
             ):
                 MODULE.main()
         update.assert_called_once_with(
             "http://127.0.0.1:3298", "run-1", "ready", None, None,
-            coverage_manifest, story_candidates,
+            coverage_manifest, story_candidates, preference_bundle, preparation_manifest,
         )
+
+    def test_cli_rejects_old_two_file_ready_path_before_http(self):
+        with mock.patch.object(sys, "argv", [
+            "run_local_review.py", "--attach-url", "http://127.0.0.1:3298",
+            "--workflow-run-id", "run-1", "--story-event", "ready",
+            "--coverage-manifest", "coverage.json", "--story-candidates", "candidates.json",
+        ]), mock.patch.object(MODULE, "update_story_workflow") as update:
+            with self.assertRaises(SystemExit):
+                MODULE.main()
+        update.assert_not_called()
 
     @unittest.skipUnless(os.name == "posix", "POSIX npm layout test")
     def test_posix_regular_next_shim_is_detected(self):
