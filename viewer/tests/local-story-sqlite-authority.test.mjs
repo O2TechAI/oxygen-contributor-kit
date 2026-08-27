@@ -30,6 +30,7 @@ const COVERAGE_DIGEST = "b".repeat(64);
 const ACTIVATED_AT = "2038-01-01T00:00:00.000Z";
 const DOCUMENT_ID = "synthetic-reviewed-document";
 const STORY_ITEM_ID = `${DOCUMENT_ID}:story-authority`;
+const PRIVATE_ITEM_ID = `${DOCUMENT_ID}:privacy-authority`;
 const EMPTY_DIGEST = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
 
 function currentStorySource() {
@@ -409,53 +410,81 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
         canonicalAuthorityJson,
         validateSemanticManifestAuthority,
         finalizeCoverageManifestAuthority,
+        readCoverageManifestAuthority,
       },
       { deriveStoryReleaseTargetCatalog, storyPreparationDigest },
+      { computeSourceDigest },
     ] = await Promise.all([
       import("../db/index.ts"),
       import("../app/api/workflow/route.ts"),
       import("../lib/story-readiness.ts"),
       import("../lib/story-preparation.ts"),
+      import("../lib/redaction-pass.mjs"),
     ]);
     const db = await getLocalDatabase();
     const timestamp = "2041-01-01T00:00:00.000Z";
     await db.prepare(`INSERT INTO workflow_runs
       (id,target_confirmed,collection_status,collection_completed,collection_total,
        story_generation_status,story_source_revision,created_at,updated_at)
-      VALUES (?,1,'complete',1,1,'running',?,?,?)`)
+      VALUES (?,1,'complete',2,2,'running',?,?,?)`)
       .bind(RUN_ID, INITIAL_SOURCE_REVISION, timestamp, timestamp).run();
     await db.prepare(`INSERT INTO organization_jobs
       (id,status,stage,completed,total,warnings_json,started_at,updated_at,completed_at)
-      VALUES ('organization','complete','done',1,1,'[]',?,?,?)`)
-      .bind(timestamp, timestamp, timestamp).run();
-    await db.prepare(`INSERT INTO redaction_jobs
-      (id,status,stage,completed,total,rejected,started_at,updated_at,completed_at)
-      VALUES ('redaction','complete','done',1,1,0,?,?,?)`)
+      VALUES ('organization','complete','done',2,2,'[]',?,?,?)`)
       .bind(timestamp, timestamp, timestamp).run();
     await db.prepare(`INSERT INTO documents
       (id,kind,title,item_count,formatted_summary_json,imported_at,updated_at)
-      VALUES (?,'trajectory','Synthetic route Story',1,'{}',?,?)`)
+      VALUES (?,'trajectory','Synthetic route Story',2,'{}',?,?)`)
       .bind(DOCUMENT_ID, timestamp, timestamp).run();
     await db.prepare(`INSERT INTO items
       (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,
        original_json,organization_category,organization_reason)
       VALUES (?,?,1,'decision','reviewer','human',?,'Synthetic route event.','{}','project',NULL)`)
       .bind(STORY_ITEM_ID, DOCUMENT_ID, timestamp).run();
+    await db.prepare(`INSERT INTO items
+      (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,
+       original_json,organization_category,organization_reason)
+      VALUES (?,?,2,'note','reviewer','human',?,'Private synthetic event.','{}','project',NULL)`)
+      .bind(PRIVATE_ITEM_ID, DOCUMENT_ID, timestamp).run();
+    await db.prepare(`INSERT INTO finalized_corpus_manifests
+      (workflow_run_id,corpus_revision,corpus_digest,document_count,item_count,finalized_at)
+      VALUES (?,1,?,1,2,?)`).bind(RUN_ID, "c".repeat(64), timestamp).run();
+    const sourceRows = (await db.prepare(`SELECT document_id,id,sequence,event_type,actor_type,
+      timestamp,content FROM items ORDER BY document_id,sequence,id`).all()).results;
+    const sourcePrivacyDigest = await computeSourceDigest(sourceRows);
+    await db.prepare(`INSERT INTO redaction_jobs
+      (id,status,stage,completed,total,rejected,source_digest,started_at,updated_at,completed_at)
+      VALUES ('redaction','complete','done',1,1,0,?,?,?,?)`)
+      .bind(sourcePrivacyDigest, timestamp, timestamp, timestamp).run();
+    await db.prepare(`INSERT INTO redactions
+      (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
+       review_state,uncertainty_reason,status,created_by,created_at,updated_at)
+      VALUES ('source-private',?,?,0,7,'sensitive','high','Local private sentinel',
+        'deterministic',NULL,'active','local-test',?,?)`)
+      .bind(PRIVATE_ITEM_ID, DOCUMENT_ID, timestamp, timestamp).run();
 
     const hash = (value) => sha256(canonicalAuthorityJson(value));
-    const sourceDigest = await hash({ id: STORY_ITEM_ID });
-    const contributionRecords = [{ id: STORY_ITEM_ID, sourceDigest }];
-    const unit = {
+    const storySourceDigest = await hash({ id: STORY_ITEM_ID });
+    const privateSourceDigest = await hash({ id: PRIVATE_ITEM_ID });
+    const contributionRecords = [
+      { id: PRIVATE_ITEM_ID, sourceDigest: privateSourceDigest },
+      { id: STORY_ITEM_ID, sourceDigest: storySourceDigest },
+    ].sort((left, right) => left.id.localeCompare(right.id));
+    const units = [{
+      id: "unit-private", revision: 1, projectId: "route-project", kind: "discussion",
+      members: [PRIVATE_ITEM_ID], memberCount: 1,
+      membershipDigest: await hash([{ id: PRIVATE_ITEM_ID, sourceDigest: privateSourceDigest }]),
+    }, {
       id: "unit-route", revision: 1, projectId: "route-project", kind: "progression",
       members: [STORY_ITEM_ID], memberCount: 1,
-      membershipDigest: await hash([{ id: STORY_ITEM_ID, sourceDigest }]),
-    };
+      membershipDigest: await hash([{ id: STORY_ITEM_ID, sourceDigest: storySourceDigest }]),
+    }];
     const semanticCore = {
       projectId: "route-project",
       revision: 1,
       sourceDigest: await hash(contributionRecords),
-      universeDigest: await hash([STORY_ITEM_ID]),
-      units: [unit],
+      universeDigest: await hash(contributionRecords.map((record) => record.id)),
+      units,
     };
     const semanticValidation = await validateSemanticManifestAuthority({
       ...semanticCore,
@@ -471,21 +500,28 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       RUN_ID, semantic.projectId, semantic.revision, INITIAL_SOURCE_REVISION,
       semantic.sourceDigest, semantic.universeDigest, semantic.manifestDigest,
       semantic.units.length, semantic.serializedBytes, semanticValidation.storyProjectionBytes,
-      1, "c".repeat(64), 1, 1, timestamp, timestamp,
+      1, "c".repeat(64), 1, 2, timestamp, timestamp,
     ).run();
-    await db.prepare(`INSERT INTO semantic_units
-      (id,workflow_run_id,revision,project_id,kind,member_count,membership_digest,
-       story_projection_json) VALUES (?,?,?,?,?,?,?,'{}')`).bind(
-      unit.id, RUN_ID, unit.revision, unit.projectId, unit.kind,
-      unit.memberCount, unit.membershipDigest,
-    ).run();
-    await db.prepare(`INSERT INTO semantic_unit_members
-      (item_id,workflow_run_id,unit_id,source_digest) VALUES (?,?,?,?)`)
-      .bind(STORY_ITEM_ID, RUN_ID, unit.id, sourceDigest).run();
+    for (const unit of semantic.units) {
+      await db.prepare(`INSERT INTO semantic_units
+        (id,workflow_run_id,revision,project_id,kind,member_count,membership_digest,
+         story_projection_json) VALUES (?,?,?,?,?,?,?,'{}')`).bind(
+        unit.id, RUN_ID, unit.revision, unit.projectId, unit.kind,
+        unit.memberCount, unit.membershipDigest,
+      ).run();
+      for (const itemId of unit.members) {
+        const sourceDigest = contributionRecords.find((record) => record.id === itemId).sourceDigest;
+        await db.prepare(`INSERT INTO semantic_unit_members
+          (item_id,workflow_run_id,unit_id,source_digest) VALUES (?,?,?,?)`)
+          .bind(itemId, RUN_ID, unit.id, sourceDigest).run();
+      }
+    }
 
     const coverageValidation = await finalizeCoverageManifestAuthority({ rows: [{
-      unitId: unit.id, disposition: "represented", ownerId: "story-authority",
-    }] }, semantic);
+      unitId: "unit-private", disposition: "excluded", exclusionReason: "privacy_withheld",
+    }, {
+      unitId: "unit-route", disposition: "represented", ownerId: "story-authority",
+    }] }, semantic, null, new Set(["unit-private"]));
     assert.equal(coverageValidation.ok, true, coverageValidation.code);
     const coverage = coverageValidation.authority;
     const coverageInput = {
@@ -493,14 +529,18 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       semanticManifestRevision: coverage.semanticManifestRevision,
       semanticManifestDigest: coverage.semanticManifestDigest,
       coverageDigest: coverage.coverageDigest,
-      rows: coverage.rows.map(({ unitId, disposition, ownerId }) => ({ unitId, disposition, ownerId })),
+      rows: coverage.rows.map((row) => row.disposition === "represented" ? {
+        unitId: row.unitId, disposition: row.disposition, ownerId: row.ownerId,
+      } : {
+        unitId: row.unitId, disposition: row.disposition, exclusionReason: row.exclusionReason,
+      }),
     };
     const storySource = JSON.parse(currentStorySource().slice("oxygen.story:".length));
     storySource.coverage = {
       semanticManifest: { revision: semantic.revision, digest: semantic.manifestDigest },
       coverageManifest: { revision: coverage.revision, digest: coverage.coverageDigest },
-      representedUnitIds: [unit.id],
-      excludedUnits: [],
+      representedUnitIds: ["unit-route"],
+      excludedUnits: [{ unitId: "unit-private", reason: "privacy_withheld" }],
     };
     const storySummary = `oxygen.story:${JSON.stringify(storySource)}`;
     const storyCandidates = [{ id: STORY_ITEM_ID, summary: storySummary }];
@@ -532,7 +572,7 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       sourceRevision: INITIAL_SOURCE_REVISION,
       receipts: [{
         lane: "story", status: "complete", inputDigest: semantic.manifestDigest,
-        scopeDigest: await storyPreparationDigest([unit.id]), scopeCount: 1,
+        scopeDigest: await storyPreparationDigest(["unit-private", "unit-route"]), scopeCount: 2,
         outputDigest: await storyPreparationDigest(storyOutput), outputCount: 1,
       }, {
         lane: "insight", status: "complete",
@@ -561,21 +601,28 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
 
     const realBatch = db.batch.bind(db);
     db.batch = async (statements) => {
-      await db.prepare(`UPDATE workflow_runs SET story_source_revision=? WHERE id=?`)
-        .bind(INITIAL_SOURCE_REVISION + 1, RUN_ID).run();
+      await db.prepare(`UPDATE redactions SET review_state='confirmed_keep',status='removed',
+        updated_at=? WHERE id='source-private'`)
+        .bind("2041-01-01T00:00:01.000Z").run();
       return realBatch(statements);
     };
-    await assert.rejects(() => workflowRoute.POST(new Request("http://localhost/api/workflow", {
+    const mutationResponse = await workflowRoute.POST(new Request("http://localhost/api/workflow", {
       method: "POST", body: JSON.stringify(body),
-    })));
+    }));
+    assert.equal(mutationResponse.status, 409, await mutationResponse.text());
     const rolledBack = await activationSnapshot(db);
     assert.equal(rolledBack.coverage, null);
     assert.deepEqual(rolledBack.receipts, []);
     assert.deepEqual(rolledBack.candidates, []);
     assert.equal(rolledBack.probeRun.source_revision, INITIAL_SOURCE_REVISION);
-    assert.equal(rolledBack.items[0].organization_reason, null);
+    assert.equal(
+      rolledBack.items.find((item) => item.id === STORY_ITEM_ID).organization_reason,
+      null,
+    );
 
     db.batch = realBatch;
+    await db.prepare(`UPDATE redactions SET review_state='deterministic',status='active',
+      updated_at=? WHERE id='source-private'`).bind(timestamp).run();
     await db.prepare(`UPDATE workflow_runs
       SET story_generation_status='running',story_source_revision=? WHERE id=?`)
       .bind(INITIAL_SOURCE_REVISION, RUN_ID).run();
@@ -596,7 +643,42 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     assert.equal(activated.probeRun.source_revision, INITIAL_SOURCE_REVISION + 1);
     assert.equal(activated.probeRun.output_digest, EMPTY_DIGEST);
     assert.equal(activated.probeRun.output_count, 0);
-    assert.match(activated.items[0].organization_reason, /^oxygen\.story:/);
+    assert.match(
+      activated.items.find((item) => item.id === STORY_ITEM_ID).organization_reason,
+      /^oxygen\.story:/,
+    );
+    const currentCoverage = await readCoverageManifestAuthority(db, RUN_ID, semantic);
+    assert.ok(currentCoverage);
+    assert.equal(currentCoverage.rows.find((row) => row.unitId === "unit-private")
+      .exclusionReason, "privacy_withheld");
+
+    await db.prepare(`UPDATE redactions SET review_state='confirmed_keep',status='removed',
+      updated_at=? WHERE id='source-private'`)
+      .bind("2041-01-01T00:00:02.000Z").run();
+    assert.equal(
+      await readCoverageManifestAuthority(db, RUN_ID, semantic),
+      null,
+      "persisted coverage fails closed after its current Source Privacy decision changes",
+    );
+    await db.prepare(`UPDATE redactions SET review_state='deterministic',status='active',
+      updated_at=? WHERE id='source-private'`).bind(timestamp).run();
+    assert.ok(await readCoverageManifestAuthority(db, RUN_ID, semantic));
+    await db.prepare("UPDATE items SET content=? WHERE id=?")
+      .bind("Changed private synthetic event.", PRIVATE_ITEM_ID).run();
+    assert.equal(
+      await readCoverageManifestAuthority(db, RUN_ID, semantic),
+      null,
+      "a current-source digest change invalidates Source Privacy authority",
+    );
+    await db.prepare("UPDATE items SET content=? WHERE id=?")
+      .bind("Private synthetic event.", PRIVATE_ITEM_ID).run();
+    assert.ok(await readCoverageManifestAuthority(db, RUN_ID, semantic));
+    await db.prepare("DELETE FROM redactions WHERE id='source-private'").run();
+    assert.equal(
+      await readCoverageManifestAuthority(db, RUN_ID, semantic),
+      null,
+      "deleting the final redaction removes persisted privacy_withheld authority",
+    );
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
     delete globalThis.__oxygenLocalSqlite;

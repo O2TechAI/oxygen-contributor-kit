@@ -172,8 +172,22 @@ The finalizer rejects omissions, overlaps, unknown unit IDs, stale semantic auth
 node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \
   work/<run>-review/project-map.json \
   work/<run>-review/story-coverage-draft.json \
-  work/<run>-review/story-coverage-manifest.json
+  work/<run>-review/story-coverage-manifest.json \
+  --source-privacy work/<run>-review/current-public-source-privacy.json
 ```
+
+`--source-privacy` is required and accepts only the current public Source Privacy JSON
+response/projection from the same reviewed run. The complete job must have zero rejected rows and
+equal completed/total counts. Exact current semantic membership maps active final-redaction
+decisions to units: `deterministic` and `confirmed_redact` authorize withholding; pending
+`needs_confirmation` and `confirmed_keep` decisions do not. Completed-zero is explicit empty authority, not
+an omitted fallback.
+
+This authority is transport-only input. The final coverage manifest shape above does not change and
+must not contain Source Privacy rows, authorized-unit lists, offsets, categories, reasons, source
+text, or other Privacy metadata. Activation independently rederives the same set from current local
+SQLite source, corpus, semantic membership, and Source Privacy state. Persisted coverage readback
+does the same; stale or changed authority makes current coverage invalid.
 
 After a successful activation, the exact submitted `story-coverage-manifest.json` becomes the prior accepted coverage authority for the next regeneration. If activation is rejected, that output is not prior authority. For regeneration, pass `--previous` only to a local copy of the exact manifest from the last successful activation:
 
@@ -182,6 +196,7 @@ node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \
   work/<run>-review/project-map.json \
   work/<run>-review/story-coverage-draft.json \
   work/<run>-review/story-coverage-manifest.json \
+  --source-privacy work/<run>-review/current-public-source-privacy.json \
   --previous work/<run>-review/story-coverage-manifest.accepted.json
 ```
 

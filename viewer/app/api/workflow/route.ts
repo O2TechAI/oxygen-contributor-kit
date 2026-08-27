@@ -31,6 +31,10 @@ import {
   beginStoryActivationMutation,
   publishActivatedStorySourceMutation,
 } from "../../../lib/story-source-publication";
+import {
+  coveragePrivacyAuthorityGuardStatement,
+  readCoveragePrivacyAuthority,
+} from "../../../lib/story-coverage-privacy-authority";
 
 const EVENTS = new Set([
   "target_confirmed",
@@ -283,6 +287,18 @@ export async function POST(request: Request) {
         await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
         return Response.json({ error: "Current semantic manifest is required" }, { status: 409 });
       }
+      const privacyAuthority = await readCoveragePrivacyAuthority(
+        db,
+        workflowRunId,
+        semanticManifest,
+      );
+      if (!privacyAuthority.ok) {
+        await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
+        return Response.json({
+          error: "Current source Privacy authority is required",
+          code: privacyAuthority.code,
+        }, { status: 409 });
+      }
       if (!preferenceAuthority) {
         await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
         return Response.json({ error: "Current Preference preparation is required" }, { status: 409 });
@@ -300,6 +316,7 @@ export async function POST(request: Request) {
         itemRows,
         semanticManifest,
         record.coverageManifest,
+        privacyAuthority.authority.authorizedUnitIds,
       );
       if (!activationValidation.ok) {
         await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
@@ -352,6 +369,7 @@ export async function POST(request: Request) {
         leasedRevision,
       ];
       const statements = [
+        coveragePrivacyAuthorityGuardStatement(db, privacyAuthority.authority),
         db.prepare(`UPDATE items SET organization_reason='semantic-unit:' || (
           SELECT unit_id FROM semantic_unit_members WHERE item_id=items.id
         ) WHERE organization_reason LIKE ? AND EXISTS (
@@ -482,6 +500,20 @@ export async function POST(request: Request) {
         preferenceAuthority.outputCount,
         now,
       )) {
+        const currentPrivacyAuthority = await readCoveragePrivacyAuthority(
+          db,
+          workflowRunId,
+          semanticManifest,
+        );
+        if (!currentPrivacyAuthority.ok
+          || currentPrivacyAuthority.authority.snapshotDigest
+            !== privacyAuthority.authority.snapshotDigest) {
+          await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
+          return Response.json({
+            error: "Story activation authority changed before commit",
+            code: "COVERAGE_PRIVACY_AUTHORITY_MISSING",
+          }, { status: 409 });
+        }
         throw new Error("Story source publication boundary changed during activation");
       }
       return Response.json(deriveWorkflowProgress({

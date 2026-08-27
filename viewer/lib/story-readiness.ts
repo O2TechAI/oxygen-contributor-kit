@@ -947,6 +947,13 @@ export async function readCoverageManifestAuthority(
   workflowRunId: string,
   semanticManifest: SemanticManifestAuthority,
 ): Promise<CoverageManifestAuthority | null> {
+  const { readCoveragePrivacyAuthority } = await import("./story-coverage-privacy-authority.ts");
+  const privacyAuthority = await readCoveragePrivacyAuthority(
+    db,
+    workflowRunId,
+    semanticManifest,
+  );
+  if (!privacyAuthority.ok) return null;
   const manifest = await db.prepare(`SELECT revision,semantic_manifest_revision,
       semantic_manifest_digest,coverage_digest,serialized_bytes
       FROM story_coverage_manifests WHERE workflow_run_id=?`)
@@ -970,7 +977,11 @@ export async function readCoverageManifestAuthority(
       exclusionReason: row.exclusion_reason,
     }),
   };
-  const validation = await validateCoverageManifestAuthority(input, semanticManifest);
+  const validation = await validateCoverageManifestAuthority(
+    input,
+    semanticManifest,
+    privacyAuthority.authority.authorizedUnitIds,
+  );
   return validation.ok ? validation.authority : null;
 }
 
@@ -1295,8 +1306,13 @@ export async function validateStoryActivationAuthority(
   evidenceRows: StoryEvidenceRow[],
   semanticManifest: SemanticManifestAuthority,
   coverageInput: unknown,
+  privacyAuthorizedUnitIds: ReadonlySet<string> = new Set(),
 ): Promise<StoryActivationAuthorityValidation> {
-  const coverage = await validateCoverageManifestAuthority(coverageInput, semanticManifest);
+  const coverage = await validateCoverageManifestAuthority(
+    coverageInput,
+    semanticManifest,
+    privacyAuthorizedUnitIds,
+  );
   if (!coverage.ok) return coverage;
   const source = validateStorySourcePackage(candidateRows, evidenceRows, {
     semanticManifest,

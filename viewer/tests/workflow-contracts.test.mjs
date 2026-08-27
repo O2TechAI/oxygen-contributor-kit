@@ -177,6 +177,16 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
   assert.match(storyDataContract, /disposition: "represented"; ownerId/);
   assert.match(storyDataContract, /disposition: "excluded"; exclusionReason/);
   assert.match(storyDataContract, /exact submitted `story-coverage-manifest\.json` becomes the prior accepted coverage authority/);
+  for (const contract of [storySkill, storyDataContract]) {
+    assert.match(contract, /--source-privacy/);
+    assert.match(contract, /completed-zero/i);
+    assert.match(contract, /`deterministic`[\s\S]{0,80}`confirmed_redact`/);
+    assert.match(contract, /`needs_confirmation`[\s\S]{0,80}`confirmed_keep`/);
+    assert.match(contract, /(no Source Privacy rows|must not contain Source Privacy rows)/i);
+  }
+  assert.match(storyDataContract, /Activation independently rederives the same set from current local\s+SQLite/i);
+  assert.match(storyDataContract, /Persisted coverage readback[\s\S]{0,100}stale or changed authority/i);
+  assert.doesNotMatch(storyDataContract, /source Privacy[^\n]{0,80}(fallback|compatibility|legacy)/i);
   assert.doesNotMatch(documents, new RegExp("server-accepted-story-" + "coverage\\.json"));
 
   assert.match(uiContract, /Insight is not Story prose/);

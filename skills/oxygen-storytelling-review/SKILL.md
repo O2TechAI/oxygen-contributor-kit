@@ -195,8 +195,23 @@ Then run the provider-free finalizer:
 node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
   "$Review\project-map.json" `
   "$Review\story-coverage-draft.json" `
-  "$Review\story-coverage-manifest.json"
+  "$Review\story-coverage-manifest.json" `
+  --source-privacy "$Review\current-public-source-privacy.json"
 ```
+
+`current-public-source-privacy.json` must be the unchanged, current JSON response/projection from
+the same Viewer's public Source Privacy surface. The finalizer requires it even when the completed
+Privacy pass contains zero rows. It accepts only a current complete job with `rejected=0` and
+`completed=total`, exact canonical row order, and exact membership in the current semantic
+manifest. Only active `deterministic` and `confirmed_redact` rows authorize a semantic unit for
+`privacy_withheld`; `needs_confirmation` and `confirmed_keep` do not. A unit is authorized only
+when it owns at least one such current final-redacted member.
+
+The source Privacy file is validation input only. The coverage output remains exactly the
+unversioned coverage manifest and contains no Source Privacy rows, authority list, offsets,
+categories, reasons, source text, or other private metadata. Missing, stale, foreign, reordered,
+duplicated, or tampered Privacy/membership input fails closed. Completed-zero authorizes an empty
+set: coverage without `privacy_withheld` may finalize, while any `privacy_withheld` row fails.
 
 For regeneration, pass `--previous` only with the exact coverage manifest that was submitted in the last successful activation. Copy or rename the submitted file as accepted only after `--story-event ready` succeeds. A rejected activation output never becomes prior authority.
 
@@ -206,6 +221,7 @@ node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
   "$Review\project-map.json" `
   "$Review\story-coverage-draft.json" `
   "$Review\story-coverage-manifest.json" `
+  --source-privacy "$Review\current-public-source-privacy.json" `
   --previous "$AcceptedCoverage"
 ```
 

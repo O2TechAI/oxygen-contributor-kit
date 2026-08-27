@@ -16,10 +16,51 @@ import {
   validateStoryActivationAuthority,
   validateStorySourcePackage,
 } from "../lib/story-readiness.ts";
+import { deriveCoveragePrivacyAuthority } from "../lib/story-coverage-privacy-authority.ts";
 import { STORY_PREFIX } from "../lib/timeline.ts";
 
 const hash = (value) => createHash("sha256").update(canonicalAuthorityJson(value)).digest("hex");
 const contributionRecords = (ids) => ids.map((id) => ({ id, sourceDigest: hash({ id }) }));
+
+function privacyRow(id, itemId, reviewState = "deterministic", overrides = {}) {
+  return {
+    id,
+    item_id: itemId,
+    document_id: "doc",
+    start_offset: 0,
+    end_offset: 1,
+    category: "sensitive",
+    confidence: "high",
+    reason: "PRIVATE_SENTINEL_MUST_NOT_ENTER_COVERAGE",
+    review_state: reviewState,
+    uncertainty_reason: reviewState === "needs_confirmation" ? "Contributor decision required." : null,
+    status: reviewState === "confirmed_keep" ? "removed" : "active",
+    created_by: "local-test",
+    created_at: "2042-01-01T00:00:00.000Z",
+    updated_at: "2042-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function sourcePrivacy(redactions, jobOverrides = {}) {
+  return {
+    redactions,
+    job: {
+      id: "source-privacy-current",
+      status: "complete",
+      stage: "complete",
+      model: null,
+      completed: redactions.length,
+      total: redactions.length,
+      rejected: 0,
+      source_digest: "9".repeat(64),
+      started_at: "2042-01-01T00:00:00.000Z",
+      updated_at: "2042-01-01T00:00:00.000Z",
+      completed_at: "2042-01-01T00:00:00.000Z",
+      ...jobOverrides,
+    },
+  };
+}
 
 async function semanticAuthority(unitBOverrides = {}) {
   const contributionIds = ["doc:item-a", "doc:item-b"];
@@ -168,6 +209,7 @@ test("coverage CLI advances only from explicitly server-accepted prior authority
     const draftPath = join(root, "draft.json");
     const outputPath = join(root, "coverage.json");
     const acceptedPath = join(root, "accepted.json");
+    const sourcePrivacyPath = join(root, "source-privacy.json");
     const firstRows = [
       { unitId: "unit-a", disposition: "represented", ownerId: "chapter-a" },
       { unitId: "unit-b", disposition: "excluded", exclusionReason: "routine_non_narrative" },
@@ -178,9 +220,17 @@ test("coverage CLI advances only from explicitly server-accepted prior authority
     ];
     writeFileSync(semanticPath, JSON.stringify(semantic), "utf8");
     writeFileSync(draftPath, JSON.stringify({ rows: firstRows }), "utf8");
+    writeFileSync(sourcePrivacyPath, JSON.stringify(sourcePrivacy([])), "utf8");
     const run = (...extra) => spawnSync(process.execPath, [
-      script, semanticPath, draftPath, outputPath, ...extra,
+      script, semanticPath, draftPath, outputPath,
+      "--source-privacy", sourcePrivacyPath,
+      ...extra,
     ], { cwd: repository, encoding: "utf8" });
+    const missingAuthority = spawnSync(process.execPath, [
+      script, semanticPath, draftPath, outputPath,
+    ], { cwd: repository, encoding: "utf8" });
+    assert.equal(missingAuthority.status, 2);
+    assert.match(missingAuthority.stderr, /--source-privacy/);
     const first = run();
     assert.equal(first.status, 0, first.stderr);
     const accepted = JSON.parse(readFileSync(outputPath, "utf8"));
@@ -195,6 +245,91 @@ test("coverage CLI advances only from explicitly server-accepted prior authority
     const acceptedRegeneration = run("--previous", acceptedPath);
     assert.equal(acceptedRegeneration.status, 0, acceptedRegeneration.stderr);
     assert.equal(JSON.parse(readFileSync(outputPath, "utf8")).revision, 2);
+    const output = readFileSync(outputPath, "utf8");
+    assert.doesNotMatch(output, /PRIVATE_SENTINEL|redactions|source_digest|authorizedUnitIds/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("coverage CLI requires current Source Privacy for privacy_withheld rows and explicit zero", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oxygen-coverage-privacy-finalizer-"));
+  try {
+    const repository = fileURLToPath(new URL("../..", import.meta.url));
+    const script = join(
+      repository, "skills", "oxygen-storytelling-review", "scripts", "finalize_story_coverage.mjs",
+    );
+    const semantic = await semanticAuthority({ kind: "discussion" });
+    const semanticPath = join(root, "semantic.json");
+    const draftPath = join(root, "draft.json");
+    const outputPath = join(root, "coverage.json");
+    const sourcePrivacyPath = join(root, "source-privacy.json");
+    writeFileSync(semanticPath, JSON.stringify(semantic), "utf8");
+    const run = () => spawnSync(process.execPath, [
+      script, semanticPath, draftPath, outputPath,
+      "--source-privacy", sourcePrivacyPath,
+    ], { cwd: repository, encoding: "utf8" });
+    const privacyRows = [
+      { unitId: "unit-a", disposition: "excluded", exclusionReason: "privacy_withheld" },
+      { unitId: "unit-b", disposition: "represented", ownerId: "chapter-b" },
+    ];
+    writeFileSync(draftPath, JSON.stringify({ rows: privacyRows }), "utf8");
+
+    writeFileSync(sourcePrivacyPath, JSON.stringify(sourcePrivacy([
+      privacyRow("deterministic-a", "doc:item-a"),
+    ])), "utf8");
+    const deterministic = run();
+    assert.equal(deterministic.status, 0, deterministic.stderr);
+    const deterministicOutput = readFileSync(outputPath, "utf8");
+    const parsedOutput = JSON.parse(deterministicOutput);
+    assert.deepEqual(Object.keys(parsedOutput), [
+      "revision", "semanticManifestRevision", "semanticManifestDigest", "coverageDigest", "rows",
+    ]);
+    assert.deepEqual(parsedOutput.rows[0], {
+      unitId: "unit-a", disposition: "excluded", exclusionReason: "privacy_withheld",
+    });
+    assert.doesNotMatch(
+      `${deterministicOutput}${deterministic.stdout}`,
+      /PRIVATE_SENTINEL|start_offset|category|reason|authorizedUnitIds/,
+    );
+
+    writeFileSync(sourcePrivacyPath, JSON.stringify(sourcePrivacy([
+      privacyRow("confirmed-a", "doc:item-a", "confirmed_redact"),
+    ])), "utf8");
+    assert.equal(run().status, 0);
+
+    for (const state of ["needs_confirmation", "confirmed_keep"]) {
+      writeFileSync(sourcePrivacyPath, JSON.stringify(sourcePrivacy([
+        privacyRow(`row-${state}`, "doc:item-a", state),
+      ])), "utf8");
+      const rejected = run();
+      assert.equal(rejected.status, 1);
+      assert.match(rejected.stderr, /COVERAGE_PRIVACY_AUTHORITY_MISSING/);
+    }
+
+    writeFileSync(sourcePrivacyPath, JSON.stringify(sourcePrivacy([])), "utf8");
+    const zeroWithPrivacy = run();
+    assert.equal(zeroWithPrivacy.status, 1);
+    assert.match(zeroWithPrivacy.stderr, /COVERAGE_PRIVACY_AUTHORITY_MISSING/);
+
+    writeFileSync(draftPath, JSON.stringify({ rows: [
+      { unitId: "unit-a", disposition: "represented", ownerId: "chapter-a" },
+      { unitId: "unit-b", disposition: "represented", ownerId: "chapter-b" },
+    ] }), "utf8");
+    assert.equal(run().status, 0, "completed-zero is explicit authority for non-Privacy coverage");
+
+    writeFileSync(draftPath, JSON.stringify({ rows: privacyRows }), "utf8");
+    writeFileSync(sourcePrivacyPath, JSON.stringify(sourcePrivacy([
+      privacyRow("wrong-unit", "doc:item-b"),
+    ])), "utf8");
+    const wrongUnit = run();
+    assert.equal(wrongUnit.status, 1);
+    assert.match(wrongUnit.stderr, /COVERAGE_PRIVACY_AUTHORITY_MISSING/);
+
+    writeFileSync(sourcePrivacyPath, Uint8Array.from([0xc3, 0x28]));
+    const invalidUtf8 = run();
+    assert.equal(invalidUtf8.status, 1);
+    assert.match(invalidUtf8.stderr, /encoded data was not valid|UTF-8/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -312,6 +447,60 @@ test("exclusion reasons require exact upstream authority", async () => {
   assert.equal((await validateCoverageManifestAuthority(
     explicitOutsideScope, semantic,
   )).ok, true);
+});
+
+test("source Privacy authorizes only exact final-redacted semantic-unit members", async () => {
+  const semantic = await semanticAuthority({ kind: "discussion" });
+  const deterministic = await deriveCoveragePrivacyAuthority(
+    sourcePrivacy([privacyRow("redaction-a", "doc:item-a")]),
+    semantic,
+  );
+  assert.equal(deterministic.ok, true);
+  assert.deepEqual([...deterministic.authority.authorizedUnitIds], ["unit-a"]);
+
+  const confirmed = await deriveCoveragePrivacyAuthority(
+    sourcePrivacy([privacyRow("redaction-b", "doc:item-b", "confirmed_redact")]),
+    semantic,
+  );
+  assert.equal(confirmed.ok, true);
+  assert.deepEqual([...confirmed.authority.authorizedUnitIds], ["unit-b"]);
+
+  for (const state of ["needs_confirmation", "confirmed_keep"]) {
+    const result = await deriveCoveragePrivacyAuthority(
+      sourcePrivacy([privacyRow(`redaction-${state}`, "doc:item-a", state)]),
+      semantic,
+    );
+    assert.equal(result.ok, true);
+    assert.deepEqual([...result.authority.authorizedUnitIds], []);
+  }
+
+  const completedZero = await deriveCoveragePrivacyAuthority(sourcePrivacy([]), semantic);
+  assert.equal(completedZero.ok, true);
+  assert.deepEqual([...completedZero.authority.authorizedUnitIds], []);
+
+  const invalidCases = [
+    sourcePrivacy([privacyRow("foreign", "doc:foreign")]),
+    sourcePrivacy([
+      privacyRow("duplicate", "doc:item-a"),
+      privacyRow("duplicate", "doc:item-b", "deterministic", { start_offset: 1, end_offset: 2 }),
+    ]),
+    sourcePrivacy([], { completed: 1, total: 1 }),
+    sourcePrivacy([privacyRow("stale", "doc:item-a")], { status: "stale" }),
+    sourcePrivacy([
+      privacyRow("later", "doc:item-b"),
+      privacyRow("earlier", "doc:item-a"),
+    ]),
+  ];
+  for (const candidate of invalidCases) {
+    assert.equal((await deriveCoveragePrivacyAuthority(candidate, semantic)).ok, false);
+  }
+
+  const tamperedMembership = structuredClone(semantic);
+  tamperedMembership.units[0].members[0] = "doc:item-tampered";
+  assert.equal((await deriveCoveragePrivacyAuthority(
+    sourcePrivacy([privacyRow("redaction-a", "doc:item-a")]),
+    tamperedMembership,
+  )).ok, false);
 });
 
 function storyCandidate(semantic, coverage, evidenceId = "doc:item-a") {
