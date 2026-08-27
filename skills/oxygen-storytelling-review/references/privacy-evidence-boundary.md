@@ -44,7 +44,9 @@ Evidence content stays in its original source language. Do not translate it and 
 
 ## Release Preview Contract
 
-Release Preview shows what would be released, not a raw-source browser.
+Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base.
+Production still exposes obsolete category/delete controls, so clean-room product completion is
+blocked. The required Release Preview shows what would be released, not a raw-source browser:
 
 - Deterministic or contributor-confirmed safe content shows only the current release-safe projection.
 - A `needs_confirmation` source Privacy item shows the minimum permitted local original beside the current safe projection, a safe uncertainty reason, and Keep/Redact.
@@ -61,7 +63,8 @@ Redact
 
 Keep preserves existing safe release context. Redact suppresses the bound release targets. Neither decision deletes source evidence, changes category/status/reason metadata, soft-deletes a row, or authorizes publication. Pending confirmation blocks Story/package release.
 
-Raw Evidence and suppressed content are not exposed through Insight review. If a final Release Preview comparison UI has not been established by implementation audit, describe this section as the required release contract and readiness gate, not as an already verified UI.
+Raw Evidence and suppressed content are not exposed through Insight review. Describe this section as
+the required release contract and readiness gate, not as an already verified UI.
 
 ## Story/Release Candidate Shape
 

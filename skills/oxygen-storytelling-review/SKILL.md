@@ -75,9 +75,9 @@ Opening Project Story for human review requires terminal results for all four pr
 - Story/Release Privacy candidate preparation;
 - Preference-question generation, including an explicit completed-zero result when no valid question is warranted.
 
-Preference questions may be generated before the human review UI opens by using reusable lessons represented by generated Insight candidates. They remain unanswered questions until the contributor acts; never report them as confirmed preferences.
+Preference questions must be generated before the human review UI opens by using reusable lessons represented by generated Insight candidates. They remain unanswered questions until the contributor acts; never report them as confirmed preferences. If no valid question is warranted, validate a completed-zero probe batch before review.
 
-Current implementation enforces persisted Story activation before Review Story. Separate terminal receipts for the Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation are **REQUIRED/NOT YET ENFORCED** at activation and remain a Wave B runtime dependency. Until that runtime gate exists, the owning Agent must fail closed in the public workflow if any required terminal receipt is missing.
+Current implementation accepts only Story candidates and coverage at `--story-event ready`. It does not accept terminal receipts for the Insight pass, Story/Release Privacy candidate preparation, or Preference-question generation. `validate_probes.py` validates the probe file shape only. Those receipt validators and the Preference readiness binding are **REQUIRED/NOT YET IMPLEMENTED** Wave B runtime dependencies. Until they exist and pass, activation is blocked here.
 
 ## Human Pauses
 
@@ -95,10 +95,10 @@ Do not fabricate a decision, infer an answer from silence, click through review 
 
 The canonical Viewer is local only. It must be the same origin and workflow run throughout the run.
 
-Start the progress-first Viewer before collection if it is not already running. This command uses a fixed local port and workflow run ID so later commands are executable without hidden state:
+Start PowerShell in the contributor-kit root, then start the progress-first Viewer before collection if it is not already running. This command uses a fixed local port and workflow run ID so later commands are executable without hidden state:
 
 ```powershell
-$Kit = "D:\Coding Projects\O2-Intern\oxygen-contributor-kit"
+$Kit = (Get-Location).Path
 $Target = "D:\Coding Projects\my-project"
 $Viewer = "http://127.0.0.1:3210"
 $WorkflowRun = "oxygen-local-review-001"
@@ -108,10 +108,10 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --target "$Target" --workflow-run-id "$WorkflowRun" --port 3210 --no-browser
 ```
 
-Keep that PowerShell window running. In a second PowerShell window, attach the organized reviewed run to that same Viewer/run:
+Keep that PowerShell window running. Start the second PowerShell window in the same contributor-kit root, then attach the organized reviewed run to that same Viewer/run:
 
 ```powershell
-$Kit = "D:\Coding Projects\O2-Intern\oxygen-contributor-kit"
+$Kit = (Get-Location).Path
 $Review = "work\repo-run-review"
 $Viewer = "http://127.0.0.1:3210"
 $WorkflowRun = "oxygen-local-review-001"
@@ -140,7 +140,7 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --story-completed 4 --story-total 4
 ```
 
-Use Master-owned bounded semantic workers only for drafts and checks. The owning Agent must prepare deterministic inputs first:
+Use Master-owned bounded semantic workers only for drafts and checks. The desired contract requires the owning Agent to prepare deterministic inputs first:
 
 - create an immutable input digest;
 - assign explicit semantic unit IDs;
@@ -154,14 +154,12 @@ Use Master-owned bounded semantic workers only for drafts and checks. The owning
 
 No worker may silently expand scope, reopen raw history, repair another lane, or treat another lane's failure as success.
 
-The owning Agent remains responsible for deterministic validation, final artifact shape, coverage finalization, activation, and human-pause enforcement.
+The provider-free deterministic shard/receipt validator and its activation binding are **REQUIRED/NOT YET IMPLEMENTED**. Until that exists, do not claim exact union/no-overlap across worker shards has been executably validated. The owning Agent remains responsible for final artifact shape, coverage finalization, activation, and human-pause enforcement.
 
 Generate these local artifacts from `work/<run>-review`:
 
 ```text
 project-map.json
-story-worker-shards/*.json
-story-worker-receipts/*.json
 story-coverage-draft.json
 story-coverage-manifest.json
 story-candidates.json
@@ -209,9 +207,19 @@ node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
 
 Never invent coverage revisions or digests in model output.
 
-## Activation
+## Activation After Wave B Authority
 
-After Story data, Evidence references, and normalized coverage all validate, request atomic activation:
+Before any activation attempt, generate and validate Preference questions:
+
+```powershell
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py "$Review"
+```
+
+Stop here on the current base. No executable provider-free receipt validator accepts terminal
+Insight, Story/Release Privacy, or Preference receipts, and `--story-event ready` must not be
+presented as the next successfully executable canonical command.
+
+After Wave B authority is implemented and those receipts validate, request atomic activation:
 
 ```powershell
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
@@ -229,21 +237,15 @@ Activation revalidates the exact source package, semantic manifest, coverage man
 
 ## Review, Preferences, And Release
 
-The contributor reviews the Story in the Viewer. The review session contains only the implemented fields documented in [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md). It does not store Preference answers. Preference questions are generated from reusable lessons and Insights, may be prepared before the human review opens, and remain unanswered until the contributor explicitly answers in the Preferences authority.
+The contributor reviews the Story in the Viewer. The review session contains only the implemented fields documented in [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md). It does not store Preference answers. Preference questions are generated and validated before the human review opens, then remain unanswered until the contributor explicitly answers in the Preferences authority.
 
-Validate generated Preference questions before handoff:
-
-```powershell
-python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py "$Review"
-```
-
-Release Preview shows only the release-safe projection. When source Privacy has `needs_confirmation`, it may show the minimum permitted local original beside the current safe projection, a safe uncertainty reason, and Keep/Redact. Unavailable originals are never reconstructed. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
+Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base. Production still exposes obsolete category/delete controls, so clean-room product completion is blocked. Required Release Preview behavior is release-safe projection only: deterministic or contributor-confirmed safe content shows safe projection only; `needs_confirmation` is the only actionable state; actions are exactly Keep/Redact; pending content may show only the minimum permitted original and safe projection; unavailable originals are never reconstructed; pending confirmation blocks release. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
 
 All set confirms the current reviewed Story locally. It does not publish, upload, merge, push, or set `publication_approved=true`.
 
 ## Completion Standard
 
-This work is complete only when a fresh contributor Agent can execute the public workflow from the reviewed boundary without prior chat context, hidden prompts, JSON surgery, database repair, code edits, or maintainer rescue. The final package remains local, provider-free after approved generation steps, and carries `publication_approved=false`.
+This work is complete only when a fresh contributor Agent can execute the public workflow from the reviewed boundary without prior chat context, hidden prompts, JSON surgery, database repair, code edits, or maintainer rescue. On this base that standard is **NOT YET MET** because receipt authority, Preference readiness binding, Story/Release Privacy candidate authority, and final Chapter Privacy/Release Preview UI are missing. The final package remains local, provider-free after approved generation steps, and carries `publication_approved=false`.
 
 Run final verification from the repository root:
 

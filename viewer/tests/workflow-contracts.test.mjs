@@ -87,8 +87,10 @@ test("root routing is progressive and preserves the canonical stage owners", asy
       "local reviewed release",
     ]);
   }
-  assert.match(storySkill, /REQUIRED\/NOT YET ENFORCED[\s\S]{0,120}Wave B runtime dependency/);
+  assert.match(storySkill, /REQUIRED\/NOT YET IMPLEMENTED[\s\S]{0,120}Wave B runtime dependenc/);
+  assert.match(storySkill, /activation is blocked here/i);
   assert.match(storySkill, /completed-zero[\s\S]{0,120}Preference-question generation/);
+  assert.doesNotMatch([sop, storySkill].join("\n"), /when possible|when appropriate/i);
 
   assert.match(storyDiscovery, /after privacy preparation/i);
   assert.match(storyDiscovery, /Project Story for human review/i);
@@ -166,8 +168,10 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
   assert.match(productContract, /byte\/content-balanced shard manifests/i);
   assert.match(productContract, /separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning/i);
   assert.match(productContract, /worker returns a receipt[\s\S]{0,160}input digest[\s\S]{0,80}unit IDs covered/);
-  assert.match(productContract, /exact union coverage[\s\S]{0,80}no overlap/i);
+  assert.match(productContract, /validator and activation binding are \*\*REQUIRED\/NOT YET IMPLEMENTED\*\*/);
+  assert.match(productContract, /Do not claim exact union\/no-overlap has been executably validated/);
   assert.match(productContract, /No worker may silently expand scope[\s\S]{0,80}repair another lane/i);
+  assert.doesNotMatch(productContract, /The owning Agent validates exact union coverage/);
 
   assert.match(storyDataContract, /type CoverageDraftRow/);
   assert.match(storyDataContract, /disposition: "represented"; ownerId/);
@@ -182,8 +186,15 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
   assert.match(uiContract, /Do not insert Insights inline[\s\S]{0,120}generic Chapter-end list/i);
 
   assert.match(privacyContract, /Only `needs_confirmation` rows are decision-editable/);
+  assert.match(privacyContract, /NOT YET IMPLEMENTED[\s\S]{0,120}obsolete category\/delete controls/);
+  assert.match(privacyContract, /clean-room product completion is[\s\S]{0,80}blocked/);
   assert.match(privacyContract, /Keep[\s\S]{0,20}Redact/);
   assert.match(privacyContract, /Pending confirmation blocks Story\/package release/);
   assert.match(privacyContract, /Raw Evidence and suppressed content are not exposed through Insight review/);
   assert.doesNotMatch(sop, /controls to change the category|delete the decision|soft delete/i);
+  assert.match(sop, /\$Kit = \(Get-Location\)\.Path/);
+  assert.doesNotMatch(sop, /O2-Intern\\oxygen-contributor-kit/);
+  assert.match(sop, /Stop here on the current base[\s\S]{0,200}receipt validator/);
+  assert.match(sop, /After Wave B authority is implemented/);
+  assert.match(sop, /--story-event ready/);
 });

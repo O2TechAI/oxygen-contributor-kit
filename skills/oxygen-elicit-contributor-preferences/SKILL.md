@@ -1,6 +1,6 @@
 ---
 name: oxygen-elicit-contributor-preferences
-description: Turn a privacy-prepared reviewed Oxygen run into a small set of answerable questions that recover the contributor's transferable preferences. Reuse validated privacy counts, reviewed exclusions, and reusable lessons represented by generated Insight candidates; find high-signal moments where preferences surfaced; reconstruct each situation; and offer evidence-grounded candidate answers plus an escape hatch. Generate questions after reusable lessons/Insight candidates exist, including before Project Story human review opens when appropriate. Answers remain explicit contributor actions during reviewed handoff.
+description: Turn a privacy-prepared reviewed Oxygen run into a small set of answerable questions that recover the contributor's transferable preferences. Reuse validated privacy counts, reviewed exclusions, and reusable lessons represented by generated Insight candidates; find high-signal moments where preferences surfaced; reconstruct each situation; and offer evidence-grounded candidate answers plus an escape hatch. Generate questions after reusable lessons/Insight candidates exist and before Project Story human review opens. Answers remain explicit contributor actions during reviewed handoff.
 ---
 
 # Elicit contributor preferences
@@ -36,10 +36,10 @@ Work only on events whose project label is the primary project unless the contri
 otherwise. Off-project events are noise and spending the contributor's attention on them is the
 main way this pass fails.
 
-Generated probes are questions, not confirmed preferences. They may be prepared before Project
-Story human review opens by using reusable lessons represented by generated Insight candidates, but
-they remain unanswered until the contributor acts. If no valid question is warranted, write a valid
-completed-zero probe batch rather than inventing a preference.
+Generated probes are questions, not confirmed preferences. They must be prepared before Project
+Story human review opens by using reusable lessons represented by generated Insight candidates, and
+they remain unanswered until the contributor acts. If no valid question is warranted, write and
+validate a completed-zero probe batch rather than inventing a preference.
 
 ## Stage 1 — Verify the reviewed boundary and report prior removals
 

@@ -8,7 +8,8 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Workflow progress reaches Review Story only through activation with `storySourceSchema: "oxygen.story"` and `storySessionSchema: "oxygen.story-review-session"`.
 - [ ] Public workflow order is Collect -> Organize -> upstream source Privacy preparation -> build Project Story using bounded semantic workers -> independent global sparse Insight pass -> Story/Release Privacy candidate preparation -> Preference-question generation -> Project Story human review -> Privacy Keep/Redact decisions -> Preference answers -> All set -> local reviewed release.
 - [ ] Review Story opens only after terminal results for Story generation, global Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation; completed-zero is explicit where valid.
-- [ ] Missing activation-time receipts for Insight, Story/Release Privacy, or Preference generation are reported as REQUIRED/NOT YET ENFORCED Wave B dependencies, not implemented runtime behavior.
+- [ ] Missing activation-time receipts for Insight, Story/Release Privacy, or Preference generation are reported as REQUIRED/NOT YET IMPLEMENTED Wave B dependencies, not implemented runtime behavior.
+- [ ] Preference-question validation is ordered before `--story-event ready`; on this base activation is blocked because no executable receipt validator accepts the other terminal receipts.
 - [ ] Story generation order inside the Story lane is complete reviewed history -> Chapter arcs -> complete Story -> validation -> adjacent Phase grouping -> independent Insight pass -> zero or more Insights.
 - [ ] Every Chapter is one complete coherent arc with nonempty supported People and Story blocks.
 - [ ] Phases group adjacent completed Chapters and use precise one- or two-word labels.
@@ -16,7 +17,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Passage assistance, if any local UI later exposes it, is optional, human-facing, non-authoritative, non-readiness, and non-release.
 - [ ] Reviewed archive/input integrity, member paths, manifest counts, source hash, and `publication_approved=false` are safe.
 - [ ] Every primary/supporting/Person/Story-block/Insight Evidence reference is exact, fully qualified, same-document when required, and resolves once.
-- [ ] Bounded semantic workers use deterministic input preparation, immutable input digest, explicit unit IDs, byte/content-balanced shard manifests, separate Story/Insight/Privacy/Preference-question workers, worker receipts, exact union coverage, no overlap, deterministic composition, revision authority outside workers, and fail-closed validation.
+- [ ] Bounded semantic workers preserve the desired Master-owned contract, but the provider-free deterministic shard/receipt validator and activation binding are marked REQUIRED/NOT YET IMPLEMENTED; do not claim exact union/no-overlap was executably validated.
 - [ ] Semantic coverage authority represents or explicitly excludes every unit exactly once.
 - [ ] Coverage draft rows are exactly `{unitId, disposition, ownerId}` or `{unitId, disposition, exclusionReason}`.
 - [ ] No Story JSON contains raw member lists, per-event negative ledgers, Privacy candidates, source originals, prompts, hidden reasoning, or Preference answers.
@@ -34,7 +35,8 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 
 ## Release Preview And Package
 
-- [ ] Release Preview shows only the release-safe projection for deterministic/confirmed safe content.
+- [ ] Final decision-only Chapter Privacy/Release Preview is marked NOT YET IMPLEMENTED on this base, and clean-room product completion is blocked until it exists.
+- [ ] Required Release Preview shows only the release-safe projection for deterministic/confirmed safe content.
 - [ ] `needs_confirmation` source Privacy items show only the minimum permitted local original, current safe projection, safe uncertainty reason, and Keep/Redact.
 - [ ] Only `needs_confirmation` rows are decision-editable; category/status/reason mutation, deletion, and soft deletion are not final contributor actions.
 - [ ] Unavailable originals are never reconstructed.
@@ -61,9 +63,9 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Narrow Chapter screenshot with no horizontal overflow.
 - [ ] Desktop Chapter screenshot showing right-side separate Insight companion cards aligned to Story paragraphs when Insights exist.
 - [ ] Story Edit Mode screenshot with notes and Undo/Redo.
-- [ ] Privacy available and unavailable screenshots when candidate authority exists.
+- [ ] Privacy screenshots only after candidate authority and the final surface exist.
 - [ ] Preferences screenshot with unanswered and answered states.
-- [ ] Release Preview screenshot.
+- [ ] Final Release Preview screenshot after implementation.
 - [ ] Reviewed HTML and ZIP safe-content equivalence evidence.
 - [ ] Console errors checked.
 - [ ] Keyboard focus and Back navigation checked.

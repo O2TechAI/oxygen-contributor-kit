@@ -58,23 +58,23 @@ The Story stage may use conceptual passes inside Build Project Story, but it mus
 
 Opening Project Story for human review requires terminal results for Story generation, the independent global sparse Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation. Completed-zero is a valid terminal result for the Insight and Preference lanes when no warranted Insight or valid question exists.
 
-Current runtime enforces persisted Story activation before Review Story. Separate activation-time receipts for Insight, Story/Release Privacy, and Preference-question generation are **REQUIRED/NOT YET ENFORCED** and remain a Wave B dependency. Until then, a contextless contributor workflow must treat a missing terminal receipt as a blocker rather than a silent success.
+Current runtime accepts only Story candidates and coverage at `--story-event ready`. It does not accept terminal receipts for Insight, Story/Release Privacy, or Preference generation. Those receipt validators and the Preference readiness binding are **REQUIRED/NOT YET IMPLEMENTED** Wave B dependencies. Until they exist and pass, a contextless contributor workflow is blocked here.
 
-Preference questions may be generated before Project Story human review opens by using reusable lessons represented by generated Insight candidates. Generated questions are not confirmed preferences; answers exist only after explicit contributor action.
+Preference questions must be generated before Project Story human review opens by using reusable lessons represented by generated Insight candidates. Generated questions are not confirmed preferences; answers exist only after explicit contributor action.
 
 ## Bounded Semantic Workers
 
 Parallel semantic work is Master-owned. The owning Agent prepares deterministic inputs, computes one immutable input digest, assigns explicit semantic unit IDs, and writes byte/content-balanced shard manifests before any worker starts.
 
-Use separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning. Each worker returns a receipt naming the input digest, shard ID, unit IDs covered, output path, and terminal status. The owning Agent validates exact union coverage, no overlap, no foreign unit IDs, and no stale digest; then it deterministically deduplicates and composes outputs.
+The desired worker contract uses separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning. Each worker returns a receipt naming the input digest, shard ID, unit IDs covered, output path, and terminal status. Exact union coverage, no overlap, no foreign unit IDs, no stale digest, deterministic deduplication, and deterministic composition remain required.
 
-Revision authority, coverage finalization, activation, human-pause enforcement, and release reconstruction stay outside worker scope. No worker may silently expand scope, reopen raw history, repair another lane, or treat another lane's failure as success. Validation fails closed on missing, overlapping, malformed, or scope-expanded work.
+The provider-free deterministic worker receipt validator and activation binding are **REQUIRED/NOT YET IMPLEMENTED**. Do not claim exact union/no-overlap has been executably validated until that validator exists and passes. Revision authority, coverage finalization, activation, human-pause enforcement, and release reconstruction stay outside worker scope. No worker may silently expand scope, reopen raw history, repair another lane, or treat another lane's failure as success.
 
 ## Product Boundaries
 
 Reuse the existing repository Viewer and contracts. Do not build a second frontend, second workflow runner, schema adapter, local database repair tool, or provider client inside the launcher.
 
-The Viewer must preserve:
+The required final Viewer must preserve:
 
 - local-only loopback access;
 - workflow progress;
@@ -85,6 +85,10 @@ The Viewer must preserve:
 - Preferences;
 - HTML/ZIP download actions;
 - publication separation.
+
+Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base.
+Production still exposes obsolete category/delete controls, so clean-room product completion remains
+blocked until the required surface and candidate authority exist.
 
 Project-specific Story prose, Privacy excerpts, generated candidates, preference answers, screenshots, and runtime database state remain local run artifacts. They must not be hardcoded in reusable Skill, Viewer, or test source.
 

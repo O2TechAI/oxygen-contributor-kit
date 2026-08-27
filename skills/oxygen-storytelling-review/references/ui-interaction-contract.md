@@ -2,7 +2,9 @@
 
 ## Application Shell
 
-Reuse the existing local Viewer shell. Keep top navigation, one left project/source rail, main canvas, Project Story Timeline, Release Preview, Preferences, Evidence review, and download actions.
+Reuse the existing local Viewer shell. The required final shell keeps top navigation, one left project/source rail, main canvas, Project Story Timeline, final decision-only Release Preview, Preferences, Evidence review, and download actions.
+
+Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base; production still exposes obsolete category/delete controls. Do not present that final surface as implemented during clean-room validation.
 
 Do not create a parallel page, second shell, project-bound renderer, replacement Privacy implementation, or standalone release tool.
 
@@ -88,7 +90,7 @@ Zero source Insights create no placeholder, empty approval card, or hidden oblig
 
 ## Privacy Surface
 
-When Story/Release Privacy candidate authority is implemented for the run, render one active candidate at a time:
+This is required final behavior, not current executable behavior on this base. When Story/Release Privacy candidate authority and the final decision-only surface are implemented for the run, render one active candidate at a time:
 
 ```text
 progress
@@ -125,8 +127,8 @@ Verify desktop and narrow layouts with the actual local Viewer. Capture final pr
 - Project Story Timeline;
 - Chapter with rail, People, and Story read mode;
 - Story Edit Mode with notes and Undo/Redo;
-- Privacy available and unavailable states when candidate authority exists;
-- Release Preview;
+- Privacy states after candidate authority and the final surface exist;
+- final Release Preview after implementation;
 - Preferences;
 - reviewed release HTML/ZIP output.
 
@@ -140,10 +142,10 @@ An implementation is materially equivalent only when it preserves:
 - Story table-of-contents hierarchy;
 - readable centered Chapter article;
 - controlled direct editing and provenance;
-- one-at-a-time Privacy decisions when present;
+- one-at-a-time Privacy decisions when candidate authority and final surface exist;
 - evidence navigation and original-language Evidence;
 - Preferences as their own authority;
-- Release Preview safe projection;
+- Release Preview safe projection when implemented;
 - HTML/ZIP release projection from the same serialized Story;
 - `publication_approved=false`.
 

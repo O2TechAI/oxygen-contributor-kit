@@ -7,7 +7,7 @@ upstream source Privacy boundary, build and human-review Project Story, prepare 
 Privacy candidates and Preferences, then finish with one local reviewed release ZIP. Nothing is
 uploaded automatically.
 
-## Completion criteria
+## Desired completion criteria
 
 The workflow is complete only when all of the following are true:
 
@@ -19,6 +19,11 @@ The workflow is complete only when all of the following are true:
 3. The contributor can download one verified `oxygen-contribution.zip`.
 4. `publication_approved` remains `false` unless the contributor separately and explicitly
    approves publication.
+
+Current runtime status: clean-room product completion is **NOT YET ACHIEVED** on this base. It is
+blocked by absent activation-time receipt authority for Insight, Story/Release Privacy, and
+Preference generation; absent Preference readiness binding; absent Story/Release Privacy candidate
+authority; and absent final decision-only Chapter Privacy/Release Preview UI.
 
 ## Final public order
 
@@ -274,23 +279,29 @@ application or copy project prose into reusable source.
 Build the complete Project Story with bounded semantic workers, then run an independent global
 sparse Insight pass. Prepare Story/Release Privacy candidates only through implemented candidate
 authority; do not claim `oxygen.story` contains them. Generate Preference questions from reusable
-lessons represented by generated Insight candidates before opening human review when possible;
-questions remain unanswered until explicit contributor action.
+lessons represented by generated Insight candidates before opening human review; questions remain
+unanswered until explicit contributor action. If no valid question exists, validate a completed-zero
+probe batch before review.
 
 Opening Project Story for human review requires terminal results for Story generation, global
 Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation.
 Completed-zero is a valid terminal result for the Insight and Preference lanes when no warranted
-Insight or valid question exists. Current runtime enforces persisted Story activation before Review
-Story, but separate activation-time receipts for Insight, Story/Release Privacy, and Preference
-generation are **REQUIRED/NOT YET ENFORCED** Wave B dependencies. Until those gates exist, a
-missing receipt blocks the public workflow.
+Insight or valid question exists. Current runtime accepts only Story candidates and coverage at
+`--story-event ready`; it does not accept terminal receipts for Insight, Story/Release Privacy, or
+Preference generation. `validate_probes.py` validates the probe file shape only. Those receipt
+validators and the Preference readiness binding are **REQUIRED/NOT YET IMPLEMENTED** Wave B
+dependencies. Until they exist and pass, activation is blocked here; do not present `--story-event
+ready` as the next executable canonical command.
 
 Master-owned semantic work must start from deterministic input preparation, an immutable input
-digest, explicit unit IDs, and byte/content-balanced shard manifests. Use separate bounded workers
-for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning. Require
-worker receipts, exact union coverage, no overlap, deterministic deduplication/composition, and
-fail-closed validation. Revision authority remains with the owning Agent/server lane; no worker may
-silently expand scope or repair another lane.
+digest, explicit unit IDs, and byte/content-balanced shard manifests. The desired design uses
+separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and
+Preference-question reasoning, with worker receipts, exact union coverage, no overlap,
+deterministic deduplication/composition, and fail-closed validation. The provider-free deterministic
+worker receipt validator and its activation binding are **REQUIRED/NOT YET IMPLEMENTED**. Until
+they exist, do not claim exact union/no-overlap across worker shards has been executably validated.
+Revision authority remains with the owning Agent/server lane; no worker may silently expand scope
+or repair another lane.
 
 Coverage draft rows use only `{unitId, disposition, ownerId}` for represented units or
 `{unitId, disposition, exclusionReason}` for excluded units. After successful activation, the exact
@@ -339,11 +350,11 @@ python3 tools/llm_redact/push_redactions.py \
 ### Native Windows PowerShell sequence
 
 Run Terminal A from the contributor-kit root. It uses a fixed local port and workflow run ID so
-Terminal B can attach without hidden state. Change only `$Target` to the contributor-approved
-project path.
+Terminal B can attach without hidden state. Start PowerShell in the contributor-kit root and change
+only `$Target` to the contributor-approved project path.
 
 ```powershell
-$Kit = "D:\Coding Projects\O2-Intern\oxygen-contributor-kit"
+$Kit = (Get-Location).Path
 $Target = "D:\Coding Projects\my-project"
 $Viewer = "http://127.0.0.1:3210"
 $WorkflowRun = "oxygen-local-review-001"
@@ -357,7 +368,7 @@ Keep Terminal A running. Run Terminal B from the same contributor-kit root after
 Organize, and upstream source Privacy preparation have produced the reviewed boundary:
 
 ```powershell
-$Kit = "D:\Coding Projects\O2-Intern\oxygen-contributor-kit"
+$Kit = (Get-Location).Path
 $Run = "work\repo-run"
 $Review = "work\repo-run-review"
 $Dialogue = "work\repo-run-dialogue"
@@ -399,6 +410,16 @@ node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
   "$Review\story-coverage-draft.json" `
   "$Review\story-coverage-manifest.json"
 
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py "$Review"
+```
+
+Stop here on the current base. No executable provider-free receipt validator accepts terminal
+Insight, Story/Release Privacy, or Preference receipts, and activation must fail closed until that
+Wave B authority exists.
+
+After Wave B authority is implemented and those receipts validate, the activation command is:
+
+```powershell
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --story-event ready `
   --coverage-manifest "$Review\story-coverage-manifest.json" `
@@ -408,8 +429,6 @@ if ($LASTEXITCODE -eq 0) {
   Copy-Item -LiteralPath "$Review\story-coverage-manifest.json" `
     -Destination "$Review\story-coverage-manifest.accepted.json" -Force
 }
-
-python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py "$Review"
 ```
 
 The push command automatically reads the adjacent `report.json`. It refuses incomplete worker
@@ -435,15 +454,18 @@ The Viewer must show organization progress, project groups, the primary project,
 timeline per project, evidence-derived primary-project Chapters, source-event evidence, and visible
 HTML/ZIP download actions. Do not describe unsupported annotation controls as available.
 
-Two further surfaces are available once their passes have run:
+Required final surfaces, with current runtime status:
 
-- Privacy review and Release Preview expose only the release-safe projection for deterministic or
-  contributor-confirmed safe content. Only `needs_confirmation` rows are decision-editable. Those
-  rows show the minimum locally permitted original when available, the current safe projection, a
-  safe uncertainty explanation, and exactly two actions: Keep or Redact. Unavailable original
-  content is never reconstructed. Pending confirmation blocks Story/package release. Do not expose
-  Raw Evidence or suppressed content through Insight review, and do not describe a final comparison
-  UI as implemented unless a current implementation audit has established it.
+- Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base.
+  Production still exposes obsolete category/delete controls, so clean-room product completion is
+  blocked until the Viewer implements the contract below and implemented candidate authority
+  supplies candidates.
+- Required Privacy review and Release Preview expose only the release-safe projection for
+  deterministic or contributor-confirmed safe content. Only `needs_confirmation` rows are
+  decision-editable. Those rows show the minimum locally permitted original when present, the
+  current safe projection, a safe uncertainty explanation, and exactly two actions: Keep or Redact.
+  Unavailable original content is never reconstructed. Pending confirmation blocks Story/package
+  release. Do not expose Raw Evidence or suppressed content through Insight review.
 - `Preferences` presents generated probes and records explicit answers (§7). Generated questions
   are not confirmed preferences.
 
@@ -455,10 +477,11 @@ localhost without an authenticating proxy in front.
 
 ## 7. Prepare Preferences and Release Preview
 
-After reusable lessons and Insights are available, read and follow
+After reusable lessons and Insights exist, read and follow
 `skills/oxygen-elicit-contributor-preferences/SKILL.md` on the same privacy-prepared reviewed input.
-This question-generation step may run before human review opens. Do not reopen raw project history
-or independently run another redaction workflow.
+This question-generation step must run before human review opens. Do not reopen raw project history
+or independently run another redaction workflow. If no valid questions exist, record a validated
+completed-zero batch before review.
 
 1. Work on the primary-project events unless the contributor asks to include other projects.
 2. Reuse the validated privacy summary and reviewed exclusions already attached to the input.
