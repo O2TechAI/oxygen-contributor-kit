@@ -14,7 +14,7 @@ import {
   normalizeProbePresentations,
 } from "../../../viewer/lib/preference-presentation.ts";
 import { canonicalAuthorityJson } from "../../../viewer/lib/story-readiness.ts";
-import { compareStorySourceIdentity, parseStorySource } from "../../../viewer/lib/timeline.ts";
+import { parseStorySource } from "../../../viewer/lib/timeline.ts";
 
 const lanes = ["story", "insight", "story_privacy", "preference"];
 const laneFiles = Object.freeze({
@@ -124,23 +124,18 @@ function finalCandidates(value) {
   if (!Array.isArray(value) || value.length === 0) fail("FINAL_STORY_CANDIDATES_INVALID");
   const rows = [];
   for (const candidate of value) {
-    if (!isObject(candidate)
-      || !Object.keys(candidate).every((key) => ["id", "documentId", "sequence", "timestamp", "summary"].includes(key))
-      || !stableId(candidate.id) || !stableId(candidate.documentId) || !nonnegative(candidate.sequence)
-      || (candidate.timestamp !== undefined && candidate.timestamp !== null && typeof candidate.timestamp !== "string")
-      || typeof candidate.summary !== "string") fail("FINAL_STORY_CANDIDATES_INVALID");
+    if (!exactKeys(candidate, ["id", "summary"])
+      || !stableId(candidate.id) || typeof candidate.summary !== "string") {
+      fail("FINAL_STORY_CANDIDATES_INVALID");
+    }
     const story = parseStorySource(candidate.summary);
     if (!story || !stableId(story.key)) fail("FINAL_STORY_CANDIDATES_INVALID");
     rows.push({
       id: candidate.id,
-      documentId: candidate.documentId,
-      sequence: candidate.sequence,
-      ...(candidate.timestamp === undefined ? {} : { timestamp: candidate.timestamp }),
       summary: candidate.summary,
       story,
     });
   }
-  rows.sort(compareStorySourceIdentity);
   if (new Set(rows.map((row) => row.id)).size !== rows.length
     || new Set(rows.map((row) => row.story.key)).size !== rows.length) fail("FINAL_STORY_IDENTITIES_INVALID");
   return rows;

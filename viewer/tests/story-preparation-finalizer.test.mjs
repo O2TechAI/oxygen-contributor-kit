@@ -38,8 +38,8 @@ function source(key, insightId = "shared") {
 }
 
 function rowsFor(stories) {
-  return stories.map((story, sequence) => ({
-    id: `event:${story.key}`, documentId: "doc", sequence,
+  return stories.map((story) => ({
+    id: `event:${story.key}`,
     summary: `oxygen.story:${JSON.stringify(story)}`,
   }));
 }
@@ -102,7 +102,7 @@ async function fixture({ insightIds = ["same", "same"], privacy = true, question
     releaseTargets: ["z::title", "é::story:block-é"],
   }] : [];
   await json(join(directory, "semantic.json"), semantic);
-  await json(join(directory, "candidates.json"), reverse ? [...rows].reverse() : rows);
+  await json(join(directory, "candidates.json"), rows);
   await json(join(directory, "preference.json"), preference);
   const inputs = {
     story: semantic.manifestDigest,
@@ -157,7 +157,7 @@ function run(fixtureValue) {
     "--workflow-run-id", "run-11", "--source-revision", "4"], { encoding: "utf8" });
 }
 
-test("four lanes finalize with a producer-shaped timestamped probe, bulk decision, and cross-Chapter Insight IDs", async () => {
+test("four lanes finalize exact public Story rows with reordered shards and cross-Chapter Insight IDs", async () => {
   const first = await fixture();
   const second = await fixture({ reverse: true });
   try {
@@ -175,6 +175,25 @@ test("four lanes finalize with a producer-shaped timestamped probe, bulk decisio
     assert.equal(preferenceReceipt.scopeCount, 2);
     assert.equal(preferenceReceipt.outputCount, 2);
   } finally { await first.cleanup(); await second.cleanup(); }
+});
+
+test("the sole public Story candidate input rejects every enriched or extra field", async (t) => {
+  const mutations = {
+    documentId: (row) => { row.documentId = "doc"; },
+    sequence: (row) => { row.sequence = 0; },
+    timestamp: (row) => { row.timestamp = null; },
+    extra: (row) => { row.authority = "second"; },
+  };
+  for (const [name, mutate] of Object.entries(mutations)) await t.test(name, async () => {
+    const value = await fixture();
+    try {
+      const path = join(value.directory, "candidates.json");
+      const candidates = await readJson(path);
+      mutate(candidates[0]);
+      await json(path, candidates);
+      assert.notEqual(run(value).status, 0);
+    } finally { await value.cleanup(); }
+  });
 });
 
 test("completed-zero Insight, Story Privacy, and Preference lanes are explicit terminal results", async () => {
