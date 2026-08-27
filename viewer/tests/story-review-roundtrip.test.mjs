@@ -27,7 +27,7 @@ import {
   timelinePresentation,
 } from "../lib/timeline.ts";
 
-const workflowRunId = "final-target-roundtrip";
+const workflowRunId = "story-review-roundtrip";
 const primaryEvidence = { documentId: "roundtrip-document", eventId: "roundtrip-document:event-primary" };
 const detailEvidence = { documentId: "roundtrip-document", eventId: "roundtrip-document:event-detail" };
 
@@ -148,7 +148,8 @@ function buildConfirmedReview(source) {
   return markChapterReady(human.state, context(source, human.state));
 }
 
-test("canonical targets survive Apply, session JSON, hydration, and reviewed Story reconstruction", () => {
+// Story/Release Privacy target roundtrip is deferred until Wave B supplies its real candidate authority.
+test("Story edit and review data survive Apply, canonical session JSON, hydration, and reviewed Story reconstruction", () => {
   const source = parseStorySource(`${STORY_PREFIX}${JSON.stringify(sourceFixture())}`);
   assert.ok(source);
   const presentation = timelinePresentation(source);
