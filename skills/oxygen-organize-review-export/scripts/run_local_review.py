@@ -823,6 +823,10 @@ def locate_inputs(run: Path):
     if not approved_run.is_dir():
         raise SystemExit(INPUT_RUN_INVALID)
 
+    root_meeting = approved_run / "meeting.json"
+    if root_meeting.exists() or root_meeting.is_symlink():
+        raise SystemExit(INPUT_RUN_INVALID)
+
     index_candidate = approved_run / "index.json"
     index_path = None
     trajectories = []

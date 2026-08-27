@@ -125,6 +125,17 @@ def write_meeting(run: Path, meeting_id: str, *, directory_id=None) -> Path:
     return path
 
 
+def write_unsupported_root_meeting(run: Path, meeting_id="meeting-root") -> Path:
+    run.mkdir(parents=True, exist_ok=True)
+    path = run / "meeting.json"
+    path.write_text(json.dumps({
+        "meeting_id": meeting_id,
+        "title": meeting_id,
+        "records": [{"record_id": "rec-00001", "order": 1, "text": "safe synthetic text"}],
+    }), encoding="utf-8")
+    return path
+
+
 def finalized_response(document_count: int, item_count: int) -> dict:
     return {
         "finalized": True,
@@ -1091,13 +1102,81 @@ class LocateInputsContainmentTest(unittest.TestCase):
     def test_root_meeting_is_not_a_supported_input(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary, "run")
-            run.mkdir(parents=True)
-            (run / "meeting.json").write_text(json.dumps({
-                "meeting_id": "meeting-root", "records": [],
-            }), encoding="utf-8")
+            write_unsupported_root_meeting(run)
 
-            with self.assertRaisesRegex(SystemExit, f"^{MODULE.INPUT_RUN_INVALID}$"):
-                MODULE.locate_inputs(run)
+            self.assert_import_fails_before_request(run, MODULE.INPUT_RUN_INVALID)
+
+    def test_root_meeting_with_empty_index_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_index(run, [])
+            write_unsupported_root_meeting(run)
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_RUN_INVALID)
+
+    def test_true_empty_history_remains_valid(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_index(run, [])
+
+            with mock.patch.object(
+                MODULE, "request_json", return_value=finalized_response(0, 0)
+            ) as request:
+                self.assertEqual(
+                    MODULE.import_run(
+                        mock.sentinel.opener, "http://127.0.0.1:3298", run
+                    ),
+                    (0, 0),
+                )
+            self.assertEqual(request.call_args.kwargs["body"], {"documents": []})
+
+    def test_root_meeting_with_valid_trajectory_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_trajectory(run, "traj-alpha")
+            write_index(run, [{"trajectory_id": "traj-alpha", "ok": True}])
+            write_unsupported_root_meeting(run)
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_RUN_INVALID)
+
+    def test_root_meeting_with_plural_meetings_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_meeting(run, "meeting-plural")
+            write_unsupported_root_meeting(run)
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_RUN_INVALID)
+
+    def test_root_meeting_symlink_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / "run"
+            write_index(run, [])
+            outside = root / "outside-meeting.json"
+            outside.write_text("{}", encoding="utf-8")
+            symlink_or_skip(self, run / "meeting.json", outside)
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_RUN_INVALID)
+
+    def test_root_meeting_broken_symlink_signal_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_index(run, [])
+            root_meeting = run.resolve() / "meeting.json"
+            original_exists = Path.exists
+            original_is_symlink = Path.is_symlink
+
+            def exists(path):
+                return False if path == root_meeting else original_exists(path)
+
+            def is_symlink(path):
+                return True if path == root_meeting else original_is_symlink(path)
+
+            with (
+                mock.patch.object(Path, "exists", autospec=True, side_effect=exists),
+                mock.patch.object(Path, "is_symlink", autospec=True, side_effect=is_symlink),
+            ):
+                self.assert_import_fails_before_request(run, MODULE.INPUT_RUN_INVALID)
 
     def test_multiple_trajectories_and_meetings_share_one_run(self):
         with tempfile.TemporaryDirectory() as temporary:
