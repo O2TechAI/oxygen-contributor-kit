@@ -295,79 +295,113 @@ def current_codex_tool_name(tool_name: str) -> str | None:
     return None
 
 
-def current_thread_result_messages(tool_name: str, value: Any) -> list[tuple[str, str, str]]:
-    """Extract only authored read results or terminal wait results."""
+def decode_current_thread_result(value: Any) -> Any:
+    """Decode the bounded JSON envelopes used by current thread tools."""
     if isinstance(value, str):
         try:
-            value = json.loads(value)
+            return json.loads(value)
         except json.JSONDecodeError:
-            return []
-    if isinstance(value, list):
-        decoded: list[Any] = []
-        for block in value:
-            if not (
-                isinstance(block, dict) and block.get("type") == "text"
-                and isinstance(block.get("text"), str)
-            ):
-                return []
-            try:
-                decoded.append(json.loads(block["text"]))
-            except json.JSONDecodeError:
-                return []
-        value = decoded
+            return None
+    if not isinstance(value, list):
+        return value
+    decoded: list[Any] = []
+    for block in value:
+        if not (
+            isinstance(block, dict) and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        ):
+            return None
+        try:
+            decoded.append(json.loads(block["text"]))
+        except json.JSONDecodeError:
+            return None
+    return decoded
+
+
+def stable_thread_id(value: Any) -> str | None:
+    if isinstance(value, list) and len(value) == 1:
+        return stable_thread_id(value[0])
+    if not isinstance(value, dict):
+        return None
+    thread_id = value.get("threadId")
+    return thread_id if isinstance(thread_id, str) and thread_id.strip() else None
+
+
+def current_thread_call_target(tool_name: str, value: dict[str, Any]) -> str | None:
+    direct = stable_thread_id(value)
+    if direct or tool_name != "wait_threads":
+        return direct
+    targets = value.get("targets")
+    if not isinstance(targets, list) or len(targets) != 1:
+        return None
+    return stable_thread_id(targets[0])
+
+
+def current_thread_result_messages(
+    tool_name: str,
+    value: Any,
+    fallback_thread_id: str | None = None,
+) -> list[tuple[str | None, str, str, str]]:
+    """Extract only authored read results or terminal wait results."""
+    value = decode_current_thread_result(value)
     if not isinstance(value, (dict, list)):
         return []
-    messages: list[tuple[str, str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    messages: list[tuple[str | None, str, str, str]] = []
+    seen: set[tuple[str | None, str, str, str]] = set()
     semantic_kinds = {
         "assistant_message", "commentary", "final", "final_report", "finding",
-        "message", "progress", "report", "user_message", "agentmessage", "usermessage",
+        "message", "progress", "report", "agentmessage",
     }
 
-    def add(role: str, phase: str, text: Any) -> None:
-        identity = (role, text)
+    def add(thread_id: str | None, role: str, phase: str, text: Any) -> None:
+        identity = (thread_id, role, phase, text)
         if isinstance(text, str) and text.strip() and identity not in seen:
             seen.add(identity)
-            messages.append((role, phase, text))
+            messages.append((thread_id, role, phase, text))
 
-    def walk(node: Any, context: str | None = None) -> None:
+    def walk(
+        node: Any,
+        context: str | None = None,
+        thread_context: str | None = fallback_thread_id,
+    ) -> None:
         if isinstance(node, list):
             for item in node:
-                walk(item, context)
+                walk(item, context, thread_context)
             return
         if not isinstance(node, dict):
             return
+        thread_id = stable_thread_id(node) or thread_context
         if tool_name == "read_thread":
             raw_role = node.get("role")
-            role = raw_role.lower() if isinstance(raw_role, str) else context
-            role = "user" if role in {"human", "user"} else (
-                "assistant" if role in {"agent", "ai", "assistant"} else None
-            )
+            normalized_role = raw_role.lower() if isinstance(raw_role, str) else None
             kind = str(node.get("type", node.get("kind", node.get("phase", "")))).lower().replace("-", "_")
-            role = role or ("user" if kind in {"user_message", "usermessage"} else (
-                "assistant" if kind in semantic_kinds else None
-            ))
+            structural_user = normalized_role in {"human", "user"} or kind in {
+                "user_message", "usermessage",
+            }
+            role = None if structural_user else (
+                "assistant" if normalized_role in {"agent", "ai", "assistant"}
+                else "assistant" if kind in semantic_kinds else context
+            )
             phase = str(node.get("phase") or kind or "coordination")
-            if role and (not kind or kind in semantic_kinds):
+            if role == "assistant" and (not kind or kind in semantic_kinds):
                 for key in (
                     "text", "message", "report", "final_text", "finalText",
                     "final_response", "finalResponse", "final_output", "finalOutput",
                 ):
-                    add(role, phase, node.get(key))
+                    add(thread_id, role, phase, node.get(key))
                 content = node.get("content")
                 if isinstance(content, str):
-                    add(role, phase, content)
+                    add(thread_id, role, phase, content)
                 elif isinstance(content, list):
-                    add(role, phase, extract_text(content)[0])
+                    add(thread_id, role, phase, extract_text(content)[0])
             for key, child_role in (
                 ("items", role), ("messages", role), ("responses", role),
                 ("turns", role), ("updates", role), ("latestTurn", None),
             ):
                 if key in node:
-                    walk(node[key], child_role)
-            add("user", "message", node.get("userMessage"))
+                    walk(node[key], child_role, thread_id)
             for key in ("agentMessage", "assistantMessage", "latestAssistantMessage"):
-                add("assistant", "final", node.get(key))
+                add(thread_id, "assistant", "final", node.get(key))
             return
         if node.get("timedOut") is True:
             return
@@ -378,7 +412,7 @@ def current_thread_result_messages(tool_name: str, value: Any) -> list[tuple[str
                 "final", "final_text", "finalText", "final_response", "finalResponse",
                 "final_output", "finalOutput", "report", "latestAssistantMessage",
             ):
-                add("assistant", "final", node.get(key))
+                add(thread_id, "assistant", "final", node.get(key))
         elif status in {
             "blocked", "needs_attention", "needsattention", "requires_approval",
             "requiresapproval", "waiting_for_user_input", "waitingforuserinput",
@@ -387,14 +421,14 @@ def current_thread_result_messages(tool_name: str, value: Any) -> list[tuple[str
             if status in {"needs_attention", "needsattention"}:
                 keys += ("message", "text", "question", "attention_text", "attentionText")
             for key in keys:
-                add("assistant", "needs_attention", node.get(key))
+                add(thread_id, "assistant", "needs_attention", node.get(key))
         for key, child_status in (
             ("completed", "completed"), ("needs_attention", "needs_attention"),
             ("needsAttention", "needs_attention"), ("results", status),
             ("targets", status), ("threads", status), ("polls", status),
         ):
             if key in node:
-                walk(node[key], child_status)
+                walk(node[key], child_status, thread_id)
 
     walk(value)
     return messages
@@ -520,6 +554,9 @@ class Extractor:
         self.last_user_event_by_turn: dict[str, str] = {}
         self.assistant_texts_by_turn: dict[str, set[str]] = {}
         self.semantic_record_fingerprints: dict[tuple[str, str, str], str] = {}
+        self.thread_semantic_fingerprints: set[tuple[str, str, str, str]] = set()
+        self.current_thread_call_targets: dict[str, str] = {}
+        self.pending_thread_prompts: dict[str, tuple[str, str, str]] = {}
         self.duplicate_semantic_replays = 0
         self.warnings: list[str] = []
 
@@ -609,13 +646,22 @@ class Extractor:
     def add_thread_message(
         self, record: dict[str, Any], raw: bytes, line_number: int,
         source_payload: dict[str, Any], record_type: str, role: str,
-        phase: str, direction: str, text: str,
+        phase: str, direction: str, text: str, thread_id: str | None = None,
     ) -> None:
         semantic_value = {"role": role, "phase": phase, "text": text}
         if not self.should_emit_semantic_record(
             source_payload, record_type, semantic_value,
         ):
             return
+        if thread_id:
+            thread_key = (
+                thread_id, role, phase,
+                sha256_bytes(text.encode("utf-8")),
+            )
+            if thread_key in self.thread_semantic_fingerprints:
+                self.duplicate_semantic_replays += 1
+                return
+            self.thread_semantic_fingerprints.add(thread_key)
         actor = self.agent_actor() if role == "assistant" else {
             "id": "participant-01", "type": "human", "parent_agent_id": None,
         }
@@ -1071,6 +1117,11 @@ class Extractor:
         if not isinstance(value, dict):
             return
         current_tool = current_codex_tool_name(tool_name)
+        target_thread_id = (
+            current_thread_call_target(current_tool, value) if current_tool else None
+        )
+        if target_thread_id:
+            self.current_thread_call_targets[call_id] = target_thread_id
         if current_tool in {"create_thread", "send_message_to_thread", "handoff_thread"}:
             field = "followUpPrompt" if current_tool == "handoff_thread" else "prompt"
             message = value.get(field)
@@ -1079,8 +1130,12 @@ class Extractor:
             record_type = f"coordination_prompt:{current_tool}"
             self.add_thread_message(
                 record, raw, line_number, record["payload"], record_type,
-                "assistant", "coordination", "agent_to_agent", message,
+                "assistant", "coordination", "agent_to_agent", message, target_thread_id,
             )
+            if current_tool == "create_thread":
+                self.pending_thread_prompts[call_id] = (
+                    "assistant", "coordination", message,
+                )
             return
         if tool_name in {"spawn_agent", "followup_task", "send_message"}:
             message = value.get("message")
@@ -1302,11 +1357,25 @@ class Extractor:
         tool_name = str(self.call_metadata.get(call_id, {}).get("tool_name") or "")
         raw_output = payload.get("output", payload.get("result"))
         current_tool = current_codex_tool_name(tool_name)
+        decoded_output = decode_current_thread_result(raw_output)
+        returned_thread_id = stable_thread_id(decoded_output)
+        if current_tool == "create_thread" and returned_thread_id:
+            pending = self.pending_thread_prompts.get(call_id)
+            if pending:
+                role, phase, text = pending
+                self.thread_semantic_fingerprints.add((
+                    returned_thread_id, role, phase,
+                    sha256_bytes(text.encode("utf-8")),
+                ))
         if current_tool in {"read_thread", "wait_threads"}:
-            messages = current_thread_result_messages(current_tool, raw_output)
+            fallback_thread_id = (
+                returned_thread_id or self.current_thread_call_targets.get(call_id)
+            )
+            messages = current_thread_result_messages(
+                current_tool, raw_output, fallback_thread_id,
+            )
             for index, item in enumerate(messages):
-                role, phase, text = item
-                direction = "human_to_agent" if role == "user" else "agent_to_agent"
+                thread_id, role, phase, text = item
                 semantic_payload = {
                     **payload,
                     "id": f"{call_id}:{current_tool}:{index}",
@@ -1314,7 +1383,7 @@ class Extractor:
                 record_type = f"thread_content:{current_tool}"
                 self.add_thread_message(
                     record, raw, line_number, semantic_payload, record_type,
-                    role, phase, direction, text,
+                    role, phase, "agent_to_agent", text, thread_id,
                 )
         if tool_name == "request_user_input":
             response_value = raw_output
