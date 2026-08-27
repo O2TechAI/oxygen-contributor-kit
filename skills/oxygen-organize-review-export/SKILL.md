@@ -92,15 +92,15 @@ When the reattach changes only organization or staged Story metadata, the Viewer
 completed Privacy pass because its reviewed source identity is unchanged. Any source-bearing item
 change marks that pass stale and requires Privacy to complete again before Story activation.
 
-For a downstream reviewed-artifact resume or a compatibility-only manual review, the launcher
-still accepts a run directly and starts a fresh Viewer:
+For a downstream reviewed-artifact resume that already satisfies the same canonical plural
+meeting contract, the launcher accepts the run directly and starts a fresh Viewer:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run>
 ```
 
-That compatibility path starts after collection and therefore must not be claimed as a complete
-progress-first Toolkit run.
+Direct resume starts after collection and therefore must not be claimed as a complete
+progress-first Toolkit run or as an alternate input contract.
 
 On native Windows and Linux/WSL it also verifies Node/npm and the platform-specific dependency
 installation, rebuilding incompatible modules with `npm ci`. Windows resolution uses the real

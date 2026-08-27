@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "build_project_map.py"
@@ -64,39 +65,50 @@ def semantic_source_digest(ids, source_digests):
 
 
 class BuildProjectMapTests(unittest.TestCase):
-    def test_plural_meetings_and_root_meeting_share_one_exact_universe(self):
+    def test_plural_meetings_share_one_exact_universe(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
             write_trajectory(run, "traj-one")
             write_meeting(run, "meeting-alpha")
             write_meeting(run, "meeting-beta")
-            (run / "meeting.json").write_text(json.dumps({
-                "meeting_id": "meeting-root",
-                "records": [{"record_id": "record-1", "text": "Root review."}],
-            }), encoding="utf-8")
-
             ids, sources, digests = MODULE.source_inventory(run)
 
             self.assertEqual(ids, [
                 f"evt-{hashlib.sha256(b'traj-one').hexdigest()}",
                 "meeting-alpha:record-1",
                 "meeting-beta:record-1",
-                "meeting-root:record-1",
             ])
-            self.assertEqual(len(sources), 4)
+            self.assertEqual(len(sources), 3)
             manifest = MODULE.finalize_units(
                 "Synthetic Project", ids, digests,
                 semantic_source_digest(ids, digests),
                 [{"id": "unit-all", "kind": "discussion", "members": ids}],
             )
-            self.assertEqual(manifest["units"][0]["memberCount"], 4)
+            self.assertEqual(manifest["units"][0]["memberCount"], 3)
+
+    def test_root_meeting_file_and_symlink_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            (run / "meeting.json").write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "root meeting source"):
+                MODULE.source_inventory(run)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            root_meeting = run / "meeting.json"
+            with mock.patch.object(
+                Path, "is_symlink", autospec=True,
+                side_effect=lambda path: path == root_meeting,
+            ):
+                with self.assertRaisesRegex(ValueError, "root meeting source"):
+                    MODULE.source_inventory(run)
 
     def test_duplicate_and_invalid_meeting_identities_fail_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
             write_meeting(run, "alpha", "meeting-duplicate")
             write_meeting(run, "beta", "meeting-duplicate")
-            with self.assertRaisesRegex(ValueError, "contribution identity is duplicated"):
+            with self.assertRaisesRegex(ValueError, "meeting source identity is invalid"):
                 MODULE.source_inventory(run)
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)

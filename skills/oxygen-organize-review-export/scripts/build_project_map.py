@@ -136,10 +136,10 @@ def source_inventory(
                 },
             )
 
-    meeting_candidates: list[Path] = []
     root_meeting = run / "meeting.json"
     if root_meeting.exists() or root_meeting.is_symlink():
-        meeting_candidates.append(root_meeting)
+        raise ValueError("root meeting source is not supported")
+    meeting_candidates: list[Path] = []
     meetings_root = run / "meetings"
     if meetings_root.exists() or meetings_root.is_symlink():
         resolved_meetings = meetings_root.resolve(strict=True)
@@ -157,7 +157,10 @@ def source_inventory(
         records = meeting.get("records")
         if not isinstance(meeting_id, str) or not meeting_id or not isinstance(records, list):
             raise ValueError("meeting source is invalid")
-        if not SOURCE_ID_PATTERN.fullmatch(meeting_id):
+        if (
+            not SOURCE_ID_PATTERN.fullmatch(meeting_id)
+            or meeting_path.parent.name != meeting_id
+        ):
             raise ValueError("meeting source identity is invalid")
         sources.append({
             "kind": "meeting",

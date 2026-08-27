@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "extract_dialogue.py"
@@ -49,16 +50,25 @@ class ExtractDialogueTest(unittest.TestCase):
             self.assertEqual(bundle["turns"][0]["item_id"], "evt-" + "a" * 64)
             self.assertEqual(bundle["turns"][0]["event_id"], "evt-" + "a" * 64)
 
-    def test_legacy_root_meeting_still_extracts(self):
+    def test_root_meeting_is_rejected(self):
         with TemporaryDirectory() as temp:
             run = Path(temp, "review")
             write_meeting(run, "meeting-000001", root=True)
 
-            bundles = MODULE.extract_bundles(run)
+            with self.assertRaisesRegex(SystemExit, "^INPUT_MEETING_INVALID$"):
+                MODULE.extract_bundles(run)
 
-            self.assertEqual(len(bundles), 1)
-            self.assertEqual(bundles[0]["trajectory"], "meeting-000001")
-            self.assertEqual(bundles[0]["document_kind"], "meeting")
+    def test_root_meeting_symlink_is_rejected(self):
+        with TemporaryDirectory() as temp:
+            run = Path(temp, "review")
+            run.mkdir()
+            root_meeting = run / "meeting.json"
+            with mock.patch.object(
+                Path, "is_symlink", autospec=True,
+                side_effect=lambda path: path == root_meeting,
+            ):
+                with self.assertRaisesRegex(SystemExit, "^INPUT_MEETING_INVALID$"):
+                    MODULE.extract_bundles(run)
 
     def test_plural_meetings_extract_separately_with_distinct_identity(self):
         with TemporaryDirectory() as temp:
@@ -105,28 +115,30 @@ class ExtractDialogueTest(unittest.TestCase):
                 "safe stable record", "safe fallback record",
             ])
 
-    def test_trajectory_root_and_plural_meetings_keep_deterministic_order(self):
+    def test_trajectory_and_plural_meetings_keep_deterministic_order(self):
         with TemporaryDirectory() as temp:
             run = Path(temp, "review")
             write_trajectory(run)
-            write_meeting(run, "meeting-000001", root=True)
+            write_meeting(run, "meeting-000001")
             write_meeting(run, "meeting-000002")
-            write_meeting(run, "meeting-000003")
 
             bundles = MODULE.extract_bundles(run)
 
             self.assertEqual(
                 [bundle["trajectory"] for bundle in bundles],
-                ["traj-safe", "meeting-000001", "meeting-000002", "meeting-000003"],
+                ["traj-safe", "meeting-000001", "meeting-000002"],
             )
 
     def test_duplicate_and_malformed_prepared_meetings_fail_closed(self):
         with TemporaryDirectory() as temp:
             run = Path(temp, "review")
-            write_meeting(run, "meeting-000001", root=True)
             write_meeting(run, "meeting-000001")
+            duplicate = write_meeting(run, "meeting-000002")
+            payload = json.loads(duplicate.read_text(encoding="utf-8"))
+            payload["meeting_id"] = "meeting-000001"
+            duplicate.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaisesRegex(
-                SystemExit, "^INPUT_MEETING_ID_DUPLICATE$"
+                SystemExit, "^INPUT_MEETING_INVALID$"
             ):
                 MODULE.extract_bundles(run)
 

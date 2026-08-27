@@ -383,22 +383,25 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             root = Path(temp)
             source = root / "source"
             output = root / "review"
-            source.mkdir()
-            (source / "meeting.json").write_text(json.dumps({
+            write_meeting(source, "private-meeting-id", records=[{
+                "record_id": "source-record-id",
+                "speaker": "Named Person",
+                "timestamp": "2026-01-02T03:04:05Z",
+                "text": "reviewable text",
+            }])
+            meeting_path = source / "meetings" / "private-meeting-id" / "meeting.json"
+            meeting = json.loads(meeting_path.read_text(encoding="utf-8"))
+            meeting.update({
                 "meeting_id": "private-meeting-id",
                 "title": "Private title",
                 "warnings": ["one warning"],
-                "records": [{
-                    "record_id": "source-record-id",
-                    "speaker": "Named Person",
-                    "timestamp": "2026-01-02T03:04:05Z",
-                    "text": "reviewable text",
-                }],
-            }), encoding="utf-8")
+            })
+            meeting_path.write_text(json.dumps(meeting), encoding="utf-8")
 
             meetings = MODULE.discover_meetings(source)
             evidence_ids, warning_count = MODULE.prepare_meetings(meetings, output)
-            prepared = json.loads((output / "meeting.json").read_text())
+            prepared_path = output / "meetings" / "meeting-000001" / "meeting.json"
+            prepared = json.loads(prepared_path.read_text())
 
             self.assertEqual(len(meetings), 1)
             self.assertEqual(warning_count, 1)
@@ -417,12 +420,34 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             self.assertNotIn("Named Person", json.dumps(prepared))
             self.assertNotIn("2026-01-02", json.dumps(prepared))
 
-    def test_root_and_plural_meetings_prepare_as_distinct_private_documents(self):
+    def test_single_plural_meeting_main_emits_only_plural_topology(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "source"
             output = root / "review"
-            write_meeting(source, "meeting-root", root=True)
+            write_meeting(source, "meeting-only")
+
+            with mock.patch.object(sys, "argv", [
+                str(MODULE_PATH), "--run", str(source), "--out", str(output)
+            ]), mock.patch("builtins.print") as emit:
+                self.assertEqual(MODULE.main(), 0)
+
+            self.assertFalse((output / "meeting.json").exists())
+            self.assertTrue(
+                (output / "meetings" / "meeting-000001" / "meeting.json").is_file()
+            )
+            index = json.loads((output / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(index["meeting_count"], 1)
+            report = json.loads(emit.call_args.args[0])
+            self.assertEqual(report, {
+                "output": str(output), "trajectories": 0, "meetings": 1,
+            })
+
+    def test_plural_meetings_prepare_as_distinct_private_documents(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
             write_meeting(source, "meeting-alpha")
             write_meeting(source, "meeting-beta")
 
@@ -430,38 +455,69 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             evidence_ids, warning_count = MODULE.prepare_meetings(meetings, output)
 
             prepared_paths = [
-                output / "meeting.json",
+                output / "meetings" / "meeting-000001" / "meeting.json",
                 output / "meetings" / "meeting-000002" / "meeting.json",
-                output / "meetings" / "meeting-000003" / "meeting.json",
             ]
             prepared = [json.loads(path.read_text(encoding="utf-8")) for path in prepared_paths]
             self.assertEqual(
                 [meeting["meeting_id"] for meeting in prepared],
-                ["meeting-000001", "meeting-000002", "meeting-000003"],
+                ["meeting-000001", "meeting-000002"],
             )
             self.assertEqual(warning_count, 0)
             self.assertEqual(
                 evidence_ids["meeting-alpha:source-record-id"],
-                "meeting-000002:record-000001",
+                "meeting-000001:record-000001",
             )
             self.assertEqual(
                 evidence_ids["meeting-beta:source-record-id"],
-                "meeting-000003:record-000001",
+                "meeting-000002:record-000001",
             )
             self.assertNotIn("source-record-id", evidence_ids)
+
+    def test_root_meeting_is_rejected_before_output(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            write_meeting(source, "meeting-root", root=True)
+            with mock.patch.object(sys, "argv", [
+                str(MODULE_PATH), "--run", str(source), "--out", str(output)
+            ]):
+                with self.assertRaisesRegex(
+                    SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$"
+                ):
+                    MODULE.main()
+            self.assertFalse(output.exists())
+
+    def test_root_meeting_symlink_is_rejected(self):
+        with TemporaryDirectory() as temp:
+            source = Path(temp, "source")
+            source.mkdir()
+            root_meeting = source / "meeting.json"
+            with mock.patch.object(
+                Path, "is_symlink", autospec=True,
+                side_effect=lambda path: path == root_meeting,
+            ):
+                with self.assertRaisesRegex(
+                    SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$"
+                ):
+                    MODULE.discover_meetings(source)
 
     def test_duplicate_and_malformed_meetings_fail_before_output(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "source"
             output = root / "review"
-            write_meeting(source, "meeting-shared", root=True)
-            write_meeting(source, "meeting-shared")
+            write_meeting(source, "meeting-alpha")
+            second = write_meeting(source, "meeting-beta")
+            duplicate = json.loads(second.read_text(encoding="utf-8"))
+            duplicate["meeting_id"] = "meeting-alpha"
+            second.write_text(json.dumps(duplicate), encoding="utf-8")
             with mock.patch.object(sys, "argv", [
                 str(MODULE_PATH), "--run", str(source), "--out", str(output)
             ]):
                 with self.assertRaisesRegex(
-                    SystemExit, f"^{MODULE.INPUT_MEETING_ID_DUPLICATE}$"
+                    SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$"
                 ):
                     MODULE.main()
             self.assertFalse(output.exists())
