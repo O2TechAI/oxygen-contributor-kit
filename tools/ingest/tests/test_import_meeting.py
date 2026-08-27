@@ -82,6 +82,47 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             )
             self.assertFalse((run / "meeting.json").exists())
 
+    def test_audio_cli_uses_temporary_asr_scratch_and_leaves_only_canonical_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "meeting.wav"
+            source.write_bytes(b"local audio fixture")
+            run = root / "run"
+            asr_outputs = []
+
+            class SuccessfulAsr:
+                stdout = iter(['PROGRESS {"pct": 100, "stage": "done"}\n'])
+
+                @staticmethod
+                def wait():
+                    return 0
+
+            def run_mock_asr(command, **_kwargs):
+                asr_out = Path(command[command.index("--out") + 1])
+                asr_outputs.append(asr_out)
+                asr_out.mkdir(parents=True)
+                (asr_out / "timestamped.txt").write_text(
+                    "0:01Speaker Ahello from audio\n", encoding="utf-8"
+                )
+                (asr_out / "intermediate.bin").write_bytes(b"temporary")
+                return SuccessfulAsr()
+
+            with mock.patch.object(MODULE.subprocess, "Popen", side_effect=run_mock_asr):
+                result = run_main(
+                    source, "--out", run, "--meeting-id", "meeting-audio", "--no-publish",
+                )
+
+            meeting = run / "meetings" / "meeting-audio"
+            self.assertEqual(result["meetings"][0]["output"], str(meeting.resolve()))
+            self.assertEqual(
+                {path.name for path in meeting.iterdir()},
+                {"meeting.json", "raw.md", "timestamped.txt"},
+            )
+            self.assertEqual(len(asr_outputs), 1)
+            self.assertNotEqual(asr_outputs[0], meeting)
+            self.assertNotIn(meeting, asr_outputs[0].parents)
+            self.assertFalse(asr_outputs[0].exists())
+
     def test_multi_source_run_keeps_records_separate(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

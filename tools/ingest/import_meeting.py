@@ -24,6 +24,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from oxygen_common import (configure_utf8_stdio, fail, progress, publish_to_staging, safe_slug,
@@ -36,7 +37,8 @@ MEETING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 MEETING_ID_DIGEST_LENGTH = 64
 
 
-def run_asr(audio: Path, out: Path, model: str, language: str | None, hf_token: str | None) -> Path:
+def run_asr(audio: Path, scratch: Path, model: str, language: str | None,
+            hf_token: str | None) -> Path:
     tools_dir = Path(__file__).resolve().parent
     candidates = (
         tools_dir / ".venv-audio" / "Scripts" / "python.exe",
@@ -44,7 +46,7 @@ def run_asr(audio: Path, out: Path, model: str, language: str | None, hf_token: 
     )
     venv_python = next((candidate for candidate in candidates if candidate.is_file()), None)
     python = str(venv_python) if venv_python else sys.executable
-    cmd = [python, str(tools_dir / "transcribe_diarize.py"), str(audio), "--out", str(out / "asr"),
+    cmd = [python, str(tools_dir / "transcribe_diarize.py"), str(audio), "--out", str(scratch / "asr"),
            "--model", model]
     if language:
         cmd += ["--language", language]
@@ -70,7 +72,7 @@ def run_asr(audio: Path, out: Path, model: str, language: str | None, hf_token: 
         print(line, flush=True)
     if process.wait() != 0:
         raise fail("transcription failed (see log above)")
-    transcript = out / "asr" / "timestamped.txt"
+    transcript = scratch / "asr" / "timestamped.txt"
     if not transcript.is_file():
         raise fail("transcription produced no timestamped.txt")
     return transcript
@@ -130,12 +132,16 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
 
     if source.suffix.lower() in AUDIO_SUFFIXES:
         progress(2, "asr", f"audio input — running local transcription for {source.name}")
-        text_path = run_asr(source, out, args.model, args.language, args.hf_token)
+        with tempfile.TemporaryDirectory(prefix="oxygen-asr-") as temporary:
+            text_path = run_asr(
+                source, Path(temporary), args.model, args.language, args.hf_token
+            )
+            transcript = text_path.read_text(encoding="utf-8")
     else:
-        text_path = source
+        transcript = source.read_text(encoding="utf-8")
 
-    progress(75, "parse", f"parsing {text_path.name}")
-    records, detected = parse_lines(text_path.read_text(encoding="utf-8"))
+    progress(75, "parse", f"parsing {source.name}")
+    records, detected = parse_lines(transcript)
     if not records:
         raise fail("no content found in transcript")
     speakers = sorted({r["speaker"] for r in records if r["speaker"]})

@@ -111,8 +111,8 @@ Do not use `--publish`. Do not copy outputs to staging or any network location.
 ## Verify
 
 - Repo/Claude export: inspect `index.json`; report counts, failures, and warnings.
-- One meeting: inspect `meeting.json`. Multiple meetings: inspect each
-  `meetings/<meeting-id>/meeting.json`. Report meeting, record, speaker, and warning counts.
+- Meeting import: inspect every `work/<run>/meetings/<meeting-id>/meeting.json`, including for a
+  one-meeting run. Report meeting, record, speaker, and warning counts.
 - Treat zero histories for a newly cloned repo as a valid result.
 - Confirm `publication_approved=false`.
 
