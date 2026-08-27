@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -79,22 +79,32 @@ function bulkDecision() {
 async function fixture({ insightIds = ["same", "same"], privacy = true, questions = true, reverse = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "story-finalizer-"));
   const shards = join(directory, "shards");
-  await (await import("node:fs/promises")).mkdir(shards);
+  await mkdir(shards);
   const stories = [source("é", insightIds[0]), source("z", insightIds[1])];
   const rows = rowsFor(stories);
+  const storyByRowId = new Map(rows.map((row, index) => [row.id, stories[index]]));
+  const canonicalRows = [...rows].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+  const canonicalStories = canonicalRows.map((row) => storyByRowId.get(row.id));
   const semanticCore = { projectId: "project", revision: 1, sourceDigest: "c".repeat(64),
     universeDigest: "d".repeat(64), units: [{ id: "unit-z" }, { id: "unit-é" }] };
   const semantic = { ...semanticCore, manifestDigest: digest(semanticCore) };
-  const base = rows.map((row, index) => ({ id: row.id, story: { ...stories[index], insights: [] } }));
-  const complete = rows.map((row, index) => ({ id: row.id, story: stories[index] }));
-  const inputDigest = digest(lessons(stories));
+  const base = canonicalRows.map((row, index) => ({ id: row.id, story: { ...canonicalStories[index], insights: [] } }));
+  const complete = canonicalRows.map((row, index) => ({ id: row.id, story: canonicalStories[index] }));
+  const inputDigest = digest(lessons(canonicalStories));
   const probes = questions ? [probe()] : [];
   const bulkDecisions = questions ? [bulkDecision()] : [];
   const batch = canonicalPreferenceQuestionBatch(probes, bulkDecisions);
   const preference = {
     workflowRunId: "run-11", sourceRevision: 4, inputDigest, outputDigest: digest(batch),
     outputCount: batch.length, setAside: 0, probes, bulkDecisions,
-    autoRemoved: { total: 1, reversible: true, categories: [{ kind: "credential", count: 1 }] },
+    autoRemoved: { total: 6, reversible: true, categories: [
+      { kind: "credential", count: 1 },
+      { kind: "internal-metric", count: 1 },
+      { kind: "internal-timeline", count: 1 },
+      { kind: "mosaic-reidentification", count: 1 },
+      { kind: "private-personal", count: 1 },
+      { kind: "sensitive", count: 1 },
+    ] },
   };
   const privacyCandidates = privacy ? [{
     id: "cross-chapter", reviewState: "needs_confirmation", title: "One issue",
@@ -102,7 +112,7 @@ async function fixture({ insightIds = ["same", "same"], privacy = true, question
     releaseTargets: ["z::title", "é::story:block-é"],
   }] : [];
   await json(join(directory, "semantic.json"), semantic);
-  await json(join(directory, "candidates.json"), rows);
+  await json(join(directory, "candidates.json"), reverse ? [...rows].reverse() : rows);
   await json(join(directory, "preference.json"), preference);
   const inputs = {
     story: semantic.manifestDigest,
@@ -150,11 +160,28 @@ async function fixture({ insightIds = ["same", "same"], privacy = true, question
   return { directory, shards, output: join(directory, "output.json"), rows, cleanup: () => rm(directory, { recursive: true, force: true }) };
 }
 
-function run(fixtureValue) {
+function run(fixtureValue, trailing = []) {
   return spawnSync(process.execPath, [script, join(fixtureValue.directory, "semantic.json"),
     join(fixtureValue.directory, "candidates.json"), fixtureValue.shards,
     join(fixtureValue.directory, "preference.json"), fixtureValue.output,
-    "--workflow-run-id", "run-11", "--source-revision", "4"], { encoding: "utf8" });
+    "--workflow-run-id", "run-11", "--source-revision", "4", ...trailing], { encoding: "utf8" });
+}
+
+async function mutatePreferenceAuthority(fixtureValue, mutate) {
+  const preferencePath = join(fixtureValue.directory, "preference.json");
+  const preference = await readJson(preferencePath);
+  mutate(preference);
+  const batch = canonicalPreferenceQuestionBatch(preference.probes, preference.bulkDecisions);
+  preference.outputDigest = digest(batch);
+  preference.outputCount = batch.length;
+  await json(preferencePath, preference);
+  const manifest = await readJson(join(fixtureValue.shards, "preference.shards.json"));
+  for (let index = 0; index < manifest.shards.length; index += 1) {
+    const receipt = await readJson(join(fixtureValue.shards, manifest.shards[index].receiptPath));
+    await json(join(fixtureValue.shards, receipt.outputPath), index === 0
+      ? { probes: preference.probes, bulkDecisions: preference.bulkDecisions }
+      : { probes: [], bulkDecisions: [] });
+  }
 }
 
 test("four lanes finalize exact public Story rows with reordered shards and cross-Chapter Insight IDs", async () => {
@@ -170,11 +197,20 @@ test("four lanes finalize exact public Story rows with reordered shards and cros
     const result = JSON.parse(one);
     assert.equal(result.receipts.length, 4);
     assert.equal(result.storyPrivacyCandidates.length, 1);
-    assert.deepEqual(result.storyPrivacyCandidates[0].releaseTargets, ["é::story:block-é", "z::title"]);
+    assert.deepEqual(result.storyPrivacyCandidates[0].releaseTargets, ["z::title", "é::story:block-é"]);
     const preferenceReceipt = result.receipts.find((receipt) => receipt.lane === "preference");
     assert.equal(preferenceReceipt.scopeCount, 2);
     assert.equal(preferenceReceipt.outputCount, 2);
   } finally { await first.cleanup(); await second.cleanup(); }
+});
+
+test("the exact CLI rejects trailing arguments without writing output", async () => {
+  const value = await fixture();
+  try {
+    const result = run(value, ["unexpected"]);
+    assert.notEqual(result.status, 0);
+    await assert.rejects(readFile(value.output, "utf8"), { code: "ENOENT" });
+  } finally { await value.cleanup(); }
 });
 
 test("the sole public Story candidate input rejects every enriched or extra field", async (t) => {
@@ -216,16 +252,59 @@ test("the sole producer-shaped Preference bundle fails closed on extra authority
     answeredProbe: (value) => { value.probes[0].answer = { choice: "one" }; },
     generationMetadata: (value) => { value.probes[0].provider = "forbidden"; },
     malformedAutoRemoved: (value) => { value.autoRemoved.extra = true; },
+    userPathAggregate: (value) => { value.autoRemoved = { total: 1, reversible: true, categories: [{ kind: "user_path", count: 1 }] }; },
+    thirdPartyAggregate: (value) => { value.autoRemoved = { total: 1, reversible: true, categories: [{ kind: "third_party_contact", count: 1 }] }; },
+    irreversibleAggregate: (value) => { value.autoRemoved.reversible = false; },
+    unsortedAggregate: (value) => { value.autoRemoved = { total: 2, reversible: true, categories: [{ kind: "sensitive", count: 1 }, { kind: "credential", count: 1 }] }; },
+    zeroAggregateCategory: (value) => { value.autoRemoved = { total: 0, reversible: true, categories: [{ kind: "credential", count: 0 }] }; },
+    foreignProbeEvidence: (value) => { value.probes[0].eventIds = ["foreign:event"]; },
+    crossDocumentProbeEvidence: (value) => { value.probes[0].documentId = "other-document"; },
+    foreignBulkEvidence: (value) => { value.bulkDecisions[0].evidenceSample = ["foreign:event"]; },
+    genericOption: (value) => { value.probes[0].options[0].text = "Be more careful."; },
+    duplicateOptionText: (value) => { value.probes[0].options[1].text = `${value.probes[0].options[0].text}.`; },
+    oversizedText: (value) => { value.probes[0].question = "x".repeat(20_001); },
+    oversizedEventId: (value) => { value.probes[0].eventIds = ["x".repeat(1_001)]; },
+    unsortedProbes: (value) => { value.probes.push({ ...structuredClone(value.probes[0]), id: "probe-0" }); },
+    unsortedBulkDecisions: (value) => { value.bulkDecisions.push({ ...structuredClone(value.bulkDecisions[0]), id: "bulk-0" }); },
   };
   for (const [name, mutate] of Object.entries(mutations)) await t.test(name, async () => {
     const value = await fixture();
     try {
-      const path = join(value.directory, "preference.json");
-      const preference = await readJson(path);
-      mutate(preference);
-      await json(path, preference);
+      await mutatePreferenceAuthority(value, mutate);
       assert.notEqual(run(value).status, 0);
     } finally { await value.cleanup(); }
+  });
+});
+
+test("physical shard containment rejects junction escapes for receipts and outputs", async (t) => {
+  await t.test("receipt", async () => {
+    const value = await fixture();
+    const outside = await mkdtemp(join(tmpdir(), "story-finalizer-outside-"));
+    try {
+      const receipt = await readJson(join(value.shards, "story-0.receipt.json"));
+      await json(join(outside, "receipt.json"), receipt);
+      await symlink(outside, join(value.shards, "escape"), process.platform === "win32" ? "junction" : "dir");
+      const manifestPath = join(value.shards, "story.shards.json");
+      const manifest = await readJson(manifestPath);
+      manifest.shards[0].receiptPath = "escape/receipt.json";
+      await json(manifestPath, manifest);
+      assert.notEqual(run(value).status, 0);
+    } finally { await value.cleanup(); await rm(outside, { recursive: true, force: true }); }
+  });
+
+  await t.test("output", async () => {
+    const value = await fixture();
+    const outside = await mkdtemp(join(tmpdir(), "story-finalizer-outside-"));
+    try {
+      const output = await readJson(join(value.shards, "story-0.output.json"));
+      await json(join(outside, "output.json"), output);
+      await symlink(outside, join(value.shards, "escape"), process.platform === "win32" ? "junction" : "dir");
+      const receiptPath = join(value.shards, "story-0.receipt.json");
+      const receipt = await readJson(receiptPath);
+      receipt.outputPath = "escape/output.json";
+      await json(receiptPath, receipt);
+      assert.notEqual(run(value).status, 0);
+    } finally { await value.cleanup(); await rm(outside, { recursive: true, force: true }); }
   });
 });
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   canonicalPreferenceQuestionBatch,
   deriveStoryReleaseTargetCatalog,
@@ -14,9 +13,8 @@ import {
   normalizeProbePresentations,
 } from "../../../viewer/lib/preference-presentation.ts";
 import { canonicalAuthorityJson } from "../../../viewer/lib/story-readiness.ts";
-import { parseStorySource } from "../../../viewer/lib/timeline.ts";
+import { compareStorySourceIdentity, parseStorySource } from "../../../viewer/lib/timeline.ts";
 
-const lanes = ["story", "insight", "story_privacy", "preference"];
 const laneFiles = Object.freeze({
   story: "story.shards.json",
   insight: "insight.shards.json",
@@ -24,7 +22,6 @@ const laneFiles = Object.freeze({
   preference: "preference.shards.json",
 });
 const hex = /^[0-9a-f]{64}$/;
-const encoder = new TextEncoder();
 const metadataKeys = new Set([
   "raworiginal", "original", "evidence", "provider", "model", "prompt", "rewrite",
   "recommendation", "execution", "agent", "duration", "token", "cost", "log",
@@ -41,6 +38,15 @@ const bulkKeys = ["id", "kind", "count", "question", "evidenceSample", "presenta
 const signals = new Set([
   "repeated_correction", "long_exchange", "late_rejection", "decision_reversal",
   "explicit_rule", "sustained_disagreement",
+]);
+const autoRemovedKinds = new Set([
+  "credential", "private-personal", "sensitive", "internal-metric",
+  "internal-timeline", "mosaic-reidentification",
+]);
+const genericOptions = new Set([
+  "be more careful", "communicate better", "be clearer", "ask more questions",
+  "do better", "follow instructions", "be consistent", "improve quality",
+  "write better code", "test more", "be faster", "explain more",
 ]);
 
 class FinalizerError extends Error {
@@ -59,6 +65,8 @@ const stableId = (value) => typeof value === "string" && Boolean(value.trim())
   && !/[\u0000-\u001f\u007f]/u.test(value);
 const safeText = (value) => typeof value === "string" && Boolean(value.trim())
   && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value);
+const boundedId = (value, maximum = 20_000) => stableId(value) && value.length <= maximum;
+const boundedText = (value, maximum = 20_000) => safeText(value) && value.length <= maximum;
 const nonnegative = (value) => Number.isSafeInteger(value) && value >= 0;
 
 async function jsonFile(path) {
@@ -75,13 +83,19 @@ async function jsonFile(path) {
   }
 }
 
-function contained(root, value) {
+async function contained(root, value) {
   if (typeof value !== "string" || !value || isAbsolute(value) || win32.isAbsolute(value)
     || value.split(/[\\/]/u).some((part) => part === "..")) fail("PATH_NOT_CONTAINED");
   const target = resolve(root, value);
-  const rel = relative(root, target);
+  let physical;
+  try {
+    physical = await realpath(target);
+  } catch {
+    fail("FILE_UNREADABLE");
+  }
+  const rel = relative(root, physical);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) fail("PATH_NOT_CONTAINED");
-  return target;
+  return physical;
 }
 
 function rejectMetadata(value) {
@@ -138,7 +152,7 @@ function finalCandidates(value) {
   }
   if (new Set(rows.map((row) => row.id)).size !== rows.length
     || new Set(rows.map((row) => row.story.key)).size !== rows.length) fail("FINAL_STORY_IDENTITIES_INVALID");
-  return rows;
+  return rows.sort(compareStorySourceIdentity);
 }
 
 function normalizedPrivacy(value, catalog) {
@@ -175,7 +189,7 @@ function dedupe(items, identity) {
 }
 
 async function laneManifest(root, lane, expectedInputDigest, universe) {
-  const path = contained(root, laneFiles[lane]);
+  const path = await contained(root, laneFiles[lane]);
   const value = await jsonFile(path);
   if (!exactKeys(value, ["schema", "lane", "inputDigest", "unitIds", "shards"])
     || value.schema !== "oxygen.story-preparation-shards" || value.lane !== lane
@@ -197,14 +211,14 @@ async function laneManifest(root, lane, expectedInputDigest, universe) {
     }
     seenShards.add(shard.id);
     assigned.push(...shard.unitIds);
-    const receiptPath = contained(root, shard.receiptPath);
+    const receiptPath = await contained(root, shard.receiptPath);
     const receipt = await jsonFile(receiptPath);
     if (!exactKeys(receipt, ["schema", "lane", "shardId", "status", "inputDigest", "unitIds", "outputPath"])
       || receipt.schema !== "oxygen.story-preparation-worker-receipt" || receipt.lane !== lane
       || receipt.shardId !== shard.id || receipt.status !== "complete" || receipt.inputDigest !== expectedInputDigest
       || !Array.isArray(receipt.unitIds) || canonicalAuthorityJson([...receipt.unitIds].sort(utf8))
         !== canonicalAuthorityJson([...shard.unitIds].sort(utf8))) fail("RECEIPT_INVALID");
-    const outputPath = contained(root, receipt.outputPath);
+    const outputPath = await contained(root, receipt.outputPath);
     const output = await jsonFile(outputPath);
     outputs.push(output);
   }
@@ -231,22 +245,26 @@ function composeStory(outputs, expected, label) {
 }
 
 function preferenceOption(value) {
-  return exactKeys(value, ["id", "text"]) && stableId(value.id) && safeText(value.text);
+  return exactKeys(value, ["id", "text"]) && boundedId(value.id, 200) && boundedText(value.text);
 }
 
-function preferenceProbe(value) {
-  if (!exactKeys(value, probeKeys) || !stableId(value.id) || !stableId(value.documentId)
+function preferenceProbe(value, evidence) {
+  if (!exactKeys(value, probeKeys) || !boundedId(value.id) || !boundedId(value.documentId)
     || !["trajectory", "meeting"].includes(value.documentKind)
     || !Array.isArray(value.eventIds) || value.eventIds.length === 0
-    || value.eventIds.some((eventId) => !stableId(eventId))
+    || value.eventIds.some((eventId) => !boundedId(eventId, 1_000))
     || new Set(value.eventIds).size !== value.eventIds.length
-    || (value.timestamp !== null && !safeText(value.timestamp)) || !signals.has(value.signal)
+    || value.eventIds.some((eventId) => !evidence.has(canonicalAuthorityJson([value.documentId, eventId])))
+    || (value.timestamp !== null && !boundedText(value.timestamp)) || !signals.has(value.signal)
     || !nonnegative(value.score) || value.score > 100 || !nonnegative(value.turns)
-    || !safeText(value.recap) || !safeText(value.question)
+    || !boundedText(value.recap) || !boundedText(value.question)
     || !Array.isArray(value.options) || ![2, 3].includes(value.options.length)
     || value.options.some((option) => !preferenceOption(option))
     || new Set(value.options.map((option) => option.id)).size !== value.options.length
     || value.allowOther !== true || value.allowSkip !== true) fail("PREFERENCE_BUNDLE_INVALID");
+  const normalizedOptions = value.options.map((option) => option.text.trim().replace(/\.+$/u, "").toLowerCase());
+  if (new Set(normalizedOptions).size !== normalizedOptions.length
+    || normalizedOptions.some((option) => genericOptions.has(option))) fail("PREFERENCE_BUNDLE_INVALID");
   const presentations = normalizeProbePresentations(value.presentations, value.options);
   if (presentations === null
     || canonicalAuthorityJson(presentations) !== canonicalAuthorityJson(value.presentations)) {
@@ -255,10 +273,10 @@ function preferenceProbe(value) {
   return value;
 }
 
-function preferenceBulkDecision(value) {
-  if (!exactKeys(value, bulkKeys) || !stableId(value.id) || !safeText(value.kind)
-    || !nonnegative(value.count) || !safeText(value.question) || !Array.isArray(value.evidenceSample)
-    || value.evidenceSample.some((eventId) => !stableId(eventId))
+function preferenceBulkDecision(value, evidenceIds) {
+  if (!exactKeys(value, bulkKeys) || !boundedId(value.id) || !boundedText(value.kind)
+    || !nonnegative(value.count) || !boundedText(value.question) || !Array.isArray(value.evidenceSample)
+    || value.evidenceSample.some((eventId) => !boundedId(eventId, 1_000) || !evidenceIds.has(eventId))
     || new Set(value.evidenceSample).size !== value.evidenceSample.length) fail("PREFERENCE_BUNDLE_INVALID");
   const presentations = normalizeBulkPreferencePresentations(value.presentations);
   if (presentations === null
@@ -268,20 +286,31 @@ function preferenceBulkDecision(value) {
   return value;
 }
 
-async function preferenceAuthority(value, workflowRunId, sourceRevision, inputDigest) {
+async function preferenceAuthority(value, workflowRunId, sourceRevision, inputDigest, evidence, evidenceIds) {
   if (!exactKeys(value, preferenceKeys) || value.workflowRunId !== workflowRunId
     || value.sourceRevision !== sourceRevision || value.inputDigest !== inputDigest
     || !hex.test(value.outputDigest) || !nonnegative(value.outputCount)
     || !nonnegative(value.setAside) || !Array.isArray(value.probes)
     || !Array.isArray(value.bulkDecisions)) fail("PREFERENCE_BUNDLE_INVALID");
   rejectMetadata({ probes: value.probes, bulkDecisions: value.bulkDecisions });
-  const probes = value.probes.map(preferenceProbe);
-  const bulkDecisions = value.bulkDecisions.map(preferenceBulkDecision);
+  const probes = value.probes.map((probe) => preferenceProbe(probe, evidence));
+  const bulkDecisions = value.bulkDecisions.map((decision) => preferenceBulkDecision(decision, evidenceIds));
   const ids = [...probes, ...bulkDecisions].map((item) => item.id);
   if (new Set(ids).size !== ids.length || value.outputCount !== ids.length
-    || (value.outputCount === 0 && value.setAside !== 0)) fail("PREFERENCE_BUNDLE_INVALID");
+    || (value.outputCount === 0 && value.setAside !== 0)
+    || canonicalAuthorityJson(probes) !== canonicalAuthorityJson(
+      [...probes].sort((left, right) => utf8(left.id, right.id)),
+    ) || canonicalAuthorityJson(bulkDecisions) !== canonicalAuthorityJson(
+      [...bulkDecisions].sort((left, right) => utf8(left.id, right.id)),
+    )) fail("PREFERENCE_BUNDLE_INVALID");
   try {
-    canonicalizeAutoRemoved(value.autoRemoved);
+    const autoRemoved = canonicalizeAutoRemoved(value.autoRemoved);
+    const categories = autoRemoved.categories;
+    if (autoRemoved.reversible !== true
+      || categories.some((category) => !autoRemovedKinds.has(category.kind) || category.count === 0)
+      || canonicalAuthorityJson(categories) !== canonicalAuthorityJson(
+        [...categories].sort((left, right) => utf8(left.kind, right.kind)),
+      )) fail("PREFERENCE_BUNDLE_INVALID");
   } catch {
     fail("PREFERENCE_BUNDLE_INVALID");
   }
@@ -311,12 +340,17 @@ function composePreference(outputs, authority) {
 
 async function finalize(args) {
   const [semanticPath, candidatesPath, shardRootInput, preferencePath, outputPath, marker, workflowRunId, revisionMarker, revision] = args;
-  if (!semanticPath || !candidatesPath || !shardRootInput || !preferencePath || !outputPath
+  if (args.length !== 9 || !semanticPath || !candidatesPath || !shardRootInput || !preferencePath || !outputPath
     || marker !== "--workflow-run-id" || !stableId(workflowRunId) || revisionMarker !== "--source-revision"
     || !/^(0|[1-9][0-9]*)$/u.test(revision || "")) fail("CLI_USAGE");
   const sourceRevision = Number(revision);
   if (!Number.isSafeInteger(sourceRevision)) fail("CLI_USAGE");
-  const shardRoot = resolve(shardRootInput);
+  let shardRoot;
+  try {
+    shardRoot = await realpath(resolve(shardRootInput));
+  } catch {
+    fail("FILE_UNREADABLE");
+  }
   const semantic = await semanticAuthority(await jsonFile(resolve(semanticPath)));
   const rows = finalCandidates(await jsonFile(resolve(candidatesPath)));
   const sourceRows = rows.map(({ story, ...row }) => row);
@@ -332,8 +366,17 @@ async function finalize(args) {
     directlyAcquiredExperience: insight.directlyAcquiredExperience,
     principle: insight.principle,
   })));
+  const evidence = new Set(rows.flatMap((row) => row.story.insights.flatMap((insight) => (
+    insight.evidence.map((reference) => canonicalAuthorityJson([reference.documentId, reference.eventId]))
+  ))));
+  const evidenceIds = new Set(rows.flatMap((row) => row.story.insights.flatMap((insight) => (
+    insight.evidence.map((reference) => reference.eventId)
+  ))));
   const preferenceInputDigest = await storyPreparationDigest(lessons);
-  const preference = await preferenceAuthority(await jsonFile(resolve(preferencePath)), workflowRunId, sourceRevision, preferenceInputDigest);
+  const preference = await preferenceAuthority(
+    await jsonFile(resolve(preferencePath)), workflowRunId, sourceRevision,
+    preferenceInputDigest, evidence, evidenceIds,
+  );
   const storyOutputs = await laneManifest(shardRoot, "story", semantic.manifestDigest, semantic.unitIds);
   composeStory(storyOutputs, base, "STORY");
   const baseDigest = await storyPreparationDigest(base);
