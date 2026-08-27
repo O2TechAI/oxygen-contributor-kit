@@ -22,7 +22,6 @@ registerHooks({
 });
 
 const RUN_ID = "story-privacy-sqlite-run";
-const ACTIVE_DIGEST = "4".repeat(64);
 const SOURCE_REVISION = 11;
 
 function story() {
@@ -48,6 +47,18 @@ function story() {
   };
 }
 
+const SOURCE = story();
+const STORY_SUMMARY = `oxygen.story:${JSON.stringify(SOURCE)}`;
+const ACTIVE_DIGEST = await storyPreparationDigest([{ id: "event-a", summary: STORY_SUMMARY }]);
+const STORY_PRIVACY_INPUT_DIGEST = await storyPreparationDigest([{
+  id: "event-a",
+  story: SOURCE,
+}]);
+const MUTATED_STORY_SUMMARY = `oxygen.story:${JSON.stringify({
+  ...SOURCE,
+  overview: "Changed Story text with the same release targets.",
+})}`;
+
 const candidate = {
   id: "same-candidate-id",
   reviewState: "needs_confirmation",
@@ -63,7 +74,7 @@ async function putReceipt(db, candidateValue, revision = SOURCE_REVISION) {
   await db.prepare(`INSERT INTO story_preparation_receipts
     (workflow_run_id,lane,source_revision,input_digest,scope_digest,scope_count,
      output_digest,output_count,completed_at) VALUES (?,'story_privacy',?,?,?,?,?,1,?)`)
-    .bind(RUN_ID, revision, "7".repeat(64), "8".repeat(64), 1,
+    .bind(RUN_ID, revision, STORY_PRIVACY_INPUT_DIGEST, "8".repeat(64), 1,
       digest, "2042-01-01T00:00:00.000Z").run();
   return digest;
 }
@@ -107,11 +118,11 @@ test("fresh SQLite defaults, immutable CAS, replacement reset, and mutation-boun
       VALUES (?,'ready_for_human_review',?,?,?,?)`)
       .bind(RUN_ID, SOURCE_REVISION, ACTIVE_DIGEST,
         "2042-01-01T00:00:00.000Z", "2042-01-01T00:00:00.000Z").run();
-    const source = story();
     await db.prepare(`INSERT INTO items
-      (id,document_id,sequence,content,original_json,organization_reason)
-      VALUES ('event-a','doc',0,'source','{}',?)`)
-      .bind(`oxygen.story:${JSON.stringify(source)}`).run();
+      (id,document_id,sequence,content,original_json,organization_reason,
+       event_type,actor_id,actor_type)
+      VALUES ('event-a','doc',0,'source','{}',?,'message','contributor-a','human')`)
+      .bind(STORY_SUMMARY).run();
     let candidateDigest = await putReceipt(db, candidate);
 
     // This is the unchanged Core activation insert shape.
@@ -189,10 +200,20 @@ test("fresh SQLite defaults, immutable CAS, replacement reset, and mutation-boun
       restore: "UPDATE workflow_runs SET active_story_digest=? WHERE id=?",
       restoreBindings: [ACTIVE_DIGEST, RUN_ID],
     }, {
+      mutate: "UPDATE story_preparation_receipts SET input_digest=? WHERE workflow_run_id=?",
+      bindings: ["1".repeat(64), RUN_ID],
+      restore: "UPDATE story_preparation_receipts SET input_digest=? WHERE workflow_run_id=?",
+      restoreBindings: [STORY_PRIVACY_INPUT_DIGEST, RUN_ID],
+    }, {
       mutate: "UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=?",
       bindings: ["0".repeat(64), RUN_ID],
       restore: "UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=?",
       restoreBindings: [candidateDigest, RUN_ID],
+    }, {
+      mutate: "UPDATE items SET organization_reason=? WHERE id='event-a'",
+      bindings: [MUTATED_STORY_SUMMARY],
+      restore: "UPDATE items SET organization_reason=? WHERE id='event-a'",
+      restoreBindings: [STORY_SUMMARY],
     }];
     for (const boundary of boundaryCases) {
       const realPrepare = db.prepare.bind(db);

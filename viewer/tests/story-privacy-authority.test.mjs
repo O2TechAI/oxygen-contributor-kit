@@ -23,7 +23,6 @@ registerHooks({
 
 const RUN_ID = "story-privacy-run";
 const SOURCE_REVISION = 7;
-const ACTIVE_DIGEST = "a".repeat(64);
 const EMPTY_DIGEST = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
 const utf8Sort = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
 
@@ -49,6 +48,17 @@ function story(key) {
     },
   };
 }
+
+const STORIES = [story("a"), story("b")];
+const STORY_ROWS = STORIES.map((source) => ({
+  id: `doc:${source.key}`,
+  summary: `oxygen.story:${JSON.stringify(source)}`,
+}));
+const ACTIVE_DIGEST = await storyPreparationDigest(STORY_ROWS);
+const STORY_PRIVACY_INPUT_DIGEST = await storyPreparationDigest(STORIES.map((source) => ({
+  id: `doc:${source.key}`,
+  story: source,
+})));
 
 const deterministic = {
   id: "deterministic-candidate",
@@ -88,12 +98,14 @@ async function insertAuthority(db, candidates) {
     (id,story_generation_status,story_source_revision,active_story_digest,created_at,updated_at)
     VALUES (?,'ready_for_human_review',?,?,?,?)`)
     .bind(RUN_ID, SOURCE_REVISION, ACTIVE_DIGEST, "2041-01-01T00:00:00.000Z", "2041-01-01T00:00:00.000Z").run();
-  for (const [sequence, source] of [story("a"), story("b")].entries()) {
+  for (const [sequence, source] of STORIES.entries()) {
     await db.prepare(`INSERT INTO items
-      (id,document_id,sequence,timestamp,content,original_json,organization_reason)
-      VALUES (?,?,?,?,?,?,?)`).bind(
+      (id,document_id,sequence,timestamp,content,original_json,organization_reason,
+       event_type,actor_id,actor_type)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(
       `doc:${source.key}`, "doc", sequence, null, "private source", "{}",
       `oxygen.story:${JSON.stringify(source)}`,
+      "message", `contributor-${source.key}`, "human",
     ).run();
   }
   return replaceCandidates(db, candidates);
@@ -108,7 +120,7 @@ async function replaceCandidates(db, candidates) {
   await db.prepare(`INSERT INTO story_preparation_receipts
     (workflow_run_id,lane,source_revision,input_digest,scope_digest,scope_count,
      output_digest,output_count,completed_at) VALUES (?,'story_privacy',?,?,?,?,?,?,?)`)
-    .bind(RUN_ID, SOURCE_REVISION, "d".repeat(64), "e".repeat(64), 1,
+    .bind(RUN_ID, SOURCE_REVISION, STORY_PRIVACY_INPUT_DIGEST, "e".repeat(64), 1,
       digest, ordered.length, "2041-01-01T00:00:00.000Z").run();
   for (const candidate of ordered) {
     await db.prepare(`INSERT INTO story_privacy_candidates
@@ -178,6 +190,28 @@ test("Story Privacy routes expose only current flat authority and fail closed", 
       expectedVersion: 0,
       decision: "keep",
     };
+    const undecided = {
+      decision: null, decision_version: 0, decided_at: null,
+    };
+    await db.prepare("UPDATE workflow_runs SET active_story_digest=? WHERE id=?")
+      .bind("f".repeat(64), RUN_ID).run();
+    assert.equal((await get(collectionRoute)).status, 409);
+    assert.equal((await patch(candidateRoute, crossChapter.id, binding)).status, 409);
+    assert.deepEqual(await db.prepare(`SELECT decision,decision_version,decided_at
+      FROM story_privacy_candidates WHERE candidate_id=?`).bind(crossChapter.id).first(), undecided);
+    await db.prepare("UPDATE workflow_runs SET active_story_digest=? WHERE id=?")
+      .bind(ACTIVE_DIGEST, RUN_ID).run();
+
+    const mutatedStory = { ...STORIES[0], overview: "Changed Story text with the same release targets." };
+    await db.prepare("UPDATE items SET organization_reason=? WHERE id=?")
+      .bind(`oxygen.story:${JSON.stringify(mutatedStory)}`, STORY_ROWS[0].id).run();
+    assert.equal((await get(collectionRoute)).status, 409);
+    assert.equal((await patch(candidateRoute, crossChapter.id, binding)).status, 409);
+    assert.deepEqual(await db.prepare(`SELECT decision,decision_version,decided_at
+      FROM story_privacy_candidates WHERE candidate_id=?`).bind(crossChapter.id).first(), undecided);
+    await db.prepare("UPDATE items SET organization_reason=? WHERE id=?")
+      .bind(STORY_ROWS[0].summary, STORY_ROWS[0].id).run();
+
     assert.equal((await patch(candidateRoute, deterministic.id, binding)).status, 409);
     assert.equal((await patch(candidateRoute, "missing-candidate", binding)).status, 404);
 
@@ -248,6 +282,12 @@ test("Story Privacy routes expose only current flat authority and fail closed", 
         .bind(SOURCE_REVISION - 1, RUN_ID).run(),
       () => db.prepare("UPDATE story_preparation_receipts SET source_revision=? WHERE workflow_run_id=?")
         .bind(SOURCE_REVISION, RUN_ID).run(),
+    );
+    await assertClosed(
+      () => db.prepare("UPDATE story_preparation_receipts SET input_digest=? WHERE workflow_run_id=?")
+        .bind("1".repeat(64), RUN_ID).run(),
+      () => db.prepare("UPDATE story_preparation_receipts SET input_digest=? WHERE workflow_run_id=?")
+        .bind(STORY_PRIVACY_INPUT_DIGEST, RUN_ID).run(),
     );
     await assertClosed(
       () => db.prepare("UPDATE workflow_runs SET story_generation_status='blocked' WHERE id=?").bind(RUN_ID).run(),

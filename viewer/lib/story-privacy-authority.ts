@@ -5,6 +5,10 @@ import {
   type StoryPreparationPrivacyCandidate,
 } from "./story-preparation";
 import {
+  validateStorySourcePackage,
+  type StoryEvidenceRow,
+} from "./story-readiness";
+import {
   compareStorySourceIdentity,
   parseStorySource,
   type StoryReleaseTarget,
@@ -60,6 +64,7 @@ type CurrentAuthority = {
   response: StoryPrivacyAuthorityResponse;
   candidateRows: CandidateRow[];
   storyRows: StoryRow[];
+  receiptInputDigest: string;
 };
 
 const digestPattern = /^[0-9a-f]{64}$/;
@@ -160,7 +165,7 @@ async function captureCurrentAuthority(
     db.prepare("SELECT id FROM workflow_runs ORDER BY id LIMIT 2"),
     db.prepare(`SELECT id,story_generation_status,story_source_revision,active_story_digest
       FROM workflow_runs WHERE id=?`).bind(workflowRunId),
-    db.prepare(`SELECT workflow_run_id,lane,source_revision,output_digest,output_count,completed_at
+    db.prepare(`SELECT workflow_run_id,lane,source_revision,input_digest,output_digest,output_count,completed_at
       FROM story_preparation_receipts WHERE workflow_run_id=? AND lane='story_privacy'`)
       .bind(workflowRunId),
     db.prepare(`SELECT workflow_run_id,candidate_id,candidate_json,decision,decision_version,decided_at
@@ -168,6 +173,8 @@ async function captureCurrentAuthority(
     db.prepare(`SELECT id,document_id AS documentId,sequence,timestamp,
         organization_reason AS summary FROM items WHERE organization_reason LIKE ?`)
       .bind("oxygen.story%"),
+    db.prepare(`SELECT id,document_id AS documentId,event_type AS eventType,
+        actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`),
   ]);
   const runAuthorities = rows(results, 0);
   if (runAuthorities.length !== 1) return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
@@ -178,6 +185,7 @@ async function captureCurrentAuthority(
   const receiptRows = rows(results, 2);
   const rawCandidateRows = rows(results, 3);
   const rawStoryRows = rows(results, 4);
+  const rawEvidenceRows = rows(results, 5);
   if (runRows.length !== 1 || receiptRows.length !== 1) {
     return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
   }
@@ -190,6 +198,7 @@ async function captureCurrentAuthority(
     || typeof activeStoryDigest !== "string" || !digestPattern.test(activeStoryDigest)
     || receipt.workflow_run_id !== workflowRunId || receipt.lane !== "story_privacy"
     || Number(receipt.source_revision) !== sourceRevision
+    || typeof receipt.input_digest !== "string" || !digestPattern.test(receipt.input_digest)
     || typeof receipt.output_digest !== "string" || !digestPattern.test(receipt.output_digest)
     || !Number.isSafeInteger(Number(receipt.output_count)) || Number(receipt.output_count) < 0
     || !exactTimestamp(receipt.completed_at)) {
@@ -218,6 +227,31 @@ async function captureCurrentAuthority(
     const story = parseStorySource(row.summary);
     if (!story) return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
     stories.push(story);
+  }
+  const evidenceRows: StoryEvidenceRow[] = [];
+  for (const row of rawEvidenceRows) {
+    if (!stableId(row.id) || !stableId(row.documentId)
+      || ![row.eventType, row.actorId, row.actorType].every((value) => (
+        value === null || typeof value === "string"
+      ))) {
+      return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
+    }
+    evidenceRows.push({
+      id: row.id,
+      documentId: row.documentId,
+      eventType: row.eventType as string | null,
+      actorId: row.actorId as string | null,
+      actorType: row.actorType as string | null,
+    });
+  }
+  const storyValidation = validateStorySourcePackage(storyRows, evidenceRows);
+  if (!storyValidation.ok
+    || await storyPreparationDigest(JSON.parse(storyValidation.canonicalCandidate)) !== activeStoryDigest
+    || await storyPreparationDigest(storyRows.map((row, index) => ({
+      id: row.id,
+      story: stories[index],
+    }))) !== receipt.input_digest) {
+    return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
   }
   const targetCatalog = stories.length > 0 ? deriveStoryReleaseTargetCatalog(stories) : null;
   if (!targetCatalog) return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
@@ -272,6 +306,7 @@ async function captureCurrentAuthority(
     },
     candidateRows,
     storyRows,
+    receiptInputDigest: receipt.input_digest,
   };
 }
 
@@ -335,7 +370,7 @@ export async function decideStoryPrivacyCandidate(
         AND r.story_source_revision=? AND r.active_story_digest=?)
       AND EXISTS (SELECT 1 FROM story_preparation_receipts p
         WHERE p.workflow_run_id=? AND p.lane='story_privacy'
-          AND p.source_revision=? AND p.output_digest=?
+          AND p.source_revision=? AND p.input_digest=? AND p.output_digest=?
           AND p.output_count=(SELECT COUNT(*) FROM story_privacy_candidates c
             WHERE c.workflow_run_id=?)
           AND typeof(p.completed_at)='text' AND length(trim(p.completed_at))>0)
@@ -363,7 +398,8 @@ export async function decideStoryPrivacyCandidate(
       input.decision, decidedAt,
       input.workflowRunId, candidateId, candidateRow.candidate_json, candidateId,
       input.workflowRunId, input.sourceRevision, input.activeStoryDigest,
-      input.workflowRunId, input.sourceRevision, input.candidateDigest, input.workflowRunId,
+      input.workflowRunId, input.sourceRevision, current.receiptInputDigest,
+      input.candidateDigest, input.workflowRunId,
       input.workflowRunId, candidateSnapshot,
       input.workflowRunId, candidateSnapshot,
       storySnapshot, storySnapshot,
