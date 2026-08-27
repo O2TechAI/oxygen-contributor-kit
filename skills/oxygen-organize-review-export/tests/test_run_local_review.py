@@ -360,50 +360,50 @@ class LauncherUnitTest(unittest.TestCase):
         printed.assert_not_called()
 
     @unittest.skipUnless(os.name == "posix", "POSIX npm layout test")
-    def test_incompatible_regular_file_shim_is_detected(self):
+    def test_posix_regular_next_shim_is_detected(self):
         with tempfile.TemporaryDirectory() as temporary:
             viewer = Path(temporary)
-            cli = viewer / "node_modules" / "vinext" / "dist" / "cli.js"
+            cli = viewer / "node_modules" / "next" / "dist" / "bin" / "next"
             cli.parent.mkdir(parents=True)
             cli.write_text("", encoding="utf-8")
             bin_dir = viewer / "node_modules" / ".bin"
             bin_dir.mkdir(parents=True)
-            (bin_dir / "vinext").write_text("#!/bin/sh\nexec node.exe\n", encoding="utf-8")
-            self.assertIn("not a symlink", MODULE.node_modules_issue(viewer))
+            (bin_dir / "next").write_text("#!/bin/sh\nexec node.exe\n", encoding="utf-8")
+            self.assertIn(".bin/next is not a symlink", MODULE.node_modules_issue(viewer))
 
     @unittest.skipUnless(os.name == "posix", "POSIX npm layout test")
-    def test_linux_symlink_layout_is_accepted(self):
+    def test_posix_next_symlink_layout_is_accepted(self):
         with tempfile.TemporaryDirectory() as temporary:
             viewer = Path(temporary)
-            cli = viewer / "node_modules" / "vinext" / "dist" / "cli.js"
+            cli = viewer / "node_modules" / "next" / "dist" / "bin" / "next"
             cli.parent.mkdir(parents=True)
             cli.write_text("", encoding="utf-8")
             bin_dir = viewer / "node_modules" / ".bin"
             bin_dir.mkdir(parents=True)
-            (bin_dir / "vinext").symlink_to("../vinext/dist/cli.js")
+            (bin_dir / "next").symlink_to("../next/dist/bin/next")
             self.assertIsNone(MODULE.node_modules_issue(viewer))
 
     def test_windows_cmd_layout_is_accepted(self):
         with tempfile.TemporaryDirectory(prefix="viewer layout ") as temporary:
             viewer = Path(temporary)
-            cli = viewer / "node_modules" / "vinext" / "dist" / "cli.js"
+            cli = viewer / "node_modules" / "next" / "dist" / "bin" / "next"
             cli.parent.mkdir(parents=True)
             cli.write_text("", encoding="utf-8")
             bin_dir = viewer / "node_modules" / ".bin"
             bin_dir.mkdir(parents=True)
-            (bin_dir / "vinext.cmd").write_text("@echo off\r\n", encoding="utf-8")
+            (bin_dir / "next.cmd").write_text("@echo off\r\n", encoding="utf-8")
             self.assertIsNone(MODULE.node_modules_issue(viewer, platform="nt"))
 
     def test_windows_rejects_posix_only_node_modules(self):
         with tempfile.TemporaryDirectory(prefix="viewer layout ") as temporary:
             viewer = Path(temporary)
-            cli = viewer / "node_modules" / "vinext" / "dist" / "cli.js"
+            cli = viewer / "node_modules" / "next" / "dist" / "bin" / "next"
             cli.parent.mkdir(parents=True)
             cli.write_text("", encoding="utf-8")
             bin_dir = viewer / "node_modules" / ".bin"
             bin_dir.mkdir(parents=True)
-            (bin_dir / "vinext").write_text("#!/bin/sh\n", encoding="utf-8")
-            self.assertIn("missing .bin/vinext.cmd", MODULE.node_modules_issue(viewer, platform="nt"))
+            (bin_dir / "next").write_text("#!/bin/sh\n", encoding="utf-8")
+            self.assertIn("missing .bin/next.cmd", MODULE.node_modules_issue(viewer, platform="nt"))
 
     def test_lockfile_bootstrap_uses_npm_ci_and_preserves_lock(self):
         with tempfile.TemporaryDirectory(prefix="viewer bootstrap ") as temporary:
@@ -427,11 +427,15 @@ class LauncherUnitTest(unittest.TestCase):
 
     def test_runtime_environment_is_scoped_to_owned_root(self):
         root = Path("/tmp/oxygen-launch-test")
-        environment = MODULE.viewer_environment(root)
-        self.assertEqual(environment["OXYGEN_VIEWER_STATE_DIR"], str(root / "state"))
-        self.assertEqual(environment["WRANGLER_LOG_PATH"], str(root / "wrangler.log"))
-        self.assertEqual(environment["MINIFLARE_REGISTRY_PATH"], str(root / "registry"))
-        self.assertEqual(environment["OXYGEN_VIEWER_HOST"], "127.0.0.1")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            environment = MODULE.viewer_environment(root)
+        self.assertEqual(
+            environment,
+            {
+                "OXYGEN_VIEWER_STATE_DIR": str(root / "state"),
+                "NEXT_TELEMETRY_DISABLED": "1",
+            },
+        )
 
     def test_separate_runtime_roots_own_separate_state_directories(self):
         first = MODULE.viewer_environment(Path("runtime-a"))
@@ -440,9 +444,11 @@ class LauncherUnitTest(unittest.TestCase):
             first["OXYGEN_VIEWER_STATE_DIR"], second["OXYGEN_VIEWER_STATE_DIR"]
         )
 
-    def test_runtime_environment_carries_exact_requested_port(self):
-        environment = MODULE.viewer_environment(Path("runtime root"), 3296)
-        self.assertEqual(environment["OXYGEN_VIEWER_PORT"], "3296")
+    def test_runtime_environment_does_not_carry_viewer_endpoint(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            environment = MODULE.viewer_environment(Path("runtime root"))
+        self.assertNotIn("OXYGEN_VIEWER_HOST", environment)
+        self.assertNotIn("OXYGEN_VIEWER_PORT", environment)
 
     @unittest.skipUnless(os.name == "posix", "POSIX process-group test")
     def test_cleanup_terminates_owned_process_group(self):

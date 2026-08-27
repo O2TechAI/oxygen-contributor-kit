@@ -151,21 +151,21 @@ def validate_node_runtime(viewer: Path = VIEWER) -> tuple[str, str]:
 def node_modules_issue(viewer: Path = VIEWER, *, platform: str | None = None) -> str | None:
     platform = platform or os.name
     modules = viewer / "node_modules"
-    vinext = modules / ".bin" / "vinext"
-    cli = modules / "vinext" / "dist" / "cli.js"
+    next_shim = modules / ".bin" / "next"
+    cli = modules / "next" / "dist" / "bin" / "next"
     if not modules.is_dir():
         return "node_modules is absent"
     if not cli.is_file():
-        return "node_modules is incomplete (missing vinext/dist/cli.js)"
-    if platform == "nt" and not (modules / ".bin" / "vinext.cmd").is_file():
+        return "node_modules is incomplete (missing next/dist/bin/next)"
+    if platform == "nt" and not (modules / ".bin" / "next.cmd").is_file():
         return (
             "node_modules was not installed by npm on Windows "
-            "(missing .bin/vinext.cmd)"
+            "(missing .bin/next.cmd)"
         )
-    if platform == "posix" and (not vinext.exists() or not vinext.is_symlink()):
+    if platform == "posix" and (not next_shim.exists() or not next_shim.is_symlink()):
         return (
             "node_modules was not installed by npm on this POSIX runtime "
-            "(.bin/vinext is not a symlink)"
+            "(.bin/next is not a symlink)"
         )
     return None
 
@@ -182,7 +182,7 @@ def validate_viewer_cli(node: str, viewer: Path = VIEWER) -> str | None:
     issue = node_modules_issue(viewer)
     if issue:
         return issue
-    cli = viewer / "node_modules" / "vinext" / "dist" / "cli.js"
+    cli = viewer / "node_modules" / "next" / "dist" / "bin" / "next"
     result = subprocess.run(
         [node, str(cli), "--version"],
         cwd=viewer,
@@ -191,7 +191,7 @@ def validate_viewer_cli(node: str, viewer: Path = VIEWER) -> str | None:
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
-        return f"Vinext CLI cannot run under the resolved Node runtime: {detail}"
+        return f"Next CLI cannot run under the resolved Node runtime: {detail}"
     return None
 
 
@@ -289,14 +289,10 @@ def wait_for_port_release(port: int, host: str = VIEWER_HOST, timeout: float = 8
     raise RuntimeError(f"Owned Viewer process tree did not release {host}:{port}")
 
 
-def viewer_environment(runtime_root: Path, port: int | None = None) -> dict[str, str]:
+def viewer_environment(runtime_root: Path) -> dict[str, str]:
     environment = os.environ.copy()
     environment["OXYGEN_VIEWER_STATE_DIR"] = str(runtime_root / "state")
-    environment["WRANGLER_LOG_PATH"] = str(runtime_root / "wrangler.log")
-    environment["MINIFLARE_REGISTRY_PATH"] = str(runtime_root / "registry")
-    environment["OXYGEN_VIEWER_HOST"] = VIEWER_HOST
-    if port is not None:
-        environment["OXYGEN_VIEWER_PORT"] = str(port)
+    environment["NEXT_TELEMETRY_DISABLED"] = "1"
     return environment
 
 
@@ -1166,7 +1162,7 @@ def main():
         process = start_owned_process(
             viewer_command(port, npm),
             cwd=VIEWER,
-            env=viewer_environment(Path(runtime), port),
+            env=viewer_environment(Path(runtime)),
         )
         try:
             for _ in range(90):
