@@ -76,6 +76,7 @@ def write_meeting(run: Path, meeting_id: str, *, root=False, records=None) -> Pa
         "title": "Private title",
         "records": records if records is not None else [{
             "record_id": "source-record-id",
+            "order": 1,
             "speaker": "Named Person",
             "timestamp": "2026-01-02T03:04:05Z",
             "text": "safe synthetic review text",
@@ -505,6 +506,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             output = root / "review"
             write_meeting(source, "private-meeting-id", records=[{
                 "record_id": "source-record-id",
+                "order": 1,
                 "speaker": "Named Person",
                 "timestamp": "2026-01-02T03:04:05Z",
                 "text": "reviewable text",
@@ -519,23 +521,19 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             meeting_path.write_text(json.dumps(meeting), encoding="utf-8")
 
             meetings = MODULE.discover_meetings(source)
-            evidence_ids, warning_count = MODULE.prepare_meetings(meetings, output)
-            prepared_path = output / "meetings" / "meeting-000001" / "meeting.json"
+            warning_count = MODULE.prepare_meetings(meetings, output)
+            prepared_path = output / "meetings" / "private-meeting-id" / "meeting.json"
             prepared = json.loads(prepared_path.read_text())
 
             self.assertEqual(len(meetings), 1)
             self.assertEqual(warning_count, 1)
-            self.assertEqual(prepared["meeting_id"], "meeting-000001")
+            self.assertEqual(prepared["meeting_id"], "private-meeting-id")
             self.assertEqual(prepared["records"], [{
-                "record_id": "record-000001",
-                "order": 0,
+                "record_id": "source-record-id",
+                "order": 1,
                 "speaker": "participant",
                 "text": "reviewable text",
             }])
-            self.assertEqual(
-                evidence_ids["private-meeting-id:source-record-id"],
-                "meeting-000001:record-000001",
-            )
             self.assertNotIn("Private title", json.dumps(prepared))
             self.assertNotIn("Named Person", json.dumps(prepared))
             self.assertNotIn("2026-01-02", json.dumps(prepared))
@@ -555,7 +553,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
 
             self.assertFalse((output / "meeting.json").exists())
             self.assertTrue(
-                (output / "meetings" / "meeting-000001" / "meeting.json").is_file()
+                (output / "meetings" / "meeting-only" / "meeting.json").is_file()
             )
             index = json.loads((output / "index.json").read_text(encoding="utf-8"))
             self.assertEqual(index["meeting_count"], 1)
@@ -589,31 +587,28 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             self.assertEqual(prepared["semantic_manifest"]["revision"], 2)
             self.assertEqual(prepared["semantic_manifest"]["units"][0]["revision"], 2)
 
-    def test_real_plural_meetings_rewrite_every_semantic_member(self):
+    def test_real_plural_meetings_preserve_every_semantic_member(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "source"
             output = root / "review"
-            alpha_path = write_meeting(source, "private-alpha")
+            write_meeting(source, "private-alpha")
             write_meeting(source, "private-beta")
-            alpha = json.loads(alpha_path.read_text(encoding="utf-8"))
-            alpha["records"][0].pop("record_id")
-            alpha_path.write_text(json.dumps(alpha), encoding="utf-8")
             write_semantic_project_map(source)
 
             self.run_main(source, output)
 
             prepared = self.assert_prepared_authority(output)
             expected = [
-                "meeting-000001:record-000001",
-                "meeting-000002:record-000001",
+                "private-alpha:source-record-id",
+                "private-beta:source-record-id",
             ]
             self.assertEqual(prepared["semantic_units"][0]["members"], expected)
             self.assertEqual(sorted(prepared["events"]), expected)
             serialized = json.dumps(prepared, ensure_ascii=False)
-            self.assertNotIn("private-alpha", serialized)
-            self.assertNotIn("private-beta", serialized)
-            self.assertNotIn("source-record-id", serialized)
+            self.assertIn("private-alpha", serialized)
+            self.assertIn("private-beta", serialized)
+            self.assertIn("source-record-id", serialized)
             self.assertFalse((output / "meeting.json").exists())
 
     def test_mixed_flow_has_exact_coverage_and_deterministic_bytes(self):
@@ -663,7 +658,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             MODULE.prepare_meetings(meetings, prepared)
             before = json.dumps(stale, sort_keys=True)
 
-            with self.assertRaisesRegex(ValueError, "unknown members"):
+            with self.assertRaisesRegex(ValueError, "semantic authority is stale"):
                 MODULE.project_map_authority.validate_project_map_authority(prepared, stale)
 
             self.assertEqual(json.dumps(stale, sort_keys=True), before)
@@ -741,27 +736,150 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             write_meeting(source, "meeting-beta")
 
             meetings = MODULE.discover_meetings(source)
-            evidence_ids, warning_count = MODULE.prepare_meetings(meetings, output)
+            warning_count = MODULE.prepare_meetings(meetings, output)
 
             prepared_paths = [
-                output / "meetings" / "meeting-000001" / "meeting.json",
-                output / "meetings" / "meeting-000002" / "meeting.json",
+                output / "meetings" / "meeting-alpha" / "meeting.json",
+                output / "meetings" / "meeting-beta" / "meeting.json",
             ]
             prepared = [json.loads(path.read_text(encoding="utf-8")) for path in prepared_paths]
             self.assertEqual(
                 [meeting["meeting_id"] for meeting in prepared],
-                ["meeting-000001", "meeting-000002"],
+                ["meeting-alpha", "meeting-beta"],
             )
             self.assertEqual(warning_count, 0)
+
+    def test_reviewed_meetings_preserve_attach_and_privacy_identity(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            meeting_ids = [
+                "meeting-alpha-5673aad42405aa9bccf0f3b47716f230a1b5f562f7e46a7a6d6eb410a66721",
+                "meeting-beta-dd6ff31480ff3d51eeebe6dfa2f4d2a4e532a24c82c6467151f7a485c8411ec6",
+            ]
+            for meeting_id in meeting_ids:
+                write_meeting(source, meeting_id, records=[{
+                    "record_id": "rec-00002", "order": 2,
+                    "speaker": "Named Person", "timestamp": "2026-01-02T03:04:06Z",
+                    "text": f"第二条 {meeting_id}",
+                }, {
+                    "record_id": "rec-00001", "order": 1,
+                    "speaker": "Named Person", "timestamp": "2026-01-02T03:04:05Z",
+                    "text": f"first {meeting_id}",
+                }])
+            original = write_semantic_project_map(source)
+            source_documents = {}
+            for meeting in MODULE.discover_meetings(source):
+                source_documents[meeting["source_meeting_id"]] = LAUNCHER.meeting_document({
+                    "dataset": meeting["dataset"],
+                    "meeting_id": meeting["source_meeting_id"],
+                })
+
+            self.run_main(source, output)
+
+            reviewed = self.assert_prepared_authority(output)
             self.assertEqual(
-                evidence_ids["meeting-alpha:source-record-id"],
-                "meeting-000001:record-000001",
+                reviewed["semantic_units"], original["semantic_units"],
             )
-            self.assertEqual(
-                evidence_ids["meeting-beta:source-record-id"],
-                "meeting-000002:record-000001",
-            )
-            self.assertNotIn("source-record-id", evidence_ids)
+            self.assertEqual(sorted(path.name for path in (output / "meetings").iterdir()), meeting_ids)
+            bundles = {bundle["trajectory"]: bundle for bundle in EXTRACT.extract_bundles(output)}
+            for meeting in MODULE.discover_meetings(output):
+                meeting_id = meeting["source_meeting_id"]
+                document = LAUNCHER.meeting_document({
+                    "dataset": meeting["dataset"], "meeting_id": meeting_id,
+                })
+                before_items = sorted(
+                    source_documents[meeting_id]["items"], key=lambda item: item["sequence"],
+                )
+                after_items = document["items"]
+                self.assertEqual(
+                    [(item["id"], item["sequence"], item["content"]) for item in after_items],
+                    [(item["id"], item["sequence"], item["content"]) for item in before_items],
+                )
+                self.assertEqual([item["sequence"] for item in after_items], [1, 2])
+                self.assertEqual(
+                    [turn["item_id"] for turn in bundles[meeting_id]["turns"]],
+                    [item["id"] for item in after_items],
+                )
+                self.assertTrue(all(
+                    set(record) == {"record_id", "order", "speaker", "text"}
+                    and record["speaker"] == "participant"
+                    for record in meeting["dataset"]["records"]
+                ))
+
+    def test_unicode_record_order_permutations_produce_identical_reviewed_bytes(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            records = [{
+                "record_id": "rec-zeta", "order": 2, "speaker": "Z", "text": "再见 🌍",
+            }, {
+                "record_id": "rec-alpha", "order": 1, "speaker": "A", "text": "你好 café",
+            }]
+            outputs = []
+            for name, ordered in (("forward", records), ("reverse", list(reversed(records)))):
+                source = root / name
+                output = root / f"{name}-review"
+                write_meeting(source, "meeting-unicode", records=ordered)
+                write_semantic_project_map(source)
+                self.run_main(source, output)
+                outputs.append(tree_bytes(output))
+            self.assertEqual(outputs[0], outputs[1])
+
+    def test_invalid_record_identity_and_sequence_authority_fail_atomically(self):
+        mutations = {
+            "missing-record-id": lambda records: records[0].pop("record_id"),
+            "foreign-qualified-id": lambda records: records[0].update(record_id="other:record"),
+            "duplicate-record-id": lambda records: records[1].update(record_id=records[0]["record_id"]),
+            "missing-sequence": lambda records: records[0].pop("order"),
+            "zero-sequence": lambda records: records[0].update(order=0),
+            "duplicate-sequence": lambda records: records[1].update(order=records[0]["order"]),
+            "gap-sequence": lambda records: records[1].update(order=3),
+            "mismatched-sequence-fields": lambda records: records[0].update(sequence_in_meeting=2),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source"
+                output = root / "existing-review"
+                path = write_meeting(source, "meeting-safe", records=[{
+                    "record_id": "rec-00001", "order": 1, "text": "one",
+                }, {
+                    "record_id": "rec-00002", "order": 2, "text": "two",
+                }])
+                write_semantic_project_map(source)
+                meeting = json.loads(path.read_text(encoding="utf-8"))
+                mutate(meeting["records"])
+                path.write_text(json.dumps(meeting, ensure_ascii=False), encoding="utf-8")
+                output.mkdir()
+                (output / "sentinel.bin").write_bytes(b"prior reviewed bytes")
+                before = tree_bytes(output)
+
+                with self.assertRaisesRegex(SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$"):
+                    MODULE.prepare_run(source, output)
+
+                self.assertEqual(tree_bytes(output), before)
+
+    def test_staged_output_tamper_fails_before_atomic_publication(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            write_meeting(source, "meeting-safe")
+            write_semantic_project_map(source)
+            original_write_json = MODULE.write_json
+
+            def tampering_write(path, value):
+                original_write_json(path, value)
+                if path.name == "meeting.json":
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    payload["records"][0]["order"] = 0
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with mock.patch.object(MODULE, "write_json", side_effect=tampering_write):
+                with self.assertRaisesRegex(SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$"):
+                    MODULE.prepare_run(source, output)
+            self.assertFalse(output.exists())
 
     def test_root_meeting_is_rejected_before_output(self):
         with TemporaryDirectory() as temp:

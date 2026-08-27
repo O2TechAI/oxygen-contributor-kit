@@ -275,7 +275,53 @@ def _meeting_id(value: object) -> str:
     return value
 
 
-def discover_meetings(source: Path) -> list[dict]:
+def _record_id(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", value
+    ):
+        raise SystemExit(INPUT_MEETING_INVALID)
+    if urllib.parse.unquote(value) != value:
+        raise SystemExit(INPUT_MEETING_INVALID)
+    return value
+
+
+def _record_sequence(record: dict) -> int:
+    sequence = record.get("sequence_in_meeting")
+    order = record.get("order")
+    if sequence is not None and order is not None and sequence != order:
+        raise SystemExit(INPUT_MEETING_INVALID)
+    value = sequence if sequence is not None else order
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 1
+        or value > 9_007_199_254_740_991
+    ):
+        raise SystemExit(INPUT_MEETING_INVALID)
+    return value
+
+
+def _validated_meeting_records(meeting_id: str, records: list[dict]) -> list[tuple[int, str, str]]:
+    try:
+        contribution_ids = project_map_authority.meeting_contribution_ids(meeting_id, records)
+    except (TypeError, ValueError):
+        raise SystemExit(INPUT_MEETING_INVALID) from None
+    prepared = []
+    for record, contribution_id in zip(records, contribution_ids):
+        record_id = _record_id(record.get("record_id"))
+        if contribution_id != f"{meeting_id}:{record_id}" or len(contribution_id) > 300:
+            raise SystemExit(INPUT_MEETING_INVALID)
+        text = record.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise SystemExit(INPUT_MEETING_INVALID)
+        prepared.append((_record_sequence(record), record_id, text))
+    sequences = [sequence for sequence, _, _ in prepared]
+    if sorted(sequences) != list(range(1, len(prepared) + 1)):
+        raise SystemExit(INPUT_MEETING_INVALID)
+    return sorted(prepared)
+
+
+def discover_meetings(source: Path, *, require_review_identity: bool = False) -> list[dict]:
     root_candidate = source / "meeting.json"
     if root_candidate.exists() or root_candidate.is_symlink():
         raise SystemExit(INPUT_MEETING_INVALID)
@@ -321,6 +367,8 @@ def discover_meetings(source: Path) -> list[dict]:
         if source_meeting_id in seen_ids:
             raise SystemExit(INPUT_MEETING_ID_DUPLICATE)
         seen_ids.add(source_meeting_id)
+        if require_review_identity:
+            _validated_meeting_records(source_meeting_id, meeting["records"])
         prepared.append({
             "dataset": meeting,
             "path": path,
@@ -330,56 +378,40 @@ def discover_meetings(source: Path) -> list[dict]:
 
 
 def prepare_meeting(
-    source: dict, output: Path, meeting_id: str
-) -> tuple[dict[str, str], int]:
+    source: dict, output: Path
+) -> int:
     meeting = source["dataset"]
     source_meeting_id = source["source_meeting_id"]
     source_warnings = meeting.get("warnings")
     warning_count = len(source_warnings) if isinstance(source_warnings, list) else 0
     records = []
-    evidence_ids: dict[str, str] = {}
-    source_records = meeting.get("records") or []
-    source_record_ids = project_map_authority.meeting_contribution_ids(
-        source_meeting_id, source_records,
-    )
-    for record, source_record_id in zip(source_records, source_record_ids):
-        text = record.get("text") if isinstance(record, dict) else None
-        if not isinstance(text, str) or not text.strip():
-            continue
-        record_number = len(records) + 1
-        record_id = f"record-{record_number:06d}"
-        evidence_ids[source_record_id] = f"{meeting_id}:{record_id}"
+    for sequence, record_id, text in _validated_meeting_records(
+        source_meeting_id, meeting.get("records") or [],
+    ):
         records.append({
             "record_id": record_id,
-            "order": record_number - 1,
+            "order": sequence,
             "speaker": "participant",
             "text": text,
         })
-    destination = output / "meetings" / meeting_id
+    destination = output / "meetings" / source_meeting_id
     write_json(destination / "meeting.json", {
         "schema_version": "ai-review.meeting/1",
-        "meeting_id": meeting_id,
-        "title": meeting_id,
+        "meeting_id": source_meeting_id,
+        "title": source_meeting_id,
         "source_warning_count": warning_count,
         "review_status": "pending",
         "publication_approved": False,
         "records": records,
     })
-    return evidence_ids, warning_count
+    return warning_count
 
 
-def prepare_meetings(meetings: list[dict], output: Path) -> tuple[dict[str, str], int]:
-    evidence_ids: dict[str, str] = {}
+def prepare_meetings(meetings: list[dict], output: Path) -> int:
     warning_count = 0
-    for index, meeting in enumerate(meetings, 1):
-        prepared_ids, prepared_warnings = prepare_meeting(
-            meeting,
-            output,
-            f"meeting-{index:06d}",
-        )
-        evidence_ids.update(prepared_ids)
-        warning_count += prepared_warnings
-    return evidence_ids, warning_count
+    for meeting in meetings:
+        warning_count += prepare_meeting(meeting, output)
+    return warning_count
 
 
 def validated_project_map(source: Path) -> tuple[dict, dict]:
@@ -400,7 +432,6 @@ def rebound_project_map(
     project_map: dict,
     canonical_source: dict,
     prepared_run: Path,
-    changed_ids: dict[str, str],
 ) -> dict:
     try:
         source_manifest = canonical_source["semantic_manifest"]
@@ -410,42 +441,27 @@ def rebound_project_map(
             for member in unit["members"]
         }, key=lambda value: value.encode("utf-8"))
         prepared_ids, _, _ = project_map_authority.source_inventory(prepared_run)
-        identity_map = dict(changed_ids)
-        for source_id in source_ids:
-            identity_map.setdefault(source_id, source_id)
-        if (
-            set(identity_map) != set(source_ids)
-            or len(set(identity_map.values())) != len(identity_map)
-            or set(identity_map.values()) != set(prepared_ids)
-        ):
-            raise ValueError("prepared contribution identity mapping is not exact")
+        if source_ids != prepared_ids:
+            raise ValueError("prepared contribution identity is not exact")
 
         raw_units = project_map["semantic_units"]
-        remapped_units = [{
-            **unit,
-            "members": [identity_map[member] for member in unit["members"]],
-        } for unit in raw_units]
         rebound = project_map_authority.canonical_project_map(
             prepared_run,
             project_map["primary_project"],
             project_map["summary"],
-            remapped_units,
+            raw_units,
             source_manifest,
         )
         if "events" in project_map:
             events = project_map["events"]
             if not isinstance(events, dict):
                 raise ValueError("project-map events authority is invalid")
-            remapped_events: dict[str, object] = {}
-            for source_id, value in events.items():
-                prepared_id = identity_map[source_id]
-                if prepared_id in remapped_events:
-                    raise ValueError("project-map events authority is duplicated")
-                remapped_events[prepared_id] = value
+            if set(events) != set(source_ids):
+                raise ValueError("project-map events authority is not exact")
             rebound["events"] = {
-                event_id: remapped_events[event_id]
+                event_id: events[event_id]
                 for event_id in sorted(
-                    remapped_events, key=lambda value: value.encode("utf-8")
+                    events, key=lambda value: value.encode("utf-8")
                 )
             }
         project_map_authority.validate_project_map_authority(prepared_run, rebound)
@@ -455,7 +471,7 @@ def rebound_project_map(
 
 
 def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
-    meetings = discover_meetings(source)
+    meetings = discover_meetings(source, require_review_identity=True)
     project_map, canonical_source = validated_project_map(source)
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(
@@ -463,13 +479,13 @@ def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
     ))
     try:
         trajectories = prepare_trajectories(source, staging)
-        meeting_ids, meeting_warning_count = prepare_meetings(meetings, staging)
+        meeting_warning_count = prepare_meetings(meetings, staging)
         if not trajectories and not meetings:
             raise SystemExit(f"no trajectories or meeting found in {source}")
         write_json(
             staging / "project-map.json",
             rebound_project_map(
-                project_map, canonical_source, staging, meeting_ids,
+                project_map, canonical_source, staging,
             ),
         )
         write_json(staging / "index.json", {
@@ -485,6 +501,8 @@ def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
             "publication_approved": False,
             "trajectories": trajectories,
         })
+        discover_meetings(staging, require_review_identity=True)
+        validated_project_map(staging)
         staging.replace(output)
         return trajectories, len(meetings)
     except BaseException:
