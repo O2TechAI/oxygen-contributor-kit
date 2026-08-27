@@ -17,6 +17,9 @@ if str(LLM_REDACT_ROOT) not in sys.path:
     sys.path.insert(0, str(LLM_REDACT_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
+from ingest.human_source_projection import (
+    meeting_contribution_ids,
+)
 from prepare_ai_review_run import discover_meetings
 
 KEEP_EVENT_TYPE = "message"
@@ -24,6 +27,7 @@ KEEP_EVENT_TYPE = "message"
 
 def extract_one(traj_dir: pathlib.Path) -> dict:
     turns = []
+    document_id = traj_dir.name
     events_path = traj_dir / "events.jsonl"
     with events_path.open(encoding="utf-8") as fh:
         for line in fh:
@@ -40,21 +44,29 @@ def extract_one(traj_dir: pathlib.Path) -> dict:
             text = payload.get("text") or ""
             if not text.strip():
                 continue
+            item_id = event.get("event_id")
             turns.append({
                 "event_id": event.get("event_id"),
+                "document_id": document_id,
+                "item_id": item_id,
                 "role": payload.get("role"),
                 "timestamp": event.get("timestamp"),
                 "text": text,
             })
-    return {"trajectory": traj_dir.name, "turns": turns,
+    return {"trajectory": document_id, "document_kind": "trajectory", "turns": turns,
             "chars": sum(len(t["text"]) for t in turns)}
 
 
 def extract_meeting(path: pathlib.Path) -> dict | None:
     dataset = json.loads(path.read_text(encoding="utf-8"))
     meeting_id = str(dataset.get("meeting_id") or dataset.get("id") or path.parent.name)
+    records = dataset.get("records") or []
+    try:
+        item_ids = meeting_contribution_ids(meeting_id, records)
+    except ValueError as error:
+        raise SystemExit(f"invalid meeting contribution identity: {error}") from error
     turns = []
-    for index, record in enumerate(dataset.get("records") or [], 1):
+    for index, (record, item_id) in enumerate(zip(records, item_ids), 1):
         if not isinstance(record, dict):
             continue
         text = record.get("text")
@@ -62,6 +74,8 @@ def extract_meeting(path: pathlib.Path) -> dict | None:
             continue
         turns.append({
             "event_id": str(record.get("record_id") or f"record-{index:06d}"),
+            "document_id": meeting_id,
+            "item_id": item_id,
             "role": "user",
             "timestamp": record.get("timestamp") or record.get("started_at"),
             "text": text,

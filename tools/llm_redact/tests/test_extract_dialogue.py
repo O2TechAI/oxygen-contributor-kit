@@ -30,13 +30,25 @@ def write_trajectory(run: Path) -> None:
     directory = run / "trajectories" / "traj-safe"
     directory.mkdir(parents=True)
     (directory / "events.jsonl").write_text(json.dumps({
-        "event_id": "event-1",
+        "event_id": "evt-" + "a" * 64,
         "event_type": "message",
         "payload": {"role": "user", "text": "safe trajectory text"},
     }) + "\n", encoding="utf-8")
 
 
 class ExtractDialogueTest(unittest.TestCase):
+    def test_trajectory_turn_carries_exact_canonical_pair(self):
+        with TemporaryDirectory() as temp:
+            run = Path(temp, "review")
+            write_trajectory(run)
+
+            bundle = MODULE.extract_bundles(run)[0]
+
+            self.assertEqual(bundle["document_kind"], "trajectory")
+            self.assertEqual(bundle["turns"][0]["document_id"], "traj-safe")
+            self.assertEqual(bundle["turns"][0]["item_id"], "evt-" + "a" * 64)
+            self.assertEqual(bundle["turns"][0]["event_id"], "evt-" + "a" * 64)
+
     def test_legacy_root_meeting_still_extracts(self):
         with TemporaryDirectory() as temp:
             run = Path(temp, "review")
@@ -62,6 +74,36 @@ class ExtractDialogueTest(unittest.TestCase):
             )
             self.assertTrue(all(bundle["document_kind"] == "meeting" for bundle in bundles))
             self.assertTrue(all(len(bundle["turns"]) == 1 for bundle in bundles))
+            self.assertEqual(
+                [bundle["turns"][0]["item_id"] for bundle in bundles],
+                ["meeting-000001:record-000001", "meeting-000002:record-000001"],
+            )
+            self.assertEqual(
+                [bundle["turns"][0]["document_id"] for bundle in bundles],
+                ["meeting-000001", "meeting-000002"],
+            )
+
+    def test_meeting_record_and_fallback_identities_match_importer(self):
+        with TemporaryDirectory() as temp:
+            run = Path(temp, "review")
+            records = [
+                {"record_id": "stable-record", "text": "safe stable record"},
+                {"text": "safe fallback record"},
+            ]
+            write_meeting(run, "meeting-000001", records=records)
+
+            turns = MODULE.extract_bundles(run)[0]["turns"]
+
+            self.assertEqual(turns[0]["item_id"], "meeting-000001:stable-record")
+            self.assertEqual(turns[0]["event_id"], "stable-record")
+            self.assertRegex(
+                turns[1]["item_id"],
+                r"^meeting-000001:rec-[0-9a-f]{64}$",
+            )
+            self.assertEqual(turns[1]["event_id"], "record-000002")
+            self.assertEqual([turn["text"] for turn in turns], [
+                "safe stable record", "safe fallback record",
+            ])
 
     def test_trajectory_root_and_plural_meetings_keep_deterministic_order(self):
         with TemporaryDirectory() as temp:
