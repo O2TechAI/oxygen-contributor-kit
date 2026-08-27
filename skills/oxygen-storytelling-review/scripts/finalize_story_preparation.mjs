@@ -8,6 +8,11 @@ import {
   storyPreparationDigest,
   validateStoryPreparationManifest,
 } from "../../../viewer/lib/story-preparation.ts";
+import { canonicalizeAutoRemoved } from "../../../viewer/lib/auto-removed.mjs";
+import {
+  normalizeBulkPreferencePresentations,
+  normalizeProbePresentations,
+} from "../../../viewer/lib/preference-presentation.ts";
 import { canonicalAuthorityJson } from "../../../viewer/lib/story-readiness.ts";
 import { compareStorySourceIdentity, parseStorySource } from "../../../viewer/lib/timeline.ts";
 
@@ -22,7 +27,20 @@ const hex = /^[0-9a-f]{64}$/;
 const encoder = new TextEncoder();
 const metadataKeys = new Set([
   "raworiginal", "original", "evidence", "provider", "model", "prompt", "rewrite",
-  "recommendation", "execution", "agent", "timestamp", "duration", "token", "cost", "log",
+  "recommendation", "execution", "agent", "duration", "token", "cost", "log",
+]);
+const preferenceKeys = [
+  "workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount",
+  "setAside", "probes", "bulkDecisions", "autoRemoved",
+];
+const probeKeys = [
+  "id", "documentId", "documentKind", "eventIds", "timestamp", "signal", "score",
+  "turns", "recap", "question", "options", "presentations", "allowOther", "allowSkip",
+];
+const bulkKeys = ["id", "kind", "count", "question", "evidenceSample", "presentations"];
+const signals = new Set([
+  "repeated_correction", "long_exchange", "late_rejection", "decision_reversal",
+  "explicit_rule", "sustained_disagreement",
 ]);
 
 class FinalizerError extends Error {
@@ -39,6 +57,8 @@ const exactKeys = (value, keys) => isObject(value)
 const utf8 = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
 const stableId = (value) => typeof value === "string" && Boolean(value.trim())
   && !/[\u0000-\u001f\u007f]/u.test(value);
+const safeText = (value) => typeof value === "string" && Boolean(value.trim())
+  && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value);
 const nonnegative = (value) => Number.isSafeInteger(value) && value >= 0;
 
 async function jsonFile(path) {
@@ -215,12 +235,63 @@ function composeStory(outputs, expected, label) {
   if (canonicalAuthorityJson(actual) !== canonicalAuthorityJson(wanted)) fail(`${label}_OUTPUT_STALE`);
 }
 
-function preferenceAuthority(value, workflowRunId, sourceRevision, inputDigest) {
-  const keys = ["workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount", "questionDigest", "questionCount", "probes", "bulkDecisions"];
-  if (!exactKeys(value, keys) || value.workflowRunId !== workflowRunId || value.sourceRevision !== sourceRevision
-    || value.inputDigest !== inputDigest || !hex.test(value.outputDigest) || value.questionDigest !== value.outputDigest
-    || !nonnegative(value.outputCount) || value.questionCount !== value.outputCount
-    || !Array.isArray(value.probes) || !Array.isArray(value.bulkDecisions)) fail("PREFERENCE_BUNDLE_INVALID");
+function preferenceOption(value) {
+  return exactKeys(value, ["id", "text"]) && stableId(value.id) && safeText(value.text);
+}
+
+function preferenceProbe(value) {
+  if (!exactKeys(value, probeKeys) || !stableId(value.id) || !stableId(value.documentId)
+    || !["trajectory", "meeting"].includes(value.documentKind)
+    || !Array.isArray(value.eventIds) || value.eventIds.length === 0
+    || value.eventIds.some((eventId) => !stableId(eventId))
+    || new Set(value.eventIds).size !== value.eventIds.length
+    || (value.timestamp !== null && !safeText(value.timestamp)) || !signals.has(value.signal)
+    || !nonnegative(value.score) || value.score > 100 || !nonnegative(value.turns)
+    || !safeText(value.recap) || !safeText(value.question)
+    || !Array.isArray(value.options) || ![2, 3].includes(value.options.length)
+    || value.options.some((option) => !preferenceOption(option))
+    || new Set(value.options.map((option) => option.id)).size !== value.options.length
+    || value.allowOther !== true || value.allowSkip !== true) fail("PREFERENCE_BUNDLE_INVALID");
+  const presentations = normalizeProbePresentations(value.presentations, value.options);
+  if (presentations === null
+    || canonicalAuthorityJson(presentations) !== canonicalAuthorityJson(value.presentations)) {
+    fail("PREFERENCE_BUNDLE_INVALID");
+  }
+  return value;
+}
+
+function preferenceBulkDecision(value) {
+  if (!exactKeys(value, bulkKeys) || !stableId(value.id) || !safeText(value.kind)
+    || !nonnegative(value.count) || !safeText(value.question) || !Array.isArray(value.evidenceSample)
+    || value.evidenceSample.some((eventId) => !stableId(eventId))
+    || new Set(value.evidenceSample).size !== value.evidenceSample.length) fail("PREFERENCE_BUNDLE_INVALID");
+  const presentations = normalizeBulkPreferencePresentations(value.presentations);
+  if (presentations === null
+    || canonicalAuthorityJson(presentations) !== canonicalAuthorityJson(value.presentations)) {
+    fail("PREFERENCE_BUNDLE_INVALID");
+  }
+  return value;
+}
+
+async function preferenceAuthority(value, workflowRunId, sourceRevision, inputDigest) {
+  if (!exactKeys(value, preferenceKeys) || value.workflowRunId !== workflowRunId
+    || value.sourceRevision !== sourceRevision || value.inputDigest !== inputDigest
+    || !hex.test(value.outputDigest) || !nonnegative(value.outputCount)
+    || !nonnegative(value.setAside) || !Array.isArray(value.probes)
+    || !Array.isArray(value.bulkDecisions)) fail("PREFERENCE_BUNDLE_INVALID");
+  rejectMetadata({ probes: value.probes, bulkDecisions: value.bulkDecisions });
+  const probes = value.probes.map(preferenceProbe);
+  const bulkDecisions = value.bulkDecisions.map(preferenceBulkDecision);
+  const ids = [...probes, ...bulkDecisions].map((item) => item.id);
+  if (new Set(ids).size !== ids.length || value.outputCount !== ids.length
+    || (value.outputCount === 0 && value.setAside !== 0)) fail("PREFERENCE_BUNDLE_INVALID");
+  try {
+    canonicalizeAutoRemoved(value.autoRemoved);
+  } catch {
+    fail("PREFERENCE_BUNDLE_INVALID");
+  }
+  const batch = canonicalPreferenceQuestionBatch(probes, bulkDecisions);
+  if (await storyPreparationDigest(batch) !== value.outputDigest) fail("PREFERENCE_BUNDLE_INVALID");
   return value;
 }
 
@@ -267,7 +338,7 @@ async function finalize(args) {
     principle: insight.principle,
   })));
   const preferenceInputDigest = await storyPreparationDigest(lessons);
-  const preference = preferenceAuthority(await jsonFile(resolve(preferencePath)), workflowRunId, sourceRevision, preferenceInputDigest);
+  const preference = await preferenceAuthority(await jsonFile(resolve(preferencePath)), workflowRunId, sourceRevision, preferenceInputDigest);
   const storyOutputs = await laneManifest(shardRoot, "story", semantic.manifestDigest, semantic.unitIds);
   composeStory(storyOutputs, base, "STORY");
   const baseDigest = await storyPreparationDigest(base);

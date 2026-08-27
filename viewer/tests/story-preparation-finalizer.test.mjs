@@ -51,6 +51,31 @@ function lessons(stories) {
   })));
 }
 
+function probe() {
+  const options = [
+    { id: "one", text: "Ask before editing deployment files." },
+    { id: "two", text: "Put deployment work on a separate branch." },
+  ];
+  return {
+    id: "probe-a", documentId: "doc", documentKind: "trajectory", eventIds: ["event:é"],
+    timestamp: "2026-08-27T12:00:00Z", signal: "explicit_rule", score: 80, turns: 2,
+    recap: "The reviewed event records a deployment boundary.",
+    question: "What should the agent remember?", options,
+    presentations: { zh: {
+      recap: "已审阅事件记录了部署边界。", question: "代理应该记住什么？",
+      options: [{ id: "one", text: "修改部署文件前先询问。" }, { id: "two", text: "把部署工作放在单独分支。" }],
+    } },
+    allowOther: true, allowSkip: true,
+  };
+}
+
+function bulkDecision() {
+  return {
+    id: "bulk-a", kind: "privacy", count: 1, question: "Keep this reviewed group?",
+    evidenceSample: ["event:z"], presentations: { zh: { question: "保留这组已审阅内容吗？" } },
+  };
+}
+
 async function fixture({ insightIds = ["same", "same"], privacy = true, questions = true, reverse = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "story-finalizer-"));
   const shards = join(directory, "shards");
@@ -63,12 +88,13 @@ async function fixture({ insightIds = ["same", "same"], privacy = true, question
   const base = rows.map((row, index) => ({ id: row.id, story: { ...stories[index], insights: [] } }));
   const complete = rows.map((row, index) => ({ id: row.id, story: stories[index] }));
   const inputDigest = digest(lessons(stories));
-  const probes = questions ? [{ id: "probe-a", question: "Question" }] : [];
-  const batch = canonicalPreferenceQuestionBatch(probes, []);
+  const probes = questions ? [probe()] : [];
+  const bulkDecisions = questions ? [bulkDecision()] : [];
+  const batch = canonicalPreferenceQuestionBatch(probes, bulkDecisions);
   const preference = {
     workflowRunId: "run-11", sourceRevision: 4, inputDigest, outputDigest: digest(batch),
-    outputCount: batch.length, questionDigest: digest(batch), questionCount: batch.length,
-    probes, bulkDecisions: [],
+    outputCount: batch.length, setAside: 0, probes, bulkDecisions,
+    autoRemoved: { total: 1, reversible: true, categories: [{ kind: "credential", count: 1 }] },
   };
   const privacyCandidates = privacy ? [{
     id: "cross-chapter", reviewState: "needs_confirmation", title: "One issue",
@@ -100,7 +126,7 @@ async function fixture({ insightIds = ["same", "same"], privacy = true, question
     story: [[base[0]], [base[1]]],
     insight: insightIds[0] === null && insightIds[1] === null ? [[], []] : [[complete[0]], [complete[1]]],
     story_privacy: [[...privacyCandidates], []],
-    preference: insightIds[0] === null && insightIds[1] === null ? [] : [{ probes, bulkDecisions: [] }, { probes: [], bulkDecisions: [] }],
+    preference: insightIds[0] === null && insightIds[1] === null ? [] : [{ probes, bulkDecisions }, { probes: [], bulkDecisions: [] }],
   };
   for (const lane of ["story", "insight", "story_privacy", "preference"]) {
     const laneUnits = units[lane];
@@ -131,7 +157,7 @@ function run(fixtureValue) {
     "--workflow-run-id", "run-11", "--source-revision", "4"], { encoding: "utf8" });
 }
 
-test("four multi-shard lanes finalize deterministically; Core accepts cross-Chapter local Insight IDs", async () => {
+test("four lanes finalize with a producer-shaped timestamped probe, bulk decision, and cross-Chapter Insight IDs", async () => {
   const first = await fixture();
   const second = await fixture({ reverse: true });
   try {
@@ -145,7 +171,9 @@ test("four multi-shard lanes finalize deterministically; Core accepts cross-Chap
     assert.equal(result.receipts.length, 4);
     assert.equal(result.storyPrivacyCandidates.length, 1);
     assert.deepEqual(result.storyPrivacyCandidates[0].releaseTargets, ["é::story:block-é", "z::title"]);
-    assert.equal(result.receipts.find((receipt) => receipt.lane === "preference").scopeCount, 2);
+    const preferenceReceipt = result.receipts.find((receipt) => receipt.lane === "preference");
+    assert.equal(preferenceReceipt.scopeCount, 2);
+    assert.equal(preferenceReceipt.outputCount, 2);
   } finally { await first.cleanup(); await second.cleanup(); }
 });
 
@@ -161,6 +189,25 @@ test("completed-zero Insight, Story Privacy, and Preference lanes are explicit t
     assert.equal(manifest.receipts.find((receipt) => receipt.lane === "story_privacy").outputCount, 0);
     assert.equal(manifest.receipts.find((receipt) => receipt.lane === "preference").outputCount, 0);
   } finally { await emptyInsight.cleanup(); await emptyQuestions.cleanup(); }
+});
+
+test("the sole producer-shaped Preference bundle fails closed on extra authority and nested fields", async (t) => {
+  const mutations = {
+    extraAuthority: (value) => { value.authorityOverride = value.outputDigest; },
+    answeredProbe: (value) => { value.probes[0].answer = { choice: "one" }; },
+    generationMetadata: (value) => { value.probes[0].provider = "forbidden"; },
+    malformedAutoRemoved: (value) => { value.autoRemoved.extra = true; },
+  };
+  for (const [name, mutate] of Object.entries(mutations)) await t.test(name, async () => {
+    const value = await fixture();
+    try {
+      const path = join(value.directory, "preference.json");
+      const preference = await readJson(path);
+      mutate(preference);
+      await json(path, preference);
+      assert.notEqual(run(value).status, 0);
+    } finally { await value.cleanup(); }
+  });
 });
 
 test("missing, duplicate, overlap, foreign, stale, nonterminal, and tampered worker inputs fail closed", async (t) => {
