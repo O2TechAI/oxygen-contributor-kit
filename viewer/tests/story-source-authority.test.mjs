@@ -20,6 +20,7 @@ import {
   publishCompletedStorySourceMutation,
 } from "../lib/story-source-publication.ts";
 import { STORY_PREFIX } from "../lib/timeline.ts";
+import { STORY_PREPARATION_EMPTY_ARRAY_DIGEST } from "../lib/story-preparation.ts";
 
 const RUN_ID = "source-authority-run";
 const ORIGINAL_SENTINEL = "PRIVATE_ORIGINAL_SENTINEL";
@@ -335,6 +336,7 @@ test("Story activation lease is running-only and publishes semantic/source autho
   ), false, "a second ready attempt cannot claim an active lease");
   assert.equal(await publishActivatedStorySourceMutation(
     db, [], RUN_ID, 30, 2, "d".repeat(64), 1, "c".repeat(64),
+    0, STORY_PREPARATION_EMPTY_ARRAY_DIGEST, 0,
     "2036-02-05T00:00:01.000Z",
   ), true);
   assert.equal(db.status, "ready_for_human_review");
@@ -355,6 +357,7 @@ test("mismatched coverage cannot partially rebind semantic authority", async () 
   ), true);
   assert.equal(await publishActivatedStorySourceMutation(
     db, [], RUN_ID, 40, 1, "d".repeat(64), 2, "e".repeat(64),
+    0, STORY_PREPARATION_EMPTY_ARRAY_DIGEST, 0,
     "2036-02-06T00:00:01.000Z",
   ), false);
   assert.equal(db.semanticRevision, 40);

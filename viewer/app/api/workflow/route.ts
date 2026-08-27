@@ -13,6 +13,12 @@ import {
 } from "../../../lib/story-readiness";
 import { isWorkflowRunId } from "../../../lib/workflow-progress";
 import {
+  canonicalPreferenceQuestionBatch,
+  storyPreparationDigest,
+  validateStoryPreparationManifest,
+  type PreferenceBatchAuthority,
+} from "../../../lib/story-preparation";
+import {
   WORKFLOW_RUN_AUTHORITY,
   WorkflowRunAuthorityError,
   establishWorkflowRun,
@@ -39,6 +45,7 @@ const EVENTS = new Set([
 ]);
 const BODY_KEYS = new Set([
   "workflowRunId", "event", "completed", "total", "coverageManifest", "storyCandidates",
+  "preparationManifest",
 ]);
 export const dynamic = "force-dynamic";
 
@@ -51,6 +58,65 @@ const count = (value: unknown) => typeof value === "number"
 async function sha256(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function readPreferenceBatchAuthority(
+  db: Awaited<ReturnType<typeof getLocalDatabase>>,
+  workflowRunId: string,
+  sourceRevision: number,
+): Promise<PreferenceBatchAuthority | null> {
+  const [run, probeRows, bulkRows] = await Promise.all([
+    db.prepare(`SELECT workflow_run_id,source_revision,input_digest,output_digest,
+        output_count,status,stage FROM probe_runs WHERE workflow_run_id=?`)
+      .bind(workflowRunId).first<Record<string, unknown>>(),
+    db.prepare(`SELECT id,document_id,document_kind,event_ids_json,timestamp,signal,
+        score,turns,recap,question,options_json,presentations_json,allow_other,allow_skip
+        FROM probes ORDER BY id`).all<Record<string, unknown>>(),
+    db.prepare(`SELECT id,kind,count,question,evidence_sample_json,presentations_json
+        FROM probe_bulk_decisions ORDER BY id`).all<Record<string, unknown>>(),
+  ]);
+  if (!run || run.workflow_run_id !== workflowRunId
+    || Number(run.source_revision) !== sourceRevision
+    || run.status !== "complete" || run.stage !== "preference"
+    || typeof run.input_digest !== "string" || typeof run.output_digest !== "string") return null;
+  try {
+    const probes = (probeRows.results || []).map((row) => ({
+      id: String(row.id),
+      documentId: String(row.document_id),
+      documentKind: String(row.document_kind),
+      eventIds: JSON.parse(String(row.event_ids_json)),
+      timestamp: row.timestamp === null ? null : String(row.timestamp),
+      signal: String(row.signal),
+      score: Number(row.score),
+      turns: Number(row.turns),
+      recap: String(row.recap),
+      question: String(row.question),
+      options: JSON.parse(String(row.options_json)),
+      presentations: JSON.parse(String(row.presentations_json)),
+      allowOther: Boolean(row.allow_other),
+      allowSkip: Boolean(row.allow_skip),
+    }));
+    const bulk = (bulkRows.results || []).map((row) => ({
+      id: String(row.id),
+      kind: String(row.kind),
+      count: Number(row.count),
+      question: String(row.question),
+      evidenceSample: JSON.parse(String(row.evidence_sample_json)),
+      presentations: JSON.parse(String(row.presentations_json)),
+    }));
+    const outputCount = probes.length + bulk.length;
+    const outputDigest = await storyPreparationDigest(canonicalPreferenceQuestionBatch(probes, bulk));
+    if (Number(run.output_count) !== outputCount || run.output_digest !== outputDigest) return null;
+    return {
+      workflowRunId,
+      sourceRevision,
+      inputDigest: run.input_digest,
+      outputDigest,
+      outputCount,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function GET(request: Request) {
@@ -89,13 +155,17 @@ export async function POST(request: Request) {
   if (!isWorkflowRunId(workflowRunId) || !EVENTS.has(event)) {
     return Response.json({ error: "Invalid workflow event" }, { status: 400 });
   }
-  if ((record.coverageManifest !== undefined || record.storyCandidates !== undefined)
+  if ((record.coverageManifest !== undefined || record.storyCandidates !== undefined
+      || record.preparationManifest !== undefined)
     && event !== "story_ready_for_human_review") {
     return Response.json({ error: "Story authority is only accepted at Story activation" }, { status: 400 });
   }
   if (event === "story_ready_for_human_review"
-    && (record.coverageManifest === undefined || record.storyCandidates === undefined)) {
-    return Response.json({ error: "Story candidates and coverage are required at activation" }, { status: 400 });
+    && (record.coverageManifest === undefined || record.storyCandidates === undefined
+      || record.preparationManifest === undefined)) {
+    return Response.json({
+      error: "Story candidates, coverage, and preparation are required at activation",
+    }, { status: 400 });
   }
 
   const completed = record.completed === undefined ? 0 : count(record.completed);
@@ -196,6 +266,7 @@ export async function POST(request: Request) {
         { results: documentRows },
         semanticManifest,
         previousCoverage,
+        preferenceAuthority,
       ] = await Promise.all([
         db.prepare(`SELECT id,document_id AS documentId,sequence,timestamp,
           organization_category AS project,event_type AS eventType,
@@ -206,10 +277,15 @@ export async function POST(request: Request) {
           .all<{ id: string; formatted_summary_json: string }>(),
         readSemanticManifestAuthority(db, workflowRunId),
         readStoredCoverageManifestAuthority(db, workflowRunId),
+        readPreferenceBatchAuthority(db, workflowRunId, leasedRevision),
       ]);
       if (!semanticManifest) {
         await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
         return Response.json({ error: "Current semantic manifest is required" }, { status: 409 });
+      }
+      if (!preferenceAuthority) {
+        await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
+        return Response.json({ error: "Current Preference preparation is required" }, { status: 409 });
       }
       const normalized = normalizeStoryCandidateSubmission(record.storyCandidates, itemRows);
       if (!normalized.ok) {
@@ -233,6 +309,25 @@ export async function POST(request: Request) {
         }, { status: 409 });
       }
       const coverageManifest: CoverageManifestAuthority = activationValidation.coverageManifest;
+      const preparationValidation = await validateStoryPreparationManifest(
+        record.preparationManifest,
+        {
+          workflowRunId,
+          sourceRevision: leasedRevision,
+          semanticManifestDigest: semanticManifest.manifestDigest,
+          semanticUnitIds: semanticManifest.units.map((unit) => unit.id),
+          storyCandidates: normalized.rows,
+          preference: preferenceAuthority,
+        },
+      );
+      if (!preparationValidation.ok) {
+        await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
+        return Response.json({
+          error: "Story preparation authority validation failed",
+          code: preparationValidation.code,
+        }, { status: 409 });
+      }
+      const preparation = preparationValidation.authority;
       const revisionFailure = validateCoverageRevisionTransition(
         coverageManifest,
         previousCoverage,
@@ -328,6 +423,55 @@ export async function POST(request: Request) {
             json_extract(value,'$.ownerId'),json_extract(value,'$.exclusionReason')
           FROM json_each(?) WHERE ${leaseSql}`)
           .bind(workflowRunId, coveragePayload, ...leaseBindings));
+      statements.push(
+        db.prepare(`DELETE FROM story_preparation_receipts
+          WHERE workflow_run_id=? AND ${leaseSql}`).bind(workflowRunId, ...leaseBindings),
+        db.prepare(`DELETE FROM story_privacy_candidates
+          WHERE workflow_run_id=? AND ${leaseSql}`).bind(workflowRunId, ...leaseBindings),
+      );
+      const receiptPayload = JSON.stringify(preparation.receipts);
+      statements.push(db.prepare(`INSERT INTO story_preparation_receipts
+          (workflow_run_id,lane,source_revision,input_digest,scope_digest,scope_count,
+           output_digest,output_count,completed_at)
+          SELECT ?,json_extract(value,'$.lane'),?,json_extract(value,'$.inputDigest'),
+            json_extract(value,'$.scopeDigest'),json_extract(value,'$.scopeCount'),
+            json_extract(value,'$.outputDigest'),json_extract(value,'$.outputCount'),?
+          FROM json_each(?) WHERE ${leaseSql}`).bind(
+        workflowRunId,
+        leasedRevision + 1,
+        now,
+        receiptPayload,
+        ...leaseBindings,
+      ));
+      const privacyRows = preparation.privacyCandidates.flatMap((group) => (
+        group.candidates.map((candidate) => ({
+          storyKey: group.storyKey,
+          candidateId: candidate.id,
+          candidateJson: JSON.stringify(candidate),
+        }))
+      ));
+      const privacyPayload = JSON.stringify(privacyRows);
+      statements.push(db.prepare(`INSERT INTO story_privacy_candidates
+          (workflow_run_id,story_key,candidate_id,candidate_json)
+          SELECT ?,json_extract(value,'$.storyKey'),json_extract(value,'$.candidateId'),
+            json_extract(value,'$.candidateJson')
+          FROM json_each(?) WHERE ${leaseSql}`).bind(
+        workflowRunId,
+        privacyPayload,
+        ...leaseBindings,
+      ));
+      statements.push(db.prepare(`UPDATE probe_runs SET source_revision=?,updated_at=?
+          WHERE workflow_run_id=? AND source_revision=? AND input_digest=?
+            AND output_digest=? AND output_count=? AND ${leaseSql}`).bind(
+        leasedRevision + 1,
+        now,
+        workflowRunId,
+        leasedRevision,
+        preferenceAuthority.inputDigest,
+        preferenceAuthority.outputDigest,
+        preferenceAuthority.outputCount,
+        ...leaseBindings,
+      ));
       if (!await publishActivatedStorySourceMutation(
         db,
         statements,
@@ -337,6 +481,9 @@ export async function POST(request: Request) {
         digest,
         coverageManifest.revision,
         coverageManifest.coverageDigest,
+        privacyRows.length,
+        preferenceAuthority.outputDigest,
+        preferenceAuthority.outputCount,
         now,
       )) {
         throw new Error("Story source publication boundary changed during activation");

@@ -146,6 +146,9 @@ test("workflow route hydrates count-only persistent state and the shell can reop
   assert.match(route, /validateStoryActivationAuthority/);
   assert.match(route, /readSemanticManifestAuthority/);
   assert.match(route, /coverageManifest/);
+  assert.match(route, /preparationManifest/);
+  assert.match(route, /readPreferenceBatchAuthority/);
+  assert.match(route, /validateStoryPreparationManifest/);
   assert.match(route, /story_source_revision/);
   assert.match(route, /BODY_KEYS/);
   assert.doesNotMatch(`${route}\n${loader}`, /original_json|SELECT\s+content|safeStatusMessage|reasoning|prompt/i);

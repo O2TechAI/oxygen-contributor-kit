@@ -30,6 +30,7 @@ const COVERAGE_DIGEST = "b".repeat(64);
 const ACTIVATED_AT = "2038-01-01T00:00:00.000Z";
 const DOCUMENT_ID = "synthetic-reviewed-document";
 const STORY_ITEM_ID = `${DOCUMENT_ID}:story-authority`;
+const EMPTY_DIGEST = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
 
 function currentStorySource() {
   const evidence = { documentId: DOCUMENT_ID, eventId: STORY_ITEM_ID };
@@ -70,7 +71,7 @@ async function sha256(value) {
 }
 
 async function activationSnapshot(db) {
-  const [run, semantic, coverage, items] = await Promise.all([
+  const [run, semantic, coverage, items, receipts, candidates, probeRun] = await Promise.all([
     db.prepare(`SELECT story_generation_status,story_generation_completed,
       story_generation_total,story_source_revision,active_story_digest,updated_at
       FROM workflow_runs WHERE id=?`).bind(RUN_ID).first(),
@@ -79,8 +80,22 @@ async function activationSnapshot(db) {
     db.prepare(`SELECT revision,coverage_digest,updated_at FROM story_coverage_manifests
       WHERE workflow_run_id=?`).bind(RUN_ID).first(),
     db.prepare(`SELECT id,organization_reason FROM items ORDER BY id`).all(),
+    db.prepare(`SELECT lane,source_revision FROM story_preparation_receipts
+      WHERE workflow_run_id=? ORDER BY lane`).bind(RUN_ID).all(),
+    db.prepare(`SELECT story_key,candidate_id FROM story_privacy_candidates
+      WHERE workflow_run_id=? ORDER BY story_key,candidate_id`).bind(RUN_ID).all(),
+    db.prepare(`SELECT source_revision,output_digest,output_count FROM probe_runs
+      WHERE workflow_run_id=?`).bind(RUN_ID).first(),
   ]);
-  return { run, semantic, coverage, items: items.results };
+  return {
+    run,
+    semantic,
+    coverage,
+    items: items.results,
+    receipts: receipts.results,
+    candidates: candidates.results,
+    probeRun,
+  };
 }
 
 test("real SQLite enforces Story activation and review-session CAS authority", async (context) => {
@@ -171,21 +186,93 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
     assert.equal(validation.ok, true, validation.code);
     const activeStoryDigest = await sha256(validation.canonicalCandidate);
 
+    await db.prepare(`INSERT INTO probe_runs
+      (workflow_run_id,id,source_revision,input_digest,output_digest,output_count,
+       status,stage,generated,set_aside,auto_removed_json,started_at,updated_at,completed_at)
+      VALUES (?,?,?,?,?,?,'complete','preference',0,0,?,?,?,?)`).bind(
+      RUN_ID,
+      RUN_ID,
+      INITIAL_SOURCE_REVISION,
+      "f".repeat(64),
+      EMPTY_DIGEST,
+      0,
+      JSON.stringify({ total: 0, reversible: true, categories: [] }),
+      ACTIVATED_AT,
+      ACTIVATED_AT,
+      ACTIVATED_AT,
+    ).run();
+
     assert.equal(await beginStoryActivationMutation(db, RUN_ID, ACTIVATED_AT), true);
     assert.equal(
       await beginStoryActivationMutation(db, RUN_ID, "2038-01-01T00:00:00.100Z"),
       false,
       "only one activation request can claim the production lease",
     );
+    const activationStatements = () => [
+      ...["story", "insight", "story_privacy", "preference"].map((lane) => (
+        db.prepare(`INSERT INTO story_preparation_receipts
+          (workflow_run_id,lane,source_revision,input_digest,scope_digest,scope_count,
+           output_digest,output_count,completed_at) VALUES (?,?,?,?,?,?,?,?,?)`).bind(
+          RUN_ID,
+          lane,
+          INITIAL_SOURCE_REVISION + 1,
+          "f".repeat(64),
+          "1".repeat(64),
+          lane === "story" ? 1 : 0,
+          lane === "story" ? "2".repeat(64) : EMPTY_DIGEST,
+          lane === "story" || lane === "story_privacy" ? 1 : 0,
+          ACTIVATED_AT,
+        )
+      )),
+      db.prepare(`INSERT INTO story_privacy_candidates
+        (workflow_run_id,story_key,candidate_id,candidate_json) VALUES (?,?,?,?)`).bind(
+        RUN_ID,
+        "story-authority",
+        "privacy-authority",
+        JSON.stringify({ id: "privacy-authority" }),
+      ),
+      db.prepare(`UPDATE probe_runs SET source_revision=?
+        WHERE workflow_run_id=? AND source_revision=?`).bind(
+        INITIAL_SOURCE_REVISION + 1,
+        RUN_ID,
+        INITIAL_SOURCE_REVISION,
+      ),
+    ];
+    const beforeFailedBatch = await activationSnapshot(db);
+    const forcedFailureStatements = activationStatements();
+    forcedFailureStatements.push(db.prepare(`INSERT INTO story_preparation_receipts
+      (workflow_run_id,lane,source_revision,input_digest,scope_digest,scope_count,
+       output_digest,output_count,completed_at) VALUES (?,?,?,?,?,?,?,?,?)`).bind(
+      RUN_ID, "story", INITIAL_SOURCE_REVISION + 1, "f".repeat(64), "1".repeat(64),
+      1, "2".repeat(64), 1, ACTIVATED_AT,
+    ));
     assert.equal(await publishActivatedStorySourceMutation(
       db,
-      [],
+      forcedFailureStatements,
       RUN_ID,
       INITIAL_SOURCE_REVISION,
       validation.chapterCount,
       activeStoryDigest,
       COVERAGE_REVISION,
       COVERAGE_DIGEST,
+      1,
+      EMPTY_DIGEST,
+      0,
+      ACTIVATED_AT,
+    ), false, "a real SQLite constraint failure rolls back the complete activation batch");
+    assert.deepEqual(await activationSnapshot(db), beforeFailedBatch);
+    assert.equal(await publishActivatedStorySourceMutation(
+      db,
+      activationStatements(),
+      RUN_ID,
+      INITIAL_SOURCE_REVISION,
+      validation.chapterCount,
+      activeStoryDigest,
+      COVERAGE_REVISION,
+      COVERAGE_DIGEST,
+      1,
+      EMPTY_DIGEST,
+      0,
       ACTIVATED_AT,
     ), true);
 
@@ -202,6 +289,21 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
       source_revision: INITIAL_SOURCE_REVISION + 1,
       updated_at: ACTIVATED_AT,
     });
+    assert.deepEqual(activated.receipts, [
+      { lane: "insight", source_revision: INITIAL_SOURCE_REVISION + 1 },
+      { lane: "preference", source_revision: INITIAL_SOURCE_REVISION + 1 },
+      { lane: "story", source_revision: INITIAL_SOURCE_REVISION + 1 },
+      { lane: "story_privacy", source_revision: INITIAL_SOURCE_REVISION + 1 },
+    ]);
+    assert.deepEqual(activated.candidates, [{
+      story_key: "story-authority",
+      candidate_id: "privacy-authority",
+    }]);
+    assert.deepEqual(activated.probeRun, {
+      source_revision: INITIAL_SOURCE_REVISION + 1,
+      output_digest: EMPTY_DIGEST,
+      output_count: 0,
+    });
 
     assert.equal(
       await beginStoryActivationMutation(db, RUN_ID, "2038-01-01T00:00:01.000Z"),
@@ -216,6 +318,9 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
       "f".repeat(64),
       COVERAGE_REVISION,
       COVERAGE_DIGEST,
+      0,
+      EMPTY_DIGEST,
+      0,
       "2038-01-01T00:00:02.000Z",
     ), false);
     assert.deepEqual(await activationSnapshot(db), activated);

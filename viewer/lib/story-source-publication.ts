@@ -184,16 +184,30 @@ export async function publishActivatedStorySourceMutation(
   activeStoryDigest: string,
   coverageRevision: number,
   coverageDigest: string,
+  preparationCandidateCount: number,
+  preferenceOutputDigest: string,
+  preferenceOutputCount: number,
   now: string,
 ) {
-  const results = await db.batch([
-    ...packageStatements,
+  try {
+    const results = await db.batch([
+      ...packageStatements,
     db.prepare(`UPDATE semantic_manifests SET source_revision=?,updated_at=?
       WHERE workflow_run_id=? AND source_revision=?
         AND EXISTS (SELECT 1 FROM workflow_runs
           WHERE id=? AND story_source_revision=? AND story_generation_status=?)
         AND EXISTS (SELECT 1 FROM story_coverage_manifests
-          WHERE workflow_run_id=? AND revision=? AND coverage_digest=?)`)
+          WHERE workflow_run_id=? AND revision=? AND coverage_digest=?)
+        AND (SELECT COUNT(*) FROM story_preparation_receipts
+          WHERE workflow_run_id=? AND source_revision=?
+            AND lane IN ('story','insight','story_privacy','preference'))=4
+        AND (SELECT COUNT(*) FROM story_privacy_candidates
+          WHERE workflow_run_id=?)=?
+        AND EXISTS (SELECT 1 FROM probe_runs
+          WHERE workflow_run_id=? AND source_revision=?
+            AND input_digest=(SELECT input_digest FROM story_preparation_receipts
+              WHERE workflow_run_id=? AND lane='preference' AND source_revision=?)
+            AND output_digest=? AND output_count=?)`)
       .bind(
         expectedRevision + 1,
         now,
@@ -205,6 +219,16 @@ export async function publishActivatedStorySourceMutation(
         workflowRunId,
         coverageRevision,
         coverageDigest,
+        workflowRunId,
+        expectedRevision + 1,
+        workflowRunId,
+        preparationCandidateCount,
+        workflowRunId,
+        expectedRevision + 1,
+        workflowRunId,
+        expectedRevision + 1,
+        preferenceOutputDigest,
+        preferenceOutputCount,
       ),
     db.prepare(`UPDATE workflow_runs
       SET story_generation_status='ready_for_human_review',
@@ -229,8 +253,18 @@ export async function publishActivatedStorySourceMutation(
         coverageRevision,
         coverageDigest,
       ),
-  ]);
-  return results.slice(-2).every((result) => Number(result.meta.changes || 0) === 1);
+      db.prepare(`SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM workflow_runs
+        WHERE id=? AND story_source_revision=?
+          AND story_generation_status='ready_for_human_review'
+          AND active_story_digest=?
+      ) THEN 1 ELSE json_extract('activation authority failed','$') END AS activation_guard`)
+        .bind(workflowRunId, expectedRevision + 1, activeStoryDigest),
+    ]);
+    return results.slice(-3, -1).every((result) => Number(result.meta.changes || 0) === 1);
+  } catch {
+    return false;
+  }
 }
 
 /** A failed write leaves no activatable source package and publishes no new

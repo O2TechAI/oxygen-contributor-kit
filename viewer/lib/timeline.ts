@@ -51,46 +51,39 @@ export type EvidenceReference = {
 
 export type StoryLanguage = "en" | "zh";
 
-export type StoryReleaseTarget =
+export type StoryReleaseTargetName =
   | "phase"
   | "title"
   | "overview"
-  | "before"
-  | "after"
-  | `people:${string}`
-  | "scene"
-  | `reconstruction-${number}`
-  | `detail-${number}`
-  | "outcome"
+  | "transition:before"
+  | "transition:after"
+  | `people:${string}:releaseLabel`
+  | `people:${string}:role`
+  | `people:${string}:description`
+  | `story:${string}`
   | "uncertainty"
-  | `insight:${string}`;
+  | `insight:${string}:title`
+  | `insight:${string}:background`
+  | `insight:${string}:directlyAcquiredExperience`
+  | `insight:${string}:principle`;
 
-export type StoryReleaseTargetDescriptor =
-  | {
-      target: "phase" | "title" | "overview" | "before" | "after" | "scene" | "outcome" | "uncertainty";
-      kind: "scalar";
-      field: "phase" | "title" | "overview" | "before" | "after" | "scene" | "decisionOutcome" | "uncertainty";
-    }
-  | { target: `reconstruction-${number}`; kind: "reconstruction"; index: number }
-  | { target: `detail-${number}`; kind: "detail"; index: number }
-  | { target: `people:${string}`; kind: "person"; id: string }
-  | { target: `insight:${string}`; kind: "insight"; id: string };
+export type StoryReleaseTarget = `${string}::${StoryReleaseTargetName}`;
+
+export type StoryReleaseTargetDescriptor = {
+  id: StoryReleaseTarget;
+  storyKey: string;
+  target: StoryReleaseTargetName;
+};
 
 export type StoryReleaseTargetCatalog = ReadonlyMap<StoryReleaseTarget, StoryReleaseTargetDescriptor>;
 
 export type StoryPrivacyCandidate = {
   id: string;
+  reviewState: "deterministic" | "needs_confirmation";
   title: string;
-  explanation: string;
-  recommendation: "keep" | "redact";
-  releaseTargets: StoryReleaseTarget[];
-  original: {
-    availability: "available" | "unavailable";
-    excerpt?: string;
-    sourceLanguage?: StoryLanguage;
-  };
   whyFlagged: string;
-  suggestedRelease?: string;
+  uncertaintyReason: string | null;
+  releaseTargets: StoryReleaseTarget[];
 };
 
 export type StoryPerson = {

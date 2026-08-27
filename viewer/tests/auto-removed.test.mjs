@@ -67,10 +67,11 @@ test("package canonicalization fails closed on malformed persisted state", () =>
   })), /non-negative integer/);
 });
 
-test("API and package routes use strict and legacy-safe boundaries respectively", async () => {
+test("Preference import and package routes use strict aggregate boundaries", async () => {
   const probesRoute = await readFile(new URL("../app/api/probes/route.ts", import.meta.url), "utf8");
   const packageRoute = await readFile(new URL("../app/api/package/route.ts", import.meta.url), "utf8");
-  assert.match(probesRoute, /canonicalizeAutoRemoved\(body\.run\.autoRemoved\)/);
+  assert.match(probesRoute, /canonicalizeAutoRemoved\(body\.autoRemoved\)/);
+  assert.doesNotMatch(probesRoute, /body\.run|crypto\.randomUUID|replaceAll/);
   assert.match(probesRoute, /status: 400/);
   assert.match(packageRoute, /canonicalizeStoredAutoRemoved/);
   assert.match(packageRoute, /status: 409/);

@@ -131,10 +131,28 @@ const statements = [
     created_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS probe_runs (
-    id TEXT PRIMARY KEY, status TEXT NOT NULL, stage TEXT NOT NULL, model TEXT,
+    workflow_run_id TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE,
+    source_revision INTEGER NOT NULL,
+    input_digest TEXT NOT NULL, output_digest TEXT NOT NULL,
+    output_count INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status='complete'), stage TEXT NOT NULL,
+    model TEXT CHECK(model IS NULL),
     generated INTEGER NOT NULL DEFAULT 0, set_aside INTEGER NOT NULL DEFAULT 0,
     auto_removed_json TEXT NOT NULL DEFAULT '{}',
     started_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS story_preparation_receipts (
+    workflow_run_id TEXT NOT NULL, lane TEXT NOT NULL,
+    source_revision INTEGER NOT NULL, input_digest TEXT NOT NULL,
+    scope_digest TEXT NOT NULL, scope_count INTEGER NOT NULL,
+    output_digest TEXT NOT NULL, output_count INTEGER NOT NULL,
+    completed_at TEXT NOT NULL,
+    PRIMARY KEY (workflow_run_id, lane)
+  )`,
+  `CREATE TABLE IF NOT EXISTS story_privacy_candidates (
+    workflow_run_id TEXT NOT NULL, story_key TEXT NOT NULL,
+    candidate_id TEXT NOT NULL, candidate_json TEXT NOT NULL,
+    PRIMARY KEY (workflow_run_id, story_key, candidate_id)
   )`,
 ];
 
