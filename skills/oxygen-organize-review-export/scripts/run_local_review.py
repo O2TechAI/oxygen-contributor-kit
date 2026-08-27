@@ -13,6 +13,7 @@ import re
 import signal
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,7 @@ INPUT_TRAJECTORY_ID_INVALID = "INPUT_TRAJECTORY_ID_INVALID"
 INPUT_MEETING_ID_INVALID = "INPUT_MEETING_ID_INVALID"
 INPUT_MEETING_ID_DUPLICATE = "INPUT_MEETING_ID_DUPLICATE"
 INPUT_PATH_OUTSIDE_RUN = "INPUT_PATH_OUTSIDE_RUN"
+INPUT_PATH_ALIAS = "INPUT_PATH_ALIAS"
 INPUT_PATH_MISSING = "INPUT_PATH_MISSING"
 INPUT_FILE_INVALID = "INPUT_FILE_INVALID"
 INPUT_PROJECTION_INVALID = "INPUT_PROJECTION_INVALID"
@@ -721,6 +723,16 @@ def _located_input(candidate: Path, approved_run: Path) -> Path:
         raise SystemExit(INPUT_PATH_MISSING) from None
 
 
+def _has_path_entry(candidate: Path) -> bool:
+    try:
+        candidate.lstat()
+        return True
+    except FileNotFoundError:
+        return False
+    except (OSError, RuntimeError):
+        raise SystemExit(INPUT_PATH_MISSING) from None
+
+
 def _located_file(candidate: Path, approved_run: Path, *, required: bool) -> Path | None:
     if not candidate.exists() and not candidate.is_symlink():
         if required:
@@ -729,6 +741,48 @@ def _located_file(candidate: Path, approved_run: Path, *, required: bool) -> Pat
     located = _located_input(candidate, approved_run)
     if not located.is_file():
         raise SystemExit(INPUT_PATH_MISSING)
+    return located
+
+
+def _is_path_alias(candidate: Path, metadata: os.stat_result) -> bool:
+    if candidate.is_symlink():
+        return True
+    is_junction = getattr(os.path, "isjunction", None)
+    if is_junction is not None and is_junction(candidate):
+        return True
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(getattr(metadata, "st_file_attributes", 0) & reparse_flag)
+
+
+def _canonical_meeting_member(
+    candidate: Path,
+    approved_run: Path,
+    *,
+    directory: bool,
+) -> Path:
+    """Require a physical, non-aliased member at this exact lexical path."""
+    try:
+        metadata = candidate.lstat()
+    except (OSError, RuntimeError):
+        raise SystemExit(INPUT_PATH_MISSING) from None
+    if _is_path_alias(candidate, metadata):
+        raise SystemExit(INPUT_PATH_ALIAS)
+
+    located = _located_input(candidate, approved_run)
+    literal = os.path.normcase(os.path.normpath(os.path.abspath(candidate)))
+    physical = os.path.normcase(os.path.normpath(str(located)))
+    if literal != physical:
+        raise SystemExit(INPUT_PATH_ALIAS)
+    if directory:
+        if not stat.S_ISDIR(metadata.st_mode) or not located.is_dir():
+            raise SystemExit(INPUT_PATH_MISSING)
+    else:
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or not located.is_file()
+            or metadata.st_nlink != 1
+        ):
+            raise SystemExit(INPUT_PATH_ALIAS if metadata.st_nlink != 1 else INPUT_PATH_MISSING)
     return located
 
 
@@ -809,10 +863,11 @@ def _prepare_meeting(path: Path) -> dict:
     records = dataset.get("records")
     if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
         raise SystemExit(INPUT_FILE_INVALID)
-    meeting_id = _validated_meeting_id(
-        dataset.get("meeting_id") or dataset.get("id") or path.parent.name
-    )
-    return {"path": path, "dataset": dataset, "meeting_id": meeting_id}
+    literal_id = _validated_meeting_id(path.parent.name)
+    payload_ids = [dataset[key] for key in ("meeting_id", "id") if key in dataset]
+    if not payload_ids or any(value != literal_id for value in payload_ids):
+        raise SystemExit(INPUT_MEETING_ID_INVALID)
+    return {"path": path, "dataset": dataset, "meeting_id": literal_id}
 
 
 def locate_inputs(run: Path):
@@ -824,7 +879,7 @@ def locate_inputs(run: Path):
         raise SystemExit(INPUT_RUN_INVALID)
 
     root_meeting = approved_run / "meeting.json"
-    if root_meeting.exists() or root_meeting.is_symlink():
+    if _has_path_entry(root_meeting):
         raise SystemExit(INPUT_RUN_INVALID)
 
     index_candidate = approved_run / "index.json"
@@ -886,21 +941,20 @@ def locate_inputs(run: Path):
 
     meetings = []
     meetings_candidate = approved_run / "meetings"
-    if meetings_candidate.exists() or meetings_candidate.is_symlink():
-        meetings_root = _located_input(meetings_candidate, approved_run)
-        if not meetings_root.is_dir():
-            raise SystemExit(INPUT_PATH_MISSING)
+    if _has_path_entry(meetings_candidate):
+        meetings_root = _canonical_meeting_member(
+            meetings_candidate, approved_run, directory=True
+        )
         try:
             entries = sorted(meetings_root.iterdir())
         except (OSError, RuntimeError):
             raise SystemExit(INPUT_PATH_MISSING) from None
         for entry in entries:
-            directory = _located_input(entry, approved_run)
-            if not directory.is_dir():
-                raise SystemExit(INPUT_PATH_MISSING)
-            _validated_meeting_id(directory.name)
-            meeting = _located_file(directory / "meeting.json", approved_run, required=True)
-            assert meeting is not None
+            _validated_meeting_id(entry.name)
+            directory = _canonical_meeting_member(entry, approved_run, directory=True)
+            meeting = _canonical_meeting_member(
+                directory / "meeting.json", approved_run, directory=False
+            )
             meetings.append(meeting)
 
     if not trajectories and not meetings and index_path is None:

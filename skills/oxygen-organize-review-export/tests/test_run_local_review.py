@@ -174,6 +174,19 @@ def directory_link_or_skip(test_case: unittest.TestCase, link: Path, target: Pat
     test_case.skipTest("directory link creation is unavailable")
 
 
+def file_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path):
+    try:
+        link.symlink_to(target)
+        return
+    except OSError:
+        pass
+    try:
+        os.link(target, link)
+        return
+    except OSError as error:
+        test_case.skipTest(f"file link creation is unavailable: {error.__class__.__name__}")
+
+
 class LauncherUnitTest(unittest.TestCase):
     def test_windows_npm_cmd_resolution_uses_actual_which_result(self):
         expected = r"C:\Program Files\nodejs\npm.cmd"
@@ -1171,21 +1184,9 @@ class LocateInputsContainmentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary, "run")
             write_index(run, [])
-            root_meeting = run.resolve() / "meeting.json"
-            original_exists = Path.exists
-            original_is_symlink = Path.is_symlink
+            symlink_or_skip(self, run / "meeting.json", run / "missing-meeting.json")
 
-            def exists(path):
-                return False if path == root_meeting else original_exists(path)
-
-            def is_symlink(path):
-                return True if path == root_meeting else original_is_symlink(path)
-
-            with (
-                mock.patch.object(Path, "exists", autospec=True, side_effect=exists),
-                mock.patch.object(Path, "is_symlink", autospec=True, side_effect=is_symlink),
-            ):
-                self.assert_import_fails_before_request(run, MODULE.INPUT_RUN_INVALID)
+            self.assert_import_fails_before_request(run, MODULE.INPUT_RUN_INVALID)
 
     def test_multiple_trajectories_and_meetings_share_one_run(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1227,15 +1228,53 @@ class LocateInputsContainmentTest(unittest.TestCase):
                     )
             request.assert_called_once()
 
-    def test_duplicate_meeting_ids_fail_before_any_viewer_request(self):
+    def test_payload_meeting_id_must_equal_literal_directory_before_any_viewer_request(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary, "run")
-            write_meeting(run, "meeting-duplicate", directory_id="meeting-alpha")
-            write_meeting(run, "meeting-duplicate", directory_id="meeting-beta")
+            write_meeting(run, "meeting-payload", directory_id="meeting-literal")
 
             self.assert_import_fails_before_request(
-                run, MODULE.INPUT_MEETING_ID_DUPLICATE
+                run, MODULE.INPUT_MEETING_ID_INVALID
             )
+
+    def test_contained_meeting_child_alias_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            target = run / "hidden" / "real-id"
+            target.mkdir(parents=True)
+            (target / "meeting.json").write_text(json.dumps({
+                "meeting_id": "real-id", "records": [],
+            }), encoding="utf-8")
+            (run / "meetings").mkdir()
+            directory_link_or_skip(self, run / "meetings" / "alias-id", target)
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_PATH_ALIAS)
+
+    def test_meetings_root_alias_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            target = run / "hidden-meetings"
+            meeting = target / "meeting-one"
+            meeting.mkdir(parents=True)
+            (meeting / "meeting.json").write_text(json.dumps({
+                "meeting_id": "meeting-one", "records": [],
+            }), encoding="utf-8")
+            directory_link_or_skip(self, run / "meetings", target)
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_PATH_ALIAS)
+
+    def test_meeting_json_alias_fails_before_any_viewer_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            directory = run / "meetings" / "meeting-one"
+            directory.mkdir(parents=True)
+            target = run / "hidden-meeting.json"
+            target.write_text(json.dumps({
+                "meeting_id": "meeting-one", "records": [],
+            }), encoding="utf-8")
+            file_link_or_skip(self, directory / "meeting.json", target)
+
+            self.assert_import_fails_before_request(run, MODULE.INPUT_PATH_ALIAS)
 
     def test_unsupported_and_malformed_meeting_entries_fail_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1263,7 +1302,7 @@ class LocateInputsContainmentTest(unittest.TestCase):
             (run / "meetings").mkdir(parents=True)
             directory_link_or_skip(self, run / "meetings" / "meeting-escape", outside)
 
-            self.assert_import_fails_before_request(run, MODULE.INPUT_PATH_OUTSIDE_RUN)
+            self.assert_import_fails_before_request(run, MODULE.INPUT_PATH_ALIAS)
 
     def test_traversal_absolute_drive_encoded_and_separator_ids_fail_before_selection(self):
         invalid_ids = [
