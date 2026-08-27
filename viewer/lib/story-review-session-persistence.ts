@@ -1,15 +1,14 @@
 import {
   parseStoryReviewSession,
   storyReviewSessionSemanticJson,
-  STORY_REVIEW_SESSION_SCHEMA,
-  type AnyStoryReviewSession,
+  type StoryReviewSession,
 } from "./story-review-session.ts";
 
 export type StoryReviewSessionSaveRequest = {
   workflowRunId: string;
   expectedVersion: number;
   sourceRevision: number;
-  session: AnyStoryReviewSession;
+  session: StoryReviewSession;
 };
 
 export type StoryReviewSessionSaveAcknowledgement = {
@@ -58,7 +57,7 @@ export type StoryReviewHandoffAuthority = {
   sourceRevision: number;
 };
 
-type Snapshot = { session: AnyStoryReviewSession; semantic: string };
+type Snapshot = { session: StoryReviewSession; semantic: string };
 type Waiter = { resolve: () => void; reject: (error: Error) => void };
 
 const defaultScheduler: Scheduler = {
@@ -68,10 +67,7 @@ const defaultScheduler: Scheduler = {
 
 function reviewSessionSemanticJson(value: unknown) {
   const session = parseStoryReviewSession(value);
-  if (!session) return null;
-  return session.schema === STORY_REVIEW_SESSION_SCHEMA
-    ? storyReviewSessionSemanticJson(session)
-    : JSON.stringify({ ...session, updatedAt: "" });
+  return session ? storyReviewSessionSemanticJson(session) : null;
 }
 
 /** Debounced single-flight persistence. An acknowledgement advances only the
@@ -87,7 +83,6 @@ export class StoryReviewSessionPersistenceQueue {
   private sourceRevision: number | null = null;
   private persistedAt: string | null = null;
   private acknowledgedSemantic: string | null = null;
-  private sessionSchema: AnyStoryReviewSession["schema"] | null = null;
   private latest: Snapshot | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private inFlight: Promise<void> | null = null;
@@ -108,7 +103,7 @@ export class StoryReviewSessionPersistenceQueue {
     workflowRunId: string;
     serverVersion: number;
     sourceRevision: number;
-    session: AnyStoryReviewSession | null;
+    session: StoryReviewSession | null;
     persistedAt?: string | null;
   }) {
     this.cancelTimer();
@@ -119,7 +114,6 @@ export class StoryReviewSessionPersistenceQueue {
     this.sourceRevision = value.sourceRevision;
     this.persistedAt = value.persistedAt || null;
     this.acknowledgedSemantic = reviewSessionSemanticJson(value.session);
-    this.sessionSchema = value.session?.schema || null;
     this.latest = value.session ? this.snapshot(value.session) : null;
     this.terminalError = null;
     this.errorCode = null;
@@ -134,7 +128,6 @@ export class StoryReviewSessionPersistenceQueue {
     this.sourceRevision = null;
     this.latest = null;
     this.acknowledgedSemantic = null;
-    this.sessionSchema = null;
     const conflict = new StoryReviewSessionPersistenceError(
       "STORY_SESSION_SOURCE_CONFLICT",
       "Story review source changed before persistence completed",
@@ -146,18 +139,13 @@ export class StoryReviewSessionPersistenceQueue {
     this.notify();
   }
 
-  schedule(value: AnyStoryReviewSession) {
+  schedule(value: StoryReviewSession) {
     if (this.terminalError || this.sourceRevision === null) return;
     const snapshot = this.snapshot(value);
     if (snapshot.session.workflowRunId !== this.workflowRunId) {
       this.fail(new StoryReviewSessionPersistenceError("STORY_SESSION_STATE_INVALID"));
       return;
     }
-    if (this.sessionSchema && snapshot.session.schema !== this.sessionSchema) {
-      this.fail(new StoryReviewSessionPersistenceError("STORY_SESSION_STATE_INVALID"));
-      return;
-    }
-    this.sessionSchema = snapshot.session.schema;
     this.latest = snapshot;
     this.cancelTimer();
     if (!this.inFlight && snapshot.semantic === this.acknowledgedSemantic) {
@@ -176,7 +164,7 @@ export class StoryReviewSessionPersistenceQueue {
     }
   }
 
-  flush(value?: AnyStoryReviewSession) {
+  flush(value?: StoryReviewSession) {
     if (value) this.schedule(value);
     this.cancelTimer();
     if (this.terminalError) return Promise.reject(this.terminalError);
@@ -186,7 +174,7 @@ export class StoryReviewSessionPersistenceQueue {
     return promise;
   }
 
-  isDurable(value: AnyStoryReviewSession) {
+  isDurable(value: StoryReviewSession) {
     return !this.terminalError
       && reviewSessionSemanticJson(value) === this.acknowledgedSemantic;
   }
@@ -201,7 +189,7 @@ export class StoryReviewSessionPersistenceQueue {
     };
   }
 
-  private snapshot(value: AnyStoryReviewSession): Snapshot {
+  private snapshot(value: StoryReviewSession): Snapshot {
     const session = parseStoryReviewSession(value);
     const semantic = reviewSessionSemanticJson(session);
     if (!session || !semantic) throw new StoryReviewSessionPersistenceError("STORY_SESSION_STATE_INVALID");
@@ -299,7 +287,7 @@ export class StoryReviewSessionPersistenceQueue {
  * durable acknowledgement. An edit during the wait causes another flush. */
 export async function runDurableStoryReviewHandoff<T>(options: {
   persistence: StoryReviewSessionPersistenceQueue;
-  currentSession(): AnyStoryReviewSession | null;
+  currentSession(): StoryReviewSession | null;
   handoff(authority: StoryReviewHandoffAuthority): Promise<T>;
 }) {
   for (;;) {

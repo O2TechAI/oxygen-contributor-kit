@@ -2,6 +2,7 @@ import { getLocalDatabase } from "../../../db";
 import {
   MAX_STORY_REVIEW_SESSION_BYTES,
   parseStoryReviewSession,
+  STORY_REVIEW_SESSION_SCHEMA,
 } from "../../../lib/story-review-session";
 import {
   STORY_SESSION_ERROR,
@@ -61,11 +62,11 @@ export async function GET(request: Request) {
   if (!active.ready || active.sourceRevision === null) {
     return sessionErrorResponse(STORY_SESSION_ERROR.notReady);
   }
-  if (!active.storySourceSchema || !active.storySessionSchema) {
+  if (active.storySourceSchema !== "oxygen.story"
+    || active.storySessionSchema !== STORY_REVIEW_SESSION_SCHEMA) {
     return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
-  const revisionMatches = record.sourceRevision === active.sourceRevision
-    || (active.storySourceSchema === "oxygen.story-highlight/2" && record.sourceRevision === null);
+  const revisionMatches = record.sourceRevision === active.sourceRevision;
   const session = revisionMatches
     ? record.session
     : null;
@@ -93,7 +94,10 @@ export async function POST(request: Request) {
   } catch {
     return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
-  if (!isRecord(body)) return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
+  if (!isRecord(body)
+    || Object.keys(body).some((key) => ![
+      "workflowRunId", "expectedVersion", "sourceRevision", "session",
+    ].includes(key))) return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   if (!("expectedVersion" in body)) {
     return sessionErrorResponse(STORY_SESSION_ERROR.versionRequired);
   }
@@ -119,7 +123,9 @@ export async function POST(request: Request) {
   if (!active.ready || active.sourceRevision === null) {
     return sessionErrorResponse(STORY_SESSION_ERROR.notReady);
   }
-  if (!active.storySessionSchema || session.schema !== active.storySessionSchema) {
+  if (active.storySourceSchema !== "oxygen.story"
+    || active.storySessionSchema !== STORY_REVIEW_SESSION_SCHEMA
+    || session.schema !== active.storySessionSchema) {
     return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
   const result = await persistStoryReviewSessionCas(db, {

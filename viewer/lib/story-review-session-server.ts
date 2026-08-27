@@ -1,18 +1,17 @@
 import type { getLocalDatabase } from "../db";
 import {
-  hydrateSuccessorStoryReviewSession,
+  hydrateStoryReviewSession,
   parseStoryReviewSession,
   storyReviewSessionSemanticJson,
   STORY_REVIEW_SESSION_SCHEMA,
-  SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
-  type AnyStoryReviewSession,
+  type StoryReviewSession,
 } from "./story-review-session.ts";
 import {
   readReservedStoryCandidateRows,
-  validateRecognizedStorySourcePackage,
+  validateStorySourcePackage,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
-import { parseSuccessorStorySource } from "./timeline.ts";
+import { parseStorySource } from "./timeline.ts";
 
 type ReviewSessionDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
@@ -39,7 +38,7 @@ export const STORY_SESSION_ERROR = {
 export type StorySessionErrorCode = typeof STORY_SESSION_ERROR[keyof typeof STORY_SESSION_ERROR];
 
 export type StoryReviewSessionRecord = {
-  session: AnyStoryReviewSession | null;
+  session: StoryReviewSession | null;
   serverVersion: number;
   sourceRevision: number | null;
   persistedAt: string | null;
@@ -47,7 +46,7 @@ export type StoryReviewSessionRecord = {
 
 type StoredStoryReviewSession = {
   sourceRevision: number;
-  session: AnyStoryReviewSession;
+  session: StoryReviewSession;
 };
 
 const validRevision = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
@@ -56,15 +55,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Read both legacy direct schema-1 rows and the source-bound internal storage
- * envelope. The public Story session schema itself remains unchanged. */
+/** Read only the source-bound internal storage envelope. */
 export function parseStoredStoryReviewSession(value: unknown): {
-  session: AnyStoryReviewSession | null;
+  session: StoryReviewSession | null;
   sourceRevision: number | null;
 } {
-  const direct = parseStoryReviewSession(value);
-  if (direct) return { session: direct, sourceRevision: null };
-  if (!isRecord(value) || !validRevision(value.sourceRevision)) {
+  if (!isRecord(value)
+    || Object.keys(value).some((key) => key !== "sourceRevision" && key !== "session")
+    || !validRevision(value.sourceRevision)) {
     return { session: null, sourceRevision: null };
   }
   const session = parseStoryReviewSession(value.session);
@@ -73,7 +71,7 @@ export function parseStoredStoryReviewSession(value: unknown): {
     : { session: null, sourceRevision: value.sourceRevision };
 }
 
-function serializeStoredStoryReviewSession(sourceRevision: number, session: AnyStoryReviewSession) {
+function serializeStoredStoryReviewSession(sourceRevision: number, session: StoryReviewSession) {
   const stored: StoredStoryReviewSession = { sourceRevision, session };
   return JSON.stringify(stored);
 }
@@ -128,7 +126,7 @@ async function readActiveStoryReviewPackage(
       actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`)
       .all<StoryEvidenceRow>(),
   ]);
-  const validation = validateRecognizedStorySourcePackage(
+  const validation = validateStorySourcePackage(
     candidateRows,
     evidenceResult.results || [],
   );
@@ -143,8 +141,8 @@ export async function readActiveStoryReviewContract(
   return validation
     ? {
         ...active,
-        storySourceSchema: validation.sourceSchema,
-        storySessionSchema: validation.sessionSchema,
+        storySourceSchema: "oxygen.story" as const,
+        storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
       }
     : { ...active, storySourceSchema: null, storySessionSchema: null };
 }
@@ -153,8 +151,8 @@ type CasRequest = {
   workflowRunId: string;
   expectedVersion: number;
   sourceRevision: number;
-  storySessionSchema: typeof STORY_REVIEW_SESSION_SCHEMA | typeof SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA;
-  session: AnyStoryReviewSession;
+  storySessionSchema: typeof STORY_REVIEW_SESSION_SCHEMA;
+  session: StoryReviewSession;
 };
 
 type CasSuccess = {
@@ -177,10 +175,7 @@ const changes = (result: { meta?: { changes?: number } }) => Number(result.meta?
 
 function reviewSessionSemanticJson(value: unknown) {
   const session = parseStoryReviewSession(value);
-  if (!session) return null;
-  return session.schema === STORY_REVIEW_SESSION_SCHEMA
-    ? storyReviewSessionSemanticJson(session)
-    : JSON.stringify({ ...session, updatedAt: "" });
+  return session ? storyReviewSessionSemanticJson(session) : null;
 }
 
 function failure(
@@ -256,33 +251,20 @@ export async function persistStoryReviewSessionCas(
   if (active.sourceRevision !== request.sourceRevision) {
     return failure(STORY_SESSION_ERROR.sourceConflict, current, active.sourceRevision);
   }
-  if (!validation || validation.sessionSchema !== request.storySessionSchema) {
+  if (!validation || request.storySessionSchema !== STORY_REVIEW_SESSION_SCHEMA) {
     return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
   }
   if (request.expectedVersion !== current.serverVersion) {
     return failure(STORY_SESSION_ERROR.versionConflict, current, active.sourceRevision);
   }
-  if (current.session && current.session.schema !== canonical.schema
-    && (current.sourceRevision === null || current.sourceRevision === request.sourceRevision)) {
+  const sources = candidateRows.map((row) => parseStorySource(row.summary));
+  if (sources.some((source) => !source)) {
     return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
   }
-  if (canonical.schema === SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA) {
-    if (validation.sourceSchema !== "oxygen.story/3") {
-      return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
-    }
-    const sources = candidateRows.map((row) => parseSuccessorStorySource(row.summary));
-    if (sources.some((source) => !source)) {
-      return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
-    }
-    const exactSources = sources.flatMap((source) => source ? [source] : []);
-    const hydrated = hydrateSuccessorStoryReviewSession(
-      canonical,
-      request.workflowRunId,
-      exactSources,
-    );
-    if (Object.keys(hydrated.chapterReviews).length !== exactSources.length) {
-      return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
-    }
+  const exactSources = sources.flatMap((source) => source ? [source] : []);
+  const hydrated = hydrateStoryReviewSession(canonical, request.workflowRunId, exactSources);
+  if (Object.keys(hydrated.chapterReviews).length !== exactSources.length) {
+    return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
   }
 
   const persistedSession = parseStoryReviewSession({ ...canonical, updatedAt: serverNow });
