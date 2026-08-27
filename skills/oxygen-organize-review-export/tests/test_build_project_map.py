@@ -147,6 +147,17 @@ class BuildProjectMapTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "meeting source path is aliased"):
                 MODULE.source_inventory(run)
 
+    def test_contained_meetings_root_alias_fails_project_map_inventory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            write_meeting(run, "real-id", "real-id")
+            hidden = run / "hidden"
+            (run / "meetings").rename(hidden)
+            directory_link_or_skip(self, run / "meetings", hidden)
+
+            with self.assertRaisesRegex(ValueError, "meetings path is aliased"):
+                MODULE.source_inventory(run)
+
     def test_raw_mechanical_digest_drift_does_not_invalidate_semantic_authority(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)

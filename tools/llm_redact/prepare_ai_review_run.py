@@ -270,7 +270,7 @@ def discover_meetings(source: Path) -> list[dict]:
     plural_candidate = source / "meetings"
     if plural_candidate.exists() or plural_candidate.is_symlink():
         plural = _contained(plural_candidate, source)
-        if not plural.is_dir():
+        if plural != source.resolve(strict=True) / "meetings" or not plural.is_dir():
             raise SystemExit(INPUT_MEETING_INVALID)
         try:
             entries = sorted(plural_candidate.iterdir())

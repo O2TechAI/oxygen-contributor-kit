@@ -180,6 +180,17 @@ class ExtractDialogueTest(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "^INPUT_MEETING_INVALID$"):
                 MODULE.extract_bundles(run)
 
+    def test_contained_meetings_root_alias_fails_at_extraction(self):
+        with TemporaryDirectory() as temp:
+            run = Path(temp, "review")
+            write_meeting(run, "real-id")
+            hidden = run / "hidden"
+            (run / "meetings").rename(hidden)
+            directory_link_or_skip(self, run / "meetings", hidden)
+
+            with self.assertRaisesRegex(SystemExit, "^INPUT_MEETING_INVALID$"):
+                MODULE.extract_bundles(run)
+
 
 if __name__ == "__main__":
     unittest.main()

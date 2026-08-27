@@ -159,8 +159,11 @@ def source_inventory(
     meetings_root = run / "meetings"
     if meetings_root.exists() or meetings_root.is_symlink():
         resolved_meetings = meetings_root.resolve(strict=True)
-        if not resolved_meetings.is_relative_to(run.resolve(strict=True)) or not resolved_meetings.is_dir():
+        resolved_run = run.resolve(strict=True)
+        if not resolved_meetings.is_relative_to(resolved_run) or not resolved_meetings.is_dir():
             raise ValueError("meetings path leaves approved run")
+        if resolved_meetings != resolved_run / "meetings":
+            raise ValueError("meetings path is aliased")
         for entry in sorted(meetings_root.iterdir()):
             literal_meeting_id = entry.name
             directory = direct_physical_child(

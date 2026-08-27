@@ -586,6 +586,19 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             ):
                 MODULE.discover_meetings(source)
 
+    def test_contained_meetings_root_alias_is_rejected(self):
+        with TemporaryDirectory() as temp:
+            source = Path(temp, "source")
+            write_meeting(source, "real-id")
+            hidden = source / "hidden"
+            (source / "meetings").rename(hidden)
+            directory_link_or_skip(self, source / "meetings", hidden)
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$"
+            ):
+                MODULE.discover_meetings(source)
+
     def test_contained_meeting_file_alias_is_rejected(self):
         with TemporaryDirectory() as temp:
             source = Path(temp, "source")
