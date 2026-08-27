@@ -1,250 +1,182 @@
 #!/usr/bin/env python3
-"""Check <run>/preference-probes.json against the probe contract.
-
-Catches the failure modes that quietly produce a bad annotation pass: counts that
-do not add up, probes whose evidence does not exist in the run, generic options,
-and missing escape hatches.
-"""
-
+"""Finalize bounded preference candidates into the exact Viewer API bundle."""
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import sys
+import tempfile
+from typing import Any
+
+_path = Path(__file__).with_name("prepare_preference_context.py")
+_spec = importlib.util.spec_from_file_location("prepare_preference_context", _path)
+assert _spec and _spec.loader
+PREPARE = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = PREPARE
+_spec.loader.exec_module(PREPARE)
+
+EMPTY_DIGEST = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+SIGNALS = {"repeated_correction", "long_exchange", "late_rejection", "decision_reversal", "explicit_rule", "sustained_disagreement"}
+PROBE_KEYS = {"id", "documentId", "documentKind", "eventIds", "timestamp", "signal", "score", "turns", "recap", "question", "options", "presentations", "allowOther", "allowSkip"}
+BULK_KEYS = {"id", "kind", "count", "question", "evidenceSample", "presentations"}
+GENERIC = {"be more careful", "communicate better", "be clearer", "ask more questions", "do better", "follow instructions", "be consistent", "improve quality", "write better code", "test more", "be faster", "explain more"}
 
 
-SIGNALS = {
-    "repeated_correction", "long_exchange", "late_rejection",
-    "decision_reversal", "explicit_rule", "sustained_disagreement",
-}
-
-# Options that could have been written without reading the transcript. A probe built
-# from these makes the contributor pick "other" and costs them more than no probe.
-GENERIC = {
-    "be more careful", "communicate better", "be clearer", "ask more questions",
-    "do better", "follow instructions", "be consistent", "improve quality",
-    "write better code", "test more", "be faster", "explain more",
-}
-
-MAX_PROBES = 20
-MAX_RECAP_SENTENCES = 3
-AUTO_REMOVED_FIELDS = {"total", "reversible", "categories"}
-AUTO_REMOVED_CATEGORY_FIELDS = {"kind", "count"}
-AUTO_REMOVED_KINDS = {
-    "credential",
-    "private-personal",
-    "sensitive",
-    "internal-metric",
-    "internal-timeline",
-    "mosaic-reidentification",
-    "user_path",
-    "third_party_contact",
-}
+def nonempty(value: Any, limit: int = 20_000) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= limit
 
 
-def validate_auto_removed(value: object) -> list[str]:
-    errors: list[str] = []
-    if not isinstance(value, dict):
-        return ["auto_removed must be an object"]
-
-    unknown = set(value) - AUTO_REMOVED_FIELDS
-    missing = AUTO_REMOVED_FIELDS - set(value)
-    if unknown:
-        errors.append("auto_removed has unknown fields")
-    if missing:
-        errors.append(f"auto_removed is missing fields: {', '.join(sorted(missing))}")
-
-    total = value.get("total")
-    if type(total) is not int or total < 0:
-        errors.append("auto_removed.total must be a non-negative integer")
-    if not isinstance(value.get("reversible"), bool):
-        errors.append("auto_removed.reversible must be a boolean")
-
-    categories = value.get("categories")
-    if not isinstance(categories, list):
-        errors.append("auto_removed.categories must be an array")
-        return errors
-
-    summed = 0
-    seen_kinds: set[str] = set()
-    counts_valid = True
-    for index, category in enumerate(categories):
-        label = f"auto_removed.categories[{index}]"
-        if not isinstance(category, dict):
-            errors.append(f"{label} must be an object")
-            counts_valid = False
-            continue
-        category_unknown = set(category) - AUTO_REMOVED_CATEGORY_FIELDS
-        category_missing = AUTO_REMOVED_CATEGORY_FIELDS - set(category)
-        if category_unknown:
-            errors.append(f"{label} has unknown fields")
-        if category_missing:
-            errors.append(f"{label} is missing fields: {', '.join(sorted(category_missing))}")
-
-        kind = category.get("kind")
-        if not isinstance(kind, str) or kind not in AUTO_REMOVED_KINDS:
-            errors.append(f"{label}.kind is not an allowed aggregate category")
-        elif kind in seen_kinds:
-            errors.append(f"{label}.kind duplicates {kind!r}")
-        else:
-            seen_kinds.add(kind)
-
-        count = category.get("count")
-        if type(count) is not int or count < 0:
-            errors.append(f"{label}.count must be a non-negative integer")
-            counts_valid = False
-        else:
-            summed += count
-
-    if type(total) is int and total >= 0 and counts_valid and total != summed:
-        errors.append(f"auto_removed.total {total} != sum of categories {summed}")
-    return errors
+def exact(value: Any, fields: set[str]) -> bool:
+    return isinstance(value, dict) and set(value) == fields
 
 
-def collect_event_ids(run: Path) -> set[str]:
-    ids: set[str] = set()
-    for events in (run / "trajectories").glob("*/events.jsonl"):
-        with events.open(encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(event.get("event_id"), str):
-                    ids.add(event["event_id"])
-    meeting = run / "meeting.json"
-    if meeting.exists():
-        try:
-            dataset = json.loads(meeting.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            dataset = {}
-        for record in dataset.get("records") or []:
-            if isinstance(record.get("record_id"), str):
-                ids.add(record["record_id"])
-    return ids
-
-
-def sentence_count(text: str) -> int:
-    return sum(text.count(mark) for mark in (".", "!", "?", "。", "！", "？")) or 1
-
-
-def validate(run: Path) -> list[str]:
-    errors: list[str] = []
-    path = run / "preference-probes.json"
-    if not path.exists():
-        return [f"missing {path}"]
+def load(path: Path) -> Any:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return [f"{path.name} is not valid JSON: {exc}"]
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read {path.name}") from exc
 
-    if not isinstance(data, dict):
-        return [f"{path.name} must contain a JSON object"]
 
-    if data.get("schema_version") != "1":
-        errors.append("schema_version must be \"1\"")
+def digest(value: Any) -> str:
+    return hashlib.sha256(PREPARE.canonical_json(value).encode("utf-8")).hexdigest()
 
-    errors.extend(validate_auto_removed(data.get("auto_removed")))
 
-    for decision in data.get("bulk_decisions") or []:
-        did = decision.get("id", "<no id>")
-        if decision.get("default") != "keep":
-            errors.append(f"{did}: default must be \"keep\"; removal requires a deliberate answer")
-        if decision.get("answer") not in (None, "remove", "keep", "inspect"):
-            errors.append(f"{did}: answer must be null, remove, keep, or inspect")
+def context_evidence(context: Any) -> dict[tuple[str, str], str]:
+    keys = {"schema", "reusableLessons", "insightIdentities", "reviewedEvidence", "autoRemoved"}
+    if not exact(context, keys) or context["schema"] != PREPARE.CONTEXT_SCHEMA:
+        raise ValueError("preference context is malformed")
+    lessons, identities = context["reusableLessons"], context["insightIdentities"]
+    if not isinstance(lessons, list) or not isinstance(identities, list):
+        raise ValueError("preference context is malformed")
+    expected, seen = [], set()
+    for lesson in lessons:
+        allowed = ({"storyKey", "insightId", "background", "directlyAcquiredExperience", "principle"}, {"storyKey", "insightId", "title", "background", "directlyAcquiredExperience", "principle"})
+        if not isinstance(lesson, dict) or set(lesson) not in allowed or not all(nonempty(lesson.get(field)) for field in ("storyKey", "insightId", "background", "directlyAcquiredExperience", "principle")) or ("title" in lesson and not nonempty(lesson["title"])):
+            raise ValueError("preference context has malformed reusable lessons")
+        identity = (lesson["storyKey"], lesson["insightId"])
+        if identity in seen:
+            raise ValueError("preference context has duplicate Insight identity")
+        seen.add(identity); expected.append({"storyKey": identity[0], "insightId": identity[1]})
+    if identities != expected or not isinstance(context["reviewedEvidence"], list):
+        raise ValueError("preference context identities or evidence are stale")
+    evidence: dict[tuple[str, str], str] = {}
+    for record in context["reviewedEvidence"]:
+        if not exact(record, {"documentId", "eventId", "documentKind"}) or not nonempty(record["documentId"]) or not nonempty(record["eventId"]) or record["documentKind"] not in {"trajectory", "meeting"}:
+            raise ValueError("preference context has malformed reviewed evidence")
+        identity = (record["documentId"], record["eventId"])
+        if identity in evidence:
+            raise ValueError("preference context has duplicate reviewed evidence")
+        evidence[identity] = record["documentKind"]
+    PREPARE.canonical_auto_removed(context["autoRemoved"])
+    return evidence
 
-    known_events = collect_event_ids(run)
-    probes = data.get("probes") or []
-    if len(probes) > MAX_PROBES:
-        errors.append(f"{len(probes)} probes exceeds the hard limit of {MAX_PROBES}")
 
-    seen_ids: set[str] = set()
-    for probe in probes:
-        pid = probe.get("id", "<no id>")
-        if pid in seen_ids:
-            errors.append(f"{pid}: duplicate probe id")
-        seen_ids.add(pid)
+def presentations(value: Any, options: list[dict[str, str]], bulk: bool = False) -> bool:
+    if not isinstance(value, dict) or set(value) - {"en", "zh"}:
+        return False
+    for item in value.values():
+        fields = {"question"} if bulk else {"recap", "question", "options"}
+        if not exact(item, fields) or not nonempty(item["question"]):
+            return False
+        if not bulk:
+            localized = item["options"]
+            if not nonempty(item["recap"]) or not isinstance(localized, list) or len(localized) != len(options):
+                return False
+            if any(not exact(option, {"id", "text"}) or option["id"] != options[index]["id"] or not nonempty(option["text"]) for index, option in enumerate(localized)):
+                return False
+    return True
 
-        if probe.get("document_kind") not in ("trajectory", "meeting"):
-            errors.append(f"{pid}: document_kind must be trajectory or meeting")
-        if probe.get("signal") not in SIGNALS:
-            errors.append(f"{pid}: unknown signal {probe.get('signal')!r}")
-        score = probe.get("score")
-        if not isinstance(score, int) or not 0 <= score <= 100:
-            errors.append(f"{pid}: score must be an integer 0-100")
 
-        event_ids = probe.get("event_ids") or []
-        if not event_ids:
-            errors.append(f"{pid}: needs at least one evidence event id")
-        if known_events:
-            for event_id in event_ids:
-                if event_id not in known_events:
-                    errors.append(f"{pid}: evidence {event_id} not found in the run")
+def probe(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
+    if not exact(value, PROBE_KEYS):
+        raise ValueError("candidate probe has extra, legacy, or missing fields")
+    if not nonempty(value["id"]) or not nonempty(value["documentId"]) or value["documentKind"] not in {"trajectory", "meeting"} or value["signal"] not in SIGNALS:
+        raise ValueError("candidate probe identity, kind, or signal is invalid")
+    if type(value["score"]) is not int or not 0 <= value["score"] <= 100 or type(value["turns"]) is not int or value["turns"] < 0:
+        raise ValueError("candidate probe score or turns is invalid")
+    if value["timestamp"] is not None and not nonempty(value["timestamp"]):
+        raise ValueError("candidate probe timestamp is invalid")
+    if not nonempty(value["recap"]) or not nonempty(value["question"]):
+        raise ValueError("candidate probe text is invalid")
+    event_ids = value["eventIds"]
+    if not isinstance(event_ids, list) or not event_ids or not all(nonempty(event, 1_000) for event in event_ids) or len(set(event_ids)) != len(event_ids):
+        raise ValueError("candidate probe evidence is invalid")
+    if any(evidence.get((value["documentId"], event)) != value["documentKind"] for event in event_ids):
+        raise ValueError("candidate probe cites foreign or cross-document evidence")
+    options = value["options"]
+    if not isinstance(options, list) or len(options) not in {2, 3}:
+        raise ValueError("candidate probe options are invalid")
+    seen_ids, seen_texts = set(), set()
+    for option in options:
+        if not exact(option, {"id", "text"}) or not nonempty(option["id"], 200) or not nonempty(option["text"]):
+            raise ValueError("candidate probe options are invalid")
+        normalized = option["text"].strip().rstrip(".").casefold()
+        if option["id"] in seen_ids or normalized in seen_texts or normalized in GENERIC:
+            raise ValueError("candidate probe options are not distinct or grounded")
+        seen_ids.add(option["id"]); seen_texts.add(normalized)
+    if value["allowOther"] is not True or value["allowSkip"] is not True or not presentations(value["presentations"], options):
+        raise ValueError("candidate probe flags or presentations are invalid")
+    return {key: value[key] for key in PROBE_KEYS}
 
-        recap = (probe.get("recap") or "").strip()
-        if not recap:
-            errors.append(f"{pid}: recap is required")
-        elif sentence_count(recap) > MAX_RECAP_SENTENCES:
-            errors.append(f"{pid}: recap is longer than {MAX_RECAP_SENTENCES} sentences")
 
-        options = probe.get("options") or []
-        if not 2 <= len(options) <= 3:
-            errors.append(f"{pid}: needs 2 or 3 options, found {len(options)}")
-        texts = [(o.get("text") or "").strip() for o in options]
-        if any(not t for t in texts):
-            errors.append(f"{pid}: every option needs text")
-        lowered = [t.lower().rstrip(".") for t in texts]
-        if len(set(lowered)) != len(lowered):
-            errors.append(f"{pid}: options must be distinct")
-        for text, low in zip(texts, lowered):
-            if low in GENERIC:
-                errors.append(f"{pid}: option {text!r} is generic; ground it in this transcript")
+def bulk(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
+    if not exact(value, BULK_KEYS):
+        raise ValueError("candidate bulk decision has extra, legacy, or missing fields")
+    if not all(nonempty(value[field]) for field in ("id", "kind", "question")) or type(value["count"]) is not int or value["count"] < 0:
+        raise ValueError("candidate bulk decision is invalid")
+    sample = value["evidenceSample"]
+    if not isinstance(sample, list) or not all(nonempty(event, 1_000) for event in sample) or len(set(sample)) != len(sample):
+        raise ValueError("candidate bulk evidence is invalid")
+    known = {event_id for _, event_id in evidence}
+    if any(event not in known for event in sample) or not presentations(value["presentations"], [], True):
+        raise ValueError("candidate bulk cites foreign evidence or has invalid presentations")
+    return {key: value[key] for key in BULK_KEYS}
 
-        if probe.get("allow_other") is not True:
-            errors.append(f"{pid}: allow_other must be true")
-        if probe.get("allow_skip") is not True:
-            errors.append(f"{pid}: allow_skip must be true")
 
-        answer = probe.get("answer")
-        if answer is not None:
-            choice = answer.get("choice") if isinstance(answer, dict) else None
-            valid = {o.get("id") for o in options} | {"other", "skip"}
-            if choice not in valid:
-                errors.append(f"{pid}: answer.choice {choice!r} is not one of {sorted(valid)}")
-            elif choice == "other" and not (answer.get("text") or "").strip():
-                errors.append(f"{pid}: answer.choice 'other' needs text")
+def finalize(context: Any, candidates: Any, workflow_run_id: str, source_revision: int) -> dict[str, Any]:
+    evidence = context_evidence(context)
+    if not nonempty(workflow_run_id, 1_000) or type(source_revision) is not int or source_revision < 0:
+        raise ValueError("workflow authority is invalid")
+    if not exact(candidates, {"probes", "bulkDecisions", "setAside"}) or not isinstance(candidates["probes"], list) or not isinstance(candidates["bulkDecisions"], list) or type(candidates["setAside"]) is not int or candidates["setAside"] < 0:
+        raise ValueError("candidates must contain only valid probes, bulkDecisions, and setAside")
+    probes = [probe(item, evidence) for item in candidates["probes"]]
+    decisions = [bulk(item, evidence) for item in candidates["bulkDecisions"]]
+    ids = [item["id"] for item in probes + decisions]
+    if len(ids) != len(set(ids)):
+        raise ValueError("candidate identity is duplicated")
+    probes.sort(key=lambda item: item["id"].encode("utf-8")); decisions.sort(key=lambda item: item["id"].encode("utf-8"))
+    count = len(probes) + len(decisions)
+    if count == 0 and candidates["setAside"] != 0:
+        raise ValueError("completed-zero cannot set questions aside")
+    batch = [{**item, "type": "probe"} for item in probes] + [{**item, "type": "bulk"} for item in decisions]
+    batch.sort(key=lambda item: f"{item['type']}:{item['id']}".encode("utf-8"))
+    output = digest(batch)
+    if count == 0 and output != EMPTY_DIGEST:
+        raise ValueError("completed-zero digest is invalid")
+    return {"workflowRunId": workflow_run_id, "sourceRevision": source_revision, "inputDigest": digest(context["reusableLessons"]), "outputDigest": output, "outputCount": count, "setAside": candidates["setAside"], "probes": probes, "bulkDecisions": decisions, "autoRemoved": context["autoRemoved"]}
 
-    return errors
+
+def write_atomic(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
+        handle.write((PREPARE.canonical_json(value) + "\n").encode("utf-8")); temporary = Path(handle.name)
+    temporary.replace(path)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("run", type=Path, help="Oxygen run directory")
+    parser.add_argument("--context", required=True, type=Path); parser.add_argument("--candidates", required=True, type=Path)
+    parser.add_argument("--workflow-run-id", required=True); parser.add_argument("--source-revision", required=True, type=int); parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    run = args.run.expanduser().resolve()
-
-    errors = validate(run)
-    if errors:
-        for error in errors:
-            print(f"error: {error}", file=sys.stderr)
-        print(f"\n{len(errors)} problem(s) found.", file=sys.stderr)
-        return 1
-
-    data = json.loads((run / "preference-probes.json").read_text(encoding="utf-8"))
-    probes = data.get("probes") or []
-    answered = sum(1 for p in probes if p.get("answer") is not None)
-    removed = (data.get("auto_removed") or {}).get("total", 0)
-    print(json.dumps({
-        "ok": True,
-        "probes": len(probes),
-        "answered": answered,
-        "set_aside": data.get("set_aside", 0),
-        "auto_removed": removed,
-    }, ensure_ascii=False))
+    try:
+        result = finalize(load(args.context), load(args.candidates), args.workflow_run_id, args.source_revision)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr); return 1
+    write_atomic(args.output, result)
+    print(json.dumps({"ok": True, "inputDigest": result["inputDigest"], "outputDigest": result["outputDigest"]}))
     return 0
 
 

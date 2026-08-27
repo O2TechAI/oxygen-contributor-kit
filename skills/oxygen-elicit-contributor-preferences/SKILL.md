@@ -26,11 +26,22 @@ sensitive" destroys the exact thing this workflow exists to capture.
 
 ## Input
 
-A privacy-prepared reviewed run: `work/<run>-review/` containing `index.json`, `trajectories/`,
-optionally `meeting.json`, and `project-map.json` from `$oxygen-organize-review-export`.
+Prepare a bounded privacy-prepared reviewed run context from the final ordered
+`story-candidates.json`, the reviewed evidence authority, and the completed Privacy summary.
+Do not reopen the raw organized run or independently apply or rerun redaction.
+- do not independently apply or rerun redaction from any other source.
 
-Do not reopen the raw organized run and do not independently apply or rerun redaction. Generate or
-validate probes only from this reviewed boundary.
+```powershell
+python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference_context.py `
+  --story-candidates "$Review\story-candidates.json" `
+  --review-dir "$Review" `
+  --privacy-summary "$Review\privacy-summary.json" `
+  --output "$Review\preference-context.json"
+```
+
+The bounded Agent reads only that context and writes `preference-candidates.json` with exactly
+`probes`, `bulkDecisions`, and `setAside`. It never writes answers, Privacy aggregates, digests,
+provider metadata, release state, or publication state.
 
 Work only on events whose project label is the primary project unless the contributor asks
 otherwise. Off-project events are noise and spending the contributor's attention on them is the
@@ -132,21 +143,21 @@ Rules that decide whether this works:
 
 ## Stage 5 — Write the results
 
-Write `work/<run>-review/preference-probes.json` per
-[references/preference-probe-contract.md](references/preference-probe-contract.md).
-
-Validate before handing off:
-
-```bash
-python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py work/<run>-review
-```
-
-Native Windows PowerShell equivalent:
+Write `preference-candidates.json` per
+[references/preference-probe-contract.md](references/preference-probe-contract.md), then finalize
+the only API-shaped output before handing off:
 
 ```powershell
 python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
-  "work\<run>-review"
+  --context "$Review\preference-context.json" `
+  --candidates "$Review\preference-candidates.json" `
+  --workflow-run-id "$WorkflowRun" `
+  --source-revision $SourceRevision `
+  --output "$Review\preference-bundle.json"
 ```
+
+The final bundle uses only the exact `/api/probes` camelCase contract. A failed preparation or
+finalization preserves an existing output byte-for-byte.
 
 Each confirmed preference becomes a checklist entry attached to its source document, carrying the
 evidence event IDs so the contributor can always reopen the original moment.
