@@ -18,9 +18,6 @@ redaction-diff.html
 # covered without another edit here.
 node_modules/
 
-# Keep local Viewer dependencies and runtime state out of the kit.
-viewer/node_modules
-viewer/.oxygen-local.json
 tools/ingest/out/
 tools/ingest/webapp-data/
 tools/ingest/.venv-audio/
