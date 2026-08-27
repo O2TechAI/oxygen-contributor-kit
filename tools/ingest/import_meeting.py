@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 
 from oxygen_common import (configure_utf8_stdio, fail, progress, safe_slug, sha256_file,
@@ -32,7 +33,20 @@ from oxygen_common import (configure_utf8_stdio, fail, progress, safe_slug, sha2
 
 AUDIO_SUFFIXES = {".m4a", ".wav", ".mp3", ".flac", ".ogg", ".aac", ".mp4"}
 TIMESTAMPED_RE = re.compile(r"^(\d{1,3}:\d{2})Speaker\s+([A-Z])\s*(.*)$")
-SPEAKER_RE = re.compile(r"^(?:\[(\d{1,3}:\d{2}(?::\d{2})?)\]\s*)?([^\s:：]{1,24})[:：]\s*(.+)$")
+SPEAKER_RE = re.compile(
+    r"^(?:\[(\d{1,3}:\d{2}(?::\d{2})?)\] *)?(.+?)[：:] *(\S.*)$"
+)
+SPEAKER_LABEL_RE = re.compile(
+    r"^[^\W_]+(?:[.'’\-][^\W_]+)*(?: +[^\W_]+(?:[.'’\-][^\W_]+)*)*$"
+)
+NON_SPEAKER_LABELS = {
+    "agenda", "answer", "author", "created", "date", "description", "duration", "file",
+    "id", "key", "language", "location", "meeting id", "meeting title", "metadata", "name",
+    "note", "owner", "path", "project", "project id", "question", "schema", "source",
+    "speaker", "status", "summary", "time", "title", "todo", "topic", "type", "updated",
+    "uri", "url", "value", "version", "warning",
+}
+NON_SPEAKER_FIRST_WORDS = {"action", "chapter", "meeting", "phase", "project", "section", "step"}
 MEETING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 MEETING_ID_DIGEST_LENGTH = 64
 
@@ -78,15 +92,53 @@ def run_asr(audio: Path, scratch: Path, model: str, language: str | None,
     return transcript
 
 
+def match_speaker_line(line: str) -> tuple[str | None, str, str] | None:
+    """Return a conservative timestamp/label/body match for one speaker line."""
+    if any(unicodedata.category(character) == "Cc" for character in line):
+        return None
+    match = SPEAKER_RE.fullmatch(line)
+    if not match:
+        return None
+    timestamp, raw_label, body = match.groups()
+    label = raw_label.strip(" ")
+    if not label or len(label) > 24 or not SPEAKER_LABEL_RE.fullmatch(label):
+        return None
+    if not any(character.isalpha() for character in label):
+        return None
+    if label.casefold() in NON_SPEAKER_LABELS:
+        return None
+
+    words = label.split(" ")
+    cased_words = [word for word in words if any(character.islower() for character in word)]
+    if words[0].casefold() in NON_SPEAKER_FIRST_WORDS:
+        return None
+    explicit_role = words[0].startswith("Speaker") or words[0].startswith("说话人")
+    if not explicit_role and any(word[0].islower() for word in cased_words):
+        return None
+
+    first_body_word = body.split(" ", 1)[0]
+    if first_body_word.startswith(("/", "\\")) or ":" in first_body_word or "：" in first_body_word:
+        return None
+    return timestamp, label, body
+
+
 def parse_lines(text: str) -> tuple[list[dict], str]:
     """Return (records, detected_format)."""
     records: list[dict] = []
-    lines = [(number, line.strip()) for number, line in enumerate(text.splitlines(), 1) if line.strip()]
+    source_lines = [
+        (number, line) for number, line in enumerate(text.splitlines(), 1) if line.strip()
+    ]
+    lines = [(number, line.strip()) for number, line in source_lines]
     if not lines:
         return records, "empty"
 
     timestamped_hits = sum(1 for _, line in lines if TIMESTAMPED_RE.match(line))
-    speaker_hits = sum(1 for _, line in lines if SPEAKER_RE.match(line))
+    speaker_matches = [
+        None if any(unicodedata.category(character) == "Cc" for character in source_line)
+        else match_speaker_line(line)
+        for (_, line), (_, source_line) in zip(lines, source_lines)
+    ]
+    speaker_hits = sum(match is not None for match in speaker_matches)
 
     if timestamped_hits >= max(1, len(lines) // 2):
         detected = "timestamped"
@@ -98,12 +150,12 @@ def parse_lines(text: str) -> tuple[list[dict], str]:
                                 "source_line": number})
             elif records:
                 records[-1]["text"] += " " + line
-    elif speaker_hits >= max(2, len(lines) // 2):
+    elif ((len(lines) == 1 and speaker_hits == 1)
+          or speaker_hits >= max(2, len(lines) // 2)):
         detected = "speaker-labeled"
-        for number, line in lines:
-            match = SPEAKER_RE.match(line)
+        for (number, line), match in zip(lines, speaker_matches):
             if match:
-                timestamp, speaker, body = match.groups()
+                timestamp, speaker, body = match
                 records.append({"timestamp": timestamp, "speaker": speaker, "text": body.strip(),
                                 "source_line": number})
             elif records:
@@ -180,10 +232,12 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
     (out / "raw.md").write_text("\n".join(body) + "\n", encoding="utf-8")
 
     stamped = out / "timestamped.txt"
-    with stamped.open("w", encoding="utf-8") as handle:
+    with stamped.open("w", encoding="utf-8", newline="\n") as handle:
         for record in records:
             if record["timestamp"] and record["speaker"]:
                 handle.write(f"{record['timestamp']}Speaker {record['speaker']}{record['text']}\n")
+            elif record["speaker"]:
+                handle.write(f"{record['speaker']}: {record['text']}\n")
 
     progress(100, "done", f"{len(records)} records ({detected}) -> {out}")
     return {"output": str(out), "meeting_id": meeting_id,

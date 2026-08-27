@@ -65,6 +65,66 @@ def hard_link_or_skip(testcase: unittest.TestCase, source: Path, target: Path) -
         testcase.skipTest(f"hard links unavailable: {error}")
 
 
+class ImportMeetingParserTest(unittest.TestCase):
+    def test_documented_multiword_and_unicode_speaker_labels_are_preserved(self):
+        records, detected = MODULE.parse_lines(
+            "Speaker A: first\nAlex Smith  :   second\n张三: 第三\n李  小龙: 第四\n说话人0: 第五\n"
+        )
+
+        self.assertEqual(detected, "speaker-labeled")
+        self.assertEqual(
+            [(record["speaker"], record["text"]) for record in records],
+            [
+                ("Speaker A", "first"),
+                ("Alex Smith", "second"),
+                ("张三", "第三"),
+                ("李  小龙", "第四"),
+                ("说话人0", "第五"),
+            ],
+        )
+
+    def test_single_token_timestamped_and_plain_formats_remain_distinct(self):
+        cases = (
+            ("Alice: hello\nBob: goodbye\n", "speaker-labeled", ["Alice", "Bob"]),
+            ("0:01Speaker Ahello\n0:02Speaker Bgoodbye\n", "timestamped", ["A", "B"]),
+            ("ordinary prose\nNote: metadata, not dialogue\n", "plain", [None, None]),
+        )
+        for text, expected_format, expected_speakers in cases:
+            with self.subTest(expected_format=expected_format):
+                records, detected = MODULE.parse_lines(text)
+                self.assertEqual(detected, expected_format)
+                self.assertEqual(
+                    [record["speaker"] for record in records], expected_speakers
+                )
+
+    def test_non_speaker_colon_forms_remain_plain(self):
+        cases = (
+            r"C:\Users\Bruce\meeting.txt",
+            "http://example.com/meeting",
+            "https://example.com/meeting",
+            "12:30 agenda",
+            "key: value",
+            "title: weekly sync",
+            "Name: Alex",
+            "speaker: Alex",
+            "Meeting Notes: text",
+            '\"speaker\": \"Alex\"',
+            ": missing label",
+            "Alex:",
+            f"{'A' * 25}: text",
+            "Alex:Smith: text",
+            "Alex: text\t",
+            "Al\x00ex: text",
+            "Alex: text\x00",
+        )
+        for line in cases:
+            with self.subTest(line=repr(line)):
+                records, detected = MODULE.parse_lines(line)
+                self.assertEqual(detected, "plain")
+                self.assertEqual(len(records), 1)
+                self.assertIsNone(records[0]["speaker"])
+
+
 class ImportMeetingTopologyTest(unittest.TestCase):
     def test_mocked_reparse_metadata_is_detected_and_unknown_windows_metadata_fails_closed(self):
         reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
@@ -142,8 +202,13 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             dataset = json.loads((meeting / "meeting.json").read_text(encoding="utf-8"))
             self.assertEqual(dataset["meeting_id"], "meeting-stable")
             self.assertEqual(dataset["title"], "Stable meeting")
+            self.assertEqual(dataset["detected_format"], "speaker-labeled")
+            self.assertEqual(dataset["speakers"], ["Speaker A", "Speaker B"])
             self.assertFalse(dataset["publication_approved"])
-            self.assertEqual((meeting / "timestamped.txt").read_text(encoding="utf-8"), "")
+            expected_stamped = "Speaker A: first\nSpeaker B: second\n"
+            self.assertEqual(
+                (meeting / "timestamped.txt").read_bytes(), expected_stamped.encode("utf-8")
+            )
 
     def test_output_is_required_before_any_run_is_created(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -207,8 +272,8 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             root = Path(temporary)
             first = root / "alpha.txt"
             second = root / "beta.txt"
-            first.write_text("alpha private text\n", encoding="utf-8")
-            second.write_text("beta private text\n", encoding="utf-8")
+            first.write_text("Speaker A: alpha private text\n", encoding="utf-8")
+            second.write_text("张三: beta private text\n", encoding="utf-8")
             run = root / "run"
 
             result = run_main(first, second, "--out", run)
@@ -220,17 +285,23 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             self.assertEqual(result["meeting_count"], 2)
             self.assertEqual([item["meeting_id"] for item in result["meetings"]], expected_ids)
             self.assertFalse((run / "meeting.json").exists())
-            for meeting_id, expected_text, foreign_text in (
-                (expected_ids[0], "alpha private text", "beta private text"),
-                (expected_ids[1], "beta private text", "alpha private text"),
+            for meeting_id, expected_speaker, expected_text, foreign_text in (
+                (expected_ids[0], "Speaker A", "alpha private text", "beta private text"),
+                (expected_ids[1], "张三", "beta private text", "alpha private text"),
             ):
                 meeting = run / "meetings" / meeting_id
                 dataset = json.loads((meeting / "meeting.json").read_text(encoding="utf-8"))
                 self.assertEqual(dataset["meeting_id"], meeting_id)
+                self.assertEqual(dataset["detected_format"], "speaker-labeled")
+                self.assertEqual(dataset["speakers"], [expected_speaker])
+                self.assertEqual(dataset["records"][0]["record_id"], "rec-00001")
                 self.assertEqual([record["text"] for record in dataset["records"]], [expected_text])
                 self.assertNotIn(foreign_text, (meeting / "raw.md").read_text(encoding="utf-8"))
                 self.assertFalse(dataset["publication_approved"])
-                self.assertTrue((meeting / "timestamped.txt").is_file())
+                self.assertEqual(
+                    (meeting / "timestamped.txt").read_text(encoding="utf-8"),
+                    f"{expected_speaker}: {expected_text}\n",
+                )
 
     def test_generated_identity_is_stable_and_content_bound(self):
         with tempfile.TemporaryDirectory() as temporary:
