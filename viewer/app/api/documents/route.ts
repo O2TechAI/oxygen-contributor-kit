@@ -23,9 +23,6 @@ type NormalizedItem = {
   timestamp: string | null;
   content: string;
   originalJson: string;
-  organizationCategory: string | null;
-  organizationConfidence: number | null;
-  organizationReason: string | null;
 };
 
 type NormalizedDocument = {
@@ -59,7 +56,8 @@ export const MAX_CORPUS_DOCUMENT_JSON_BYTES = 750_000;
 const MAX_ID_BYTES = 300;
 const MAX_TITLE_BYTES = 4_096;
 const MAX_OPTIONAL_TEXT_BYTES = 16_384;
-const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,299}$/;
+const DOCUMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
+const ITEM_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,299}$/;
 const encoder = new TextEncoder();
 
 const TOP_LEVEL_KEYS = new Set(["documents"]);
@@ -70,7 +68,7 @@ const DOCUMENT_KEYS = new Set([
 ]);
 const ITEM_KEYS = new Set([
   "id", "sequence", "eventType", "actorId", "actorType", "timestamp", "content",
-  "original", "organizationCategory", "organizationConfidence", "organizationReason",
+  "original",
 ]);
 
 export class CorpusValidationError extends Error {
@@ -143,9 +141,15 @@ function optionalString(value: unknown, code: string) {
   return value;
 }
 
-function validId(value: unknown, code: string) {
+function validDocumentId(value: unknown, code: string) {
   const id = requiredString(value, MAX_ID_BYTES, code);
-  if (!ID_PATTERN.test(id) || id !== id.trim()) throw new CorpusValidationError(code);
+  if (!DOCUMENT_ID_PATTERN.test(id) || id !== id.trim()) throw new CorpusValidationError(code);
+  return id;
+}
+
+function validItemId(value: unknown, code: string) {
+  const id = requiredString(value, MAX_ID_BYTES, code);
+  if (!ITEM_ID_PATTERN.test(id) || id !== id.trim()) throw new CorpusValidationError(code);
   return id;
 }
 
@@ -173,7 +177,7 @@ function normalizeItem(
     ["id", "sequence", "content", "original"],
     "CORPUS_ITEM_INVALID",
   );
-  const id = validId(item.id, "CORPUS_ITEM_ID_INVALID");
+  const id = validItemId(item.id, "CORPUS_ITEM_ID_INVALID");
   if (itemIds.has(id)) throw new CorpusValidationError("CORPUS_ITEM_ID_DUPLICATE");
   itemIds.add(id);
   const sequence = item.sequence;
@@ -204,14 +208,6 @@ function normalizeItem(
   if (!eventOwned && !qualifiedRecordOwned) {
     throw new CorpusValidationError("CORPUS_ITEM_OWNERSHIP_INVALID");
   }
-  const organizationConfidence = item.organizationConfidence;
-  if (organizationConfidence !== undefined && organizationConfidence !== null
-    && (typeof organizationConfidence !== "number"
-      || !Number.isFinite(organizationConfidence)
-      || organizationConfidence < 0
-      || organizationConfidence > 100)) {
-    throw new CorpusValidationError("CORPUS_ITEM_ORGANIZATION_INVALID");
-  }
   return {
     id,
     documentId,
@@ -222,17 +218,6 @@ function normalizeItem(
     timestamp: optionalString(item.timestamp, "CORPUS_ITEM_TIMESTAMP_INVALID"),
     content,
     originalJson,
-    organizationCategory: optionalString(
-      item.organizationCategory,
-      "CORPUS_ITEM_ORGANIZATION_INVALID",
-    ),
-    organizationConfidence: organizationConfidence === undefined || organizationConfidence === null
-      ? null
-      : organizationConfidence,
-    organizationReason: optionalString(
-      item.organizationReason,
-      "CORPUS_ITEM_ORGANIZATION_INVALID",
-    ),
   };
 }
 
@@ -272,7 +257,7 @@ export function normalizeFinalizedCorpus(
       ["id", "kind", "title", "itemCount"],
       "CORPUS_DOCUMENT_INVALID",
     );
-    const id = validId(document.id, "CORPUS_DOCUMENT_ID_INVALID");
+    const id = validDocumentId(document.id, "CORPUS_DOCUMENT_ID_INVALID");
     if (documentIds.has(id)) throw new CorpusValidationError("CORPUS_DOCUMENT_ID_DUPLICATE");
     documentIds.add(id);
     if (document.kind !== "meeting" && document.kind !== "trajectory") {
@@ -455,14 +440,12 @@ export async function POST(request: Request) {
     }
     for (const payload of itemPayloads) {
       statements.push(db.prepare(`INSERT INTO items
-        (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,original_json,
-         organization_category,organization_confidence,organization_reason)
+        (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,original_json)
         SELECT json_extract(value,'$.id'),json_extract(value,'$.documentId'),
           json_extract(value,'$.sequence'),json_extract(value,'$.eventType'),
           json_extract(value,'$.actorId'),json_extract(value,'$.actorType'),
           json_extract(value,'$.timestamp'),json_extract(value,'$.content'),
-          json_extract(value,'$.originalJson'),json_extract(value,'$.organizationCategory'),
-          json_extract(value,'$.organizationConfidence'),json_extract(value,'$.organizationReason')
+          json_extract(value,'$.originalJson')
         FROM json_each(?) WHERE ${leaseSql}`)
         .bind(payload, ...leaseBindings));
     }

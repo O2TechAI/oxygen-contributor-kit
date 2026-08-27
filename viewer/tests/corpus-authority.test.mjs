@@ -72,9 +72,6 @@ function trajectoryEntry(documentId, itemId, overrides = {}) {
         event_id: itemId,
         payload: { role: "user", text: "Safe synthetic contribution." },
       },
-      organizationCategory: "Synthetic Project",
-      organizationConfidence: 90,
-      organizationReason: "Synthetic unit",
     }],
     ...overrides,
   };
@@ -133,6 +130,77 @@ test("one complete multi-document corpus normalizes with exact global ownership 
     ["meeting-safe:rec-00001", "meeting-safe"],
     ["evt-safe", "trajectory-safe"],
   ]);
+});
+
+test("finalized item identity excludes and rejects Organization-owned fields", async () => {
+  const input = { documents: [trajectoryEntry("trajectory-safe", "evt-safe")] };
+  for (const [field, value] of [
+    ["organizationCategory", "Synthetic Project"],
+    ["organizationConfidence", 90],
+    ["organizationReason", "Synthetic unit"],
+  ]) {
+    const legacy = structuredClone(input);
+    legacy.documents[0].items[0][field] = value;
+    assert.equal(
+      errorCode(() => corpus.normalizeFinalizedCorpus(legacy)),
+      "CORPUS_ITEM_INVALID",
+    );
+  }
+
+  const normalized = corpus.normalizeFinalizedCorpus(input);
+  const normalizedItem = normalized.documents[0].items[0];
+  assert.deepEqual(Object.keys(normalizedItem).sort(), [
+    "actorId", "actorType", "content", "documentId", "eventType", "id",
+    "originalJson", "sequence", "timestamp",
+  ]);
+  assert.doesNotMatch(
+    normalized.canonicalPayload,
+    /organization(?:Category|Confidence|Reason)/,
+  );
+  const digest = await corpus.finalizedCorpusDigest(normalized);
+  Object.assign(normalizedItem, {
+    organizationCategory: "downstream-project",
+    organizationConfidence: 100,
+    organizationReason: "downstream-semantic-unit",
+  });
+  assert.equal(await corpus.finalizedCorpusDigest(normalized), digest);
+});
+
+test("document and item IDs preserve canonical and exact ownership grammars", () => {
+  for (const documentId of ["a", "Runner.id_with-dashes", `a${"b".repeat(254)}`]) {
+    assert.equal(
+      corpus.normalizeFinalizedCorpus({
+        documents: [trajectoryEntry(documentId, "evt-safe")],
+      }).documents[0].id,
+      documentId,
+    );
+  }
+
+  assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({
+    documents: [trajectoryEntry("trajectory:ambiguous", "evt-safe")],
+  })), "CORPUS_DOCUMENT_ID_INVALID");
+  assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({
+    documents: [trajectoryEntry(`a${"b".repeat(255)}`, "evt-safe")],
+  })), "CORPUS_DOCUMENT_ID_INVALID");
+
+  const qualified = meetingEntry("meeting-safe");
+  qualified.items[0].id = "meeting-safe:record:00001";
+  assert.equal(
+    corpus.normalizeFinalizedCorpus({ documents: [qualified] }).documents[0].items[0].id,
+    "meeting-safe:record:00001",
+  );
+
+  const prefixConfusable = meetingEntry("meeting-safe");
+  prefixConfusable.items[0].id = "meeting-safe-other:rec-00001";
+  assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({
+    documents: [prefixConfusable],
+  })), "CORPUS_ITEM_OWNERSHIP_INVALID");
+
+  const eventBacked = trajectoryEntry("trajectory-safe", "evt:safe");
+  assert.equal(
+    corpus.normalizeFinalizedCorpus({ documents: [eventBacked] }).documents[0].items[0].id,
+    "evt:safe",
+  );
 });
 
 test("duplicate, ambiguous, foreign, malformed, and oversized corpora fail before mutation", () => {
@@ -223,9 +291,6 @@ test("corpus digest ignores input array and object-key order but binds every per
     (value) => { value.documents[0].items[0].timestamp = "2037-01-01"; },
     (value) => { value.documents[0].items[0].content += " changed"; },
     (value) => { value.documents[0].items[0].original.extra = true; },
-    (value) => { value.documents[0].items[0].organizationCategory = "Other"; },
-    (value) => { value.documents[0].items[0].organizationConfidence = 89; },
-    (value) => { value.documents[0].items[0].organizationReason = "Other reason"; },
   ];
   for (const mutate of mutations) {
     const changed = structuredClone(input);
@@ -347,6 +412,10 @@ test("documents route has one whole-corpus atomic JSON-batched POST contract", (
   assert.match(routeSource, /FROM json_each\(\?\) WHERE \$\{leaseSql\}/);
   assert.match(routeSource, /publishFinalizedCorpusSourceMutation/);
   assert.doesNotMatch(routeSource, /await db\.batch\(body\.items|start \+= 75/);
+  assert.doesNotMatch(
+    routeSource,
+    /organizationCategory|organizationConfidence|organizationReason|organization_category|organization_confidence|organization_reason/,
+  );
   assert.match(schemaSource, /finalizedCorpusManifests/);
   assert.match(dbSource, /CREATE TABLE IF NOT EXISTS finalized_corpus_manifests/);
 });
@@ -389,9 +458,16 @@ test("Organization refuses absent or mismatched corpus authority and binds its s
   assert.match(organizationSource, /corpus_revision,corpus_digest,corpus_document_count,corpus_item_count/);
   assert.match(organizationSource, /leasedCorpus\.corpusDigest/);
   assert.match(organizationSource, /finalizedCorpus:\s*\{/);
+  assert.match(
+    organizationSource,
+    /UPDATE items SET\s*organization_category=\?,organization_confidence=100,\s*organization_reason=/,
+  );
+  assert.match(schemaSource, /organizationCategory: text\("organization_category"\)/);
+  assert.match(schemaSource, /organizationConfidence: integer\("organization_confidence"\)/);
+  assert.match(schemaSource, /organizationReason: text\("organization_reason"\)/);
 });
 
-test("24796-item corpus preserves 33-statement replacement and D1 JSON bounds", (context) => {
+test("24796-item corpus remains within 33-statement replacement and D1 JSON bounds", (context) => {
   const documentId = "synthetic-bom";
   const padding = "x".repeat(1_125);
   const rawItems = [];
@@ -412,9 +488,6 @@ test("24796-item corpus preserves 33-statement replacement and D1 JSON bounds", 
       timestamp: "2036-01-01T00:00:00.000Z",
       content: "c".repeat(100),
       original,
-      organizationCategory: "Synthetic",
-      organizationConfidence: 100,
-      organizationReason: "Bounded",
     });
     persistedItems.push({
       id,
@@ -426,9 +499,6 @@ test("24796-item corpus preserves 33-statement replacement and D1 JSON bounds", 
       timestamp: "2036-01-01T00:00:00.000Z",
       content: "c".repeat(100),
       originalJson: JSON.stringify(original),
-      organizationCategory: "Synthetic",
-      organizationConfidence: 100,
-      organizationReason: "Bounded",
     });
   }
   const request = { documents: [{
@@ -457,9 +527,11 @@ test("24796-item corpus preserves 33-statement replacement and D1 JSON bounds", 
   const invocationStatements = assertFinalizedCorpusQueryBudget(replacementStatements);
   const allPayloads = [...documentPayloads, ...itemPayloads];
   const maxJsonParameterBytes = Math.max(...allPayloads.map((payload) => Buffer.byteLength(payload)));
-  assert.equal(itemPayloads.length, 25);
-  assert.equal(replacementStatements, 33);
-  assert.equal(invocationStatements, 36);
+  assert.equal(itemPayloads.length, 24);
+  assert.equal(replacementStatements, 32);
+  assert.equal(invocationStatements, 35);
+  assert.ok(replacementStatements <= 33);
+  assert.ok(invocationStatements <= 36);
   assert.ok(maxJsonParameterBytes <= D1_JSON_PARAMETER_BYTES);
   assert.ok(totalRequestBytes <= corpus.MAX_CORPUS_REQUEST_BYTES);
   context.diagnostic(JSON.stringify({

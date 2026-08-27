@@ -699,6 +699,20 @@ class LocateInputsContainmentTest(unittest.TestCase):
                 {"trajectory_id": "traj-alpha", "ok": True},
                 {"trajectory_id": "traj-beta", "ok": True},
             ])
+            event_ids = [
+                f"evt-{hashlib.sha256(trajectory_id.encode('utf-8')).hexdigest()}"
+                for trajectory_id in ("traj-alpha", "traj-beta")
+            ]
+            (run / "project-map.json").write_text(json.dumps({
+                "events": {
+                    event_id: {
+                        "project": "Synthetic Project",
+                        "confidence": 90,
+                        "summary": "Synthetic unit",
+                    }
+                    for event_id in event_ids
+                }
+            }), encoding="utf-8")
 
             trajectories, meetings = MODULE.locate_inputs(run)
 
@@ -720,6 +734,14 @@ class LocateInputsContainmentTest(unittest.TestCase):
                 document_id = entry["document"]["id"]
                 self.assertTrue(all(
                     item["original"]["trajectory_id"] == document_id
+                    for item in entry["items"]
+                ))
+                self.assertTrue(all(
+                    {
+                        "organizationCategory",
+                        "organizationConfidence",
+                        "organizationReason",
+                    }.isdisjoint(item)
                     for item in entry["items"]
                 ))
 

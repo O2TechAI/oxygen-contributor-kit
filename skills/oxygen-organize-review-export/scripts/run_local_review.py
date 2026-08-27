@@ -648,11 +648,9 @@ def trajectory_document(prepared: dict, project_map: dict) -> dict:
         "envelope": {"manifest": manifest, "redaction": redaction, "format": "oxygen-events-jsonl"},
         "itemCount": len(events),
     }
-    event_labels = project_map.get("events") or {}
     items = []
     for index, event in enumerate(events, 1):
         event_id = projected_contribution_id(event)
-        label = event_labels.get(event_id, {})
         items.append({
             "id": event_id,
             "sequence": event.get("sequence", index),
@@ -662,9 +660,6 @@ def trajectory_document(prepared: dict, project_map: dict) -> dict:
             "timestamp": event.get("timestamp") or event.get("started_at"),
             "content": event_content(event, directory),
             "original": event,
-            "organizationCategory": label.get("project"),
-            "organizationConfidence": label.get("confidence"),
-            "organizationReason": label.get("summary") or label.get("reason"),
         })
     return {"document": document, "items": items}
 
