@@ -52,6 +52,13 @@ INPUT_PATH_ALIAS = "INPUT_PATH_ALIAS"
 INPUT_PATH_MISSING = "INPUT_PATH_MISSING"
 INPUT_FILE_INVALID = "INPUT_FILE_INVALID"
 INPUT_PROJECTION_INVALID = "INPUT_PROJECTION_INVALID"
+VIEWER_NETWORK_ERROR = "VIEWER_NETWORK_ERROR: The local Viewer could not be reached."
+VIEWER_RESPONSE_INVALID = "VIEWER_RESPONSE_INVALID: The local Viewer returned an invalid response."
+VIEWER_WORKFLOW_BLOCKERS = {
+    400: "VIEWER_WORKFLOW_BLOCKED_HTTP_400: The local Viewer rejected the workflow request.",
+    404: "VIEWER_WORKFLOW_BLOCKED_HTTP_404: The local Viewer rejected the workflow request.",
+    409: "VIEWER_WORKFLOW_BLOCKED_HTTP_409: The local Viewer rejected the workflow request.",
+}
 
 _WINDOWS_BOOTSTRAP = """\
 import ctypes
@@ -598,8 +605,26 @@ def request_json(opener, url: str, *, method="GET", body=None):
         url, data=data, method=method,
         headers={"content-type": "application/json"} if data else {},
     )
-    with opener.open(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with opener.open(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        status = error.code
+        error.close()
+        blocker = VIEWER_WORKFLOW_BLOCKERS.get(status)
+        if blocker:
+            raise SystemExit(blocker) from None
+        if 500 <= status <= 599:
+            raise SystemExit(
+                f"VIEWER_SERVER_ERROR_HTTP_{status}: The local Viewer failed to process the request."
+            ) from None
+        raise SystemExit(
+            f"VIEWER_HTTP_ERROR_{status}: The local Viewer request failed."
+        ) from None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise SystemExit(VIEWER_NETWORK_ERROR) from None
+    except (UnicodeError, json.JSONDecodeError):
+        raise SystemExit(VIEWER_RESPONSE_INVALID) from None
 
 
 def resolve_contained_path(candidate: Path, approved_root: Path) -> Path:

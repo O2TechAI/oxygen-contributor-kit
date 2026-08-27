@@ -1,5 +1,7 @@
 import importlib.util
 import hashlib
+import http.server
+import io
 import json
 import os
 from pathlib import Path
@@ -8,8 +10,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+import urllib.error
 from unittest import mock
 
 
@@ -188,6 +192,147 @@ def file_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path):
 
 
 class LauncherUnitTest(unittest.TestCase):
+    def test_story_blocked_cli_sanitizes_hostile_409_without_retry(self):
+        hostile_body = (
+            b'{"private":"token=secret-value","sqlite":"C:/private/state.db",'
+            b'"payload":"customer-data"}'
+        )
+        requests = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                requests.append(self.path)
+                self.send_response(409)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(hostile_body)))
+                self.end_headers()
+                self.wfile.write(hostile_body)
+
+            def log_message(self, *_args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "--attach-url",
+                    f"http://127.0.0.1:{port}",
+                    "--workflow-run-id",
+                    "synthetic-run",
+                    "--story-event",
+                    "blocked",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="strict",
+                check=False,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(
+            result.stderr,
+            MODULE.VIEWER_WORKFLOW_BLOCKERS[409] + "\n",
+        )
+        self.assertEqual(requests, ["/api/workflow"])
+        for leaked in (
+            "Traceback",
+            "secret-value",
+            "C:/private/state.db",
+            "customer-data",
+            f"127.0.0.1:{port}",
+        ):
+            self.assertNotIn(leaked, result.stderr)
+
+    def test_expected_400_and_404_blockers_are_sanitized_without_retry(self):
+        hostile_body = b"private payload sqlite detail token=secret"
+        for status in (400, 404):
+            with self.subTest(status=status):
+                opener = mock.Mock()
+                opener.open.side_effect = urllib.error.HTTPError(
+                    "http://127.0.0.1:3298/api/workflow",
+                    status,
+                    "internal exception text",
+                    {},
+                    io.BytesIO(hostile_body),
+                )
+                with self.assertRaises(SystemExit) as raised:
+                    MODULE.request_json(
+                        opener,
+                        "http://127.0.0.1:3298/api/workflow",
+                        method="POST",
+                        body={"event": "synthetic"},
+                    )
+                self.assertEqual(
+                    str(raised.exception),
+                    MODULE.VIEWER_WORKFLOW_BLOCKERS[status],
+                )
+                opener.open.assert_called_once()
+                for leaked in ("private payload", "sqlite detail", "secret", "internal exception"):
+                    self.assertNotIn(leaked, str(raised.exception))
+
+    def test_5xx_and_network_failures_are_distinguishable_bounded_and_not_retried(self):
+        opener = mock.Mock()
+        opener.open.side_effect = urllib.error.HTTPError(
+            "http://127.0.0.1:3298/api/workflow",
+            503,
+            "database secret",
+            {},
+            io.BytesIO(b"private server body"),
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            r"^VIEWER_SERVER_ERROR_HTTP_503: The local Viewer failed to process the request\.$",
+        ) as server_error:
+            MODULE.request_json(opener, "http://127.0.0.1:3298/api/workflow")
+        opener.open.assert_called_once()
+        self.assertNotIn("database secret", str(server_error.exception))
+        self.assertNotIn("private server body", str(server_error.exception))
+
+        opener = mock.Mock()
+        opener.open.side_effect = urllib.error.URLError("socket secret detail")
+        with self.assertRaisesRegex(
+            SystemExit,
+            rf"^{MODULE.VIEWER_NETWORK_ERROR}$",
+        ) as network_error:
+            MODULE.request_json(opener, "http://127.0.0.1:3298/api/workflow")
+        opener.open.assert_called_once()
+        self.assertNotIn("socket secret detail", str(network_error.exception))
+
+    def test_invalid_and_successful_json_responses_preserve_bounded_behavior(self):
+        invalid_response = mock.MagicMock()
+        invalid_response.__enter__.return_value.read.return_value = (
+            b"private invalid response body"
+        )
+        opener = mock.Mock()
+        opener.open.return_value = invalid_response
+        with self.assertRaisesRegex(
+            SystemExit,
+            rf"^{MODULE.VIEWER_RESPONSE_INVALID}$",
+        ) as invalid_error:
+            MODULE.request_json(opener, "http://127.0.0.1:3298/api/workflow")
+        self.assertNotIn("private invalid response body", str(invalid_error.exception))
+
+        successful_response = mock.MagicMock()
+        successful_response.__enter__.return_value.read.return_value = b'{"ok":true}'
+        opener = mock.Mock()
+        opener.open.return_value = successful_response
+        self.assertEqual(
+            MODULE.request_json(opener, "http://127.0.0.1:3298/api/workflow"),
+            {"ok": True},
+        )
+        opener.open.assert_called_once()
+
     def test_windows_npm_cmd_resolution_uses_actual_which_result(self):
         expected = r"C:\Program Files\nodejs\npm.cmd"
         resolved = MODULE.resolve_executable(
@@ -475,6 +620,87 @@ class LauncherUnitTest(unittest.TestCase):
                 preference_bundle=preference_bundle, preparation_manifest=preparation_manifest,
             )
         self.assertEqual(len(request.call_args_list), 2)
+
+    def test_http_failed_preference_import_prevents_workflow_activation(self):
+        preference_bundle, preparation_manifest = ready_authority()
+        with (
+            mock.patch.object(
+                MODULE,
+                "request_json",
+                side_effect=SystemExit(MODULE.VIEWER_WORKFLOW_BLOCKERS[409]),
+            ) as request,
+            mock.patch("builtins.print") as printed,
+        ):
+            with self.assertRaisesRegex(SystemExit, "VIEWER_WORKFLOW_BLOCKED_HTTP_409"):
+                MODULE.update_story_workflow(
+                    "http://127.0.0.1:3298",
+                    "run-1",
+                    "ready",
+                    coverage_manifest={},
+                    story_candidates=[{"id": "doc:item-1"}],
+                    preference_bundle=preference_bundle,
+                    preparation_manifest=preparation_manifest,
+                )
+        request.assert_called_once_with(
+            mock.ANY,
+            "http://127.0.0.1:3298/api/probes",
+            method="POST",
+            body=preference_bundle,
+        )
+        printed.assert_not_called()
+
+    def test_failed_ready_transition_stops_after_import_without_success_output(self):
+        preference_bundle, preparation_manifest = ready_authority()
+        with (
+            mock.patch.object(
+                MODULE,
+                "request_json",
+                side_effect=[
+                    {"imported": 1, "bulkImported": 0},
+                    SystemExit(MODULE.VIEWER_WORKFLOW_BLOCKERS[409]),
+                ],
+            ) as request,
+            mock.patch("builtins.print") as printed,
+        ):
+            with self.assertRaisesRegex(SystemExit, "VIEWER_WORKFLOW_BLOCKED_HTTP_409"):
+                MODULE.update_story_workflow(
+                    "http://127.0.0.1:3298",
+                    "run-1",
+                    "ready",
+                    coverage_manifest={},
+                    story_candidates=[{"id": "doc:item-1"}],
+                    preference_bundle=preference_bundle,
+                    preparation_manifest=preparation_manifest,
+                )
+        self.assertEqual(
+            [call.args[1] for call in request.call_args_list],
+            [
+                "http://127.0.0.1:3298/api/probes",
+                "http://127.0.0.1:3298/api/workflow",
+            ],
+        )
+        printed.assert_not_called()
+
+    def test_failed_blocked_transition_stops_without_success_output(self):
+        with (
+            mock.patch.object(
+                MODULE,
+                "request_json",
+                side_effect=SystemExit(MODULE.VIEWER_WORKFLOW_BLOCKERS[409]),
+            ) as request,
+            mock.patch("builtins.print") as printed,
+        ):
+            with self.assertRaisesRegex(SystemExit, "VIEWER_WORKFLOW_BLOCKED_HTTP_409"):
+                MODULE.update_story_workflow(
+                    "http://127.0.0.1:3298", "run-1", "blocked"
+                )
+        request.assert_called_once_with(
+            mock.ANY,
+            "http://127.0.0.1:3298/api/workflow",
+            method="POST",
+            body={"workflowRunId": "run-1", "event": "story_generation_blocked"},
+        )
+        printed.assert_not_called()
 
     def test_story_ready_accepts_exact_nonempty_counter_partitions(self):
         cases = (
