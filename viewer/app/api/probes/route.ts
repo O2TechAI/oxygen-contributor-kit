@@ -8,7 +8,6 @@ import {
 } from "../../../lib/preference-presentation";
 import {
   canonicalPreferenceQuestionBatch,
-  STORY_PREPARATION_EMPTY_ARRAY_DIGEST,
   storyPreparationDigest,
 } from "../../../lib/story-preparation";
 import {
@@ -229,8 +228,7 @@ export async function POST(request: Request) {
       acceptedBulk.map(bulkQuestionAuthority),
     ),
   );
-  if (recomputedOutputDigest !== body.outputDigest
-    || (body.outputCount === 0 && body.outputDigest !== STORY_PREPARATION_EMPTY_ARRAY_DIGEST)) {
+  if (recomputedOutputDigest !== body.outputDigest) {
     return Response.json({ error: "Preference output digest mismatch" }, { status: 400 });
   }
 

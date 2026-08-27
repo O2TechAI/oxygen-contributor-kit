@@ -480,6 +480,7 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       (candidate) => { delete candidate.probes[0].timestamp; },
       (candidate) => { candidate.probes[0].options = [{ id: "only", text: "Only" }]; },
       (candidate) => { candidate.probes[0].eventIds = ["foreign:event"]; },
+      (candidate) => { candidate.bulkDecisions[0].evidenceSample = ["foreign:event"]; },
       (candidate) => { candidate.probes[0].documentKind = "meeting"; },
       (candidate) => { candidate.setAside = Number.MAX_SAFE_INTEGER + 1; },
     ]) {
@@ -506,6 +507,22 @@ test("Preference import validates before mutation, supports zero, and real SQL f
     }))).status, 409);
     assert.deepEqual(await sqliteSnapshot(db), answered);
     await db.prepare("DROP TRIGGER force_probe_failure").run();
+
+    const completedZeroSetAside = {
+      workflowRunId: RUN_ID,
+      sourceRevision: SOURCE_REVISION,
+      inputDigest: "d".repeat(64),
+      outputDigest: STORY_PREPARATION_EMPTY_ARRAY_DIGEST,
+      outputCount: 0,
+      setAside: 1,
+      probes: [],
+      bulkDecisions: [],
+      autoRemoved: { total: 0, reversible: true, categories: [] },
+    };
+    assert.equal((await route.POST(new Request("http://localhost/api/probes", {
+      method: "POST", body: JSON.stringify(completedZeroSetAside),
+    }))).status, 400);
+    assert.deepEqual(await sqliteSnapshot(db), answered);
 
     const zero = {
       workflowRunId: RUN_ID,

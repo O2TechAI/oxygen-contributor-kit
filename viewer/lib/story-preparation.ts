@@ -370,17 +370,10 @@ export async function validateStoryPreparationManifest(
       return mismatch(`STORY_PREPARATION_${lane.toUpperCase()}_ZERO_INVALID`);
     }
   }
-  const manifest: StoryPreparationManifest = {
-    schema: STORY_PREPARATION_SCHEMA,
-    workflowRunId: context.workflowRunId,
-    sourceRevision: context.sourceRevision,
-    receipts: STORY_PREPARATION_LANES.map((lane) => expected[lane]),
-    storyPrivacyCandidates: privacyCandidates,
-  };
   return {
     ok: true,
     authority: {
-      receipts: manifest.receipts,
+      receipts: STORY_PREPARATION_LANES.map((lane) => expected[lane]),
       privacyCandidates,
       preference: context.preference,
     },
