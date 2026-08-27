@@ -429,7 +429,10 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       setAside: 1,
       probes: [probeAuthority],
       bulkDecisions: [bulkAuthority],
-      autoRemoved: { total: 0, reversible: true, categories: [] },
+      autoRemoved: { total: 2, reversible: true, categories: [
+        { kind: "credential", count: 1 },
+        { kind: "private-personal", count: 1 },
+      ] },
     };
     assert.equal((await route.POST(new Request("http://localhost/api/probes", {
       method: "POST", body: JSON.stringify(payload),
@@ -483,6 +486,27 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       (candidate) => { candidate.bulkDecisions[0].evidenceSample = ["foreign:event"]; },
       (candidate) => { candidate.probes[0].documentKind = "meeting"; },
       (candidate) => { candidate.setAside = Number.MAX_SAFE_INTEGER + 1; },
+      (candidate) => { candidate.autoRemoved.reversible = false; },
+      (candidate) => { candidate.autoRemoved = {
+        total: 1, reversible: true, categories: [{ kind: "user_path", count: 1 }],
+      }; },
+      (candidate) => { candidate.autoRemoved = {
+        total: 1, reversible: true, categories: [{ kind: "third_party_contact", count: 1 }],
+      }; },
+      (candidate) => { candidate.autoRemoved = {
+        total: 0, reversible: true, categories: [{ kind: "credential", count: 0 }],
+      }; },
+      (candidate) => { candidate.autoRemoved = {
+        total: Number.MAX_SAFE_INTEGER + 1, reversible: true,
+        categories: [{ kind: "credential", count: Number.MAX_SAFE_INTEGER + 1 }],
+      }; },
+      (candidate) => { candidate.autoRemoved = {
+        total: 2, reversible: true, categories: [
+          { kind: "private-personal", count: 1 },
+          { kind: "credential", count: 1 },
+        ],
+      }; },
+      (candidate) => { candidate.autoRemoved.removed_text = "old-private-field"; },
     ]) {
       const invalid = clone(payload);
       mutate(invalid);

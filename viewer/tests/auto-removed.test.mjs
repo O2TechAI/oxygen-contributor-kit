@@ -8,10 +8,10 @@ import {
 
 const validAggregate = () => ({
   total: 2,
-  reversible: false,
+  reversible: true,
   categories: [
-    { kind: "private-personal", count: 1 },
     { kind: "credential", count: 1 },
+    { kind: "private-personal", count: 1 },
   ],
 });
 
@@ -35,27 +35,36 @@ test("strict boundary rejects private top-level and category fields", () => {
 test("strict boundary rejects malformed aggregate values", () => {
   const cases = [
     { ...validAggregate(), total: -1 },
+    { ...validAggregate(), total: Number.MAX_SAFE_INTEGER + 1 },
     { ...validAggregate(), total: "2" },
+    { ...validAggregate(), reversible: false },
     { ...validAggregate(), reversible: "false" },
     { ...validAggregate(), categories: {} },
     { ...validAggregate(), categories: [{ kind: "private-personal", count: -1 }] },
+    { total: 0, reversible: true, categories: [{ kind: "private-personal", count: 0 }] },
+    { total: Number.MAX_SAFE_INTEGER + 1, reversible: true,
+      categories: [{ kind: "private-personal", count: Number.MAX_SAFE_INTEGER + 1 }] },
     { ...validAggregate(), categories: [{ kind: "private-personal", count: 1.5 }] },
     { ...validAggregate(), categories: [
       { kind: "private-personal", count: 1 },
       { kind: "private-personal", count: 1 },
     ] },
-    { total: 1, reversible: false, categories: [{ kind: "free-form private label", count: 1 }] },
+    { total: 1, reversible: true, categories: [{ kind: "free-form private label", count: 1 }] },
+    { total: 1, reversible: true, categories: [{ kind: "user_path", count: 1 }] },
+    { total: 1, reversible: true, categories: [{ kind: "third_party_contact", count: 1 }] },
+    { total: 2, reversible: true, categories: [
+      { kind: "private-personal", count: 1 },
+      { kind: "credential", count: 1 },
+    ] },
   ];
   for (const value of cases) assert.throws(() => canonicalizeAutoRemoved(value));
 });
 
-test("package canonicalization strips legacy unknown fields without retaining sentinel", () => {
+test("stored package aggregate rejects old unknown fields instead of retaining a compatibility lane", () => {
   const legacy = validAggregate();
   legacy.removed_text = "AUTO-REMOVED-PRIVATE-SENTINEL-8472";
   legacy.categories[0].sample = "AUTO-REMOVED-PRIVATE-SENTINEL-8472";
-  const canonical = canonicalizeStoredAutoRemoved(JSON.stringify(legacy));
-  assert.deepEqual(canonical, validAggregate());
-  assert.doesNotMatch(JSON.stringify(canonical), /AUTO-REMOVED-PRIVATE-SENTINEL-8472/);
+  assert.throws(() => canonicalizeStoredAutoRemoved(JSON.stringify(legacy)), /unknown fields/);
 });
 
 test("package canonicalization fails closed on malformed persisted state", () => {
@@ -64,7 +73,7 @@ test("package canonicalization fails closed on malformed persisted state", () =>
     total: 1,
     reversible: false,
     categories: [{ kind: "private-personal", count: -1 }],
-  })), /non-negative integer/);
+  })), /reversible must be true/);
 });
 
 test("Preference import and package routes use strict aggregate boundaries", async () => {
