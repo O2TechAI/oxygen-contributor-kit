@@ -18,6 +18,7 @@ import {
   type StorySource,
 } from "../lib/timeline";
 import { type StoryReviewFocusTarget } from "../lib/story-navigation";
+import type { StoryPrivacyCandidate, StoryPrivacyState } from "./story-privacy-ui";
 import {
   applyChapterReview,
   applyStoryReviewToBlock,
@@ -390,6 +391,10 @@ export function StoryChapterEditor({
   onPrevious,
   onNext,
   language,
+  storyPrivacyState,
+  storyPrivacyCandidates,
+  storyPrivacyReady,
+  onOpenStoryPrivacy,
 }: {
   source: StorySource;
   position: number;
@@ -402,6 +407,10 @@ export function StoryChapterEditor({
   onPrevious: () => void;
   onNext: () => void;
   language: StoryLanguage;
+  storyPrivacyState: StoryPrivacyState["status"];
+  storyPrivacyCandidates: StoryPrivacyCandidate[];
+  storyPrivacyReady: boolean;
+  onOpenStoryPrivacy: () => void;
 }) {
   const storyRef = useRef<HTMLElement | null>(null);
   const completionRef = useRef<HTMLElement | null>(null);
@@ -731,6 +740,10 @@ export function StoryChapterEditor({
   };
 
   const applyReview = async () => {
+    if (!storyPrivacyReady) {
+      setApplyError("Resolve the current Chapter Privacy references in Release Preview before applying this review.");
+      return;
+    }
     setApplying(true);
     setApplyError("");
     try {
@@ -858,16 +871,28 @@ export function StoryChapterEditor({
           </section>}
         </section>
         <section className="episodePrimarySection privacySection" aria-labelledby="story-privacy-heading">
-          <div className="simpleSectionHead"><div><h3 id="story-privacy-heading">Privacy</h3><p>Only reviewed, post-policy-safe Story content is available in this lane.</p></div></div>
-          <p className="privacySummary">Raw Evidence and suppressed content are not exposed by Insight review or selection.</p>
+          <div className="simpleSectionHead"><div><h3 id="story-privacy-heading">Privacy</h3><p>Read-only references to the one global Story Privacy authority.</p></div></div>
+          <div className="privacySummary chapterPrivacySummary">
+            {storyPrivacyState !== "ready" ? <p role="status">Current Story Privacy authority is {storyPrivacyState}. Apply review and All set remain blocked.</p>
+              : storyPrivacyCandidates.length === 0 ? <p><b>0 / 0 for this Chapter.</b> No release Privacy candidate targets this Chapter.</p>
+                : <ul>{storyPrivacyCandidates.map((candidate) => <li key={candidate.id}>
+                  <b>{candidate.title}</b>
+                  <span>{candidate.reviewState === "deterministic" ? "Automatically redacted"
+                    : candidate.decision === "keep" ? "Kept by contributor"
+                      : candidate.decision === "redact" ? "Redacted by contributor" : "Needs confirmation"}</span>
+                </li>)}</ul>}
+            <p>Raw Evidence and unavailable originals are never reconstructed here. Cross-Chapter findings keep one global identity and decision.</p>
+            <button onClick={onOpenStoryPrivacy}>Open global Release Preview</button>
+          </div>
         </section>
         <section className="chapterCompletion" data-chapter-completion ref={completionRef} tabIndex={-1} aria-labelledby="story-review-summary-heading">
           <div><span>{chapterReview.stage.replaceAll("_", " ")} · Revision {chapterReview.revision}</span><h3 id="story-review-summary-heading">Review summary</h3></div>
-          <ul><li><b>{source.insights.length}</b> source AI Insights</li><li><b>{Object.keys(chapterReview.humanInsights).length}</b> human-created Insights</li><li><b>{blockers.length}</b> bounded review blockers</li></ul>
+          <ul><li><b>{source.insights.length}</b> source AI Insights</li><li><b>{Object.keys(chapterReview.humanInsights).length}</b> human-created Insights</li><li><b>{blockers.length + (storyPrivacyReady ? 0 : 1)}</b> bounded review blockers</li></ul>
           {blockers.length > 0 && <ul className="storyBlockerList">{blockers.map((blocker, index) => <li key={`${blocker.code}:${blocker.targetKind}:${blocker.targetId || ""}:${index}`}>{storyBlockerCopy[blocker.code]}</li>)}</ul>}
+          {!storyPrivacyReady && <p className="completionBlocker" role="status">Current Chapter Privacy is not complete.</p>}
           {applyError && <p className="completionBlocker" role="alert">{applyError}</p>}
-          {chapterReview.stage === "reviewing" ? <button className="completionPrimary" disabled={applying} onClick={applyReview}>{applying ? "Applying review…" : "Apply current review"}</button>
-            : chapterReview.stage === "revision_ready" ? <div className="completionActions"><span>{blockers.length ? "Resolve the bounded review items before All set." : "Inspect the latest revision, then choose All set."}</span><button className="completionPrimary" disabled={!canMarkChapterReady(chapterReview, context)} onClick={() => { leaveEditMode(); onChapterReview(markChapterReady(chapterReview, context)); }}>All set</button></div>
+          {chapterReview.stage === "reviewing" ? <button className="completionPrimary" disabled={applying || !storyPrivacyReady} onClick={applyReview}>{applying ? "Applying review…" : "Apply current review"}</button>
+            : chapterReview.stage === "revision_ready" ? <div className="completionActions"><span>{blockers.length || !storyPrivacyReady ? "Resolve the bounded review items before All set." : "Inspect the latest revision, then choose All set."}</span><button className="completionPrimary" disabled={!storyPrivacyReady || !canMarkChapterReady(chapterReview, context)} onClick={() => { leaveEditMode(); onChapterReview(markChapterReady(chapterReview, context)); }}>All set</button></div>
               : <div className="readyConfirmation"><b>Final Release Memory</b><p>Human-confirmed locally. This is not publication approval.</p><button onClick={() => onChapterReview(returnChapterToReview(chapterReview) as ChapterReviewState)}>Reopen review</button></div>}
         </section>
       </div>

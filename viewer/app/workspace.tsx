@@ -3,6 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { WorkflowProgress } from "./organization-progress";
 import { RedactionCompare, segments, type Redaction, type RedactionJob } from "./redaction-compare";
+import {
+  StoryPrivacyReview,
+} from "./story-privacy-review";
+import {
+  chapterStoryPrivacyCandidates,
+  parseStoryPrivacyAuthority,
+  storyPrivacyAuthorityComplete,
+  storyPrivacyCandidateResolved,
+  type StoryPrivacyCandidate,
+  type StoryPrivacyDecision,
+  type StoryPrivacyState,
+} from "./story-privacy-ui";
 import { ProbePanel, type Probe, type BulkDecision, type ProbeRun } from "./probe-panel";
 import {
   StoryChapterEditor,
@@ -210,7 +222,7 @@ export function InlineWorkspace({
   const [sourceFocus,setSourceFocus] = useState("");
   const [activeStoryKey,setActiveStoryKey] = useState("");
   const [language,setLanguage] = useState<StoryLanguage>("en");
-  const [privacyDecisions,setPrivacyDecisions] = useState<Record<string,PrivacyDecision>>(initialPrivacyDecisions);
+  void initialPrivacyDecisions;
   const [chapterReviews,setChapterReviews] = useState<Record<string,ChapterReviewState>>(initialChapterReviews);
   const [storyDataReadyRunId,setStoryDataReadyRunId] = useState(initialStorySessionReadyRunId);
   const [storySessionReadyRunId,setStorySessionReadyRunId] = useState(initialStorySessionReadyRunId);
@@ -226,7 +238,6 @@ export function InlineWorkspace({
   const storyPersistenceReadyRunRef = useRef("");
   const currentStoryStateRef = useRef({
     chapterReviews: initialChapterReviews,
-    privacyDecisions: initialPrivacyDecisions,
     chapters: [] as StoryViewerChapter[],
   });
   const activeChapterButtonRef = useCallback((node:HTMLButtonElement|null) => {
@@ -244,6 +255,11 @@ export function InlineWorkspace({
   const [redactions,setRedactions] = useState<Redaction[]>([]);
   const [redactionJob,setRedactionJob] = useState<RedactionJob>(null);
   const [redactionBusy,setRedactionBusy] = useState("");
+  const [storyPrivacy,setStoryPrivacy] = useState<StoryPrivacyState>({
+    status:"unavailable", authority:null, message:"Story review is not ready.",
+  });
+  const [storyPrivacyRunId,setStoryPrivacyRunId] = useState("");
+  const [storyPrivacyBusy,setStoryPrivacyBusy] = useState("");
   const redactionJobStatus = redactionJob?.status;
   const storyPersistenceRef = useRef<StoryReviewSessionPersistenceQueue|null>(null);
   if (storyPersistenceRef.current == null) {
@@ -293,7 +309,10 @@ export function InlineWorkspace({
 
   const loadRedactions = useCallback(async () => {
     const response = await fetch("/api/redactions", { cache:"no-store" });
-    if (!response.ok) return;
+    if (!response.ok) {
+      setError("Source Privacy authority could not be loaded");
+      return;
+    }
     const payload = await response.json() as { redactions: Redaction[]; job: RedactionJob };
     setRedactions(payload.redactions || []);
     setRedactionJob(payload.job);
@@ -313,21 +332,22 @@ export function InlineWorkspace({
     };
   }, [loadRedactions, redactionJobStatus]);
 
-  async function updateRedaction(id: string, patch: { category?: string; status?: string }) {
+  async function decideRedaction(id: string, decision: "keep" | "redact") {
     setRedactionBusy(id);
-    await fetch(`/api/redactions/${id}`, {
-      method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    await loadRedactions();
-    setRedactionBusy("");
-  }
-
-  async function deleteRedaction(id: string) {
-    setRedactionBusy(id);
-    await fetch(`/api/redactions/${id}`, { method: "DELETE" });
-    await loadRedactions();
-    setRedactionBusy("");
+    setError("");
+    try {
+      const response = await fetch(`/api/redactions/${encodeURIComponent(id)}`, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Source Privacy decision was not accepted");
+      await loadRedactions();
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "Source Privacy decision was not accepted");
+    } finally {
+      setRedactionBusy("");
+    }
   }
 
   const [probes,setProbes] = useState<Probe[]>([]);
@@ -465,6 +485,106 @@ export function InlineWorkspace({
   const storyContract = workflow.storySourceSchema === "oxygen.story"
     && workflow.storySessionSchema === STORY_REVIEW_SESSION_SCHEMA;
   const storyReady = storyContract && storyPackageReady;
+  const loadStoryPrivacy = useCallback(async (signal?: AbortSignal, message = "") => {
+    if (!scopedWorkflowRunId) {
+      setStoryPrivacyRunId("");
+      setStoryPrivacy({ status:"unavailable", authority:null, message:"Story review is not ready." });
+      return null;
+    }
+    setStoryPrivacyRunId(scopedWorkflowRunId);
+    try {
+      const response = await fetch(`/api/story-privacy?workflowRunId=${encodeURIComponent(scopedWorkflowRunId)}`, {
+        cache:"no-store", ...(signal ? { signal } : {}),
+      });
+      const payload = await response.json().catch(() => ({})) as unknown;
+      if (signal?.aborted) return null;
+      if (!response.ok) {
+        const failure = payload as { error?: string };
+        throw new Error(failure.error || "Current Story Privacy authority is unavailable");
+      }
+      const authority = parseStoryPrivacyAuthority(payload);
+      if (!authority || authority.workflowRunId !== scopedWorkflowRunId) {
+        throw new Error("Current Story Privacy authority is invalid");
+      }
+      setStoryPrivacy({ status:"ready", authority, message });
+      return authority;
+    } catch (value) {
+      if (signal?.aborted) return null;
+      setStoryPrivacy({
+        status:"error",
+        authority:null,
+        message:value instanceof Error ? value.message : "Current Story Privacy authority is unavailable",
+      });
+      return null;
+    }
+  }, [scopedWorkflowRunId]);
+
+  const storyPrivacyEligible = storyReviewReady && storyReady
+    && storyDataReadyRunId === workflowRunId && Boolean(scopedWorkflowRunId);
+  useEffect(() => {
+    if (!storyPrivacyEligible) return;
+    const controller = new AbortController();
+    const start = setTimeout(() => {
+      setStoryPrivacyRunId(workflowRunId);
+      setStoryPrivacy({ status:"loading", authority:null, message:"" });
+      void loadStoryPrivacy(controller.signal);
+    }, 0);
+    return () => {
+      clearTimeout(start);
+      controller.abort();
+    };
+  }, [loadStoryPrivacy, storyPrivacyEligible, workflowRunId]);
+
+  const presentedStoryPrivacy: StoryPrivacyState = storyPrivacyEligible
+    ? storyPrivacyRunId === workflowRunId
+      ? storyPrivacy
+      : { status:"loading", authority:null, message:"" }
+    : { status:"unavailable", authority:null, message:"Story review is not ready." };
+
+  const currentStoryPrivacyAuthority = presentedStoryPrivacy.status === "ready"
+    && presentedStoryPrivacy.authority.workflowRunId === workflowRunId
+    ? presentedStoryPrivacy.authority
+    : null;
+  const storyPrivacyReleaseReady = presentedStoryPrivacy.status === "ready"
+    && storyPrivacyAuthorityComplete(currentStoryPrivacyAuthority);
+
+  const decideStoryPrivacy = async (candidate: StoryPrivacyCandidate, decision: StoryPrivacyDecision) => {
+    const authority = currentStoryPrivacyAuthority;
+    if (!authority || candidate.reviewState !== "needs_confirmation"
+      || candidate.decision !== null || candidate.decisionVersion !== 0) return;
+    setStoryPrivacyBusy(candidate.id);
+    setStoryPrivacy({ status:"ready", authority, message:"" });
+    try {
+      const response = await fetch(`/api/story-privacy/${encodeURIComponent(candidate.id)}`, {
+        method:"PATCH",
+        headers:{ "content-type":"application/json" },
+        body:JSON.stringify({
+          workflowRunId:authority.workflowRunId,
+          sourceRevision:authority.sourceRevision,
+          activeStoryDigest:authority.activeStoryDigest,
+          candidateDigest:authority.candidateDigest,
+          expectedVersion:0,
+          decision,
+        }),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      if (response.status === 409) {
+        setStoryPrivacy({ status:"loading", authority:null, message:"" });
+        await loadStoryPrivacy(undefined, "The authority changed while deciding. The durable current result is shown; no mutation was retried.");
+        return;
+      }
+      if (!response.ok) throw new Error(payload.error || "Story Privacy decision was not accepted");
+      setStoryPrivacy({ status:"loading", authority:null, message:"" });
+      await loadStoryPrivacy(undefined, "Decision saved to the current Story Privacy authority.");
+    } catch (value) {
+      setStoryPrivacy({
+        status:"error", authority:null,
+        message:value instanceof Error ? value.message : "Story Privacy decision was not accepted",
+      });
+    } finally {
+      setStoryPrivacyBusy("");
+    }
+  };
   const effectiveError = storyReviewReady && !storyReady
     ? "The active Story contract does not match the exact reviewed source package" : error;
   const navigationCandidates = useMemo(() => storySelection.chapters.map((chapter) => ({
@@ -535,7 +655,6 @@ export function InlineWorkspace({
             persistedAt: payload.persistedAt as string|null,
           });
           setChapterReviews(restored.chapterReviews);
-          setPrivacyDecisions(restored.privacyDecisions);
           storySessionHydratedRunRef.current = workflowRunId;
           storyPersistenceReadyRunRef.current = workflowRunId;
           setStorySessionReadyRunId(workflowRunId);
@@ -543,7 +662,6 @@ export function InlineWorkspace({
       } catch (value) {
         if (!cancelled) {
           setChapterReviews({});
-          setPrivacyDecisions({});
           setError(value instanceof Error ? value.message : "Story review persistence could not be loaded");
         }
       } finally {
@@ -561,13 +679,13 @@ export function InlineWorkspace({
     if (!workflowRunId || storySessionReadyRunId !== workflowRunId
       || storySessionHydratedRunRef.current !== workflowRunId
       || storyPersistenceReadyRunRef.current !== workflowRunId) return;
-    const session = createStoryReviewSession(workflowRunId, chapterReviews, privacyDecisions);
+    const session = createStoryReviewSession(workflowRunId, chapterReviews, {});
     if (!session) {
       const errorTimer = setTimeout(() => setError("Story review state could not be safely persisted"), 0);
       return () => clearTimeout(errorTimer);
     }
     storyPersistenceRef.current?.schedule(session);
-  }, [chapterReviews, privacyDecisions, storySessionReadyRunId, workflowRunId]);
+  }, [chapterReviews, storySessionReadyRunId, workflowRunId]);
 
   const storyWorkspaceReady = isStoryWorkspaceReady(workflow, {
     storyDataReadyRunId,
@@ -594,8 +712,8 @@ export function InlineWorkspace({
     return next;
   };
   useEffect(() => {
-    currentStoryStateRef.current = { chapterReviews, privacyDecisions, chapters:projectChapters };
-  }, [chapterReviews, privacyDecisions, projectChapters]);
+    currentStoryStateRef.current = { chapterReviews, chapters:projectChapters };
+  }, [chapterReviews, projectChapters]);
   useEffect(() => {
     if (!storyWorkspaceReady || storySessionReadyRunId !== workflowRunId
       || view !== "timeline" || !navigationCandidates.length) return;
@@ -656,6 +774,12 @@ export function InlineWorkspace({
   const activeStoryIndex = viewerChapters.findIndex((event) => event.key === navigation.storyKey);
   const activeChapter = activeStoryIndex >= 0 ? viewerChapters[activeStoryIndex] : null;
   const activeSourceChapter = activeChapter?.chapter || null;
+  const activeChapterPrivacyCandidates = activeSourceChapter
+    ? chapterStoryPrivacyCandidates(currentStoryPrivacyAuthority, activeSourceChapter.source.key)
+    : [];
+  const activeChapterPrivacyReady = presentedStoryPrivacy.status === "ready"
+    && Boolean(currentStoryPrivacyAuthority)
+    && activeChapterPrivacyCandidates.every(storyPrivacyCandidateResolved);
   const insightProgress = projectChapters.reduce((progress,chapter) => {
     progress.total+=chapter.source.insights.length;
     progress.resolved+=chapter.source.insights.filter((insight) => {
@@ -701,14 +825,14 @@ export function InlineWorkspace({
   };
   const openReleasePreview = () => {
     setSourceFocus("");
-    if (isProject && redactionJob?.status === "complete" && docs[0]) {
-      releasePreviewReturnSelectionRef.current=`project:${selectedProject}`;
-      setStoryNavigation({ project:selectedProject, storyKey:"" });
-      setDetail(null);
-      setSelected(docs[0].id);
-    } else {
-      setActiveStoryKey("");
-    }
+    setActiveStoryKey("");
+    setView("redaction");
+  };
+  const openGlobalStoryPrivacy = () => {
+    releasePreviewReturnSelectionRef.current=null;
+    setSourceFocus("");
+    setDetail(null);
+    setStoryNavigation({ project:selectedProject, storyKey:"" });
     setView("redaction");
   };
   const restoreReleasePreviewSelection = () => {
@@ -754,6 +878,11 @@ export function InlineWorkspace({
   };
   const downloadReviewed = async (url:string,filename:string) => {
     setError("");
+    if (!storyPrivacyReleaseReady) {
+      setError("Resolve the current Story Privacy authority in Release Preview before download");
+      openGlobalStoryPrivacy();
+      return;
+    }
     const blockerGroups=currentDownloadReviewBlockerGroups();
     if(blockerGroups.length) {
       setDownloadBlockerGroups(blockerGroups);
@@ -770,7 +899,7 @@ export function InlineWorkspace({
         persistence,
         currentSession: () => {
           const current=currentStoryStateRef.current;
-          return createStoryReviewSession(workflowRunId,current.chapterReviews,current.privacyDecisions);
+          return createStoryReviewSession(workflowRunId,current.chapterReviews,{});
         },
         handoff: ({workflowRunId,serverVersion,sourceRevision}) => fetch(url,{
           method:"POST",
@@ -820,8 +949,8 @@ export function InlineWorkspace({
         <span>|</span>
         <button className={storyLanguage==="zh"?"active":""} onClick={() => setLanguage("zh")} aria-pressed={storyLanguage==="zh"}>中文</button>
       </div>
-      <button className="download" onClick={() => downloadReviewed("/api/organization/export","oxygen-reviewed-story.html")}>Download HTML</button>
-      <button className="download primary" onClick={() => downloadReviewed("/api/package","oxygen-contribution.zip")}>Download ZIP</button>
+      <button className="download" aria-disabled={!storyPrivacyReleaseReady} title={!storyPrivacyReleaseReady?"Resolve Story Privacy first":undefined} onClick={() => downloadReviewed("/api/organization/export","oxygen-reviewed-story.html")}>Download HTML</button>
+      <button className="download primary" aria-disabled={!storyPrivacyReleaseReady} title={!storyPrivacyReleaseReady?"Resolve Story Privacy first":undefined} onClick={() => downloadReviewed("/api/package","oxygen-contribution.zip")}>Download ZIP</button>
     </header>
     <div className={`workspace storytellingWorkspace ${activeChapter?"episodeOpen":""}`} style={workspaceStyle}>
       <aside className="rail storyRail">
@@ -846,16 +975,20 @@ export function InlineWorkspace({
           <nav className="toolbar storyToolbar" aria-label="Record view" aria-hidden={activeChapter?true:undefined} inert={activeChapter?true:undefined}>
             <div className="toolbarInner"><button className={view==="timeline"?"active":""} onClick={() => { restoreReleasePreviewSelection(); setActiveStoryKey(""); setView("timeline"); }}>{labels.timeline}</button>
             <button className={view==="redaction"?"active":""} onClick={openReleasePreview}>
-              {labels.release}{redactionJob?.status === "running" ? " · running"
-                : redactionJob && redactionJob.status !== "complete" ? ` · ${redactionJob.status}`
-                : redactions.length ? ` · ${redactions.length} redacted` : ""}
+              {labels.release}{isProject
+                ? presentedStoryPrivacy.status === "loading" ? " · loading"
+                  : currentStoryPrivacyAuthority ? ` · ${currentStoryPrivacyAuthority.candidates.filter(storyPrivacyCandidateResolved).length}/${currentStoryPrivacyAuthority.candidates.length}`
+                    : " · blocked"
+                : redactionJob?.status === "running" ? " · running"
+                  : redactions.filter((span) => span.review_state === "needs_confirmation").length
+                    ? ` · ${redactions.filter((span) => span.review_state === "needs_confirmation").length} pending` : ""}
             </button>
             <button className={view==="probes"?"active":""} onClick={() => { restoreReleasePreviewSelection(); setView("probes"); }}>
               {labels.preferences}{probeRun?.status === "running" ? " · running" : probes.length ? ` · ${probes.filter((p) => p.answered_at).length}/${probes.length}` : ""}
             </button></div>
           </nav>
           {view!=="timeline" && <div className="canvasHead" aria-hidden={activeChapter?true:undefined} inert={activeChapter?true:undefined}><div className="canvasHeadInner">
-            <span className="eyebrow">{view==="redaction"?labels.evidenceReview:labels.preferencesTitle}</span>
+            <span className="eyebrow">{view==="redaction"?(isProject?labels.release:labels.evidenceReview):labels.preferencesTitle}</span>
             <h1>{summary.primary_project || detail?.document.title}</h1>
           </div></div>}
           <div className={`stream ${view==="timeline" ? "storyStream" : view==="redaction" ? "reviewStream releasePreviewStream" : "reviewStream preferencesStream"}`} ref={timelineScrollRef} onScroll={updateActivePhase} aria-hidden={activeChapter?true:undefined} inert={activeChapter?true:undefined}>
@@ -880,16 +1013,19 @@ export function InlineWorkspace({
                   </article>)}</div>
                 </section>)}
               </div><nav className="phaseDirectory" aria-label={storyLanguage==="zh"?"叙事阶段目录":"Narrative phase directory"}><b>{storyLanguage==="zh"?"故事阶段":"STORY PHASES"}</b>{phaseGroups.map((group,index) => <button className={activePhaseIndex===index?"active":""} aria-current={activePhaseIndex===index?"location":undefined} onClick={() => scrollToPhase(index)} key={phaseGroupIdentity(group.name,index)}>{group.name}</button>)}</nav></div>
-            </> : view === "redaction" ? <><RedactionCompare
+            </> : view === "redaction" ? (isProject ? <StoryPrivacyReview
+              state={presentedStoryPrivacy}
+              busyId={storyPrivacyBusy}
+              onDecision={(candidate,decision) => { void decideStoryPrivacy(candidate,decision); }}
+            /> : <RedactionCompare
               job={redactionJob}
               redactions={redactions}
               detail={detail}
-              isProject={isProject}
+              isProject={false}
               focusItemId={sourceFocus}
               busyId={redactionBusy}
-              onUpdate={updateRedaction}
-              onDelete={deleteRedaction}
-            /></> : view === "probes" ? <ProbePanel
+              onDecision={(id,decision) => { void decideRedaction(id,decision); }}
+            />) : view === "probes" ? <ProbePanel
               language={storyLanguage}
               run={probeRun}
               probes={probes}
@@ -921,6 +1057,10 @@ export function InlineWorkspace({
             chapterReview={chapterReviews[activeSourceChapter.source.key] || emptyChapterReview(activeSourceChapter.source)}
             reviewFocus={downloadReviewFocus?.chapterKey===activeSourceChapter.source.key ? downloadReviewFocus : undefined}
             onReviewFocusHandled={clearDownloadReviewFocus}
+            storyPrivacyState={presentedStoryPrivacy.status}
+            storyPrivacyCandidates={activeChapterPrivacyCandidates}
+            storyPrivacyReady={activeChapterPrivacyReady}
+            onOpenStoryPrivacy={openGlobalStoryPrivacy}
             onChapterReview={(review) => updateChapterReview(activeSourceChapter.source.key,review)}
             onClose={closeStory}
             onPrevious={() => navigateStory(viewerChapters[activeStoryIndex-1]?.key || activeSourceChapter.source.key)}

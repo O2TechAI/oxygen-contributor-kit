@@ -257,7 +257,8 @@ test("workspace consumes only the server-owned exact Story contract", () => {
   assert.match(workspace, /payload\.storySourceSchema !== workflow\.storySourceSchema/);
   assert.match(workspace, /hydrateStoryReviewSession/);
   const download = workspace.slice(workspace.indexOf("const downloadReviewed"), workspace.indexOf("const ready ="));
-  assert.match(download, /createStoryReviewSession\(workflowRunId,current\.chapterReviews,current\.privacyDecisions\)/);
+  assert.match(download, /createStoryReviewSession\(workflowRunId,current\.chapterReviews,\{\}\)/);
+  assert.doesNotMatch(download, /current\.privacyDecisions/);
   assert.match(download, /body:JSON\.stringify\(\{workflowRunId,serverVersion,sourceRevision\}\)/);
 });
 

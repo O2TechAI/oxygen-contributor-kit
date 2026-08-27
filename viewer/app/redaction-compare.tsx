@@ -14,11 +14,12 @@ const PAGE_SIZE = 60;
 export type Redaction = {
   id: string; item_id: string; document_id: string;
   start_offset: number; end_offset: number;
-  category: string; confidence?: string; reason?: string;
-  status: string; created_by: string;
+  category: string; status: string;
+  review_state: "deterministic" | "needs_confirmation" | "confirmed_keep" | "confirmed_redact";
+  uncertainty_reason?: string | null;
 };
 export type RedactionJob = {
-  status: string; stage: string; model?: string;
+  status: string; stage: string;
   completed: number; total: number; rejected: number;
 } | null;
 type Item = {
@@ -26,15 +27,6 @@ type Item = {
   timestamp?: string; content: string;
 };
 type Detail = { document: { id: string; title: string }; items: Item[] } | null;
-
-const CATEGORIES = [
-  "credential",
-  "private-personal",
-  "sensitive",
-  "internal-metric",
-  "internal-timeline",
-  "mosaic-reidentification",
-];
 
 const fmt = (value?: string) => value
   ? new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })
@@ -55,7 +47,7 @@ export function segments(content: string, spans: Redaction[], masked: boolean): 
     }
     out.push(masked
       ? <span key={`tag-${span.id}`} className="redactedReplacement">
-          &lt;redacted · {span.category}&gt;
+          &lt;redacted&gt;
         </span>
       : <mark key={`hit-${span.id}`} className="redactionHit">
           {points.slice(span.start_offset, span.end_offset).join("")}
@@ -75,10 +67,9 @@ export function RedactionCompare(props: {
   isProject: boolean;
   focusItemId?: string;
   busyId: string;
-  onUpdate: (id: string, patch: { category?: string; status?: string }) => void;
-  onDelete: (id: string) => void;
+  onDecision: (id: string, decision: "keep" | "redact") => void;
 }) {
-  const { job, redactions, detail, isProject, focusItemId, busyId, onUpdate, onDelete } = props;
+  const { job, redactions, detail, isProject, focusItemId, busyId, onDecision } = props;
 
   const allItems = detail?.items || [];
   const documentId = detail?.document.id;
@@ -125,8 +116,7 @@ export function RedactionCompare(props: {
     return <div className="redactionPanel">
       <h2>Redaction pass running…</h2>
       <p className="redactionMuted">
-        Stage: {job.stage}{job.model ? ` · model ${job.model}` : ""} ·
-        {" "}{job.completed}/{job.total} done ({percent}%)
+        {job.completed}/{job.total} checked ({percent}%)
       </p>
       <div className="redactionBar"><span style={{ width: `${percent}%` }} /></div>
       <p className="redactionMuted">
@@ -148,37 +138,28 @@ export function RedactionCompare(props: {
   }
 
   const notice = <p className="redactionNotice">
-    Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review
-    is required before release. Every event that would ship is listed below — left column is the
-    original, right column is the release version. Editing a category or deleting a span takes
-    effect immediately.
+    Source Privacy is local and decision-only. Automatically derived and resolved rows show only
+    their release-safe projection. Only uncertain rows expose the minimum local excerpt needed for
+    one Keep or Redact decision.
   </p>;
 
   if (isProject || !detail) {
-    const byCategory = redactions.reduce<Record<string, number>>((acc, span) => {
-      acc[span.category] = (acc[span.category] || 0) + 1;
-      return acc;
-    }, {});
     const byDocument = redactions.reduce<Record<string, number>>((acc, span) => {
       acc[span.document_id] = (acc[span.document_id] || 0) + 1;
       return acc;
     }, {});
     return <div className="redactionPanel">
-      <h2>Redaction overview · {redactions.length} span(s)</h2>
+      <h2>Source Privacy · {redactions.length} finding(s)</h2>
       {notice}
       {redactions.length === 0 && <p className="redactionMuted">
         {job
           ? "The pass completed without a single hit. That can be a correct result, but it can also mean coverage was too thin — sample the records by hand before deciding to publish."
           : "No redaction pass has been run yet."}
       </p>}
-      <div className="redactionChips">
-        {Object.entries(byCategory).sort((a, b) => b[1] - a[1]).map(([category, count]) =>
-          <span className="redactionChip" key={category}>{category} <b>{count}</b></span>)}
-      </div>
       <h3>By source record</h3>
       <ul className="redactionDocs">
         {Object.entries(byDocument).sort((a, b) => b[1] - a[1]).map(([documentId, count]) =>
-          <li key={documentId}><code>{documentId}</code><span>{count} span(s)</span></li>)}
+          <li key={documentId}><code>{documentId}</code><span>{count} finding(s)</span></li>)}
       </ul>
       <p className="redactionMuted">
         Select a source record on the left to review every event it would publish.
@@ -194,13 +175,13 @@ export function RedactionCompare(props: {
   // Fixed action labels are short, safe release information. Pagination keeps
   // large runs bounded while still letting the contributor inspect every row.
   const items = allItems;
-  const redactedCount = items.filter((item) => byItem.has(item.id)).length;
   const spanCount = items.reduce((total, item) => total + (byItem.get(item.id)?.length || 0), 0);
+  const pendingCount = redactions.filter((span) => span.review_state === "needs_confirmation").length;
   const visible = items.slice(0, visibleLimit);
 
   return <div className="redactionPanel">
     <h2>
-      Release preview · {items.length} event(s) · {spanCount} span(s) across {redactedCount} event(s)
+      Source Privacy · {items.length} event(s) · {spanCount} finding(s) · {pendingCount} pending
     </h2>
     {notice}
     {focusItemId && focusResolution?.status !== "resolved" && <p className="redactionNotice" role="alert">
@@ -208,37 +189,34 @@ export function RedactionCompare(props: {
     </p>}
     {visible.map((item) => {
       const spans = byItem.get(item.id) || [];
+      const pending = spans.filter((span) => span.review_state === "needs_confirmation");
+      const releaseSpans = spans.filter((span) => span.status === "active");
       return <article id={`source-event-${item.id}`} tabIndex={item.id===resolvedFocusId?-1:undefined} className={`redactionRow ${spans.length ? "" : "clean"} ${item.id===resolvedFocusId?"sourceFocused":""}`} key={item.id}>
         <div className="redactionMeta">
           #{item.sequence} · {item.event_type || "record"} · {fmt(item.timestamp)} ·
-          {" "}{spans.length ? `${spans.length} span(s)` : "no redactions"}
+          {" "}{spans.length ? `${spans.length} Privacy finding(s)` : "release-safe as reviewed"}
         </div>
         {spans.length ? <>
-          <div className="redactionCols">
-            <div>
-              <h4>Original</h4>
-              <pre>{segments(item.content, spans, false)}</pre>
-            </div>
-            <div>
-              <h4>Release version</h4>
-              <pre>{segments(item.content, spans, true)}</pre>
-            </div>
-          </div>
-          <ul className="redactionSpans">
-            {spans.map((span) => <li key={span.id}>
-              <select
-                value={span.category}
-                disabled={busyId === span.id}
-                onChange={(event) => onUpdate(span.id, { category: event.target.value })}
-              >
-                {CATEGORIES.map((category) =>
-                  <option key={category} value={category}>{category}</option>)}
-              </select>
-              <span className="redactionReason">{span.reason || "no reason given"}</span>
-              <span className="redactionMuted">{span.confidence || "—"} · {span.created_by}</span>
-              <button disabled={busyId === span.id} onClick={() => onDelete(span.id)}>Delete</button>
+          <div className="sourcePrivacyProjection"><h4>Release-safe projection</h4><pre>{segments(item.content, releaseSpans, true)}</pre></div>
+          <ul className="sourcePrivacyStatuses" aria-label="Resolved source Privacy status">
+            {spans.filter((span) => span.review_state !== "needs_confirmation").map((span) => <li key={span.id}>
+              {span.review_state === "deterministic" ? "Automatically redacted"
+                : span.review_state === "confirmed_keep" ? "Kept by contributor"
+                  : "Redacted by contributor"}
             </li>)}
           </ul>
+          {pending.map((span) => <section className="sourcePrivacyDecision" key={span.id} aria-labelledby={`source-privacy-${span.id}`}>
+            <h4 id={`source-privacy-${span.id}`}>Needs confirmation</h4>
+            <div className="sourcePrivacyComparison">
+              <div><b>Minimum local original</b><pre>{Array.from(item.content).slice(span.start_offset, span.end_offset).join("")}</pre></div>
+              <div><b>Release-safe projection</b><pre>&lt;redacted&gt;</pre></div>
+            </div>
+            {span.uncertainty_reason && <p>{span.uncertainty_reason}</p>}
+            <div className="sourcePrivacyActions">
+              <button disabled={busyId === span.id} onClick={() => onDecision(span.id, "keep")}>Keep</button>
+              <button className="primary" disabled={busyId === span.id} onClick={() => onDecision(span.id, "redact")}>Redact</button>
+            </div>
+          </section>)}
         </> : <pre className="redactionClean">{item.content}</pre>}
       </article>;
     })}
