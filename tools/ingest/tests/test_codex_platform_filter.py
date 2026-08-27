@@ -1,5 +1,6 @@
-import importlib.util
+import copy
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -24,6 +25,83 @@ PROJECTION_SPEC.loader.exec_module(PROJECTION)
 
 
 class PlatformFilterTest(unittest.TestCase):
+    def test_secret_sanitizer_closes_worker_grammar_and_preserves_safe_text(self):
+        unsafe = [
+            "prefix -----BEGIN SYNTHETIC PRIVATE KEY----- suffix",
+            "TOKEN : synthetic-sentinel, suffix",
+            "password=\"synthetic-sentinel\"",
+            "authorization\t=\tsynthetic-sentinel",
+            "unicode 😀 API key: synthetic-sentinel 二",
+            "first line\nSeCrEt=synthetic-sentinel\nlast line",
+            "sk-syntheticvalue",
+            "ghp-syntheticvalue",
+            "xoxb-syntheticvalue",
+            "AKIAABCDEFGHIJKLMNOP",
+            "https://synthetic-user:synthetic-password@example.invalid/path",
+        ]
+        safe = [
+            "The token count is a public metric.",
+            "api_key != synthetic-sentinel",
+            "password >= minimum_length",
+            "secret < threshold",
+            "authorization headers are discussed without a value.",
+            "x == y",
+            "token=<REDACTED>",
+            "password=[redacted]",
+            'token="<REDACTED>"',
+            'password="[redacted]"',
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            for value in unsafe:
+                with self.subTest(kind="unsafe", index=unsafe.index(value)):
+                    redacted = MODULE.redact_text(value, home)
+                    self.assertNotEqual(redacted, value)
+                    self.assertEqual(MODULE.redact_text(redacted, home), redacted)
+                    if value == 'password="synthetic-sentinel"':
+                        self.assertEqual(redacted, 'password="<REDACTED>"')
+            for value in safe:
+                with self.subTest(kind="safe", index=safe.index(value)):
+                    self.assertEqual(MODULE.redact_text(value, home), value)
+
+            with self.assertRaisesRegex(TypeError, "must be text"):
+                MODULE.redact_secret_like_text(None)
+
+    def test_secret_sanitization_changes_only_projected_content_authority(self):
+        raw = {
+            "schema_version": "0.2",
+            "event_id": "raw-event",
+            "trajectory_id": "traj-synthetic",
+            "event_type": "message",
+            "sequence": 1,
+            "timestamp": "2026-08-27T00:00:00Z",
+            "actor": {"id": "actor", "type": "human"},
+            "relations": [],
+            "source": {
+                "system": "codex", "session_id": "session", "origin": "top_level",
+                "record_id": "stable-record", "record_type": "message",
+            },
+            "payload": {
+                "role": "user", "interaction_direction": "human_to_agent",
+                "text": "authorization=synthetic-sentinel", "attachments": [],
+            },
+        }
+        sanitized = copy.deepcopy(raw)
+        sanitized["payload"]["text"] = MODULE.redact_text(raw["payload"]["text"], Path.cwd())
+        raw_projected, raw_summary = PROJECTION.project_events([raw])
+        safe_projected, safe_summary = PROJECTION.project_events([sanitized])
+
+        self.assertEqual(raw_projected[0]["event_id"], safe_projected[0]["event_id"])
+        self.assertEqual(raw_projected[0]["source"], safe_projected[0]["source"])
+        self.assertEqual(raw_projected[0]["sequence"], safe_projected[0]["sequence"])
+        normalized = copy.deepcopy(safe_projected[0])
+        normalized["payload"]["text"] = raw_projected[0]["payload"]["text"]
+        self.assertEqual(normalized, raw_projected[0])
+        self.assertNotEqual(
+            raw_summary["projected_universe_digest"],
+            safe_summary["projected_universe_digest"],
+        )
+
     def test_platform_wrappers_are_filtered(self):
         for value in (
             "<recommended_plugins>\n...",

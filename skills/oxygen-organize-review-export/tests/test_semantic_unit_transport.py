@@ -11,7 +11,10 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+VENDOR = Path(__file__).resolve().parents[3] / "tools" / "ingest" / "vendor"
+sys.path.insert(0, str(VENDOR))
 import build_project_map as builder
+import extract_codex_trajectory as extractor
 import finalize_semantic_units as finalizer
 import prepare_semantic_units as preparer
 
@@ -152,6 +155,50 @@ def write_worker_results(output: Path, unit_for_id) -> None:
 
 
 class SemanticUnitTransportTests(unittest.TestCase):
+    def test_current_ingest_sanitizer_closes_every_worker_secret_rule(self):
+        unsafe = [
+            "-----BEGIN SYNTHETIC PRIVATE KEY-----",
+            "api_key=synthetic-sentinel",
+            "access token : synthetic-sentinel",
+            "TOKEN=synthetic-sentinel",
+            "Password = \"synthetic-sentinel\"",
+            "passwd=synthetic-sentinel",
+            "secret=synthetic-sentinel",
+            "Authorization=synthetic-sentinel",
+            "sk-syntheticvalue",
+            "ghp-syntheticvalue",
+            "xoxb-syntheticvalue",
+            "AKIAABCDEFGHIJKLMNOP",
+            "https://synthetic-user:synthetic-password@example.invalid/path",
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / "run"
+            sanitized = [extractor.redact_text(value, root) for value in unsafe]
+            ids = write_trajectory(run, "traj-sanitized", sanitized)
+            self.assertEqual(run_builder(run).returncode, 0)
+            prepared = preparer.build_preparation(run, 4096)
+            records = prepared["context"]["contributions"]
+            shard_records = [
+                record for shard in prepared["inputs"] for record in shard["contributions"]
+            ]
+            self.assertEqual(
+                [record["id"] for record in records],
+                sorted(ids, key=lambda value: value.encode("utf-8")),
+            )
+            self.assertEqual(
+                sorted(record["id"] for record in shard_records),
+                sorted(ids),
+            )
+            self.assertTrue(all(not preparer.secret_like_text(record["content"]) for record in records))
+            serialized = builder.canonical_json({
+                "context": prepared["context"], "inputs": prepared["inputs"],
+            })
+            self.assertNotIn("synthetic-sentinel", serialized)
+            self.assertNotIn("syntheticvalue", serialized)
+            self.assertNotIn("synthetic-user", serialized)
+            self.assertNotIn("synthetic-password", serialized)
+
     def test_one_multi_and_mixed_current_runs_finalize_without_project_map_editing(self):
         cases = ((["one"], []), (["one", "two", "three"], []), (["one", "two"], ["meeting"]))
         for trajectory_texts, meeting_texts in cases:

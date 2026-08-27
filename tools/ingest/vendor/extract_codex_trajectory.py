@@ -28,6 +28,7 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
+from ingest.secret_safety import redact_secret_like_text
 
 
 SCHEMA_VERSION = "0.2"
@@ -47,11 +48,11 @@ SECRET_PATTERNS = [
     re.compile(r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(
         r"(?i)((?:access|auth|connection|refresh)[_-]?token)"
-        r"(\s*[=:]\s*)([^\s,;\"']+)"
+        r"(\s*[=:]\s*)(?!<redacted>|\[redacted\])([^\s,;\"']+)"
     ),
     re.compile(
         r"(?i)(password|passwd|api[_-]?key|access[_-]?token|secret)"
-        r"(\s*[=:]\s*)([^\s,;\"']+)"
+        r"(\s*[=:]\s*)(?!<redacted>|\[redacted\])([^\s,;\"']+)"
     ),
     re.compile(r"(密码(?:为|是|[:：])\s*)([^\s,，。;；\"“”']+)"),
     re.compile(r"(?i)(用户名|username)(\+\d{3,}!)"),
@@ -99,7 +100,7 @@ def redact_text(text: str, home: Path) -> str:
             redacted = pattern.sub(r"\1 <REDACTED>", redacted)
         else:
             redacted = pattern.sub("<REDACTED>", redacted)
-    return redacted
+    return redact_secret_like_text(redacted)
 
 
 def sanitize(value: Any, home: Path) -> Any:

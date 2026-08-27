@@ -7,7 +7,6 @@ import json
 import math
 import os
 from pathlib import Path
-import re
 import shutil
 import sys
 from typing import Any
@@ -26,6 +25,7 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
+from ingest.secret_safety import secret_like_text
 
 
 DEFAULT_MAX_SHARD_BYTES = 196_608
@@ -36,18 +36,6 @@ MAX_RECORDS_PER_SHARD = 400
 SAFE_RECORD_KEYS = (
     "id", "documentId", "sequence", "eventType", "actorType", "timestamp", "content",
 )
-SECRET_PATTERNS = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
-    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----",
-    r"\b(?:api[_ -]?key|access[_ -]?token|token|password|passwd|secret|authorization)"
-    r"\s*[:=]\s*(?!<redacted>|\[redacted\])[^\s,;]{6,}",
-    r"\b(?:sk|gh[pousr]|xox[baprs])-[A-Za-z0-9_-]{8,}",
-    r"\bAKIA[0-9A-Z]{16}\b",
-    r"://[^/\s:@]+:[^/\s@]+@",
-))
-
-
-def secret_like_text(value: str) -> bool:
-    return any(pattern.search(value) for pattern in SECRET_PATTERNS)
 
 
 def safe_record(record: dict[str, Any]) -> dict[str, Any]:
