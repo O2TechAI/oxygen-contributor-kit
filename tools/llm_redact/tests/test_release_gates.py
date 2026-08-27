@@ -35,7 +35,13 @@ def write_push_fixture(root: Path, *, turn_updates=None, trajectory="traj-1") ->
         "item_id": EVENT_ID,
         "role": "user",
         "text": "safe synthetic text",
-        "redactions": [{"start": 0, "end": 4, "category": "sensitive"}],
+        "redactions": [{
+            "start": 0,
+            "end": 4,
+            "category": "sensitive",
+            "review_state": "deterministic",
+            "uncertainty_reason": None,
+        }],
     }
     turn.update(turn_updates or {})
     (redacted / f"{trajectory}.json").write_text(json.dumps({
@@ -153,7 +159,16 @@ class ReleaseGateTest(unittest.TestCase):
     def test_post_body_forwards_canonical_pair_without_qualification(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
-            redacted, report = write_push_fixture(root)
+            safe_reason = "human context is required to classify this reference"
+            redacted, report = write_push_fixture(root, turn_updates={
+                "redactions": [{
+                    "start": 0,
+                    "end": 4,
+                    "category": "sensitive",
+                    "review_state": "needs_confirmation",
+                    "uncertainty_reason": safe_reason,
+                }],
+            })
             captured = {}
 
             def fake_post(base_url, path, body):
@@ -178,9 +193,41 @@ class ReleaseGateTest(unittest.TestCase):
             "category": "sensitive",
             "confidence": None,
             "reason": None,
+            "reviewState": "needs_confirmation",
+            "uncertaintyReason": safe_reason,
             "createdBy": "llm",
         }])
         self.assertNotIn("traj-1:", captured["body"]["redactions"][0]["itemId"])
+
+    def test_invalid_review_contract_fails_before_any_http_push(self):
+        invalid_spans = [
+            {
+                "start": 0,
+                "end": 4,
+                "category": "sensitive",
+                "review_state": "deterministic",
+            },
+            {
+                "start": 5,
+                "end": 9,
+                "category": "sensitive",
+                "review_state": "needs_confirmation",
+            },
+        ]
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            redacted, report = write_push_fixture(
+                root, turn_updates={"redactions": invalid_spans}
+            )
+            argv = [
+                "push_redactions.py", "--redacted", str(redacted),
+                "--report", str(report),
+            ]
+            with mock.patch.object(PUSH, "post") as post, \
+                    mock.patch.object(sys, "argv", argv), \
+                    self.assertRaisesRegex(SystemExit, "uncertainty_reason"):
+                PUSH.main()
+            post.assert_not_called()
 
     def test_push_response_must_report_exact_complete_success(self):
         cases = [

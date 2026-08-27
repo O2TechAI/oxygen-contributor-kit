@@ -2,9 +2,10 @@
 """Push redaction spans into a running local viewer.
 
 The viewer stores the ORIGINAL text and overlays these spans at render time, so
-a reviewer can change a category or delete a decision without the source having
-been destroyed. Dialogue extraction finalizes each canonical document/item pair;
-this script validates and forwards those identities without rewriting them.
+an uncertain span can receive an explicit Keep or Redact decision without the
+source having been destroyed. Dialogue extraction finalizes each canonical
+document/item pair; this script validates and forwards those identities without
+rewriting them.
 """
 import argparse
 import json
@@ -24,6 +25,7 @@ DOCUMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}")
 TRAJECTORY_ITEM_ID = re.compile(r"evt-[0-9a-f]{64}")
 MEETING_ITEM_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}")
 MEETING_FALLBACK_ITEM = re.compile(r"rec-[0-9a-f]{64}")
+REVIEW_STATES = {"deterministic", "needs_confirmation"}
 
 
 def post(base_url: str, path: str, body: dict) -> dict:
@@ -145,10 +147,29 @@ def collect_spans(redacted: pathlib.Path) -> list[dict]:
                     start = span["start"]
                     end = span["end"]
                     category = span["category"]
+                    review_state = span["review_state"]
                 except KeyError as error:
                     raise _identity_error(
                         path, f"turn {event_id} redaction is missing {error.args[0]}"
                     ) from error
+                uncertainty_reason = span.get("uncertainty_reason")
+                if not isinstance(review_state, str) or review_state not in REVIEW_STATES:
+                    raise _identity_error(
+                        path, f"turn {event_id} redaction review_state is invalid"
+                    )
+                if review_state == "needs_confirmation":
+                    if not isinstance(uncertainty_reason, str) \
+                            or not uncertainty_reason.strip():
+                        raise _identity_error(
+                            path,
+                            f"turn {event_id} needs_confirmation redaction is missing "
+                            "uncertainty_reason",
+                        )
+                elif uncertainty_reason is not None:
+                    raise _identity_error(
+                        path,
+                        f"turn {event_id} deterministic redaction has uncertainty_reason",
+                    )
                 spans.append({
                     "itemId": item_id,
                     "documentId": document_id,
@@ -157,6 +178,8 @@ def collect_spans(redacted: pathlib.Path) -> list[dict]:
                     "category": category,
                     "confidence": span.get("confidence"),
                     "reason": span.get("reason"),
+                    "reviewState": review_state,
+                    "uncertaintyReason": uncertainty_reason,
                     "createdBy": "llm",
                 })
     return spans

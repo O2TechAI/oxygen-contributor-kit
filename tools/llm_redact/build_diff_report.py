@@ -84,7 +84,9 @@ def main() -> int:
             total_turns += 1
             reasons = "".join(
                 f'<li><span class="cat">{html.escape(s["category"])}</span>'
+                f'<strong>{html.escape(s["review_state"])}</strong> &middot; '
                 f'{html.escape(s.get("reason") or "")}'
+                f'{" &middot; " + html.escape(s["uncertainty_reason"]) if s.get("uncertainty_reason") else ""}'
                 f' <em>({html.escape(str(s.get("confidence") or ""))})</em></li>'
                 for s in spans)
             rows.append(f"""
