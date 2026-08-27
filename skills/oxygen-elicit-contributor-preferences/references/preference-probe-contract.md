@@ -15,7 +15,9 @@ story-candidates.json       [{"id":"existing-imported-item-id","summary":"oxygen
 <redaction>/report.json     exact completed merge report with zero rejects and zero missing workers
 ```
 
-Each ordered candidate has exactly `id` and `summary`, matching the sole Story activation contract.
+Each candidate has exactly `id` and `summary`, matching the sole Story activation contract. Context
+preparation sorts that plain array by the UTF-8 bytes of candidate `id` before projecting lessons,
+Insight identities, or evidence, so input reordering cannot change context bytes or digests.
 `summary` is a valid `oxygen.story:` JSON source. The preparation step projects only
 `documentId`, `documentKind`, and exact imported item identities from the reviewed bundles; source
 text and redacted text never enter the Preference context. The report's per-document counts and
@@ -57,7 +59,16 @@ distinct canonical options, valid `en`/`zh` presentations when supplied, `allowO
 `allowSkip: true`. Candidate bulk decisions use the exact six API keys. Candidates cannot supply
 digests, `autoRemoved`, defaults, answers, model/provider information, or publication state.
 Other and Skip are flags, never option rows. A probe's evidence must belong to its document; every
-bulk evidence ID must be in the reviewed authority.
+bulk evidence ID must be in the reviewed authority. The producer binds `documentKind` to the exact
+reviewed bundle that supplied each cited identity; Core POST independently rechecks that kind and
+the item owner against its SQLite document snapshot.
+
+Stable IDs reject all ASCII controls. Safe display text rejects ASCII controls except tab, LF, and
+CR, matching Core's safe-text boundary. Every integer that crosses into JavaScript is a
+nonnegative safe integer no larger than `9007199254740991`. Canonical-option comparison performs
+ECMAScript whitespace trimming, removes trailing ASCII `.` characters, and folds only ASCII
+`A`–`Z`; non-ASCII characters remain verbatim so Python and JavaScript cannot diverge by Unicode
+runtime tables.
 
 The finalizer emits exactly nine API fields:
 

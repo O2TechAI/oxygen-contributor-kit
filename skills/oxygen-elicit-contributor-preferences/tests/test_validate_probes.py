@@ -58,9 +58,90 @@ class FinalizerTests(unittest.TestCase):
         second = VALIDATOR.finalize(context(), {"probes": [probe("probe-a"), probe("probe-z")], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
         self.assertEqual(VALIDATOR.PREPARE.canonical_json(first), VALIDATOR.PREPARE.canonical_json(second))
 
+    def test_option_normalization_is_explicit_and_cross_runtime_stable(self):
+        self.assertEqual(VALIDATOR.normalize_option_text("\u00a0CHOICE...\ufeff"), "choice")
+        self.assertEqual(VALIDATOR.normalize_option_text("Straße"), "straße")
+        self.assertEqual(VALIDATOR.normalize_option_text("STRASSE"), "strasse")
+        candidate = probe()
+        candidate["options"] = [
+            {"id": "one", "text": "Straße"},
+            {"id": "two", "text": "STRASSE"},
+        ]
+        candidate["presentations"] = {}
+        VALIDATOR.finalize(
+            context(), {"probes": [candidate], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
+        )
+        candidate["options"] = [
+            {"id": "one", "text": "Choice..."},
+            {"id": "two", "text": "choice"},
+        ]
+        with self.assertRaisesRegex(ValueError, "distinct"):
+            VALIDATOR.finalize(
+                context(), {"probes": [candidate], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
+            )
+        candidate = probe()
+        candidate["options"][0]["id"] = "\U0001f600" * 101
+        candidate["presentations"] = {}
+        with self.assertRaisesRegex(ValueError, "options"):
+            VALIDATOR.finalize(
+                context(), {"probes": [candidate], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
+            )
+
+    def test_rejects_internal_controls_and_integers_above_js_safe_range(self):
+        for field, value in (("id", "probe\tid"), ("question", "unsafe\u000btext")):
+            with self.subTest(field=field):
+                candidate = probe()
+                candidate[field] = value
+                with self.assertRaises(ValueError):
+                    VALIDATOR.finalize(
+                        context(), {"probes": [candidate], "bulkDecisions": [], "setAside": 0},
+                        "run-a", 7,
+                    )
+
+        candidate = probe()
+        candidate["turns"] = VALIDATOR.PREPARE.MAX_SAFE_INTEGER + 1
+        with self.assertRaisesRegex(ValueError, "score or turns"):
+            VALIDATOR.finalize(
+                context(), {"probes": [candidate], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
+            )
+        with self.assertRaisesRegex(ValueError, "workflow authority"):
+            VALIDATOR.finalize(
+                context(), {"probes": [], "bulkDecisions": [], "setAside": 0},
+                "run-a", VALIDATOR.PREPARE.MAX_SAFE_INTEGER + 1,
+            )
+        with self.assertRaisesRegex(ValueError, "setAside"):
+            VALIDATOR.finalize(
+                context(), {
+                    "probes": [], "bulkDecisions": [],
+                    "setAside": VALIDATOR.PREPARE.MAX_SAFE_INTEGER + 1,
+                }, "run-a", 7,
+            )
+        bulk = {
+            "id": "bulk-a", "kind": "privacy",
+            "count": VALIDATOR.PREPARE.MAX_SAFE_INTEGER + 1,
+            "question": "Keep this reviewed group?", "evidenceSample": ["event-a"],
+            "presentations": {},
+        }
+        with self.assertRaisesRegex(ValueError, "bulk decision"):
+            VALIDATOR.finalize(
+                context(), {"probes": [], "bulkDecisions": [bulk], "setAside": 0}, "run-a", 7,
+            )
+
+        invalid_context = context()
+        invalid_context["autoRemoved"] = {
+            "total": VALIDATOR.PREPARE.MAX_SAFE_INTEGER + 1,
+            "reversible": True,
+            "categories": [],
+        }
+        with self.assertRaisesRegex(ValueError, "Privacy aggregate"):
+            VALIDATOR.finalize(
+                invalid_context, {"probes": [], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
+            )
+
     def test_rejects_foreign_cross_document_duplicate_and_answer_fields(self):
         cases = []
         foreign = probe(); foreign["eventIds"] = ["missing"]; cases.append(foreign)
+        wrong_kind = probe(); wrong_kind["documentKind"] = "meeting"; cases.append(wrong_kind)
         duplicate = probe(); duplicate["eventIds"] = ["event-a", "event-a"]; cases.append(duplicate)
         answered = probe(); answered["answer"] = {"choice": "one"}; cases.append(answered)
         for candidate in cases:

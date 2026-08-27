@@ -103,6 +103,71 @@ class PrepareContextTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "story-candidates"):
                 PREPARE.prepare(candidates, redacted, report)
 
+    def test_reordered_candidates_emit_byte_identical_utf8_ordered_context(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidates, redacted, report = inputs(root, [
+                story(key="chapter-emoji", insight="lesson-emoji"),
+                story(key="chapter-private-use", insight="lesson-private-use"),
+            ])
+            rows = json.loads(candidates.read_text(encoding="utf-8"))
+            rows[0]["id"] = "\U0001f600"
+            rows[1]["id"] = "\ue000"
+            candidates.write_text(json.dumps(rows), encoding="utf-8")
+            first_path = root / "first-context.json"
+            first_run = subprocess.run([
+                sys.executable, str(SCRIPT), "--story-candidates", str(candidates),
+                "--redacted", str(redacted), "--privacy-report", str(report),
+                "--output", str(first_path),
+            ], check=True, capture_output=True, text=True)
+            candidates.write_text(json.dumps(list(reversed(rows))), encoding="utf-8")
+            second_path = root / "second-context.json"
+            second_run = subprocess.run([
+                sys.executable, str(SCRIPT), "--story-candidates", str(candidates),
+                "--redacted", str(redacted), "--privacy-report", str(report),
+                "--output", str(second_path),
+            ], check=True, capture_output=True, text=True)
+            first = json.loads(first_path.read_text(encoding="utf-8"))
+            first_bytes = first_path.read_bytes()
+            second_bytes = second_path.read_bytes()
+
+        self.assertEqual(first_bytes, second_bytes)
+        self.assertEqual(first_run.stdout, second_run.stdout)
+        self.assertEqual(
+            [lesson["storyKey"] for lesson in first["reusableLessons"]],
+            ["chapter-private-use", "chapter-emoji"],
+        )
+
+    def test_rejects_internal_controls_and_oversized_privacy_integers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidates, redacted, report = inputs(root)
+            rows = json.loads(candidates.read_text(encoding="utf-8"))
+            rows[0]["id"] = "candidate\tid"
+            candidates.write_text(json.dumps(rows), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "story candidate"):
+                PREPARE.prepare(candidates, redacted, report)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidates, redacted, report = inputs(root)
+            rows = json.loads(candidates.read_text(encoding="utf-8"))
+            source = json.loads(rows[0]["summary"].removeprefix("oxygen.story:"))
+            source["insights"][0]["principle"] = "unsafe\u0000text"
+            rows[0]["summary"] = "oxygen.story:" + json.dumps(source)
+            candidates.write_text(json.dumps(rows), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Insight"):
+                PREPARE.prepare(candidates, redacted, report)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidates, redacted, report = inputs(root)
+            privacy = json.loads(report.read_text(encoding="utf-8"))
+            privacy["total_applied"] = PREPARE.MAX_SAFE_INTEGER + 1
+            report.write_text(json.dumps(privacy), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Privacy report"):
+                PREPARE.prepare(candidates, redacted, report)
+
     def test_rejects_foreign_evidence_duplicate_identity_and_malformed_story(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

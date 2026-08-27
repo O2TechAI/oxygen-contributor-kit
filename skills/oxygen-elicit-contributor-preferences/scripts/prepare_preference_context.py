@@ -25,6 +25,10 @@ from tools.llm_redact.merge_and_apply import (  # noqa: E402
 
 CONTEXT_SCHEMA = "oxygen.preference-context"
 AUTO_REMOVED_KINDS = frozenset(MERGE_ALLOWED)
+MAX_SAFE_INTEGER = 9_007_199_254_740_991
+STABLE_ID_CONTROLS = frozenset(chr(code) for code in (*range(0x20), 0x7F))
+SAFE_TEXT_CONTROLS = STABLE_ID_CONTROLS - {"\t", "\n", "\r"}
+ECMASCRIPT_TRIM = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 
 
 def canonical_json(value: Any) -> str:
@@ -43,8 +47,26 @@ def sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def nonempty(value: Any) -> bool:
-    return isinstance(value, str) and bool(value.strip()) and len(value) <= 20_000
+def js_trim(value: str) -> str:
+    return value.strip(ECMASCRIPT_TRIM)
+
+
+def js_length(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+def safe_text(value: Any, maximum: int = 20_000) -> bool:
+    return (isinstance(value, str) and bool(js_trim(value)) and js_length(value) <= maximum
+            and not any(character in SAFE_TEXT_CONTROLS for character in value))
+
+
+def stable_id(value: Any, maximum: int = 20_000) -> bool:
+    return (isinstance(value, str) and bool(js_trim(value)) and js_length(value) <= maximum
+            and not any(character in STABLE_ID_CONTROLS for character in value))
+
+
+def nonnegative_integer(value: Any) -> bool:
+    return type(value) is int and 0 <= value <= MAX_SAFE_INTEGER
 
 
 def exact_object(value: Any, required: set[str], optional: set[str] = set()) -> bool:
@@ -61,7 +83,7 @@ def read_json(path: Path) -> Any:
 def canonical_auto_removed(value: Any) -> dict[str, Any]:
     if not exact_object(value, {"total", "reversible", "categories"}):
         raise ValueError("Privacy aggregate is malformed")
-    if type(value["total"]) is not int or value["total"] < 0 or not isinstance(value["reversible"], bool):
+    if not nonnegative_integer(value["total"]) or value["reversible"] is not True:
         raise ValueError("Privacy aggregate is malformed")
     categories = value["categories"]
     if not isinstance(categories, list):
@@ -70,11 +92,13 @@ def canonical_auto_removed(value: Any) -> dict[str, Any]:
     seen: set[str] = set()
     for category in categories:
         if (not exact_object(category, {"kind", "count"}) or category["kind"] not in AUTO_REMOVED_KINDS
-                or type(category["count"]) is not int or category["count"] < 0
+                or not nonnegative_integer(category["count"])
+                or category["count"] == 0
                 or category["kind"] in seen):
             raise ValueError("Privacy aggregate is malformed")
         seen.add(category["kind"])
         normalized.append({"kind": category["kind"], "count": category["count"]})
+    normalized.sort(key=lambda category: category["kind"].encode("utf-8"))
     if sum(category["count"] for category in normalized) != value["total"]:
         raise ValueError("Privacy aggregate is inconsistent")
     return {"total": value["total"], "reversible": value["reversible"], "categories": normalized}
@@ -89,7 +113,7 @@ def parse_story(summary: Any) -> dict[str, Any]:
         raise ValueError("Story JSON is malformed") from exc
     required = {"schema", "key", "phase", "title", "overview", "people", "story", "insights", "evidence", "coverage"}
     optional = {"kind", "transition", "chips"}
-    if not exact_object(story, required, optional) or story["schema"] != "oxygen.story" or not nonempty(story["key"]):
+    if not exact_object(story, required, optional) or story["schema"] != "oxygen.story" or not stable_id(story["key"]):
         raise ValueError("Story is malformed")
     insights = story["insights"]
     if not isinstance(insights, list):
@@ -98,9 +122,9 @@ def parse_story(summary: Any) -> dict[str, Any]:
     parsed: list[dict[str, Any]] = []
     for insight in insights:
         fields = {"id", "background", "quote", "directlyAcquiredExperience", "principle", "evidence"}
-        if not exact_object(insight, fields, {"title"}) or not nonempty(insight["id"]) or insight["id"] in seen:
+        if not exact_object(insight, fields, {"title"}) or not stable_id(insight["id"]) or insight["id"] in seen:
             raise ValueError("Story Insight is malformed")
-        if not all(nonempty(insight[field]) for field in ("background", "directlyAcquiredExperience", "principle")):
+        if not all(safe_text(insight[field]) for field in ("background", "directlyAcquiredExperience", "principle")):
             raise ValueError("Story Insight is malformed")
         quote = insight["quote"]
         if not exact_object(quote, {"storyBlockIds"}) or not isinstance(quote["storyBlockIds"], list):
@@ -113,7 +137,7 @@ def parse_story(summary: Any) -> dict[str, Any]:
         for reference in evidence:
             if not exact_object(reference, {"documentId", "eventId"}, {"label"}):
                 raise ValueError("Story Insight evidence is malformed")
-            if not nonempty(reference["documentId"]) or not nonempty(reference["eventId"]):
+            if not stable_id(reference["documentId"]) or not stable_id(reference["eventId"], 1_000):
                 raise ValueError("Story Insight evidence is malformed")
             identity = (reference["documentId"], reference["eventId"])
             if identity in evidence_seen:
@@ -128,7 +152,7 @@ def parse_story(summary: Any) -> dict[str, Any]:
             "principle": insight["principle"],
         }
         if "title" in insight:
-            if not nonempty(insight["title"]):
+            if not safe_text(insight["title"]):
                 raise ValueError("Story Insight is malformed")
             lesson["title"] = insight["title"]
         parsed.append({"lesson": lesson, "evidence": evidence_out})
@@ -145,8 +169,8 @@ def read_privacy_authority(
     }
     if not exact_object(report, report_fields):
         raise ValueError("completed Privacy report is malformed")
-    if (type(report["total_applied"]) is not int or report["total_applied"] < 0
-            or type(report["rejected"]) is not int or report["rejected"] != 0
+    if (not nonnegative_integer(report["total_applied"])
+            or not nonnegative_integer(report["rejected"]) or report["rejected"] != 0
             or report["rejects"] != [] or report["missing_worker_output"] != []
             or not isinstance(report["categories"], dict)
             or not isinstance(report["per_trajectory"], list)):
@@ -154,7 +178,7 @@ def read_privacy_authority(
 
     reported_counts: dict[str, int] = {}
     for kind, count in report["categories"].items():
-        if kind not in AUTO_REMOVED_KINDS or type(count) is not int or count <= 0:
+        if kind not in AUTO_REMOVED_KINDS or not nonnegative_integer(count) or count == 0:
             raise ValueError("completed Privacy report categories are malformed")
         reported_counts[kind] = count
     if sum(reported_counts.values()) != report["total_applied"]:
@@ -163,10 +187,10 @@ def read_privacy_authority(
     reported_documents: dict[str, tuple[int, int]] = {}
     for row in report["per_trajectory"]:
         if (not exact_object(row, {"trajectory", "turns", "applied"})
-                or not nonempty(row["trajectory"])
+                or not stable_id(row["trajectory"])
                 or row["trajectory"] in reported_documents
-                or type(row["turns"]) is not int or row["turns"] < 0
-                or type(row["applied"]) is not int or row["applied"] < 0):
+                or not nonnegative_integer(row["turns"])
+                or not nonnegative_integer(row["applied"])):
             raise ValueError("completed Privacy report documents are malformed")
         reported_documents[row["trajectory"]] = (row["turns"], row["applied"])
 
@@ -189,10 +213,10 @@ def read_privacy_authority(
         document_id = bundle["trajectory"]
         document_kind = bundle["document_kind"]
         turns = bundle["turns"]
-        if (not nonempty(document_id) or path.stem != document_id
+        if (not stable_id(document_id) or path.stem != document_id
                 or document_kind not in {"trajectory", "meeting"}
                 or not isinstance(turns, list)
-                or type(bundle["chars"]) is not int or bundle["chars"] < 0
+                or not nonnegative_integer(bundle["chars"])
                 or document_id in observed_documents):
             raise ValueError("reviewed redaction bundle is malformed")
         applied = 0
@@ -202,8 +226,8 @@ def read_privacy_authority(
                 "event_id", "document_id", "item_id", "role", "timestamp", "text",
                 "redactions", "redacted_text",
             }
-            if (not exact_object(turn, fields) or not nonempty(turn["event_id"])
-                    or turn["document_id"] != document_id or not nonempty(turn["item_id"])
+            if (not exact_object(turn, fields) or not stable_id(turn["event_id"], 1_000)
+                    or turn["document_id"] != document_id or not stable_id(turn["item_id"], 1_000)
                     or not isinstance(turn["text"], str) or not isinstance(turn["redacted_text"], str)
                     or not isinstance(turn["redactions"], list)):
                 raise ValueError("reviewed redaction turn is malformed")
@@ -219,13 +243,14 @@ def read_privacy_authority(
                     "review_state", "uncertainty_reason",
                 }
                 if (not exact_object(span, span_fields)
-                        or type(span["start"]) is not int or type(span["end"]) is not int
+                        or not nonnegative_integer(span["start"])
+                        or not nonnegative_integer(span["end"])
                         or not 0 <= span["start"] < span["end"] <= len(turn["text"])
                         or span["category"] not in AUTO_REMOVED_KINDS
                         or span["review_state"] not in REVIEW_STATES):
                     raise ValueError("reviewed redaction span is malformed")
                 if (span["review_state"] == "needs_confirmation"
-                        and not nonempty(span["uncertainty_reason"])):
+                        and not safe_text(span["uncertainty_reason"])):
                     raise ValueError("reviewed redaction span is malformed")
                 if (span["review_state"] == "deterministic"
                         and span["uncertainty_reason"] is not None):
@@ -270,10 +295,12 @@ def prepare(
     seen_identities: set[tuple[str, str]] = set()
     seen_evidence: set[tuple[str, str]] = set()
     for candidate in candidates:
-        if (not exact_object(candidate, {"id", "summary"}) or not nonempty(candidate["id"])
+        if (not exact_object(candidate, {"id", "summary"}) or not stable_id(candidate["id"])
                 or candidate["id"] in seen_candidate_ids):
             raise ValueError("story candidate is malformed")
         seen_candidate_ids.add(candidate["id"])
+    ordered_candidates = sorted(candidates, key=lambda item: item["id"].encode("utf-8"))
+    for candidate in ordered_candidates:
         story = parse_story(candidate["summary"])
         if story["key"] in seen_story_keys:
             raise ValueError("Story key is duplicated")
