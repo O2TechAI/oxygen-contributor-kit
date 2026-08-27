@@ -84,6 +84,8 @@ const activeSentinelRedaction = () => ({
   category: "sensitive",
   confidence: "high",
   reason: "Synthetic concurrency coverage",
+  review_state: "confirmed_redact",
+  uncertainty_reason: null,
   status: "active",
   created_by: "contributor",
   created_at: "2026-08-25T00:00:03.000Z",

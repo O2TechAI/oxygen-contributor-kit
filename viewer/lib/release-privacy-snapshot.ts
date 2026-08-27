@@ -66,7 +66,7 @@ function rows(results: unknown[], index: number): SnapshotRow[] {
 
 function safeActiveRows(results: unknown[], index: number): SnapshotRow[] {
   return rows(results, index).filter((row) => row.status === "active"
-    && ["deterministic", "confirmed_redact"].includes(String(row.review_state || "deterministic")));
+    && ["deterministic", "confirmed_redact"].includes(String(row.review_state)));
 }
 
 /** Capture every database row that governs reviewed Story reconstruction in one

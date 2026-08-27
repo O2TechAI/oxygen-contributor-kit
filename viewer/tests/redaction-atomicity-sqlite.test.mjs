@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 registerHooks({
@@ -21,6 +22,7 @@ registerHooks({
 const oldTime = "2036-01-01T00:00:00.000Z";
 const LOCAL_REASON_SENTINEL = "LOCAL_REASON_SENTINEL";
 const LOCAL_UNCERTAINTY_SENTINEL = "LOCAL_UNCERTAINTY_SENTINEL";
+const LEGACY_STATE_SENTINEL = "LEGACY_STATE_SENTINEL";
 
 function span(overrides = {}) {
   return {
@@ -80,12 +82,37 @@ async function privacySnapshot(db) {
   return { jobs: jobs.results, redactions: redactions.results };
 }
 
+function seedLegacyRedactions(stateDir) {
+  const database = new DatabaseSync(join(stateDir, "oxygen.sqlite"));
+  database.exec(`CREATE TABLE redactions (
+    id TEXT PRIMARY KEY, item_id TEXT NOT NULL, document_id TEXT NOT NULL,
+    start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL,
+    category TEXT NOT NULL, confidence TEXT, reason TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_by TEXT NOT NULL DEFAULT 'llm', created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+  const insert = database.prepare(`INSERT INTO redactions
+    (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
+     status,created_by,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const row of [
+    ["legacy-active-low", "item-alpha", "document-alpha", 0, 5, "private-personal", "low", "active"],
+    ["legacy-removed-medium", "item-beta", "document-beta", 0, 4, "credential", "medium", "removed"],
+    ["legacy-active-high", "item-alpha", "document-alpha", 13, 18, "sensitive", "high", "active"],
+  ]) {
+    insert.run(...row.slice(0, 7), `${LEGACY_STATE_SENTINEL}-${row[0]}`, row[7], "llm", oldTime, oldTime);
+  }
+  database.close();
+}
+
 test("redaction replacement validates completely and commits once with real SQLite", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "oxygen-redaction-atomicity-"));
   const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
   process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
 
   try {
+    seedLegacyRedactions(stateDir);
     const [
       { getLocalDatabase },
       { establishWorkflowRun },
@@ -144,17 +171,54 @@ test("redaction replacement validates completely and commits once with real SQLi
         (id,status,stage,model,completed,total,rejected,source_digest,
          started_at,updated_at,completed_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(
-        "old-job", "complete", "done", "old-model", 1, 1, 0, sourceDigest,
+        "old-job", "complete", "done", "old-model", 3, 3, 0, sourceDigest,
         oldTime, oldTime, oldTime,
       ),
-      db.prepare(`INSERT INTO redactions
-        (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
-         status,created_by,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
-        "old-redaction", "item-alpha", "document-alpha", 0, 5, "private-personal",
-        "high", "old fixture", "active", "contributor", oldTime, oldTime,
-      ),
     ]);
+
+    const migratedColumns = await db.prepare("PRAGMA table_info(redactions)").all();
+    const migratedReviewState = migratedColumns.results.find((column) => column.name === "review_state");
+    assert.deepEqual({
+      notnull: migratedReviewState.notnull,
+      defaultValue: migratedReviewState.dflt_value,
+    }, { notnull: 0, defaultValue: null });
+    assert.ok(migratedColumns.results.some((column) => column.name === "uncertainty_reason"));
+    const migratedRows = await db.prepare(
+      `SELECT id,confidence,status,review_state,uncertainty_reason,reason
+         FROM redactions ORDER BY id`,
+    ).all();
+    assert.deepEqual(migratedRows.results.map((row) => ({
+      id: row.id,
+      confidence: row.confidence,
+      status: row.status,
+      review_state: row.review_state,
+      uncertainty_reason: row.uncertainty_reason,
+      reason: row.reason,
+    })), [
+      {
+        id: "legacy-active-high", confidence: "high", status: "active",
+        review_state: null, uncertainty_reason: null,
+        reason: `${LEGACY_STATE_SENTINEL}-legacy-active-high`,
+      },
+      {
+        id: "legacy-active-low", confidence: "low", status: "active",
+        review_state: null, uncertainty_reason: null,
+        reason: `${LEGACY_STATE_SENTINEL}-legacy-active-low`,
+      },
+      {
+        id: "legacy-removed-medium", confidence: "medium", status: "removed",
+        review_state: null, uncertainty_reason: null,
+        reason: `${LEGACY_STATE_SENTINEL}-legacy-removed-medium`,
+      },
+    ]);
+    const legacyReleaseSnapshot = await capturePackageReleasePrivacySnapshot(db);
+    assert.deepEqual(legacyReleaseSnapshot.redactionRows, [],
+      "unclassified active rows cannot become safe release spans");
+    const legacyBlockedPackage = await buildPackageFromDatabase(db, undefined, undefined, {
+      exportedAt: oldTime,
+    });
+    assert.equal(legacyBlockedPackage.status, 409);
+    assert.match(await legacyBlockedPackage.text(), /rerun Privacy before release/);
 
     const oldSnapshot = await privacySnapshot(db);
     const originalBatch = db.batch.bind(db);
@@ -296,10 +360,6 @@ test("redaction replacement validates completely and commits once with real SQLi
       },
     ]);
 
-    const columns = await db.prepare("PRAGMA table_info(redactions)").all();
-    assert.ok(columns.results.some((column) => column.name === "review_state"));
-    assert.ok(columns.results.some((column) => column.name === "uncertainty_reason"));
-
     const blockedPackage = await buildPackageFromDatabase(db, undefined, undefined, {
       exportedAt: oldTime,
     });
@@ -369,9 +429,52 @@ test("redaction replacement validates completely and commits once with real SQLi
     assert.equal(releasedPackage.status, 200);
     const archiveText = new TextDecoder().decode(await releasedPackage.arrayBuffer());
     assert.match(archiveText, /beta token/);
-    assert.doesNotMatch(archiveText, /alpha secret omega|LOCAL_REASON_SENTINEL|LOCAL_UNCERTAINTY_SENTINEL/);
+    assert.doesNotMatch(archiveText, new RegExp(
+      `alpha secret omega|${LOCAL_REASON_SENTINEL}|${LOCAL_UNCERTAINTY_SENTINEL}|${LEGACY_STATE_SENTINEL}`,
+    ));
     assert.doesNotMatch(archiveText, /review_state|uncertainty_reason|created_by/);
     assert.match(archiveText, /<redacted category=\\"sensitive\\"\/>/);
+  } finally {
+    globalThis.__oxygenLocalSqlite?.database.close();
+    delete globalThis.__oxygenLocalSqlite;
+    if (previousStateDir === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
+    else process.env.OXYGEN_VIEWER_STATE_DIR = previousStateDir;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("fresh SQLite requires an explicit redaction review state with no default", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "oxygen-redaction-fresh-schema-"));
+  const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
+  process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
+
+  try {
+    const { getLocalDatabase } = await import("../db/index.ts");
+    const db = await getLocalDatabase();
+    const columns = await db.prepare("PRAGMA table_info(redactions)").all();
+    const reviewState = columns.results.find((column) => column.name === "review_state");
+    assert.deepEqual({
+      notnull: reviewState.notnull,
+      defaultValue: reviewState.dflt_value,
+    }, { notnull: 1, defaultValue: null });
+    await assert.rejects(
+      db.prepare(`INSERT INTO redactions
+        (id,item_id,document_id,start_offset,end_offset,category,status,created_by,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(
+        "missing-state", "item", "document", 0, 1, "sensitive", "active", "llm", oldTime, oldTime,
+      ).run(),
+      /NOT NULL constraint failed: redactions\.review_state/,
+    );
+    await db.prepare(`INSERT INTO redactions
+      (id,item_id,document_id,start_offset,end_offset,category,review_state,
+       status,created_by,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(
+      "explicit-state", "item", "document", 0, 1, "sensitive", "deterministic",
+      "active", "llm", oldTime, oldTime,
+    ).run();
+    assert.equal((await db.prepare(
+      "SELECT review_state FROM redactions WHERE id='explicit-state'",
+    ).first()).review_state, "deterministic");
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
     delete globalThis.__oxygenLocalSqlite;

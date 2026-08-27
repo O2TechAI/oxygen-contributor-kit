@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { testStoryCoverage } from "./fixtures/successor-story-coverage.mjs";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { registerHooks } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { getLocalDatabase } from "../db/index.ts";
 import {
   applySuccessorChapterReview,
   editSuccessorAiInsight,
@@ -33,6 +38,19 @@ import { captureStoryReleasePrivacySnapshot } from "../lib/release-privacy-snaps
 import { validateRecognizedStorySourcePackage } from "../lib/story-readiness.ts";
 import { SUCCESSOR_STORY_PREFIX } from "../lib/timeline.ts";
 
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith(".") && !/\.[^/]+$/.test(specifier)) {
+      try {
+        return nextResolve(`${specifier}.ts`, context);
+      } catch {
+        return nextResolve(`${specifier}/index.ts`, context);
+      }
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
 const RUN_ID = "successor-release-run";
 const SOURCE_REVISION = 9;
 const SERVER_VERSION = 6;
@@ -40,6 +58,7 @@ const PRIVATE = "PRIVATE_STORY_SENTINEL";
 const PRIVATE_STORY_QUOTE_SENTINEL = "PRIVATE_STORY_QUOTE_SENTINEL";
 const LOCAL_REVIEW_REASON_SENTINEL = "LOCAL_REVIEW_REASON_SENTINEL";
 const LOCAL_UNCERTAINTY_SENTINEL = "LOCAL_UNCERTAINTY_SENTINEL";
+const LEGACY_STATE_SENTINEL = "LEGACY_STATE_SENTINEL";
 const evidence = { documentId: "story-doc", eventId: "story-doc:chapter-item" };
 
 function insight(id, blockId = "story-block-safe", overrides = {}) {
@@ -302,6 +321,152 @@ async function sha256(value) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function seedLegacyStoryRedactions(stateDir) {
+  const database = new DatabaseSync(join(stateDir, "oxygen.sqlite"));
+  database.exec(`CREATE TABLE redactions (
+    id TEXT PRIMARY KEY, item_id TEXT NOT NULL, document_id TEXT NOT NULL,
+    start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL,
+    category TEXT NOT NULL, confidence TEXT, reason TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_by TEXT NOT NULL DEFAULT 'llm', created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+  const insert = database.prepare(`INSERT INTO redactions
+    (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
+     status,created_by,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const [id, confidence, status] of [
+    ["legacy-active-low", "low", "active"],
+    ["legacy-removed-medium", "medium", "removed"],
+    ["legacy-active-high", "high", "active"],
+  ]) {
+    insert.run(
+      id, evidence.eventId, evidence.documentId, 0, PRIVATE.length,
+      "sensitive", confidence, `${LEGACY_STATE_SENTINEL}-${id}`, status,
+      "llm", "2026-08-25T00:00:03.000Z", "2026-08-25T00:00:03.000Z",
+    );
+  }
+  database.close();
+}
+
+test("real SQLite migration leaves legacy Privacy state unclassified until a fresh explicit pass", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "oxygen-story-legacy-privacy-"));
+  const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
+  process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
+
+  try {
+    seedLegacyStoryRedactions(stateDir);
+    const db = await getLocalDatabase();
+    const currentSource = source([]);
+    const state = reviewedState(currentSource);
+    const session = createSuccessorStoryReviewSession(RUN_ID, { [currentSource.key]: state }, {});
+    const item = {
+      id: evidence.eventId,
+      document_id: evidence.documentId,
+      sequence: 1,
+      event_type: "message",
+      actor_id: "contributor",
+      actor_type: "user",
+      timestamp: "2026-08-25T00:00:00.000Z",
+      content: `${PRIVATE} supporting evidence`,
+      organization_reason: `${SUCCESSOR_STORY_PREFIX}${JSON.stringify(currentSource)}`,
+    };
+    const validation = validateRecognizedStorySourcePackage(
+      [{ id: item.id, documentId: item.document_id, summary: item.organization_reason }],
+      [{
+        id: item.id, documentId: item.document_id, eventType: item.event_type,
+        actorId: item.actor_id, actorType: item.actor_type,
+      }],
+    );
+    assert.equal(validation.ok, true);
+    const sourceDigest = await computeSourceDigest([item]);
+    const now = "2026-08-25T00:00:10.000Z";
+    await db.batch([
+      db.prepare(`INSERT INTO workflow_runs
+        (id,story_generation_status,story_source_revision,active_story_digest,created_at,updated_at)
+        VALUES (?,?,?,?,?,?)`).bind(
+        RUN_ID, "ready_for_human_review", SOURCE_REVISION,
+        await sha256(validation.canonicalCandidate), now, now,
+      ),
+      db.prepare(`INSERT INTO story_review_sessions
+        (workflow_run_id,state_json,updated_at,server_version) VALUES (?,?,?,?)`).bind(
+        RUN_ID, JSON.stringify({ sourceRevision: SOURCE_REVISION, session }), now, SERVER_VERSION,
+      ),
+      db.prepare(`INSERT INTO items
+        (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,
+         original_json,organization_reason)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(
+        item.id, item.document_id, item.sequence, item.event_type, item.actor_id,
+        item.actor_type, item.timestamp, item.content, "{}", item.organization_reason,
+      ),
+      db.prepare(`INSERT INTO redaction_jobs
+        (id,status,stage,model,completed,total,rejected,source_digest,
+         started_at,updated_at,completed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(
+        "legacy-job", "complete", "done", "legacy-model", 3, 3, 0,
+        sourceDigest, now, now, now,
+      ),
+    ]);
+
+    const migrated = await db.prepare(
+      `SELECT id,confidence,status,review_state,uncertainty_reason
+         FROM redactions ORDER BY id`,
+    ).all();
+    assert.deepEqual(migrated.results.map((row) => [
+      row.id, row.confidence, row.status, row.review_state, row.uncertainty_reason,
+    ]), [
+      ["legacy-active-high", "high", "active", null, null],
+      ["legacy-active-low", "low", "active", null, null],
+      ["legacy-removed-medium", "medium", "removed", null, null],
+    ]);
+    const legacySnapshot = await captureStoryReleasePrivacySnapshot(db, RUN_ID);
+    assert.deepEqual(legacySnapshot.redactionRows, []);
+    assert.equal((await reconstructReviewedStoryReleaseFromDatabase(
+      db, request(),
+    )).code, RELEASE_ERROR.storyNotReady);
+
+    const redactionsRoute = await import("../app/api/redactions/route.ts");
+    const importResponse = await redactionsRoute.POST(new Request(
+      "http://localhost/api/redactions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          replaceAll: true,
+          job: { status: "complete", stage: "done", model: "fresh-model", total: 1, rejected: 0 },
+          redactions: [{
+            id: "fresh-explicit", itemId: item.id, documentId: item.document_id,
+            startOffset: 0, endOffset: PRIVATE.length, category: "sensitive",
+            confidence: "medium", reason: LOCAL_REVIEW_REASON_SENTINEL,
+            reviewState: "deterministic", uncertaintyReason: null, createdBy: "llm",
+          }],
+        }),
+      },
+    ));
+    assert.equal(importResponse.status, 200);
+    assert.deepEqual((await db.prepare(
+      "SELECT id,review_state,status FROM redactions ORDER BY id",
+    ).all()).results, [{ id: "fresh-explicit", review_state: "deterministic", status: "active" }]);
+
+    const released = await reconstructReviewedStoryReleaseFromDatabase(db, request());
+    assert.equal(released.ok, true);
+    const { renderReviewedStoryHtml } = await import("../app/api/organization/export/route.ts");
+    const html = renderReviewedStoryHtml(released.serializedStory);
+    const zipEntry = successorReviewedStoryPackageEntry(released.story);
+    const publicationBytes = [released.serializedStory, html, zipEntry.data].join("\n");
+    assert.doesNotMatch(publicationBytes, new RegExp(
+      `${PRIVATE}|${LEGACY_STATE_SENTINEL}|${LOCAL_REVIEW_REASON_SENTINEL}`,
+    ));
+    assert.doesNotMatch(publicationBytes, /review_state|uncertainty_reason|created_by|legacy-active|legacy-removed/);
+  } finally {
+    globalThis.__oxygenLocalSqlite?.database.close();
+    delete globalThis.__oxygenLocalSqlite;
+    if (previousStateDir === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
+    else process.env.OXYGEN_VIEWER_STATE_DIR = previousStateDir;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 class FakeSuccessorReleaseDb {
   constructor({ items, run, session, redactionJob, redactions = [] }) {
     this.items = items;
@@ -435,6 +600,7 @@ async function serverFixture({
       start_offset: 0,
       end_offset: storyPrivate.length,
       category: "secret",
+      review_state: "deterministic",
       status: "active",
     }] : [],
   });

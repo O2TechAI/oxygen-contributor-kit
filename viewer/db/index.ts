@@ -86,13 +86,13 @@ const statements = [
     updated_at TEXT NOT NULL, server_version INTEGER NOT NULL DEFAULT 0
   )`,
   // One row per redacted span. Offsets address items.content, which stays the
-  // untouched original -- the tag is applied at render time so a reviewer can
-  // still edit or delete the decision.
+  // untouched original -- the tag is applied at render time. Only pending
+  // model spans can receive one contributor Keep or Redact decision.
   `CREATE TABLE IF NOT EXISTS redactions (
     id TEXT PRIMARY KEY, item_id TEXT NOT NULL, document_id TEXT NOT NULL,
     start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL,
     category TEXT NOT NULL, confidence TEXT, reason TEXT,
-    review_state TEXT NOT NULL DEFAULT 'deterministic'
+    review_state TEXT NOT NULL
       CHECK(review_state IN ('deterministic','needs_confirmation','confirmed_keep','confirmed_redact')),
     uncertainty_reason TEXT,
     status TEXT NOT NULL DEFAULT 'active',
@@ -216,16 +216,11 @@ function migrateRedactionReviewState(database: DatabaseSync) {
   const names = new Set(columns.map((column) => column.name));
   const migrations: string[] = [];
   if (!names.has("review_state")) {
-    migrations.push(`ALTER TABLE redactions ADD COLUMN review_state TEXT NOT NULL
-      DEFAULT 'deterministic'
+    migrations.push(`ALTER TABLE redactions ADD COLUMN review_state TEXT
       CHECK(review_state IN ('deterministic','needs_confirmation','confirmed_keep','confirmed_redact'))`);
   }
   if (!names.has("uncertainty_reason")) {
     migrations.push("ALTER TABLE redactions ADD COLUMN uncertainty_reason TEXT");
-  }
-  if (!names.has("review_state")) {
-    migrations.push(`UPDATE redactions SET review_state='confirmed_keep'
-      WHERE status='removed'`);
   }
   if (migrations.length) database.exec(migrations.join(";\n"));
 }

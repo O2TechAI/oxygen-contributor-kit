@@ -187,6 +187,15 @@ test("only internally consistent completed redaction passes are releasable", () 
     status: "complete", completed: 1, total: 1, rejected: 0,
     source_digest: digest,
   };
+  const legacyStateError = "AI redaction review state is missing or invalid; rerun Privacy before release";
+  for (const confidence of ["low", "medium", "high"]) {
+    assert.equal(redactionReleaseError(completeJob, digest, [{
+      status: "active", confidence,
+    }]), legacyStateError);
+    assert.equal(redactionReleaseError(completeJob, digest, [{
+      review_state: null, status: "removed", confidence,
+    }]), legacyStateError);
+  }
   assert.match(redactionReleaseError(completeJob, digest, [{
     review_state: "needs_confirmation", status: "active", confidence: "high",
   }]), /requires contributor confirmation/);
@@ -201,9 +210,9 @@ test("only internally consistent completed redaction passes are releasable", () 
   assert.match(redactionReleaseError(completeJob, digest, [{
     review_state: "needs_confirmation", status: "removed",
   }]), /inconsistent/);
-  assert.match(redactionReleaseError(completeJob, digest, [{
+  assert.equal(redactionReleaseError(completeJob, digest, [{
     review_state: "invented", status: "active",
-  }]), /invalid/);
+  }]), legacyStateError);
 });
 
 test("duplicate span ids cannot inflate the persisted completion count", () => {

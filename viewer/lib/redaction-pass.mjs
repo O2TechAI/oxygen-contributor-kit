@@ -84,9 +84,11 @@ const persistedReviewStates = new Set([
 function redactionReviewReleaseError(redactions) {
   let pending = false;
   for (const row of redactions || []) {
-    const reviewState = row?.review_state == null ? "deterministic" : String(row.review_state);
+    const reviewState = row?.review_state == null ? "" : String(row.review_state);
     const status = String(row?.status || "");
-    if (!persistedReviewStates.has(reviewState)) return "AI redaction review state is invalid";
+    if (!persistedReviewStates.has(reviewState)) {
+      return "AI redaction review state is missing or invalid; rerun Privacy before release";
+    }
     const expectedStatus = reviewState === "confirmed_keep" ? "removed" : "active";
     if (status !== expectedStatus) return "AI redaction review state is inconsistent";
     if (reviewState === "needs_confirmation") pending = true;
