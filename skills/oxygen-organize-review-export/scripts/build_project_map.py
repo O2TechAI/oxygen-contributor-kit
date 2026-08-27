@@ -525,6 +525,75 @@ def finalize_units(
     return manifest
 
 
+def canonical_project_map(
+    run: Path,
+    primary_project: str,
+    summary: str,
+    raw_units: Any,
+    previous_manifest: Any = None,
+    *,
+    finalize: bool = True,
+    existing_manifest: Any = None,
+) -> dict[str, Any]:
+    """Build the single Organization project map for ``run``."""
+    if not isinstance(summary, str):
+        raise ValueError("project summary is invalid")
+    contribution_ids, sources, contribution_source_digests = source_inventory(run)
+    source_digest = digest([{
+        "id": contribution_id,
+        "sourceDigest": contribution_source_digests[contribution_id],
+    } for contribution_id in contribution_ids])
+    return {
+        "schema_version": "1",
+        "primary_project": primary_project,
+        "summary": summary,
+        "projects": [{
+            "name": primary_project,
+            "event_count": len(contribution_ids),
+            "reason": "One repo-scoped projected contribution universe.",
+        }],
+        "source_authority": {
+            "sourceDigest": source_digest,
+            "sourceCount": len(sources),
+            "contributionCount": len(contribution_ids),
+        },
+        "semantic_units": raw_units,
+        "semantic_manifest": finalize_units(
+            primary_project,
+            contribution_ids,
+            contribution_source_digests,
+            source_digest,
+            raw_units,
+            previous_manifest,
+        ) if finalize else existing_manifest,
+    }
+
+
+def validate_project_map_authority(
+    run: Path, project_map: Any,
+) -> dict[str, Any]:
+    """Prove a finalized project map is bound to the exact current corpus."""
+    if not isinstance(project_map, dict):
+        raise ValueError("project map semantic authority is invalid")
+    manifest = project_map.get("semantic_manifest")
+    source_authority = project_map.get("source_authority")
+    if not isinstance(manifest, dict) or not isinstance(source_authority, dict):
+        raise ValueError("project map semantic authority is not finalized")
+    expected = canonical_project_map(
+        run,
+        project_map.get("primary_project"),
+        project_map.get("summary"),
+        project_map.get("semantic_units"),
+        manifest,
+    )
+    if (
+        expected["semantic_manifest"] != manifest
+        or expected["source_authority"] != source_authority
+    ):
+        raise ValueError("project map semantic authority is stale")
+    return expected
+
+
 def main() -> None:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser()
@@ -541,11 +610,6 @@ def main() -> None:
     destination = run / "project-map.json"
     if destination.exists() or destination.is_symlink():
         contained_file(destination, run)
-    contribution_ids, sources, contribution_source_digests = source_inventory(run)
-    source_digest = digest([{
-        "id": contribution_id,
-        "sourceDigest": contribution_source_digests[contribution_id],
-    } for contribution_id in contribution_ids])
     existing = (
         read_object(contained_file(destination, run))
         if destination.exists() or destination.is_symlink()
@@ -556,37 +620,22 @@ def main() -> None:
     if args.previous is not None:
         previous_object = read_object(contained_file(args.previous, run))
         previous_manifest = previous_object.get("semantic_manifest", previous_object)
-    output = {
-        "schema_version": "1",
-        "primary_project": args.primary_project,
-        "summary": args.summary,
-        "projects": [{
-            "name": args.primary_project,
-            "event_count": len(contribution_ids),
-            "reason": "One repo-scoped projected contribution universe.",
-        }],
-        "source_authority": {
-            "sourceDigest": source_digest,
-            "sourceCount": len(sources),
-            "contributionCount": len(contribution_ids),
-        },
-        "semantic_units": raw_units,
-        "semantic_manifest": finalize_units(
-            args.primary_project,
-            contribution_ids,
-            contribution_source_digests,
-            source_digest,
-            raw_units,
-            previous_manifest,
-        ) if args.finalize else existing.get("semantic_manifest"),
-    }
+    output = canonical_project_map(
+        run,
+        args.primary_project,
+        args.summary,
+        raw_units,
+        previous_manifest,
+        finalize=args.finalize,
+        existing_manifest=existing.get("semantic_manifest"),
+    )
     destination.write_text(
         json.dumps(output, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     print(json.dumps({
         "project_map": str(destination),
-        "contribution_records": len(contribution_ids),
+        "contribution_records": output["source_authority"]["contributionCount"],
         "semantic_units": len(raw_units),
         "finalized": bool(output["semantic_manifest"] is not None),
     }))

@@ -87,6 +87,35 @@ def semantic_source_digest(ids, source_digests):
 
 
 class BuildProjectMapTests(unittest.TestCase):
+    def test_canonical_project_map_validator_rejects_stale_corpus_authority(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            trajectory = write_trajectory(run, "traj-one")
+            ids, _, _ = MODULE.source_inventory(run)
+            project_map = MODULE.canonical_project_map(
+                run,
+                "Synthetic Project",
+                "Safe summary.",
+                [{"id": "unit-one", "kind": "discussion", "members": ids}],
+            )
+            self.assertEqual(
+                MODULE.validate_project_map_authority(run, project_map), project_map,
+            )
+
+            event = json.loads((trajectory / "events.jsonl").read_text(encoding="utf-8"))
+            event["payload"]["text"] = "Changed synthetic decision."
+            serialized = MODULE.canonical_json(event) + "\n"
+            (trajectory / "events.jsonl").write_text(serialized, encoding="utf-8")
+            manifest_path = trajectory / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["contribution_projection"]["projected_universe_digest"] = (
+                hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+            )
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "semantic authority is stale"):
+                MODULE.validate_project_map_authority(run, project_map)
+
     def test_plural_meetings_share_one_exact_universe(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)

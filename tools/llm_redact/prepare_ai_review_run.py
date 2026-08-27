@@ -13,7 +13,9 @@ import argparse
 import json
 from pathlib import Path
 import re
+import shutil
 import sys
+import tempfile
 import urllib.parse
 
 TOOLS_ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +24,17 @@ if str(TOOLS_ROOT) not in sys.path:
 
 from oxygen_utf8 import configure_utf8_stdio
 from ingest.human_source_projection import POLICY_ID, digest_events
+
+ORGANIZER_SCRIPTS = (
+    Path(__file__).resolve().parents[2]
+    / "skills"
+    / "oxygen-organize-review-export"
+    / "scripts"
+)
+if str(ORGANIZER_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(ORGANIZER_SCRIPTS))
+
+import build_project_map as project_map_authority
 
 
 CONVERSATIONAL_TYPES = {
@@ -60,6 +73,7 @@ INPUT_PATH_OUTSIDE_RUN = "INPUT_PATH_OUTSIDE_RUN"
 INPUT_MEETING_INVALID = "INPUT_MEETING_INVALID"
 INPUT_MEETING_ID_DUPLICATE = "INPUT_MEETING_ID_DUPLICATE"
 INPUT_PROJECTION_INVALID = "INPUT_PROJECTION_INVALID"
+INPUT_SEMANTIC_AUTHORITY_INVALID = "INPUT_SEMANTIC_AUTHORITY_INVALID"
 
 
 def safe_source_system(value: object) -> str:
@@ -324,16 +338,17 @@ def prepare_meeting(
     warning_count = len(source_warnings) if isinstance(source_warnings, list) else 0
     records = []
     evidence_ids: dict[str, str] = {}
-    for index, record in enumerate(meeting.get("records") or [], 1):
+    source_records = meeting.get("records") or []
+    source_record_ids = project_map_authority.meeting_contribution_ids(
+        source_meeting_id, source_records,
+    )
+    for record, source_record_id in zip(source_records, source_record_ids):
         text = record.get("text") if isinstance(record, dict) else None
         if not isinstance(text, str) or not text.strip():
             continue
         record_number = len(records) + 1
-        source_record_id = str(record.get("record_id") or f"record-{index:06d}")
         record_id = f"record-{record_number:06d}"
-        evidence_ids[f"{source_meeting_id}:{source_record_id}"] = (
-            f"{meeting_id}:{record_id}"
-        )
+        evidence_ids[source_record_id] = f"{meeting_id}:{record_id}"
         records.append({
             "record_id": record_id,
             "order": record_number - 1,
@@ -367,6 +382,116 @@ def prepare_meetings(meetings: list[dict], output: Path) -> tuple[dict[str, str]
     return evidence_ids, warning_count
 
 
+def validated_project_map(source: Path) -> tuple[dict, dict]:
+    try:
+        path = project_map_authority.contained_file(
+            source / "project-map.json", source,
+        )
+        project_map = read_json(path)
+        canonical = project_map_authority.validate_project_map_authority(
+            source, project_map,
+        )
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        raise SystemExit(INPUT_SEMANTIC_AUTHORITY_INVALID) from None
+    return project_map, canonical
+
+
+def rebound_project_map(
+    project_map: dict,
+    canonical_source: dict,
+    prepared_run: Path,
+    changed_ids: dict[str, str],
+) -> dict:
+    try:
+        source_manifest = canonical_source["semantic_manifest"]
+        source_ids = sorted({
+            member
+            for unit in source_manifest["units"]
+            for member in unit["members"]
+        }, key=lambda value: value.encode("utf-8"))
+        prepared_ids, _, _ = project_map_authority.source_inventory(prepared_run)
+        identity_map = dict(changed_ids)
+        for source_id in source_ids:
+            identity_map.setdefault(source_id, source_id)
+        if (
+            set(identity_map) != set(source_ids)
+            or len(set(identity_map.values())) != len(identity_map)
+            or set(identity_map.values()) != set(prepared_ids)
+        ):
+            raise ValueError("prepared contribution identity mapping is not exact")
+
+        raw_units = project_map["semantic_units"]
+        remapped_units = [{
+            **unit,
+            "members": [identity_map[member] for member in unit["members"]],
+        } for unit in raw_units]
+        rebound = project_map_authority.canonical_project_map(
+            prepared_run,
+            project_map["primary_project"],
+            project_map["summary"],
+            remapped_units,
+            source_manifest,
+        )
+        if "events" in project_map:
+            events = project_map["events"]
+            if not isinstance(events, dict):
+                raise ValueError("project-map events authority is invalid")
+            remapped_events: dict[str, object] = {}
+            for source_id, value in events.items():
+                prepared_id = identity_map[source_id]
+                if prepared_id in remapped_events:
+                    raise ValueError("project-map events authority is duplicated")
+                remapped_events[prepared_id] = value
+            rebound["events"] = {
+                event_id: remapped_events[event_id]
+                for event_id in sorted(
+                    remapped_events, key=lambda value: value.encode("utf-8")
+                )
+            }
+        project_map_authority.validate_project_map_authority(prepared_run, rebound)
+        return rebound
+    except (KeyError, TypeError, ValueError):
+        raise SystemExit(INPUT_SEMANTIC_AUTHORITY_INVALID) from None
+
+
+def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
+    meetings = discover_meetings(source)
+    project_map, canonical_source = validated_project_map(source)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(
+        prefix=f".{output.name}.prepare-", dir=output.parent,
+    ))
+    try:
+        trajectories = prepare_trajectories(source, staging)
+        meeting_ids, meeting_warning_count = prepare_meetings(meetings, staging)
+        if not trajectories and not meetings:
+            raise SystemExit(f"no trajectories or meeting found in {source}")
+        write_json(
+            staging / "project-map.json",
+            rebound_project_map(
+                project_map, canonical_source, staging, meeting_ids,
+            ),
+        )
+        write_json(staging / "index.json", {
+            "schema_version": "0.2",
+            "tool": "prepare_ai_review_run",
+            "trajectory_count": len(trajectories),
+            "meeting_count": len(meetings),
+            "source_warning_count": (
+                sum(entry["source_warning_count"] for entry in trajectories)
+                + meeting_warning_count
+            ),
+            "review_status": "pending",
+            "publication_approved": False,
+            "trajectories": trajectories,
+        })
+        staging.replace(output)
+        return trajectories, len(meetings)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
 def main() -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -377,40 +502,13 @@ def main() -> int:
     output = args.out.expanduser().resolve()
     if not source.is_dir():
         raise SystemExit(f"run not found: {source}")
-    if output.exists():
+    if output.exists() or output.is_symlink():
         raise SystemExit(f"output already exists: {output}")
-    meetings = discover_meetings(source)
-
-    trajectories = prepare_trajectories(source, output)
-    meeting_evidence_ids, meeting_warning_count = prepare_meetings(meetings, output)
-    if not trajectories and not meetings:
-        raise SystemExit(f"no trajectories or meeting found in {source}")
-    project_map = source / "project-map.json"
-    if project_map.is_file():
-        project_map_data = read_json(project_map)
-        if meeting_evidence_ids and isinstance(project_map_data.get("events"), dict):
-            project_map_data["events"] = {
-                meeting_evidence_ids.get(str(event_id), str(event_id)): label
-                for event_id, label in project_map_data["events"].items()
-            }
-        write_json(output / "project-map.json", project_map_data)
-    write_json(output / "index.json", {
-        "schema_version": "0.2",
-        "tool": "prepare_ai_review_run",
-        "trajectory_count": len(trajectories),
-        "meeting_count": len(meetings),
-        "source_warning_count": (
-            sum(entry["source_warning_count"] for entry in trajectories)
-            + meeting_warning_count
-        ),
-        "review_status": "pending",
-        "publication_approved": False,
-        "trajectories": trajectories,
-    })
+    trajectories, meeting_count = prepare_run(source, output)
     print(json.dumps({
         "output": str(output),
         "trajectories": len(trajectories),
-        "meetings": len(meetings),
+        "meetings": meeting_count,
     }, ensure_ascii=False))
     return 0
 

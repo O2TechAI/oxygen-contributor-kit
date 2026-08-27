@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -83,6 +84,82 @@ def write_meeting(run: Path, meeting_id: str, *, root=False, records=None) -> Pa
     return path
 
 
+def write_semantic_project_map(
+    run: Path, *, units: list[dict] | None = None, include_events: bool = True,
+) -> dict:
+    ids, _, _ = MODULE.project_map_authority.source_inventory(run)
+    if units is None:
+        units = [{"id": "unit-all", "kind": "discussion", "members": ids}]
+    project_map = MODULE.project_map_authority.canonical_project_map(
+        run, "Synthetic Project", "Synthetic organization.", units,
+    )
+    if include_events:
+        project_map["events"] = {
+            contribution_id: {
+                "project": "Synthetic Project",
+                "confidence": 100,
+                "summary": "Synthetic unit",
+            }
+            for contribution_id in ids
+        }
+    (run / "project-map.json").write_text(
+        json.dumps(project_map, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return project_map
+
+
+def tree_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*")) if path.is_file()
+    }
+
+
+def synthetic_event_id(label: str) -> str:
+    return f"evt-{hashlib.sha256(label.encode('utf-8')).hexdigest()}"
+
+
+def assert_viewer_accepts(test_case: unittest.TestCase, run: Path) -> None:
+    project_map = json.loads((run / "project-map.json").read_text(encoding="utf-8"))
+    ids, _, digests = MODULE.project_map_authority.source_inventory(run)
+    payload = {
+        "manifest": project_map["semantic_manifest"],
+        "records": [{"id": value, "sourceDigest": digests[value]} for value in ids],
+    }
+    readiness_uri = (
+        MODULE_PATH.parents[2] / "viewer" / "lib" / "story-readiness.ts"
+    ).as_uri()
+    script = f"""
+import {{ registerHooks }} from 'node:module';
+registerHooks({{
+  resolve(specifier, context, nextResolve) {{
+    if (specifier.startsWith('.') && !/\\.[^/]+$/.test(specifier)) {{
+      try {{ return nextResolve(`${{specifier}}.ts`, context); }}
+      catch {{ return nextResolve(`${{specifier}}/index.ts`, context); }}
+    }}
+    return nextResolve(specifier, context);
+  }},
+}});
+const {{ validateSemanticManifestAuthority }} = await import({json.dumps(readiness_uri)});
+let input = '';
+process.stdin.setEncoding('utf8');
+for await (const chunk of process.stdin) input += chunk;
+const payload = JSON.parse(input);
+const result = await validateSemanticManifestAuthority(payload.manifest, payload.records);
+if (!result.ok) {{ console.error(JSON.stringify(result)); process.exit(1); }}
+"""
+    try:
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            input=json.dumps(payload), capture_output=True, text=True,
+            encoding="utf-8", check=False,
+        )
+    except FileNotFoundError:
+        test_case.skipTest("Node is unavailable for Viewer authority validation")
+    test_case.assertEqual(result.returncode, 0, result.stderr)
+
+
 def directory_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path) -> None:
     try:
         link.symlink_to(target, target_is_directory=True)
@@ -126,6 +203,28 @@ def file_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path) ->
 
 
 class PrepareAiReviewRunTest(unittest.TestCase):
+    def run_main(self, source: Path, output: Path) -> None:
+        with mock.patch.object(sys, "argv", [
+            str(MODULE_PATH), "--run", str(source), "--out", str(output),
+        ]), mock.patch("builtins.print"):
+            self.assertEqual(MODULE.main(), 0)
+
+    def assert_prepared_authority(self, output: Path) -> dict:
+        project_map = json.loads(
+            (output / "project-map.json").read_text(encoding="utf-8")
+        )
+        MODULE.project_map_authority.validate_project_map_authority(output, project_map)
+        self.assertEqual(LAUNCHER.finalized_semantic_manifest(output), project_map["semantic_manifest"])
+        ids, _, _ = MODULE.project_map_authority.source_inventory(output)
+        members = [
+            member
+            for unit in project_map["semantic_manifest"]["units"]
+            for member in unit["members"]
+        ]
+        self.assertEqual(sorted(members), ids)
+        self.assertEqual(len(members), len(set(members)))
+        return project_map
+
     def assert_projection_invalid(self, mutate):
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -447,6 +546,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             source = root / "source"
             output = root / "review"
             write_meeting(source, "meeting-only")
+            write_semantic_project_map(source)
 
             with mock.patch.object(sys, "argv", [
                 str(MODULE_PATH), "--run", str(source), "--out", str(output)
@@ -463,6 +563,174 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             self.assertEqual(report, {
                 "output": str(output), "trajectories": 0, "meetings": 1,
             })
+
+    def test_real_single_trajectory_flow_rebinds_canonical_authority(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            event_id = synthetic_event_id("single")
+            write_source_trajectory(source, "traj-one", [{
+                "event_id": event_id,
+                "event_type": "tool_result",
+                "actor": {"type": "tool"},
+                "payload": {"stdout": "private synthetic tool output"},
+            }])
+            original = write_semantic_project_map(source)
+
+            self.run_main(source, output)
+
+            prepared = self.assert_prepared_authority(output)
+            self.assertEqual(prepared["semantic_units"][0]["members"], [event_id])
+            self.assertNotEqual(
+                prepared["source_authority"]["sourceDigest"],
+                original["source_authority"]["sourceDigest"],
+            )
+            self.assertEqual(prepared["semantic_manifest"]["revision"], 2)
+            self.assertEqual(prepared["semantic_manifest"]["units"][0]["revision"], 2)
+
+    def test_real_plural_meetings_rewrite_every_semantic_member(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            alpha_path = write_meeting(source, "private-alpha")
+            write_meeting(source, "private-beta")
+            alpha = json.loads(alpha_path.read_text(encoding="utf-8"))
+            alpha["records"][0].pop("record_id")
+            alpha_path.write_text(json.dumps(alpha), encoding="utf-8")
+            write_semantic_project_map(source)
+
+            self.run_main(source, output)
+
+            prepared = self.assert_prepared_authority(output)
+            expected = [
+                "meeting-000001:record-000001",
+                "meeting-000002:record-000001",
+            ]
+            self.assertEqual(prepared["semantic_units"][0]["members"], expected)
+            self.assertEqual(sorted(prepared["events"]), expected)
+            serialized = json.dumps(prepared, ensure_ascii=False)
+            self.assertNotIn("private-alpha", serialized)
+            self.assertNotIn("private-beta", serialized)
+            self.assertNotIn("source-record-id", serialized)
+            self.assertFalse((output / "meeting.json").exists())
+
+    def test_mixed_flow_has_exact_coverage_and_deterministic_bytes(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            first = root / "review-first"
+            second = root / "review-second"
+            event_id = synthetic_event_id("mixed")
+            write_source_trajectory(source, "traj-mixed", [{
+                "event_id": event_id,
+                "event_type": "message",
+                "actor": {"type": "user"},
+                "payload": {"text": "safe synthetic request"},
+            }])
+            write_meeting(source, "private-meeting")
+            ids, _, _ = MODULE.project_map_authority.source_inventory(source)
+            write_semantic_project_map(source, units=[
+                {"id": "unit-meeting", "kind": "discussion", "members": [
+                    member for member in ids if ":" in member
+                ]},
+                {"id": "unit-trajectory", "kind": "progression", "members": [
+                    member for member in ids if ":" not in member
+                ]},
+            ])
+
+            self.run_main(source, first)
+            self.run_main(source, second)
+
+            prepared = self.assert_prepared_authority(first)
+            self.assertEqual(prepared["source_authority"]["contributionCount"], 2)
+            self.assertEqual(
+                {unit["id"]: unit["memberCount"] for unit in prepared["semantic_manifest"]["units"]},
+                {"unit-meeting": 1, "unit-trajectory": 1},
+            )
+            assert_viewer_accepts(self, first)
+            self.assertEqual(tree_bytes(first), tree_bytes(second))
+
+    def test_stale_copied_authority_is_rejected_by_attach_contract(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            prepared = root / "prepared"
+            write_meeting(source, "private-meeting")
+            stale = write_semantic_project_map(source)
+            meetings = MODULE.discover_meetings(source)
+            MODULE.prepare_meetings(meetings, prepared)
+            before = json.dumps(stale, sort_keys=True)
+
+            with self.assertRaisesRegex(ValueError, "unknown members"):
+                MODULE.project_map_authority.validate_project_map_authority(prepared, stale)
+
+            self.assertEqual(json.dumps(stale, sort_keys=True), before)
+
+    def test_invalid_semantic_authority_fails_atomically(self):
+        mutations = {
+            "stale-manifest-count": lambda value: value["semantic_manifest"]["units"][0].update(
+                memberCount=99
+            ),
+            "stale-manifest-digest": lambda value: value["semantic_manifest"].update(
+                manifestDigest="0" * 64
+            ),
+            "foreign-member": lambda value: value["semantic_units"][0]["members"].__setitem__(
+                0, "foreign-member"
+            ),
+            "duplicate-member": lambda value: value["semantic_units"][0]["members"].append(
+                value["semantic_units"][0]["members"][0]
+            ),
+            "missing-member": lambda value: value["semantic_units"][0]["members"].pop(),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source"
+                output = root / "review"
+                first_id = synthetic_event_id("invalid-one")
+                second_id = synthetic_event_id("invalid-two")
+                write_source_trajectory(source, "traj-invalid", [{
+                    "event_id": first_id, "event_type": "message",
+                    "actor": {"type": "user"}, "payload": {"text": "one"},
+                }, {
+                    "event_id": second_id, "event_type": "message",
+                    "actor": {"type": "assistant"}, "payload": {"text": "two"},
+                }])
+                project_map = write_semantic_project_map(source)
+                mutate(project_map)
+                (source / "project-map.json").write_text(
+                    json.dumps(project_map, ensure_ascii=False), encoding="utf-8",
+                )
+                source_before = tree_bytes(source)
+
+                with mock.patch.object(sys, "argv", [
+                    str(MODULE_PATH), "--run", str(source), "--out", str(output),
+                ]):
+                    with self.assertRaisesRegex(
+                        SystemExit, f"^{MODULE.INPUT_SEMANTIC_AUTHORITY_INVALID}$"
+                    ):
+                        MODULE.main()
+
+                self.assertFalse(output.exists())
+                self.assertEqual(tree_bytes(source), source_before)
+
+    def test_empty_canonical_universe_does_not_create_a_review_run(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            source.mkdir()
+            write_semantic_project_map(source, units=[])
+
+            with mock.patch.object(sys, "argv", [
+                str(MODULE_PATH), "--run", str(source), "--out", str(output),
+            ]):
+                with self.assertRaisesRegex(SystemExit, "^no trajectories or meeting found"):
+                    MODULE.main()
+
+            self.assertFalse(output.exists())
 
     def test_plural_meetings_prepare_as_distinct_private_documents(self):
         with TemporaryDirectory() as temp:
