@@ -65,6 +65,11 @@ PLATFORM_USER_PREFIXES = (
     "# AGENTS.md instructions",
 )
 
+CURRENT_CODEX_SEMANTIC_TOOLS = {
+    "create_thread", "handoff_thread", "read_thread", "send_message_to_thread", "wait_threads",
+}
+CURRENT_CODEX_TOOL_PREFIX = "mcp__codex_app__"
+
 
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -280,6 +285,121 @@ def infer_action(tool_name: str, raw_arguments: Any) -> str:
     return "command" if tool_name in {"exec", "exec_command", "write_stdin"} else "other"
 
 
+def current_codex_tool_name(tool_name: str) -> str | None:
+    if tool_name in CURRENT_CODEX_SEMANTIC_TOOLS:
+        return tool_name
+    if tool_name.startswith(CURRENT_CODEX_TOOL_PREFIX):
+        candidate = tool_name[len(CURRENT_CODEX_TOOL_PREFIX):]
+        if candidate in CURRENT_CODEX_SEMANTIC_TOOLS:
+            return candidate
+    return None
+
+
+def current_thread_result_messages(tool_name: str, value: Any) -> list[tuple[str, str, str]]:
+    """Extract only authored read results or terminal wait results."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if isinstance(value, list):
+        decoded: list[Any] = []
+        for block in value:
+            if not (
+                isinstance(block, dict) and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ):
+                return []
+            try:
+                decoded.append(json.loads(block["text"]))
+            except json.JSONDecodeError:
+                return []
+        value = decoded
+    if not isinstance(value, (dict, list)):
+        return []
+    messages: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    semantic_kinds = {
+        "assistant_message", "commentary", "final", "final_report", "finding",
+        "message", "progress", "report", "user_message", "agentmessage", "usermessage",
+    }
+
+    def add(role: str, phase: str, text: Any) -> None:
+        identity = (role, text)
+        if isinstance(text, str) and text.strip() and identity not in seen:
+            seen.add(identity)
+            messages.append((role, phase, text))
+
+    def walk(node: Any, context: str | None = None) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item, context)
+            return
+        if not isinstance(node, dict):
+            return
+        if tool_name == "read_thread":
+            raw_role = node.get("role")
+            role = raw_role.lower() if isinstance(raw_role, str) else context
+            role = "user" if role in {"human", "user"} else (
+                "assistant" if role in {"agent", "ai", "assistant"} else None
+            )
+            kind = str(node.get("type", node.get("kind", node.get("phase", "")))).lower().replace("-", "_")
+            role = role or ("user" if kind in {"user_message", "usermessage"} else (
+                "assistant" if kind in semantic_kinds else None
+            ))
+            phase = str(node.get("phase") or kind or "coordination")
+            if role and (not kind or kind in semantic_kinds):
+                for key in (
+                    "text", "message", "report", "final_text", "finalText",
+                    "final_response", "finalResponse", "final_output", "finalOutput",
+                ):
+                    add(role, phase, node.get(key))
+                content = node.get("content")
+                if isinstance(content, str):
+                    add(role, phase, content)
+                elif isinstance(content, list):
+                    add(role, phase, extract_text(content)[0])
+            for key, child_role in (
+                ("items", role), ("messages", role), ("responses", role),
+                ("turns", role), ("updates", role), ("latestTurn", None),
+            ):
+                if key in node:
+                    walk(node[key], child_role)
+            add("user", "message", node.get("userMessage"))
+            for key in ("agentMessage", "assistantMessage", "latestAssistantMessage"):
+                add("assistant", "final", node.get(key))
+            return
+        if node.get("timedOut") is True:
+            return
+        raw_status = node.get("status")
+        status = str(raw_status).lower().replace("-", "_") if raw_status else context
+        if status in {"complete", "completed"}:
+            for key in (
+                "final", "final_text", "finalText", "final_response", "finalResponse",
+                "final_output", "finalOutput", "report", "latestAssistantMessage",
+            ):
+                add("assistant", "final", node.get(key))
+        elif status in {
+            "blocked", "needs_attention", "needsattention", "requires_approval",
+            "requiresapproval", "waiting_for_user_input", "waitingforuserinput",
+        }:
+            keys = ("latestAssistantMessage",)
+            if status in {"needs_attention", "needsattention"}:
+                keys += ("message", "text", "question", "attention_text", "attentionText")
+            for key in keys:
+                add("assistant", "needs_attention", node.get(key))
+        for key, child_status in (
+            ("completed", "completed"), ("needs_attention", "needs_attention"),
+            ("needsAttention", "needs_attention"), ("results", status),
+            ("targets", status), ("threads", status), ("polls", status),
+        ):
+            if key in node:
+                walk(node[key], child_status)
+
+    walk(value)
+    return messages
+
+
 def parse_exit_code(text: str) -> int | None:
     matches = re.findall(r"(?i)(?:exit code|process exited with code)\s*[:=]?\s*(-?\d+)", text)
     return int(matches[-1]) if matches else None
@@ -485,6 +605,31 @@ class Extractor:
             )
         self.duplicate_semantic_replays += 1
         return False
+
+    def add_thread_message(
+        self, record: dict[str, Any], raw: bytes, line_number: int,
+        source_payload: dict[str, Any], record_type: str, role: str,
+        phase: str, direction: str, text: str,
+    ) -> None:
+        semantic_value = {"role": role, "phase": phase, "text": text}
+        if not self.should_emit_semantic_record(
+            source_payload, record_type, semantic_value,
+        ):
+            return
+        actor = self.agent_actor() if role == "assistant" else {
+            "id": "participant-01", "type": "human", "parent_agent_id": None,
+        }
+        self.add_event(
+            timestamp=record.get("timestamp"), event_type="message", actor=actor,
+            payload={
+                "role": role, "phase": phase, "interaction_direction": direction,
+                "text": redact_text(text, self.home), "attachments": [],
+            },
+            source=self.semantic_source(
+                source_payload, raw, line_number, record_type, direction, semantic_value,
+            ),
+            turn_id=source_turn_id(record["payload"]),
+        )
 
     def add_event(
         self,
@@ -925,6 +1070,18 @@ class Extractor:
             value = arguments
         if not isinstance(value, dict):
             return
+        current_tool = current_codex_tool_name(tool_name)
+        if current_tool in {"create_thread", "send_message_to_thread", "handoff_thread"}:
+            field = "followUpPrompt" if current_tool == "handoff_thread" else "prompt"
+            message = value.get(field)
+            if not isinstance(message, str) or not message.strip():
+                return
+            record_type = f"coordination_prompt:{current_tool}"
+            self.add_thread_message(
+                record, raw, line_number, record["payload"], record_type,
+                "assistant", "coordination", "agent_to_agent", message,
+            )
+            return
         if tool_name in {"spawn_agent", "followup_task", "send_message"}:
             message = value.get("message")
             if not isinstance(message, str) or not message.strip():
@@ -1144,6 +1301,21 @@ class Extractor:
         turn_id = source_turn_id(payload)
         tool_name = str(self.call_metadata.get(call_id, {}).get("tool_name") or "")
         raw_output = payload.get("output", payload.get("result"))
+        current_tool = current_codex_tool_name(tool_name)
+        if current_tool in {"read_thread", "wait_threads"}:
+            messages = current_thread_result_messages(current_tool, raw_output)
+            for index, item in enumerate(messages):
+                role, phase, text = item
+                direction = "human_to_agent" if role == "user" else "agent_to_agent"
+                semantic_payload = {
+                    **payload,
+                    "id": f"{call_id}:{current_tool}:{index}",
+                }
+                record_type = f"thread_content:{current_tool}"
+                self.add_thread_message(
+                    record, raw, line_number, semantic_payload, record_type,
+                    role, phase, direction, text,
+                )
         if tool_name == "request_user_input":
             response_value = raw_output
             if isinstance(response_value, str):

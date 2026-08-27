@@ -68,8 +68,11 @@ SEMANTIC_SOURCE_RECORD_TYPES = {
     "agent_plan",
     "agent_reasoning",
     "agent_message",
+    "coordination_prompt:create_thread",
     "coordination_prompt:followup_task",
+    "coordination_prompt:handoff_thread",
     "coordination_prompt:send_message",
+    "coordination_prompt:send_message_to_thread",
     "coordination_prompt:spawn_agent",
     "coordination_prompt:agent",
     "coordination_prompt:task",
@@ -80,6 +83,8 @@ SEMANTIC_SOURCE_RECORD_TYPES = {
     "subagent_finding",
     "thinking",
     "task_complete_agent_message",
+    "thread_content:read_thread",
+    "thread_content:wait_threads",
     "user_message",
 }
 MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991

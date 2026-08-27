@@ -671,6 +671,153 @@ class PlatformFilterTest(unittest.TestCase):
             self.assertEqual(summary["kept_by_reason"][PROJECTION.KEEP_HUMAN_FEEDBACK], 1)
             self.assertNotIn("command-shaped", json.dumps(projected))
 
+    def test_current_codex_thread_tools_retain_only_authored_semantics(self):
+        def call(call_id, name, arguments):
+            return {
+                "type": "response_item", "timestamp": "2026-08-26T01:00:00Z",
+                "payload": {
+                    "id": call_id, "call_id": call_id, "type": "function_call",
+                    "name": name, "arguments": json.dumps(arguments),
+                },
+            }
+
+        def result(call_id, output):
+            return {
+                "type": "response_item", "timestamp": "2026-08-26T01:00:01Z",
+                "payload": {
+                    "id": f"{call_id}-result", "call_id": call_id,
+                    "type": "function_call_output",
+                    "output": [{"type": "text", "text": json.dumps(output)}],
+                },
+            }
+
+        create = call(
+            "create", "create_thread",
+            {"prompt": "Implement the bounded parser repair.", "projectId": "project-secret"},
+        )
+        records = [
+            create,
+            json.loads(json.dumps(create)),
+            call(
+                "send", "mcp__codex_app__send_message_to_thread",
+                {"threadId": "thread-secret", "prompt": "Return only verified findings."},
+            ),
+            call(
+                "handoff", "handoff_thread",
+                {"threadId": "thread-secret", "followUpPrompt": "Continue from the clean base."},
+            ),
+            call(
+                "empty-handoff", "mcp__codex_app__handoff_thread",
+                {"threadId": "thread-secret", "followUpPrompt": "   "},
+            ),
+            call("read", "mcp__codex_app__read_thread", {"threadId": "thread-secret"}),
+            result("read", {
+                "threadId": "thread-secret", "hostId": "host-secret", "status": "completed",
+                "turns": [{
+                    "turnId": "turn-secret",
+                    "items": [
+                        {"type": "userMessage", "content": "Check the exact base."},
+                        {"type": "progress", "text": "The required base is verified."},
+                        {
+                            "type": "agentMessage", "phase": "final",
+                            "text": "The scoped repair is complete.",
+                        },
+                        {
+                            "type": "tool_result", "role": "assistant",
+                            "text": "raw command output must stay mechanical",
+                            "truncated": True,
+                        },
+                        {"role": "assistant", "content": {"text": "malformed authored wrapper"}},
+                    ],
+                }],
+                "latestAssistantMessage": "The scoped repair is complete.",
+                "cursor": "cursor-secret", "tokenUsage": 123,
+            }),
+            call("wait-final", "wait_threads", {"targets": [{"threadId": "thread-secret"}]}),
+            result("wait-final", {
+                "timedOut": False, "wake": {"threadId": "thread-secret"},
+                "polls": [{
+                    "threadId": "thread-secret", "hostId": "host-secret", "status": "completed",
+                    "latestAssistantMessage": "The task passed all scoped tests.",
+                }],
+            }),
+            call(
+                "wait-attention", "mcp__codex_app__wait_threads",
+                {"targets": [{"threadId": "thread-secret"}]},
+            ),
+            result("wait-attention", {
+                "timedOut": False,
+                "polls": [{
+                    "threadId": "thread-secret", "status": "blocked",
+                    "latestAssistantMessage": "Please confirm the source boundary.",
+                }],
+            }),
+            call("wait-timeout", "wait_threads", {"targets": []}),
+            result("wait-timeout", {
+                "timedOut": True, "wake": None,
+                "polls": [{
+                    "threadId": "thread-secret", "status": "running",
+                    "latestAssistantMessage": "timeout metadata is not a final report",
+                }],
+            }),
+            call("wait-status", "wait_threads", {"targets": []}),
+            result("wait-status", {"status": "completed", "cursor": "cursor-secret"}),
+            call("unknown", "mcp__codex_app__list_threads", {"prompt": "Do not retain this."}),
+            call("malformed-call", "create_thread", {"prompt": {"text": "not a string"}}),
+            call("malformed-read", "read_thread", {"threadId": "thread-secret"}),
+            {
+                "type": "response_item", "timestamp": "2026-08-26T01:00:02Z",
+                "payload": {
+                    "id": "malformed-read-result", "call_id": "malformed-read",
+                    "type": "function_call_output", "output": "{not-json",
+                },
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            session = root / "session.jsonl"
+            session.write_text(
+                "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8",
+            )
+            extractor = MODULE.Extractor(
+                session, root / "out", "traj-current-thread-tools", overwrite=False,
+                source_home=root, source_user="tester",
+            )
+            extractor.process()
+            projected, summary = PROJECTION.project_events(extractor.events)
+            self.assertEqual(summary["kept_event_count"], 8)
+            self.assertEqual(extractor.duplicate_semantic_replays, 1)
+            self.assertEqual(
+                [event["source"]["record_type"] for event in projected],
+                [
+                    "coordination_prompt:create_thread",
+                    "coordination_prompt:send_message_to_thread",
+                    "coordination_prompt:handoff_thread",
+                    "thread_content:read_thread",
+                    "thread_content:read_thread",
+                    "thread_content:read_thread",
+                    "thread_content:wait_threads",
+                    "thread_content:wait_threads",
+                ],
+            )
+            texts = [event["payload"]["text"] for event in projected]
+            self.assertEqual(texts.count("Implement the bounded parser repair."), 1)
+            self.assertEqual(texts.count("The scoped repair is complete."), 1)
+            self.assertEqual(texts.count("The task passed all scoped tests."), 1)
+            self.assertIn("Please confirm the source boundary.", texts)
+            self.assertEqual(projected[3]["actor"]["type"], "human")
+            self.assertEqual(projected[3]["payload"]["interaction_direction"], "human_to_agent")
+            self.assertTrue(all(
+                event["payload"]["interaction_direction"] == "agent_to_agent"
+                for event in projected[:3] + projected[4:]
+            ))
+            projected_json = json.dumps(projected)
+            for excluded in (
+                "thread-secret", "host-secret", "cursor-secret", "raw command output",
+                "timeout metadata", "Do not retain this", "malformed authored wrapper",
+            ):
+                self.assertNotIn(excluded, projected_json)
+
 
 if __name__ == "__main__":
     unittest.main()
