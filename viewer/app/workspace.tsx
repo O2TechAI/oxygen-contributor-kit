@@ -22,7 +22,7 @@ import {
   type ChapterReviewBlocker,
   type SuccessorChapterReviewState,
 } from "../lib/story-review";
-import { STORY_PREFIX, SUCCESSOR_STORY_PREFIX, compareStorySourceIdentity, milestoneKindLabel, storyReleaseTargetCatalog, type EvidenceReference, type StoryLanguage, type SuccessorStorySource, type TimelineMilestone } from "../lib/timeline";
+import { STORY_PREFIX, SUCCESSOR_STORY_PREFIX, compareStorySourceIdentity, milestoneKindLabel, storyReleaseTargetCatalog, successorTimelinePresentation, type EvidenceReference, type StoryLanguage, type SuccessorStorySource, type TimelineMilestone } from "../lib/timeline";
 import {
   isReservedStoryOrganizationReason,
   selectReviewableStoryTimeline,
@@ -93,6 +93,7 @@ type ViewerChapter = {
   before?: string;
   after?: string;
   chips?: string[];
+  successorTimelineMarker?: "ai_insight";
   legacy?: TimelineMilestone;
   successor?: SuccessorViewerChapter;
 };
@@ -141,7 +142,7 @@ const workspaceUi = {
     milestones:"meaningful milestones", phases:"narrative phases", reviewed:"highlights reviewed", successorReviewed:"AI Insights resolved", retained:"source records retained",
     timeline:"Project Story", release:"Release preview", preferences:"Preferences", mainProject:"MAIN PROJECT", events:"events",
     introTitle:"AI-selected highlights are the table of contents.", intro:"Open a chapter for People, Story, and Privacy. AI insights stay inside the narrative; local evidence stays secondary.",
-    before:"BEFORE", after:"AFTER", selected:"AI-selected highlight", evidence:"reviewed evidence event", read:"Read chapter", workflow:"Workflow",
+    before:"BEFORE", after:"AFTER", selected:"AI-selected highlight", timelineAiInsight:"AI Insight", evidence:"reviewed evidence event", read:"Read chapter", workflow:"Workflow",
     nextStep:"Read a Chapter to review the full story, evidence, direct learning, and reusable rules.",
     downloadReviewKicker:"Review required", downloadReviewTitle:"Review before download", downloadReviewIntro:"Complete these Chapter review items, then try the download again.", downloadReviewCount:"unresolved review items", openReview:"Open review", close:"Close", chapter:"Chapter",
     downloadBlockers:{
@@ -161,7 +162,7 @@ const workspaceUi = {
     milestones:"个重要章节", phases:"个叙事阶段", reviewed:"个高光已审阅", successorReviewed:"项 AI 洞察已解决", retained:"条来源记录保留",
     timeline:"项目故事", release:"发布预览", preferences:"偏好", mainProject:"主要项目", events:"条事件",
     introTitle:"AI 选择的高光就是故事目录。", intro:"打开一章，按人物、故事和隐私阅读；AI 洞察留在叙事中，本地证据保持为次要入口。",
-    before:"之前", after:"之后", selected:"AI 选择的高光", evidence:"条已审阅证据", read:"阅读章节", workflow:"工作流",
+    before:"之前", after:"之后", selected:"AI 选择的高光", timelineAiInsight:"AI 洞察", evidence:"条已审阅证据", read:"阅读章节", workflow:"工作流",
     nextStep:"阅读任一章节，完整审阅故事、证据、直接经验与可复用规则。",
     downloadReviewKicker:"需要审阅", downloadReviewTitle:"下载前请完成审阅", downloadReviewIntro:"请完成以下章节审阅项，然后再次尝试下载。", downloadReviewCount:"项待解决审阅", openReview:"打开审阅", close:"关闭", chapter:"章节",
     downloadBlockers:{
@@ -730,21 +731,25 @@ export function InlineWorkspace({
       chips:copy?.timelineChips?.length ? copy.timelineChips : event.story.metric?.split(/\s*·\s*/).filter(Boolean) || [],
       legacy:event,
     };
-  }) : successorProjectChapters.map((chapter) => ({
-    key:chapter.source.key,
-    project:chapter.project,
-    phase:chapter.source.phase.label,
-    kind:chapter.source.kind,
-    title:chapter.source.title,
-    overview:chapter.source.overview,
-    timestamp:chapter.timestamp,
-    evidenceCount:1+chapter.source.evidence.supporting.length,
-    readingMinutes:Math.max(1,Math.ceil(chapter.source.story.blocks.reduce((count,block) => count+block.text.trim().split(/\s+/u).length,0)/220)),
-    before:chapter.source.transition?.before,
-    after:chapter.source.transition?.after,
-    chips:chapter.source.chips,
-    successor:chapter,
-  }));
+  }) : successorProjectChapters.map((chapter) => {
+    const timeline = successorTimelinePresentation(chapter.source);
+    return {
+      key:chapter.source.key,
+      project:chapter.project,
+      phase:chapter.source.phase.label,
+      kind:timeline.kind,
+      title:chapter.source.title,
+      overview:chapter.source.overview,
+      timestamp:chapter.timestamp,
+      evidenceCount:1+chapter.source.evidence.supporting.length,
+      readingMinutes:Math.max(1,Math.ceil(chapter.source.story.blocks.reduce((count,block) => count+block.text.trim().split(/\s+/u).length,0)/220)),
+      before:timeline.before,
+      after:timeline.after,
+      chips:timeline.chips,
+      successorTimelineMarker:timeline.marker,
+      successor:chapter,
+    };
+  });
   const phaseGroups = viewerChapters.reduce<Array<{ name:string; events:ViewerChapter[] }>>((groups,event) => {
     const phase=event.phase;
     const previous=groups.at(-1);
@@ -1062,7 +1067,7 @@ export function InlineWorkspace({
                 {phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
                   <header className="phaseHeading"><span>{String(phaseIndex+1).padStart(2,"0")}</span><div><h2>{group.name}</h2><p>{group.events.length} {storyLanguage==="zh"?"个章节":`milestone${group.events.length===1?"":"s"}`}</p></div></header>
                   <div className="milestoneList">{group.events.map((event) => <article className="milestone" data-kind={event.kind} data-story-key={event.key} key={event.key} aria-labelledby={`milestone-${event.key}`}>
-                    <div className="milestoneMeta"><time dateTime={event.timestamp}>{fmtTimelineDate(event.timestamp,storyLanguage)}</time>{event.kind && <span>{milestoneKindLabel(event.kind,storyLanguage)}</span>}{storyLane==="legacy" && <strong>{labels.selected}</strong>}{storyLane==="successor" && event.successor && event.successor.source.insights.length > 0 && <strong>AI Insight</strong>}</div>
+                    <div className="milestoneMeta"><time dateTime={event.timestamp}>{fmtTimelineDate(event.timestamp,storyLanguage)}</time>{event.kind && <span>{milestoneKindLabel(event.kind,storyLanguage)}</span>}{storyLane==="legacy" && <strong>{labels.selected}</strong>}{storyLane==="successor" && event.successorTimelineMarker === "ai_insight" && <strong>{labels.timelineAiInsight}</strong>}</div>
                     <h3 id={`milestone-${event.key}`}>{event.title}</h3>
                     {event.before && event.after && <div className="transition" aria-label={`${labels.before} to ${labels.after}`}>
                       <div><small>{labels.before}</small><p>{event.before}</p></div><b aria-hidden="true">→</b><div><small>{labels.after}</small><p>{event.after}</p></div>

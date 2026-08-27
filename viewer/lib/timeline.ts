@@ -174,6 +174,25 @@ export type SuccessorStorySource = {
   coverage: SuccessorStoryCoverage;
 };
 
+export type SuccessorTimelinePresentation = Pick<SuccessorStorySource, "kind" | "chips"> & {
+  before?: string;
+  after?: string;
+  marker?: "ai_insight";
+};
+
+/** Exact source-owned Timeline fields for the successor Story lane. */
+export function successorTimelinePresentation(source: SuccessorStorySource): SuccessorTimelinePresentation {
+  const presentation: SuccessorTimelinePresentation = {};
+  if (source.kind !== undefined) presentation.kind = source.kind;
+  if (source.transition !== undefined) {
+    presentation.before = source.transition.before;
+    presentation.after = source.transition.after;
+  }
+  if (source.chips !== undefined) presentation.chips = source.chips;
+  if (source.insights.length > 0) presentation.marker = "ai_insight";
+  return presentation;
+}
+
 export type StoryChapter = {
   scene: string;
   reconstruction: string[];

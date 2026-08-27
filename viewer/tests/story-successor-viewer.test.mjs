@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { successorTimelinePresentation } from "../lib/timeline.ts";
 
 const [editor, workspace, navigation, route] = await Promise.all([
   readFile(new URL("../app/story-chapter-editor.tsx", import.meta.url), "utf8"),
@@ -129,23 +130,33 @@ test("successor progress counts resolved AI versions and presents zero as affirm
   assert.doesNotMatch(successorEditor, /source\.insights\.length\s*\?\s*"No AI Insights required"/);
 });
 
-test("successor Timeline preserves source metadata without manufacturing markers or labels", () => {
-  const successorTimeline = workspace.slice(
-    workspace.indexOf("}) : successorProjectChapters.map"),
-    workspace.indexOf("const phaseGroups"),
-  );
+test("successor Timeline executes the exact source mapping without manufacturing fields", () => {
+  const transition = { before: "Manual review", after: "Approved release" };
+  const chips = ["reviewed", "local-only"];
+  const present = successorTimelinePresentation({
+    kind: "decision",
+    transition,
+    chips,
+    insights: [{ id: "insight-1" }],
+  });
+  const absent = successorTimelinePresentation({ insights: [] });
+
+  assert.equal(present.kind, "decision");
+  assert.equal(present.before, transition.before);
+  assert.equal(present.after, transition.after);
+  assert.strictEqual(present.chips, chips);
+  assert.equal(present.marker, "ai_insight");
+  assert.deepEqual(absent, {});
+  assert.equal(Object.hasOwn(absent, "kind"), false);
+  assert.equal(Object.hasOwn(absent, "chips"), false);
+
   const timelineRows = workspace.slice(
     workspace.indexOf('<div className="milestoneMeta">'),
     workspace.indexOf("<footer>"),
   );
-  assert.match(successorTimeline, /kind:chapter\.source\.kind,/);
-  assert.match(successorTimeline, /before:chapter\.source\.transition\?\.before,/);
-  assert.match(successorTimeline, /after:chapter\.source\.transition\?\.after,/);
-  assert.match(successorTimeline, /chips:chapter\.source\.chips,/);
-  assert.doesNotMatch(successorTimeline, /kind:chapter\.source\.kind \|\| "foundation"|chips:\[\]/);
-  assert.doesNotMatch(successorTimeline, /transition\?\.(?:before|after)\s*\|\||chips:chapter\.source\.chips\s*\|\|/);
-  assert.match(timelineRows, /event\.kind && <span>\{milestoneKindLabel\(event\.kind,storyLanguage\)\}<\/span>/);
-  assert.match(timelineRows, /storyLane==="successor" && event\.successor && event\.successor\.source\.insights\.length > 0 && <strong>AI Insight<\/strong>/);
+  assert.match(workspace, /timelineAiInsight:"AI Insight"/);
+  assert.match(workspace, /timelineAiInsight:"AI 洞察"/);
+  assert.match(timelineRows, /storyLane==="successor" && event\.successorTimelineMarker === "ai_insight" && <strong>\{labels\.timelineAiInsight\}<\/strong>/);
   assert.doesNotMatch(timelineRows, /Story Chapter|successorChapterReviews/);
   assert.match(timelineRows, /storyLane==="legacy" && <strong>\{labels\.selected\}<\/strong>/);
 });
