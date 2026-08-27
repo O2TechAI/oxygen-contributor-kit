@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -52,6 +53,29 @@ def tree_snapshot(root: Path) -> list[tuple[str, str, bytes | None]]:
         snapshot.append((relative, "dir" if path.is_dir() else "file",
                          None if path.is_dir() else path.read_bytes()))
     return snapshot
+
+
+def junction_or_symlink(testcase: unittest.TestCase, link: Path, target: Path):
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if result.returncode != 0:
+            testcase.skipTest(f"directory junction unavailable: {result.stderr.strip()}")
+        return lambda: os.rmdir(link)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        testcase.skipTest(f"directory symlink unavailable: {error}")
+    return link.unlink
+
+
+def hard_link_or_skip(testcase: unittest.TestCase, source: Path, target: Path) -> None:
+    try:
+        os.link(source, target)
+    except OSError as error:
+        testcase.skipTest(f"hard links unavailable: {error}")
 
 
 class BoundedMetadataScanTest(unittest.TestCase):
@@ -282,6 +306,56 @@ class DiscoveryContractTest(unittest.TestCase):
 
 
 class CollectorMainBoundaryTest(unittest.TestCase):
+    def test_output_root_junction_fails_before_touching_external_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            repo.mkdir()
+            external = root / "external"
+            external.mkdir()
+            (external / "sentinel.bin").write_bytes(b"junction sentinel\x00")
+            before = tree_snapshot(external)
+            redirected_parent = root / "redirected-parent"
+            cleanup = junction_or_symlink(self, redirected_parent, external)
+            requested = redirected_parent / "requested-run"
+            try:
+                with self.assertRaises(SystemExit):
+                    MODULE.main([str(repo), "--out", str(requested)])
+                self.assertEqual(tree_snapshot(external), before)
+            finally:
+                cleanup()
+
+    def test_hard_linked_collector_index_fails_before_any_mutation(self):
+        artifacts = (
+            Path("index.json"),
+            Path("trajectories/traj-hard/events.jsonl"),
+            Path("trajectories/traj-hard/manifest.json"),
+            Path("memory/repo/notes.md"),
+        )
+        for artifact in artifacts:
+            with self.subTest(artifact=artifact), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                repo = root / "repo"
+                repo.mkdir()
+                external = root / "external-artifact"
+                external.write_bytes(b"hard-link sentinel\x00")
+                out = root / "run"
+                target = out / artifact
+                target.parent.mkdir(parents=True)
+                hard_link_or_skip(self, external, target)
+                if artifact != Path("index.json"):
+                    (out / "index.json").write_text(
+                        '{"tool":"collect_repo_trajectories"}\n', encoding="utf-8"
+                    )
+                before_out = tree_snapshot(out)
+                before_external = external.read_bytes()
+
+                with self.assertRaises(SystemExit):
+                    MODULE.main([str(repo), "--out", str(out)])
+
+                self.assertEqual(external.read_bytes(), before_external)
+                self.assertEqual(tree_snapshot(out), before_out)
+
     def test_writable_historical_shared_location_is_unchanged(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

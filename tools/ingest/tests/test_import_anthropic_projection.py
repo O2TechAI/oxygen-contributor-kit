@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -35,7 +37,75 @@ def tree_snapshot(root: Path) -> list[tuple[str, str, bytes | None]]:
     return snapshot
 
 
+def junction_or_symlink(testcase: unittest.TestCase, link: Path, target: Path):
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if result.returncode != 0:
+            testcase.skipTest(f"directory junction unavailable: {result.stderr.strip()}")
+        return lambda: os.rmdir(link)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        testcase.skipTest(f"directory symlink unavailable: {error}")
+    return link.unlink
+
+
+def hard_link_or_skip(testcase: unittest.TestCase, source: Path, target: Path) -> None:
+    try:
+        os.link(source, target)
+    except OSError as error:
+        testcase.skipTest(f"hard links unavailable: {error}")
+
+
 class AnthropicProjectionTest(unittest.TestCase):
+    def test_output_root_junction_fails_before_touching_external_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "conversations.json"
+            source.write_text("[]", encoding="utf-8")
+            external = root / "external"
+            external.mkdir()
+            (external / "sentinel.bin").write_bytes(b"junction sentinel\x00")
+            before = tree_snapshot(external)
+            requested = root / "requested-run"
+            cleanup = junction_or_symlink(self, requested, external)
+            try:
+                with self.assertRaises(SystemExit):
+                    MODULE.main([str(source), "--out", str(requested)])
+                self.assertEqual(tree_snapshot(external), before)
+            finally:
+                cleanup()
+
+    def test_hard_linked_index_fails_before_any_mutation(self):
+        artifacts = (
+            Path("index.json"),
+            Path("trajectories/traj-hard/events.jsonl"),
+            Path("trajectories/traj-hard/manifest.json"),
+            Path("memory/claudeai-memory/files/note.md"),
+        )
+        for artifact in artifacts:
+            with self.subTest(artifact=artifact), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "conversations.json"
+                source.write_text("[]", encoding="utf-8")
+                external = root / "external-artifact"
+                external.write_bytes(b"hard-link sentinel\x00")
+                out = root / "run"
+                target = out / artifact
+                target.parent.mkdir(parents=True)
+                hard_link_or_skip(self, external, target)
+                before_out = tree_snapshot(out)
+                before_external = external.read_bytes()
+
+                with self.assertRaises(SystemExit):
+                    MODULE.main([str(source), "--out", str(out)])
+
+                self.assertEqual(external.read_bytes(), before_external)
+                self.assertEqual(tree_snapshot(out), before_out)
+
     def test_writable_historical_shared_location_is_unchanged(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

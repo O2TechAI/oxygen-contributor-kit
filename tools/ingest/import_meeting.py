@@ -28,38 +28,13 @@ import tempfile
 from pathlib import Path
 
 from oxygen_common import (configure_utf8_stdio, fail, progress, safe_slug, sha256_file,
-                           text_subprocess_options, utc_now, write_json)
+                           text_subprocess_options, utc_now, validate_output_root, write_json)
 
 AUDIO_SUFFIXES = {".m4a", ".wav", ".mp3", ".flac", ".ogg", ".aac", ".mp4"}
 TIMESTAMPED_RE = re.compile(r"^(\d{1,3}:\d{2})Speaker\s+([A-Z])\s*(.*)$")
 SPEAKER_RE = re.compile(r"^(?:\[(\d{1,3}:\d{2}(?::\d{2})?)\]\s*)?([^\s:：]{1,24})[:：]\s*(.+)$")
 MEETING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 MEETING_ID_DIGEST_LENGTH = 64
-
-
-def validate_output_tree(out: Path) -> None:
-    """Reject any existing entry that can redirect writes outside the run."""
-    if not out.exists():
-        if out.is_symlink():
-            raise fail("output path must not be a symbolic link")
-        return
-    if out.is_symlink() or not out.is_dir():
-        raise fail("output path must be a real directory")
-    resolved_out = out.resolve(strict=True)
-    pending = [out]
-    while pending:
-        directory = pending.pop()
-        for entry in directory.iterdir():
-            if entry.is_symlink():
-                raise fail("output directory must not contain symbolic links")
-            try:
-                resolved_entry = entry.resolve(strict=True)
-            except (OSError, RuntimeError) as error:
-                raise fail(f"output directory contains an invalid entry: {entry}") from error
-            if not resolved_entry.is_relative_to(resolved_out):
-                raise fail("output directory contains an entry outside the run")
-            if entry.is_dir():
-                pending.append(entry)
 
 
 def run_asr(audio: Path, scratch: Path, model: str, language: str | None,
@@ -247,11 +222,10 @@ def main(argv=None) -> int:
         raise fail("duplicate meeting IDs in one collection run")
 
     date = args.date or dt.date.today().isoformat()
-    requested_out = args.out.expanduser()
-    if requested_out.is_symlink():
-        raise fail("output path must not be a symbolic link")
-    base_out = requested_out.resolve()
-    validate_output_tree(base_out)
+    try:
+        base_out = validate_output_root(args.out)
+    except ValueError as error:
+        raise fail(str(error)) from error
     results = []
     for source, meeting_id in zip(sources, meeting_ids):
         out = (base_out / "meetings" / meeting_id).resolve()

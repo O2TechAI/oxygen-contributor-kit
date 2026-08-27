@@ -45,6 +45,7 @@ from oxygen_common import (
     configure_utf8_stdio,
     text_subprocess_options,
     utc_now,
+    validate_output_root,
     write_json,
 )
 from human_source_projection import POLICY_ID, project_trajectory
@@ -538,31 +539,6 @@ def validate_rerunnable_output(out: Path) -> bool:
     return True
 
 
-def validate_output_tree(out: Path) -> None:
-    """Reject any existing entry that can redirect writes outside the run."""
-    if not out.exists():
-        if out.is_symlink():
-            raise ValueError("output path must not be a symbolic link")
-        return
-    if out.is_symlink() or not out.is_dir():
-        raise ValueError("output path must be a real directory")
-    resolved_out = out.resolve(strict=True)
-    pending = [out]
-    while pending:
-        directory = pending.pop()
-        for entry in directory.iterdir():
-            if entry.is_symlink():
-                raise ValueError("output directory must not contain symbolic links")
-            try:
-                resolved_entry = entry.resolve(strict=True)
-            except (OSError, RuntimeError) as error:
-                raise ValueError(f"output directory contains an invalid entry: {entry}") from error
-            if not resolved_entry.is_relative_to(resolved_out):
-                raise ValueError("output directory contains an entry outside the run")
-            if entry.is_dir():
-                pending.append(entry)
-
-
 def prune_stale_trajectory_outputs(out: Path, successful_ids: set[str]) -> int:
     """Remove only obsolete derived trajectory directories from a proven run."""
     root = out / "trajectories"
@@ -866,12 +842,8 @@ def main(argv=None) -> int:
     if not repo.is_dir():
         raise fail(f"repo not found: {repo}")
     agents = {a.strip() for a in args.agents.split(",") if a.strip()}
-    requested_out = args.out.expanduser()
-    if requested_out.is_symlink():
-        raise fail("output path must not be a symbolic link")
-    out = requested_out.resolve()
     try:
-        validate_output_tree(out)
+        out = validate_output_root(args.out)
         replacing_existing_output = validate_rerunnable_output(out)
     except ValueError as error:
         raise fail(str(error)) from error

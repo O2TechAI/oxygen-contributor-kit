@@ -33,6 +33,7 @@ from oxygen_common import (  # noqa: E402
     progress,
     safe_slug,
     utc_now,
+    validate_output_root,
     write_json,
 )
 
@@ -50,31 +51,6 @@ def locate_export(source: Path, scratch: Path) -> Path:
         if hits:
             return hits[0].parent
     raise fail(f"could not find conversations.json under {source}")
-
-
-def validate_output_tree(out: Path) -> None:
-    """Reject any existing entry that can redirect writes outside the run."""
-    if not out.exists():
-        if out.is_symlink():
-            raise fail("output path must not be a symbolic link")
-        return
-    if out.is_symlink() or not out.is_dir():
-        raise fail("output path must be a real directory")
-    resolved_out = out.resolve(strict=True)
-    pending = [out]
-    while pending:
-        directory = pending.pop()
-        for entry in directory.iterdir():
-            if entry.is_symlink():
-                raise fail("output directory must not contain symbolic links")
-            try:
-                resolved_entry = entry.resolve(strict=True)
-            except (OSError, RuntimeError) as error:
-                raise fail(f"output directory contains an invalid entry: {entry}") from error
-            if not resolved_entry.is_relative_to(resolved_out):
-                raise fail("output directory contains an entry outside the run")
-            if entry.is_dir():
-                pending.append(entry)
 
 
 def message_text(message: dict) -> str:
@@ -401,11 +377,10 @@ def main(argv=None) -> int:
     source = args.source.expanduser().resolve()
     if not source.exists():
         raise fail(f"source not found: {source}")
-    requested_out = args.out.expanduser()
-    if requested_out.is_symlink():
-        raise fail("output path must not be a symbolic link")
-    out = requested_out.resolve()
-    validate_output_tree(out)
+    try:
+        out = validate_output_root(args.out)
+    except ValueError as error:
+        raise fail(str(error)) from error
     out.mkdir(parents=True, exist_ok=True)
     home = args.home.expanduser().resolve()
 

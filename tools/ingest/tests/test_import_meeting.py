@@ -3,9 +3,13 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import stat
+import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -38,7 +42,79 @@ def tree_snapshot(root: Path) -> list[tuple[str, str, bytes | None]]:
     return snapshot
 
 
+def junction_or_symlink(testcase: unittest.TestCase, link: Path, target: Path):
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if result.returncode != 0:
+            testcase.skipTest(f"directory junction unavailable: {result.stderr.strip()}")
+        return lambda: os.rmdir(link)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        testcase.skipTest(f"directory symlink unavailable: {error}")
+    return link.unlink
+
+
+def hard_link_or_skip(testcase: unittest.TestCase, source: Path, target: Path) -> None:
+    try:
+        os.link(source, target)
+    except OSError as error:
+        testcase.skipTest(f"hard links unavailable: {error}")
+
+
 class ImportMeetingTopologyTest(unittest.TestCase):
+    def test_mocked_reparse_metadata_is_detected_and_unknown_windows_metadata_fails_closed(self):
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        metadata = SimpleNamespace(
+            st_mode=stat.S_IFDIR,
+            st_file_attributes=reparse_flag,
+        )
+        self.assertTrue(COMMON._is_link_or_reparse(metadata, windows=True))
+        with self.assertRaisesRegex(ValueError, "cannot prove"):
+            COMMON._is_link_or_reparse(SimpleNamespace(st_mode=stat.S_IFDIR), windows=True)
+
+    def test_output_root_junction_fails_before_touching_external_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "meeting.txt"
+            source.write_text("private meeting\n", encoding="utf-8")
+            external = root / "external"
+            external.mkdir()
+            (external / "sentinel.bin").write_bytes(b"junction sentinel\x00")
+            before = tree_snapshot(external)
+            requested = root / "requested-run"
+            cleanup = junction_or_symlink(self, requested, external)
+            try:
+                with self.assertRaises(SystemExit):
+                    run_main(source, "--out", requested, "--meeting-id", "meeting-junction")
+                self.assertEqual(tree_snapshot(external), before)
+            finally:
+                cleanup()
+
+    def test_hard_linked_meeting_file_fails_before_any_mutation(self):
+        for artifact in ("meeting.json", "raw.md", "timestamped.txt"):
+            with self.subTest(artifact=artifact), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "meeting.txt"
+                source.write_text("private meeting\n", encoding="utf-8")
+                external = root / f"external-{artifact}"
+                external.write_bytes(b"hard-link sentinel\x00")
+                run = root / "run"
+                meeting = run / "meetings" / "meeting-hard-link"
+                meeting.mkdir(parents=True)
+                hard_link_or_skip(self, external, meeting / artifact)
+                before_run = tree_snapshot(run)
+                before_external = external.read_bytes()
+
+                with self.assertRaises(SystemExit):
+                    run_main(source, "--out", run, "--meeting-id", "meeting-hard-link")
+
+                self.assertEqual(external.read_bytes(), before_external)
+                self.assertEqual(tree_snapshot(run), before_run)
+
     def test_single_explicit_output_uses_plural_topology_and_all_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
