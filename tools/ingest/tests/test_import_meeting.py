@@ -1,0 +1,166 @@
+import contextlib
+import hashlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+
+KIT_ROOT = Path(__file__).resolve().parents[3]
+MODULE_PATH = KIT_ROOT / "tools" / "ingest" / "import_meeting.py"
+sys.path.insert(0, str(MODULE_PATH.parent))
+SPEC = importlib.util.spec_from_file_location("oxygen_import_meeting_test", MODULE_PATH)
+MODULE = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(MODULE)
+
+
+def run_main(*arguments: object) -> dict:
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        result = MODULE.main([str(argument) for argument in arguments])
+    if result != 0:
+        raise AssertionError(f"import returned {result}")
+    return json.loads(output.getvalue().strip().splitlines()[-1])
+
+
+class ImportMeetingTopologyTest(unittest.TestCase):
+    def test_single_explicit_output_uses_plural_topology_and_all_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "notes.txt"
+            source.write_text("Speaker A: first\nSpeaker B: second\n", encoding="utf-8")
+            run = root / "run"
+
+            result = run_main(
+                source, "--out", run, "--meeting-id", "meeting-stable",
+                "--title", "Stable meeting", "--date", "2026-08-27", "--no-publish",
+            )
+
+            meeting = run / "meetings" / "meeting-stable"
+            self.assertEqual(result["output"], str(run.resolve()))
+            self.assertEqual(result["meeting_count"], 1)
+            self.assertEqual(result["meetings"][0]["meeting_id"], "meeting-stable")
+            self.assertEqual(result["meetings"][0]["output"], str(meeting))
+            for name in ("meeting.json", "raw.md", "timestamped.txt"):
+                self.assertFalse((run / name).exists())
+            self.assertEqual(
+                {path.name for path in meeting.iterdir()},
+                {"meeting.json", "raw.md", "timestamped.txt"},
+            )
+            dataset = json.loads((meeting / "meeting.json").read_text(encoding="utf-8"))
+            self.assertEqual(dataset["meeting_id"], "meeting-stable")
+            self.assertEqual(dataset["title"], "Stable meeting")
+            self.assertFalse(dataset["publication_approved"])
+            self.assertEqual((meeting / "timestamped.txt").read_text(encoding="utf-8"), "")
+
+    def test_default_output_is_a_run_with_one_plural_meeting(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_module = root / "tools" / "ingest" / "import_meeting.py"
+            fake_module.parent.mkdir(parents=True)
+            source = root / "timestamped.txt"
+            source.write_text("0:01Speaker Ahello\n", encoding="utf-8")
+
+            with mock.patch.object(MODULE, "__file__", str(fake_module)):
+                result = run_main(
+                    source, "--meeting-id", "meeting-default", "--no-publish",
+                )
+
+            run = fake_module.parent / "out" / "meeting-default"
+            meeting = run / "meetings" / "meeting-default"
+            self.assertEqual(result["output"], str(run))
+            self.assertTrue((meeting / "meeting.json").is_file())
+            self.assertTrue((meeting / "raw.md").is_file())
+            self.assertEqual(
+                (meeting / "timestamped.txt").read_text(encoding="utf-8"),
+                "0:01Speaker Ahello\n",
+            )
+            self.assertFalse((run / "meeting.json").exists())
+
+    def test_multi_source_run_keeps_records_separate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "alpha.txt"
+            second = root / "beta.txt"
+            first.write_text("alpha private text\n", encoding="utf-8")
+            second.write_text("beta private text\n", encoding="utf-8")
+            run = root / "run"
+
+            result = run_main(first, second, "--out", run, "--no-publish")
+
+            expected_ids = [
+                f"meeting-alpha-{hashlib.sha256(first.read_bytes()).hexdigest()}",
+                f"meeting-beta-{hashlib.sha256(second.read_bytes()).hexdigest()}",
+            ]
+            self.assertEqual(result["meeting_count"], 2)
+            self.assertEqual([item["meeting_id"] for item in result["meetings"]], expected_ids)
+            self.assertFalse((run / "meeting.json").exists())
+            for meeting_id, expected_text, foreign_text in (
+                (expected_ids[0], "alpha private text", "beta private text"),
+                (expected_ids[1], "beta private text", "alpha private text"),
+            ):
+                meeting = run / "meetings" / meeting_id
+                dataset = json.loads((meeting / "meeting.json").read_text(encoding="utf-8"))
+                self.assertEqual(dataset["meeting_id"], meeting_id)
+                self.assertEqual([record["text"] for record in dataset["records"]], [expected_text])
+                self.assertNotIn(foreign_text, (meeting / "raw.md").read_text(encoding="utf-8"))
+                self.assertFalse(dataset["publication_approved"])
+                self.assertTrue((meeting / "timestamped.txt").is_file())
+
+    def test_generated_identity_is_stable_and_content_bound(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "same name.txt"
+            source.write_text("same content\n", encoding="utf-8")
+
+            first = run_main(source, "--out", root / "first", "--no-publish")
+            second = run_main(source, "--out", root / "second", "--no-publish")
+            first_id = first["meetings"][0]["meeting_id"]
+            self.assertEqual(second["meetings"][0]["meeting_id"], first_id)
+            self.assertEqual(
+                first_id,
+                f"meeting-same-name-{hashlib.sha256(source.read_bytes()).hexdigest()}",
+            )
+            first_output = Path(first["meetings"][0]["output"])
+            self.assertEqual(first_output.name, first_id)
+            self.assertEqual(first_output.parent.name, "meetings")
+
+            source.write_text("changed content\n", encoding="utf-8")
+            changed = run_main(source, "--out", root / "changed", "--no-publish")
+            self.assertNotEqual(changed["meetings"][0]["meeting_id"], first_id)
+
+    def test_staging_receives_each_canonical_meeting_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "meeting.txt"
+            source.write_text("plain record\n", encoding="utf-8")
+            run = root / "run"
+
+            with mock.patch.object(MODULE, "publish_to_staging", return_value="staged") as publish:
+                result = run_main(
+                    source, "--out", run, "--meeting-id", "meeting-stage",
+                )
+
+            publish.assert_called_once_with(run / "meetings" / "meeting-stage", "meeting-stage")
+            self.assertEqual(result["meetings"][0]["staged"], "staged")
+
+    def test_explicit_identity_cannot_escape_the_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "meeting.txt"
+            source.write_text("plain record\n", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                run_main(
+                    source, "--out", root / "run", "--meeting-id", "../outside",
+                    "--no-publish",
+                )
+            self.assertFalse((root / "outside").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

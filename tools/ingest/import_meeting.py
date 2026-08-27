@@ -8,13 +8,10 @@
     2. "Speaker A: text" / "说话人0: text" / "张三: text"
     3. plain lines (no speaker structure)
 
-Single-source outputs in --out (default tools/out/meeting-<id>/):
-    meeting.json        canonical records (order/speaker/timestamp/text/source_line)
-    raw.md              internal raw markdown, same shape as scripts/import_timestamped_meeting.py
-    timestamped.txt     present when timestamps exist — feeds the existing Oxygen importer
-
-With multiple sources, --out is required and each meeting keeps the same files under
-meetings/<meeting-id>/.
+Every source is stored under the same run topology (default tools/out/meeting-<id>/):
+    meetings/<meeting-id>/meeting.json     canonical records
+    meetings/<meeting-id>/raw.md           internal raw markdown
+    meetings/<meeting-id>/timestamped.txt  timestamped records when available
 
 Everything is marked contains_unredacted_source_text=true / publication_approved=false.
 """
@@ -29,12 +26,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from oxygen_common import (configure_utf8_stdio, fail, progress, publish_to_staging, run_stamp,
-                           safe_slug, text_subprocess_options, utc_now, write_json)
+from oxygen_common import (configure_utf8_stdio, fail, progress, publish_to_staging, safe_slug,
+                           sha256_file, text_subprocess_options, utc_now, write_json)
 
 AUDIO_SUFFIXES = {".m4a", ".wav", ".mp3", ".flac", ".ogg", ".aac", ".mp4"}
 TIMESTAMPED_RE = re.compile(r"^(\d{1,3}:\d{2})Speaker\s+([A-Z])\s*(.*)$")
 SPEAKER_RE = re.compile(r"^(?:\[(\d{1,3}:\d{2}(?::\d{2})?)\]\s*)?([^\s:：]{1,24})[:：]\s*(.+)$")
+MEETING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+MEETING_ID_DIGEST_LENGTH = 64
 
 
 def run_asr(audio: Path, out: Path, model: str, language: str | None, hf_token: str | None) -> Path:
@@ -120,6 +119,12 @@ def parse_lines(text: str) -> tuple[list[dict], str]:
     return records, detected
 
 
+def generated_meeting_id(source: Path) -> str:
+    digest = sha256_file(source)
+    slug_limit = 255 - len("meeting--") - MEETING_ID_DIGEST_LENGTH
+    return f"meeting-{safe_slug(source.stem)[:slug_limit]}-{digest}"
+
+
 def import_source(source: Path, out: Path, meeting_id: str, title: str, date: str, args) -> dict:
     out.mkdir(parents=True, exist_ok=True)
 
@@ -165,13 +170,11 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
             body.append(f"{stamp}{record['text']}")
     (out / "raw.md").write_text("\n".join(body) + "\n", encoding="utf-8")
 
-    if detected == "timestamped" or (source.suffix.lower() in AUDIO_SUFFIXES):
-        stamped = out / "timestamped.txt"
-        if not stamped.exists():
-            with stamped.open("w", encoding="utf-8") as handle:
-                for record in records:
-                    if record["timestamp"] and record["speaker"]:
-                        handle.write(f"{record['timestamp']}Speaker {record['speaker']}{record['text']}\n")
+    stamped = out / "timestamped.txt"
+    with stamped.open("w", encoding="utf-8") as handle:
+        for record in records:
+            if record["timestamp"] and record["speaker"]:
+                handle.write(f"{record['timestamp']}Speaker {record['speaker']}{record['text']}\n")
 
     staged = None
     if not args.no_publish:
@@ -203,15 +206,15 @@ def main(argv=None) -> int:
     for source in sources:
         if not source.is_file():
             raise fail(f"source not found: {source}")
-    multiple = len(sources) > 1
-    if multiple and args.out is None:
+    if len(sources) > 1 and args.out is None:
         raise fail("--out is required when importing multiple meetings")
-    if multiple and (args.meeting_id or args.title):
-        raise fail("--meeting-id and --title support single-meeting imports only")
+    if len(sources) > 1 and (args.meeting_id or args.title):
+        raise fail("--meeting-id and --title require exactly one source")
+    if args.meeting_id is not None and not MEETING_ID_RE.fullmatch(args.meeting_id):
+        raise fail("--meeting-id must be one safe identity component")
 
-    stamp = run_stamp()
     meeting_ids = [
-        args.meeting_id or f"meeting-{safe_slug(source.stem)}-{stamp}"
+        args.meeting_id or generated_meeting_id(source)
         for source in sources
     ]
     if len(set(meeting_ids)) != len(meeting_ids):
@@ -222,16 +225,13 @@ def main(argv=None) -> int:
         Path(__file__).resolve().parent / "out" / meeting_ids[0])
     results = []
     for source, meeting_id in zip(sources, meeting_ids):
-        out = base_out / "meetings" / meeting_id if multiple else base_out
+        out = base_out / "meetings" / meeting_id
         results.append(import_source(
             source, out, meeting_id, args.title or source.stem, date, args
         ))
 
-    if multiple:
-        print(json.dumps({"output": str(base_out), "meeting_count": len(results),
-                          "meetings": results}, ensure_ascii=False))
-    else:
-        print(json.dumps(results[0], ensure_ascii=False))
+    print(json.dumps({"output": str(base_out), "meeting_count": len(results),
+                      "meetings": results}, ensure_ascii=False))
     return 0
 
 

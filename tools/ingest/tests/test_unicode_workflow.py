@@ -52,7 +52,9 @@ class UnicodeWorkflowTest(unittest.TestCase):
                 "--no-publish",
             )
             self.assertEqual(meeting.returncode, 0, meeting.stderr)
-            dataset = json.loads((meeting_out / "meeting.json").read_text(encoding="utf-8"))
+            summary = json.loads(meeting.stdout.strip().splitlines()[-1])
+            dataset_path = Path(summary["meetings"][0]["output"]) / "meeting.json"
+            dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
             self.assertEqual(dataset["title"], "会议 标题 😀")
             self.assertEqual(
                 [record["text"] for record in dataset["records"]],

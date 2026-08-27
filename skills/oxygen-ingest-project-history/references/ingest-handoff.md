@@ -4,8 +4,7 @@ The bundled tools support three stable outputs:
 
 1. `collect_repo_trajectories.py`: `index.json`, `trajectories/`, and `memory/`.
 2. `import_anthropic_export.py`: `index.json`, `trajectories/`, and imported memory/project documents.
-3. `import_meeting.py`: one source keeps the compatible root `meeting.json`, `raw.md`, and
-   `timestamped.txt`; multiple sources place the same unchanged per-meeting files under
+3. `import_meeting.py`: every source keeps `meeting.json`, `raw.md`, and `timestamped.txt` under
    `meetings/<meeting-id>/` in one run.
 
 Repo collection matches sessions whose recorded working directory falls inside the resolved
@@ -35,8 +34,8 @@ Meeting audio uses faster-whisper locally. Speaker diarization is optional and r
 current user's accepted access to the gated pyannote model. Without a token, the tool still
 produces a single-speaker transcript and records a warning.
 
-Multi-meeting import requires an explicit shared `--out`. Each source keeps its own meeting ID and
-records; transcript contents are never concatenated. `--meeting-id` and `--title` remain available
-for compatible single-meeting imports only.
+Multi-meeting import requires an explicit shared `--out`. Each source keeps its own stable meeting
+ID and records; transcript contents are never concatenated. With exactly one source, `--meeting-id`
+and `--title` can override its generated identity and source-derived title.
 
 All outputs default to `review_status=pending` and `publication_approved=false`.
