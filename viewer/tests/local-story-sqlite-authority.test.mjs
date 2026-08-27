@@ -28,6 +28,41 @@ const COVERAGE_REVISION = 1;
 const SEMANTIC_DIGEST = "a".repeat(64);
 const COVERAGE_DIGEST = "b".repeat(64);
 const ACTIVATED_AT = "2038-01-01T00:00:00.000Z";
+const DOCUMENT_ID = "synthetic-reviewed-document";
+const STORY_ITEM_ID = `${DOCUMENT_ID}:story-authority`;
+
+function currentStorySource() {
+  const evidence = { documentId: DOCUMENT_ID, eventId: STORY_ITEM_ID };
+  return `oxygen.story:${JSON.stringify({
+    schema: "oxygen.story",
+    key: "story-authority",
+    phase: { id: "activation", label: "Activation" },
+    kind: "decision",
+    title: "SQLite source authority",
+    overview: "A synthetic current Story chapter validates local SQLite source authority.",
+    people: [{
+      id: "reviewer",
+      releaseLabel: "Reviewer",
+      role: "reviewer",
+      description: "The reviewer confirms the exact local SQLite source boundary.",
+      localIdentityState: "not_identified",
+      evidence: [evidence],
+    }],
+    story: { blocks: [{
+      id: "source-check",
+      text: "The reviewer confirmed the local SQLite source boundary.",
+      evidence: [evidence],
+    }] },
+    insights: [],
+    evidence: { primary: evidence, supporting: [] },
+    coverage: {
+      semanticManifest: { revision: 1, digest: SEMANTIC_DIGEST },
+      coverageManifest: { revision: COVERAGE_REVISION, digest: COVERAGE_DIGEST },
+      representedUnitIds: [],
+      excludedUnits: [],
+    },
+  })}`;
+}
 
 async function sha256(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -56,8 +91,7 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
   try {
     const [
       { getLocalDatabase },
-      { syntheticStoryEvents },
-      { readReservedStoryCandidateRows, validateRecognizedStorySourcePackage },
+      { readReservedStoryCandidateRows, validateStorySourcePackage },
       {
         beginStoryActivationMutation,
         publishActivatedStorySourceMutation,
@@ -66,6 +100,7 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
         createStoryReviewSession,
         STORY_REVIEW_SESSION_SCHEMA,
       },
+      { emptyChapterReview },
       {
         persistStoryReviewSessionCas,
         readStoryReviewSessionRecord,
@@ -73,10 +108,10 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
       },
     ] = await Promise.all([
       import("../db/index.ts"),
-      import("./fixtures/synthetic-story-project.mjs"),
       import("../lib/story-readiness.ts"),
       import("../lib/story-source-publication.ts"),
       import("../lib/story-review-session.ts"),
+      import("../lib/story-review.ts"),
       import("../lib/story-review-session-server.ts"),
     ]);
     const db = await getLocalDatabase();
@@ -97,7 +132,7 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
       RUN_ID, "synthetic-project", 1, INITIAL_SOURCE_REVISION,
       "c".repeat(64), "d".repeat(64), SEMANTIC_DIGEST,
-      0, 2, 2, 1, "e".repeat(64), 1, syntheticStoryEvents.length,
+      0, 2, 2, 1, "e".repeat(64), 1, 1,
       "2037-12-31T00:00:00.000Z", "2037-12-31T00:00:00.000Z",
     ).run();
     await db.prepare(`INSERT INTO story_coverage_manifests
@@ -108,33 +143,32 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
       0, 2, "2037-12-31T00:00:00.000Z", "2037-12-31T00:00:00.000Z",
     ).run();
 
-    const documentId = syntheticStoryEvents[0].document_id;
     await db.prepare(`INSERT INTO documents
       (id,kind,title,item_count,imported_at,updated_at) VALUES (?,?,?,?,?,?)`).bind(
-      documentId, "synthetic", "Synthetic reviewed Story", syntheticStoryEvents.length,
+      DOCUMENT_ID, "synthetic", "Synthetic reviewed Story", 1,
       "2037-12-31T00:00:00.000Z", "2037-12-31T00:00:00.000Z",
     ).run();
-    await db.batch(syntheticStoryEvents.map((event) => db.prepare(`INSERT INTO items
+    await db.prepare(`INSERT INTO items
       (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,
        original_json,organization_reason) VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(
-      `${event.document_id}:${event.id}`,
-      event.document_id,
-      event.sequence,
-      event.event_type,
-      event.actor_id,
-      event.actor_type,
-      event.timestamp,
-      event.content,
+      STORY_ITEM_ID,
+      DOCUMENT_ID,
+      1,
+      "decision",
+      "reviewer",
+      "human",
+      "2038-01-01T00:00:00.000Z",
+      "Safe synthetic reviewed event.",
       "{}",
-      event.summary,
-    )));
+      currentStorySource(),
+    ).run();
 
     const candidateRows = await readReservedStoryCandidateRows(db);
     const evidenceRows = (await db.prepare(`SELECT id,document_id AS documentId,
       event_type AS eventType,actor_id AS actorId,actor_type AS actorType
       FROM items ORDER BY document_id,sequence`).all()).results;
-    const validation = validateRecognizedStorySourcePackage(candidateRows, evidenceRows);
-    assert.equal(validation.ok, true);
+    const validation = validateStorySourcePackage(candidateRows, evidenceRows);
+    assert.equal(validation.ok, true, validation.code);
     const activeStoryDigest = await sha256(validation.canonicalCandidate);
 
     assert.equal(await beginStoryActivationMutation(db, RUN_ID, ACTIVATED_AT), true);
@@ -187,9 +221,9 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
     assert.deepEqual(await activationSnapshot(db), activated);
 
     const session = (label) => {
-      const value = createStoryReviewSession(RUN_ID, {}, {}, "2099-01-01T00:00:00.000Z");
-      value.privacyDecisions = { [JSON.stringify(["chapter", label])]: "keep" };
-      return value;
+      const review = emptyChapterReview(JSON.parse(currentStorySource().slice("oxygen.story:".length)));
+      review.evidenceVerified = label === "writer-a";
+      return createStoryReviewSession(RUN_ID, { "story-authority": review }, {}, "2099-01-01T00:00:00.000Z");
     };
     const sessions = [session("writer-a"), session("writer-b")];
     const serverTimes = [
@@ -230,8 +264,8 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
     assert.equal(record.persistedAt, serverTimes[winnerIndex]);
     assert.equal(record.session.updatedAt, serverTimes[winnerIndex]);
     assert.notEqual(record.session.updatedAt, sessions[winnerIndex].updatedAt);
-    assert.deepEqual(record.session.privacyDecisions, sessions[winnerIndex].privacyDecisions);
-    assert.notDeepEqual(record.session.privacyDecisions, sessions[loserIndex].privacyDecisions);
+    assert.deepEqual(record.session.chapterReviews, sessions[winnerIndex].chapterReviews);
+    assert.notDeepEqual(record.session.chapterReviews, sessions[loserIndex].chapterReviews);
 
     context.diagnostic(JSON.stringify({
       activation: {
