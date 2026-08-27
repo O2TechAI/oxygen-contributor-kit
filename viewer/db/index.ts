@@ -27,6 +27,37 @@ const statements = [
     warnings_json TEXT NOT NULL DEFAULT '[]', started_at TEXT NOT NULL,
     updated_at TEXT NOT NULL, completed_at TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS semantic_manifests (
+    workflow_run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+    revision INTEGER NOT NULL, source_revision INTEGER NOT NULL,
+    source_digest TEXT NOT NULL, universe_digest TEXT NOT NULL,
+    manifest_digest TEXT NOT NULL, unit_count INTEGER NOT NULL,
+    serialized_bytes INTEGER NOT NULL, story_projection_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS semantic_units (
+    id TEXT PRIMARY KEY, workflow_run_id TEXT NOT NULL,
+    revision INTEGER NOT NULL, project_id TEXT NOT NULL, kind TEXT NOT NULL,
+    member_count INTEGER NOT NULL, membership_digest TEXT NOT NULL,
+    duplicate_of_unit_id TEXT, story_projection_json TEXT NOT NULL DEFAULT '{}'
+  )`,
+  `CREATE TABLE IF NOT EXISTS semantic_unit_members (
+    item_id TEXT PRIMARY KEY, workflow_run_id TEXT NOT NULL, unit_id TEXT NOT NULL,
+    source_digest TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS semantic_unit_members_unit_idx
+     ON semantic_unit_members(unit_id)`,
+  `CREATE TABLE IF NOT EXISTS story_coverage_manifests (
+    workflow_run_id TEXT PRIMARY KEY, revision INTEGER NOT NULL,
+    semantic_manifest_revision INTEGER NOT NULL,
+    semantic_manifest_digest TEXT NOT NULL, coverage_digest TEXT NOT NULL,
+    unit_count INTEGER NOT NULL, serialized_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS story_coverage_rows (
+    unit_id TEXT PRIMARY KEY, workflow_run_id TEXT NOT NULL,
+    disposition TEXT NOT NULL, owner_id TEXT NOT NULL, exclusion_reason TEXT
+  )`,
   // This is the only pre-collection persistence surface. Keep it operational
   // and allowlisted: no target path, reasoning, payload, or free-form status.
   `CREATE TABLE IF NOT EXISTS workflow_runs (
@@ -130,6 +161,13 @@ export async function getD1() {
       ] as const;
       for (const [name, sql] of workflowMigrations) {
         if (!workflowNames.has(name)) await env.DB.prepare(sql).run();
+      }
+      const semanticMemberColumns = await env.DB.prepare("PRAGMA table_info(semantic_unit_members)")
+        .all<{ name: string }>();
+      if (!semanticMemberColumns.results.some((column: { name: string }) => column.name === "source_digest")) {
+        await env.DB.prepare(
+          "ALTER TABLE semantic_unit_members ADD COLUMN source_digest TEXT NOT NULL DEFAULT ''",
+        ).run();
       }
       const sessionColumns = await env.DB.prepare("PRAGMA table_info(story_review_sessions)")
         .all<{ name: string }>();

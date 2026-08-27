@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,10 +25,33 @@ SPEC.loader.exec_module(MODULE)
 def write_trajectory(run: Path, trajectory_id: str) -> Path:
     directory = run / "trajectories" / trajectory_id
     directory.mkdir(parents=True)
+    item = {
+        "event_id": f"evt-{hashlib.sha256(trajectory_id.encode('utf-8')).hexdigest()}",
+        "event_type": "message",
+        "actor": {"id": "person-safe", "type": "human"},
+        "payload": {"role": "user", "text": "safe synthetic contribution"},
+    }
+    serialized = json.dumps(
+        item, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ) + "\n"
+    projected_digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
     (directory / "manifest.json").write_text(
-        json.dumps({"trajectory_id": trajectory_id}), encoding="utf-8"
+        json.dumps({
+            "trajectory_id": trajectory_id,
+            "event_count": 1,
+            "contribution_projection": {
+                "policy_id": MODULE.HUMAN_SOURCE_POLICY_ID,
+                "raw_source_digest": "a" * 64,
+                "projected_universe_digest": projected_digest,
+                "raw_event_count": 2,
+                "normalized_event_count": 2,
+                "kept_event_count": 1,
+                "dropped_event_count": 1,
+                "cross_trajectory_semantic_replay_count": 0,
+            },
+        }), encoding="utf-8"
     )
-    (directory / "events.jsonl").write_text("{}\n", encoding="utf-8")
+    (directory / "events.jsonl").write_text(serialized, encoding="utf-8")
     return directory
 
 
@@ -150,12 +174,55 @@ class LauncherUnitTest(unittest.TestCase):
     def test_attach_verifies_stable_workflow_run_before_import(self):
         with (
             mock.patch.object(MODULE, "request_json", return_value={"workflowRunId": "run-1"}),
+            mock.patch.object(MODULE, "finalized_semantic_manifest", return_value={"revision": 1}),
             mock.patch.object(MODULE, "import_run", return_value=(2, 9)) as imported,
             mock.patch.object(MODULE, "complete_organization", return_value={"status": "complete"}),
             mock.patch("builtins.print"),
         ):
             MODULE.attach_run("http://127.0.0.1:3298", "run-1", Path("reviewed run"))
         imported.assert_called_once()
+
+    def test_trajectory_requires_current_projection_provenance_before_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            trajectory = write_trajectory(run, "traj-safe")
+            manifest_path = trajectory / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest.pop("contribution_projection")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, MODULE.INPUT_PROJECTION_INVALID):
+                MODULE._prepare_trajectory(trajectory, run)
+
+            trajectory = write_trajectory(run, "traj-stale")
+            (trajectory / "events.jsonl").write_text(
+                '{"event_id":"changed","event_type":"message"}\n', encoding="utf-8"
+            )
+            with self.assertRaisesRegex(SystemExit, MODULE.INPUT_PROJECTION_INVALID):
+                MODULE._prepare_trajectory(trajectory, run)
+
+            trajectory = write_trajectory(run, "traj-wrong-policy")
+            manifest_path = trajectory / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["contribution_projection"]["policy_id"] = "obsolete-policy"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, MODULE.INPUT_PROJECTION_INVALID):
+                MODULE._prepare_trajectory(trajectory, run)
+
+    def test_organization_posts_one_finalized_semantic_manifest(self):
+        semantic_manifest = {"revision": 1, "manifestDigest": "a" * 64}
+        with mock.patch.object(
+            MODULE, "request_json", return_value={"status": "complete"}
+        ) as request:
+            result = MODULE.complete_organization(
+                mock.sentinel.opener, "http://127.0.0.1:3298", semantic_manifest
+            )
+        self.assertEqual(result, {"status": "complete"})
+        request.assert_called_once_with(
+            mock.sentinel.opener,
+            "http://127.0.0.1:3298/api/organization",
+            method="POST",
+            body={"semanticManifest": semantic_manifest},
+        )
 
     def test_establishment_uses_target_confirmation_and_exact_identity(self):
         with mock.patch.object(
@@ -214,7 +281,9 @@ class LauncherUnitTest(unittest.TestCase):
             },
         )
 
-    def test_story_ready_event_does_not_send_story_payload(self):
+    def test_story_ready_event_sends_only_bounded_coverage_authority(self):
+        coverage_manifest = {"revision": 1, "coverageDigest": "a" * 64}
+        story_candidates = [{"id": "doc:item-1", "summary": "oxygen.story/3:{}"}]
         with (
             mock.patch.object(MODULE, "request_json", return_value={
                 "currentStageId": "review",
@@ -224,7 +293,9 @@ class LauncherUnitTest(unittest.TestCase):
             mock.patch("builtins.print") as printed,
         ):
             result = MODULE.update_story_workflow(
-                "http://127.0.0.1:3298", "run-1", "ready"
+                "http://127.0.0.1:3298", "run-1", "ready",
+                coverage_manifest=coverage_manifest,
+                story_candidates=story_candidates,
             )
         request.assert_called_once_with(
             mock.ANY,
@@ -233,6 +304,8 @@ class LauncherUnitTest(unittest.TestCase):
             body={
                 "workflowRunId": "run-1",
                 "event": "story_ready_for_human_review",
+                "coverageManifest": coverage_manifest,
+                "storyCandidates": story_candidates,
             },
         )
         self.assertEqual(result["viewer"], "http://127.0.0.1:3298")
@@ -254,7 +327,9 @@ class LauncherUnitTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(SystemExit, "human Story review boundary"):
                 MODULE.update_story_workflow(
-                    "http://127.0.0.1:3298", "run-1", "ready"
+                    "http://127.0.0.1:3298", "run-1", "ready",
+                    coverage_manifest={"revision": 1},
+                    story_candidates=[{"id": "doc:item-1", "summary": "oxygen.story/3:{}"}],
                 )
         printed.assert_not_called()
 
@@ -611,6 +686,17 @@ class LocateInputsContainmentTest(unittest.TestCase):
                     (2, 2),
                 )
             self.assertEqual(request.call_count, 2)
+
+    def test_failed_collector_index_is_never_attached_as_an_exhaustive_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_trajectory(run, "traj-alpha")
+            run.mkdir(parents=True, exist_ok=True)
+            (run / "index.json").write_text(json.dumps({
+                "trajectory_failures": 1,
+                "trajectories": [{"trajectory_id": "traj-alpha", "ok": False}],
+            }), encoding="utf-8")
+            self.assert_import_fails_before_request(run, MODULE.INPUT_INDEX_INVALID)
 
     def test_multi_meeting_cli_preserves_document_ids_and_qualified_records(self):
         with tempfile.TemporaryDirectory(prefix="multi meeting ") as temporary:

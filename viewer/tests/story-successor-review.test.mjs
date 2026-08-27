@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { testStoryCoverage } from "./fixtures/successor-story-coverage.mjs";
 import { readFile } from "node:fs/promises";
 import {
   addStoryAnnotation,
@@ -71,7 +72,7 @@ function source(insightIds = [], key = "chapter-alpha") {
     },
     insights: insightIds.map((id) => insight(id)),
     evidence: { primary: evidenceA, supporting: [evidenceB] },
-    contextRetention: { excluded: [] },
+    coverage: testStoryCoverage(),
   };
 }
 
@@ -676,5 +677,5 @@ test("successor Review Session is wired through exact workflow, Viewer, transpor
   assert.match(wiredSources[4], /parseStoryReviewSession/);
   assert.match(wiredSources[5], /SUCCESSOR_REVIEWED_STORY_SCHEMA/);
   assert.match(wiredSources[6], /hydrateSuccessorStoryReviewSession/);
-  assert.match(wiredSources[7], /validateRecognizedStorySourcePackage/);
+  assert.match(wiredSources[7], /validateStoryActivationAuthority/);
 });

@@ -21,8 +21,11 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "vendor"))
+INGEST_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(INGEST_DIR))
+sys.path.insert(0, str(INGEST_DIR / "vendor"))
 import extract_codex_trajectory as vendor_common  # noqa: E402  (secret masking, hashing)
+from human_source_projection import digest_value, project_trajectory  # noqa: E402
 
 from oxygen_common import (  # noqa: E402
     configure_utf8_stdio,
@@ -80,7 +83,15 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
             continue
         text = message_text(message)
         sender = message.get("sender")
-        actor_type = "human" if sender == "human" else "ai"
+        if sender == "human":
+            actor_type = "human"
+        elif sender == "assistant":
+            actor_type = "ai"
+        else:
+            warnings.append(
+                f"conversation {conv_id or title!r}: skipped message with ambiguous sender"
+            )
+            continue
         attachments = []
         for kind in ("attachments", "files"):
             for item in message.get(kind) or []:
@@ -121,6 +132,10 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
                     "session_id": conv_id or None,
                     "record_id": message.get("uuid"),
                     "record_type": "chat_message",
+                    "origin": "top_level",
+                    "interaction_direction": (
+                        "human_to_agent" if actor_type == "human" else "agent_to_human"
+                    ),
                     "locator": "conversations.json",
                     "line": None,
                     "sha256": None,
@@ -129,6 +144,7 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
                     "role": "user" if actor_type == "human" else "assistant",
                     "text": vendor_common.redact_text(text, home),
                     "attachments": attachments,
+                    "has_attachments": bool(attachments),
                     "phase": None,
                 },
                 "outcome": None,
@@ -165,7 +181,15 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
         trajectory_dir / "redaction.json",
         {"review_status": "pending", "publication_approved": False, "reviewed_by": None},
     )
-    return {"trajectory_id": trajectory_id, "title": title, "event_count": len(events)}
+    projection = project_trajectory(
+        trajectory_dir,
+        raw_source_digest=digest_value(conv),
+    )
+    return {
+        "trajectory_id": trajectory_id,
+        "title": title,
+        "event_count": projection["kept_event_count"],
+    }
 
 
 def load_projects(export_dir: Path) -> list[dict]:
@@ -281,7 +305,13 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
         if not text:
             continue
         role = message.get("role") or (inner.get("role") if isinstance(inner, dict) else None)
-        actor_type = "human" if role == "user" else "ai"
+        if role == "user":
+            actor_type = "human"
+        elif role == "assistant":
+            actor_type = "ai"
+        else:
+            warnings.append(f"design chat {path.name}: skipped message with ambiguous role")
+            continue
         sequence += 1
         events.append({
             "schema_version": "0.2",
@@ -298,6 +328,10 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
             "executor": None, "relations": [],
             "source": {"system": "claude-ai-export", "session_id": chat_id,
                        "record_id": message.get("uuid"), "record_type": "design_chat_message",
+                       "origin": "top_level",
+                       "interaction_direction": (
+                           "human_to_agent" if actor_type == "human" else "agent_to_human"
+                       ),
                        "locator": f"design_chats/{path.name}", "line": None, "sha256": None},
             "payload": {"role": "user" if actor_type == "human" else "assistant",
                         "text": vendor_common.redact_text(text, home), "attachments": [], "phase": None},
@@ -322,7 +356,12 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
     })
     write_json(trajectory_dir / "redaction.json",
                {"review_status": "pending", "publication_approved": False, "reviewed_by": None})
-    return {"trajectory_id": trajectory_id, "title": title, "event_count": len(events),
+    projection = project_trajectory(
+        trajectory_dir,
+        raw_source_digest=digest_value(chat),
+    )
+    return {"trajectory_id": trajectory_id, "title": title,
+            "event_count": projection["kept_event_count"],
             "kind": "design_chat"}
 
 

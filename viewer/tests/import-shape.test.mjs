@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
-test("viewer uses local D1 with only organization tables", async () => {
+test("viewer D1 has one canonical semantic and coverage authority", async () => {
   const hosting=JSON.parse(await read("../.openai/hosting.json"));
   const db=await read("../db/index.ts");
   assert.equal(hosting.d1,"DB");
   assert.match(db,/documents/);assert.match(db,/items/);assert.match(db,/organization_jobs/);
+  for(const table of ["semantic_manifests","semantic_units","semantic_unit_members","story_coverage_manifests","story_coverage_rows"])assert.match(db,new RegExp(table));
   assert.doesNotMatch(db,/annotations|checklists|audit_log/);
 });
 test("chapter editor retains the application rail and exposes three bilingual sections", async () => {
@@ -200,15 +201,32 @@ test("HTML and ZIP downloads accept only the reviewed Story release projection",
 test("removed features and login routes stay deleted", async () => {
   for(const path of ["../app/login/page.tsx","../lib/auth.ts","../app/api/annotations/route.ts","../app/api/checklists/route.ts","../app/api/rewrite/[id]/route.ts"]){await assert.rejects(access(new URL(path,import.meta.url)));}
 });
-test("organizer labels projects and preserves concise summaries", async () => {
-  const organizer=await read("../app/api/organization/route.ts"),skill=await read("../../skills/oxygen-organize-review-export/SKILL.md");
-  assert.match(organizer,/primary_project/);assert.match(organizer,/organization_category/);assert.match(organizer,/highlights/);
-  assert.match(skill,/at most 18 English words or 32 Chinese characters/);assert.match(skill,/proactively open/);assert.match(skill,/Download ZIP/);
-  assert.match(skill,/Never create one timeline per trajectory/);
-  assert.match(skill,/evidence-supported meaningful milestones without using a numeric quota/);
-  assert.match(skill,/durable\s+progress, substantive iterations/);
+test("Organization owns one bounded exhaustive semantic manifest", async () => {
+  const organizer=await read("../app/api/organization/route.ts"),workflow=await read("../app/api/workflow/route.ts"),skill=await read("../../skills/oxygen-organize-review-export/SKILL.md");
+  assert.match(organizer,/validateSemanticManifestAuthority/);assert.match(organizer,/semantic_unit_members/);assert.match(organizer,/storyProjectionBytes/);
+  assert.match(organizer,/unitId/);assert.match(organizer,/JOIN items/);assert.doesNotMatch(organizer,/highlights/);
+  assert.match(skill,/Semantic unit is the authority of organization/);assert.match(skill,/exactly one unit owner/);
+  assert.match(skill,/Do not create one unit per raw record/);assert.match(skill,/proactively open/);assert.match(skill,/Download ZIP/);
+  assert.match(skill,/recorded semantic[\s\S]*Agent reasoning, delegation,[\s\S]*status\/progress/);
+  for(const route of [organizer,workflow]){
+    assert.match(route,/jsonParameterBatches/);assert.match(route,/json_each\(\?\)/);
+    assert.match(route,/leaseSql/);assert.doesNotMatch(route,/INSERT_BATCH|UPDATE_BATCH/);
+  }
+  assert.equal((organizer.match(/\$\{leaseSql\}/g)||[]).length,10);
+  assert.equal((workflow.match(/\$\{leaseSql\}/g)||[]).length,7);
   const launcher=await read("../../skills/oxygen-organize-review-export/scripts/run_local_review.py");
-  assert.match(launcher,/trajectory_id}:\{event_id/);
+  assert.match(launcher,/projected_contribution_id\(event\)/);
+  assert.match(launcher,/meeting_contribution_ids/);
+  assert.doesNotMatch(launcher,/"sourceDigest"/);
+  assert.doesNotMatch(launcher,/range\(0,\s*len\(items\),\s*75\)/);
+  assert.match(organizer,/contributionRecordSourceDigest/);
+  assert.match(organizer,/SEMANTIC_EVIDENCE_ITEM_TOO_LARGE/);
+  assert.match(organizer,/MAX_SEMANTIC_EVIDENCE_PAGE_MEMBERS = 50/);
+  assert.match(organizer,/MAX_SEMANTIC_EVIDENCE_RESPONSE_BYTES = 500_000/);
+  assert.match(organizer,/membershipDigest/);assert.match(organizer,/requestedRevision/);
+  assert.match(organizer,/ORDER BY i\.document_id,i\.sequence,i\.id LIMIT \? OFFSET \?/);
+  assert.match(organizer,/Semantic Evidence membership is stale/);
+  assert.match(launcher,/semanticManifest/);
   const timeline=await read("../lib/timeline.ts");
   assert.match(timeline,/maximum\?: number/);
   assert.match(timeline,/maximum \?\? Number\.POSITIVE_INFINITY/);

@@ -1,8 +1,14 @@
 import { getD1 } from "../../../db";
 import { loadWorkflowProgress } from "../../../lib/workflow-progress-server";
+import { deriveWorkflowProgress } from "../../../lib/workflow-progress";
 import {
-  readReservedStoryCandidateRows,
-  validateRecognizedStorySourcePackage,
+  normalizeStoryCandidateSubmission,
+  readSemanticManifestAuthority,
+  readStoredCoverageManifestAuthority,
+  validateCoverageRevisionTransition,
+  validateStoryActivationAuthority,
+  type CoverageManifestAuthority,
+  type StoryCandidateItemAuthority,
   type StoryEvidenceRow,
 } from "../../../lib/story-readiness";
 import { isWorkflowRunId } from "../../../lib/workflow-progress";
@@ -13,7 +19,14 @@ import {
   requireExactWorkflowRun,
   workflowRunErrorResponse,
 } from "../../../lib/workflow-run-server";
-import { STORY_SOURCE_WRITE_STATUS } from "../../../lib/story-source-publication";
+import {
+  STORY_SOURCE_WRITE_STATUS,
+  abortStorySourceMutation,
+  assertStoryActivationQueryBudget,
+  beginStoryActivationMutation,
+  jsonParameterBatches,
+  publishActivatedStorySourceMutation,
+} from "../../../lib/story-source-publication";
 
 const EVENTS = new Set([
   "target_confirmed",
@@ -26,8 +39,9 @@ const EVENTS = new Set([
   "story_generation_blocked",
   "story_ready_for_human_review",
 ]);
-const BODY_KEYS = new Set(["workflowRunId", "event", "completed", "total"]);
-
+const BODY_KEYS = new Set([
+  "workflowRunId", "event", "completed", "total", "coverageManifest", "storyCandidates",
+]);
 export const dynamic = "force-dynamic";
 
 const count = (value: unknown) => typeof value === "number"
@@ -77,6 +91,14 @@ export async function POST(request: Request) {
   if (!isWorkflowRunId(workflowRunId) || !EVENTS.has(event)) {
     return Response.json({ error: "Invalid workflow event" }, { status: 400 });
   }
+  if ((record.coverageManifest !== undefined || record.storyCandidates !== undefined)
+    && event !== "story_ready_for_human_review") {
+    return Response.json({ error: "Story authority is only accepted at Story activation" }, { status: 400 });
+  }
+  if (event === "story_ready_for_human_review"
+    && (record.coverageManifest === undefined || record.storyCandidates === undefined)) {
+    return Response.json({ error: "Story candidates and coverage are required at activation" }, { status: 400 });
+  }
 
   const completed = record.completed === undefined ? 0 : count(record.completed);
   const total = record.total === undefined ? 0 : count(record.total);
@@ -103,9 +125,14 @@ export async function POST(request: Request) {
   }
   if (event.startsWith("story_")) {
     const [run, organization, redaction] = await Promise.all([
-      db.prepare(`SELECT id,story_generation_status,story_source_revision
+      db.prepare(`SELECT id,target_confirmed,collection_status,collection_completed,
+        collection_total,story_generation_status,story_generation_completed,
+        story_generation_total,story_source_revision,updated_at
         FROM workflow_runs WHERE id=?`).bind(workflowRunId).first<{
-          id: string; story_generation_status: string; story_source_revision: number;
+          id: string; target_confirmed: number; collection_status: string;
+          collection_completed: number; collection_total: number;
+          story_generation_status: string; story_generation_completed: number;
+          story_generation_total: number; story_source_revision: number; updated_at: string;
         }>(),
       db.prepare("SELECT status FROM organization_jobs ORDER BY updated_at DESC LIMIT 1")
         .first<{ status: string }>(),
@@ -117,6 +144,10 @@ export async function POST(request: Request) {
       return Response.json({ error: "Reviewed Story boundary is not ready" }, { status: 409 });
     }
     if (event === "story_generation_started") {
+      const semanticManifest = await readSemanticManifestAuthority(db, workflowRunId);
+      if (!semanticManifest) {
+        return Response.json({ error: "Current semantic manifest is required" }, { status: 409 });
+      }
       const started = await db.prepare(`UPDATE workflow_runs
         SET story_generation_status='running',story_generation_completed=0,
             story_generation_total=0,active_story_digest=NULL,updated_at=?
@@ -145,38 +176,199 @@ export async function POST(request: Request) {
       return Response.json(await loadWorkflowProgress(workflowRunId));
     }
     if (event === "story_generation_blocked") {
-      await db.prepare(`UPDATE workflow_runs
-        SET story_generation_status='blocked',active_story_digest=NULL,updated_at=? WHERE id=?`)
+      const blocked = await db.prepare(`UPDATE workflow_runs
+        SET story_generation_status='blocked',active_story_digest=NULL,updated_at=?
+        WHERE id=? AND story_generation_status='running'`)
         .bind(now, workflowRunId).run();
+      if (Number(blocked.meta.changes || 0) !== 1) {
+        return Response.json({ error: "Story generation is not running" }, { status: 409 });
+      }
       return Response.json(await loadWorkflowProgress(workflowRunId));
     }
     if (run.story_generation_status !== "running") {
       return Response.json({ error: "Story generation is not running" }, { status: 409 });
     }
-    const [candidateRows, { results: evidenceRows }] = await Promise.all([
-      readReservedStoryCandidateRows(db),
-      db.prepare(`SELECT id,document_id AS documentId,event_type AS eventType,
-        actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`)
-        .all<StoryEvidenceRow>(),
-    ]);
-    const validation = validateRecognizedStorySourcePackage(candidateRows, evidenceRows);
-    if (!validation.ok) {
-      await db.prepare(`UPDATE workflow_runs
-        SET story_generation_status='blocked',active_story_digest=NULL,updated_at=? WHERE id=?`)
-        .bind(now, workflowRunId).run();
-      return Response.json({ error: "Story candidate validation failed", code: validation.code }, { status: 409 });
+    if (!await beginStoryActivationMutation(db, workflowRunId, now)) {
+      return Response.json({ error: "Another Story source mutation is already running" }, { status: 409 });
     }
-    const digest = await sha256(validation.canonicalCandidate);
-    const activated = await db.prepare(`UPDATE workflow_runs
-      SET story_generation_status='ready_for_human_review',
-          story_generation_completed=?,story_generation_total=?,active_story_digest=?,updated_at=?
-      WHERE id=? AND story_source_revision=? AND story_generation_status='running'`)
-      .bind(validation.chapterCount, validation.chapterCount, digest, now,
-        workflowRunId, run.story_source_revision).run();
-    if (Number(activated.meta.changes || 0) !== 1) {
-      return Response.json({ error: "Story candidate changed during validation" }, { status: 409 });
+    const leasedRevision = Number(run.story_source_revision);
+    try {
+      const [
+        { results: itemRows },
+        { results: documentRows },
+        semanticManifest,
+        previousCoverage,
+      ] = await Promise.all([
+        db.prepare(`SELECT id,document_id AS documentId,sequence,timestamp,
+          organization_category AS project,event_type AS eventType,
+          actor_id AS actorId,actor_type AS actorType
+          FROM items ORDER BY document_id,sequence,id`)
+          .all<StoryCandidateItemAuthority & StoryEvidenceRow>(),
+        db.prepare("SELECT id,formatted_summary_json FROM documents ORDER BY id")
+          .all<{ id: string; formatted_summary_json: string }>(),
+        readSemanticManifestAuthority(db, workflowRunId),
+        readStoredCoverageManifestAuthority(db, workflowRunId),
+      ]);
+      if (!semanticManifest) {
+        await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
+        return Response.json({ error: "Current semantic manifest is required" }, { status: 409 });
+      }
+      const normalized = normalizeStoryCandidateSubmission(record.storyCandidates, itemRows);
+      if (!normalized.ok) {
+        await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
+        return Response.json({
+          error: "Story candidate submission validation failed",
+          code: normalized.code,
+        }, { status: 409 });
+      }
+      const activationValidation = await validateStoryActivationAuthority(
+        normalized.rows,
+        itemRows,
+        semanticManifest,
+        record.coverageManifest,
+      );
+      if (!activationValidation.ok) {
+        await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
+        return Response.json({
+          error: "Story activation authority validation failed",
+          code: activationValidation.code,
+        }, { status: 409 });
+      }
+      const coverageManifest: CoverageManifestAuthority = activationValidation.coverageManifest;
+      const revisionFailure = validateCoverageRevisionTransition(
+        coverageManifest,
+        previousCoverage,
+      );
+      if (revisionFailure) {
+        await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
+        return Response.json({
+          error: "Coverage manifest revision transition failed",
+          code: revisionFailure,
+        }, { status: 409 });
+      }
+      const validation = activationValidation.source;
+      const digest = await sha256(validation.canonicalCandidate);
+      const leaseSql = `EXISTS (SELECT 1 FROM workflow_runs r
+        JOIN semantic_manifests m ON m.workflow_run_id=r.id
+        WHERE r.id=? AND r.story_source_revision=? AND r.story_generation_status=?
+          AND m.source_revision=?)`;
+      const leaseBindings = [
+        workflowRunId,
+        leasedRevision,
+        STORY_SOURCE_WRITE_STATUS.resumeGeneration,
+        leasedRevision,
+      ];
+      const statements = [
+        db.prepare(`UPDATE items SET organization_reason='semantic-unit:' || (
+          SELECT unit_id FROM semantic_unit_members WHERE item_id=items.id
+        ) WHERE organization_reason LIKE ? AND EXISTS (
+          SELECT 1 FROM semantic_unit_members m
+          WHERE m.item_id=items.id AND m.workflow_run_id=?
+        ) AND ${leaseSql}`).bind("oxygen.story%", workflowRunId, ...leaseBindings),
+        db.prepare(`DELETE FROM story_coverage_rows WHERE workflow_run_id=? AND ${leaseSql}`)
+          .bind(workflowRunId, ...leaseBindings),
+        db.prepare(`DELETE FROM story_coverage_manifests WHERE workflow_run_id=? AND ${leaseSql}`)
+          .bind(workflowRunId, ...leaseBindings),
+        db.prepare(`INSERT INTO story_coverage_manifests
+          (workflow_run_id,revision,semantic_manifest_revision,semantic_manifest_digest,
+           coverage_digest,unit_count,serialized_bytes,created_at,updated_at)
+          SELECT ?,?,?,?,?,?,?,?,? WHERE ${leaseSql}`).bind(
+          workflowRunId,
+          coverageManifest.revision,
+          coverageManifest.semanticManifestRevision,
+          coverageManifest.semanticManifestDigest,
+          coverageManifest.coverageDigest,
+          coverageManifest.rows.length,
+          coverageManifest.serializedBytes,
+          now,
+          now,
+          ...leaseBindings,
+        ),
+      ];
+      const candidateRows = normalized.rows.map((row) => ({ id: row.id, summary: row.summary }));
+      for (const payload of jsonParameterBatches(candidateRows)) {
+        statements.push(db.prepare(`WITH candidate_rows AS (
+          SELECT json_extract(value,'$.id') AS id,
+            json_extract(value,'$.summary') AS summary FROM json_each(?)
+        ) UPDATE items SET organization_reason=(
+          SELECT summary FROM candidate_rows WHERE candidate_rows.id=items.id
+        ) WHERE id IN (SELECT id FROM candidate_rows) AND ${leaseSql}`)
+          .bind(payload, ...leaseBindings));
+      }
+      const documentSummaries: Array<{ id: string; formattedSummary: string }> = [];
+      for (const document of documentRows) {
+        let summary: Record<string, unknown> = {};
+        try {
+          const parsed = JSON.parse(String(document.formatted_summary_json || "{}"));
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("Stored document summary is not an object");
+          }
+          summary = parsed;
+        } catch {
+          throw new Error("Stored document summary is invalid");
+        }
+        const formattedSummary = JSON.stringify({
+          ...summary,
+          highlights: normalized.highlightsByDocument.get(document.id) || [],
+        });
+        documentSummaries.push({ id: document.id, formattedSummary });
+      }
+      for (const payload of jsonParameterBatches(documentSummaries)) {
+        statements.push(db.prepare(`WITH document_summaries AS (
+          SELECT json_extract(value,'$.id') AS id,
+            json_extract(value,'$.formattedSummary') AS formatted_summary
+          FROM json_each(?)
+        ) UPDATE documents SET
+          formatted_summary_json=(SELECT formatted_summary FROM document_summaries
+            WHERE document_summaries.id=documents.id),
+          updated_at=?
+          WHERE id IN (SELECT id FROM document_summaries) AND ${leaseSql}`)
+          .bind(payload, now, ...leaseBindings));
+      }
+      for (const payload of jsonParameterBatches(coverageManifest.rows)) {
+        statements.push(db.prepare(`INSERT INTO story_coverage_rows
+          (unit_id,workflow_run_id,disposition,owner_id,exclusion_reason)
+          SELECT json_extract(value,'$.unitId'),?,json_extract(value,'$.disposition'),
+            json_extract(value,'$.ownerId'),json_extract(value,'$.exclusionReason')
+          FROM json_each(?) WHERE ${leaseSql}`)
+          .bind(workflowRunId, payload, ...leaseBindings));
+      }
+      assertStoryActivationQueryBudget(statements.length);
+      if (!await publishActivatedStorySourceMutation(
+        db,
+        statements,
+        workflowRunId,
+        leasedRevision,
+        validation.chapterCount,
+        digest,
+        coverageManifest.revision,
+        coverageManifest.coverageDigest,
+        now,
+      )) {
+        throw new Error("Story source publication boundary changed during activation");
+      }
+      return Response.json(deriveWorkflowProgress({
+        workflowRunId,
+        targetConfirmed: Boolean(run.target_confirmed),
+        collectionStatus: run.collection_status,
+        collectionCompleted: Number(run.collection_completed || 0),
+        collectionTotal: Number(run.collection_total || 0),
+        documentCount: documentRows.length,
+        itemCount: itemRows.length,
+        organizedItemCount: itemRows.length,
+        organizationStatus: "complete",
+        redactionStatus: "complete",
+        storyGenerationStatus: "ready_for_human_review",
+        storyGenerationCompleted: validation.chapterCount,
+        storyGenerationTotal: validation.chapterCount,
+        storySourceSchema: "oxygen.story/3",
+        storySessionSchema: "oxygen.story-review-session/2",
+        updatedAt: now,
+      }));
+    } catch (error) {
+      await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
+      throw error;
     }
-    return Response.json(await loadWorkflowProgress(workflowRunId));
   }
 
   const existing = await db.prepare(

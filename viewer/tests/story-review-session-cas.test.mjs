@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { testStoryCoverage } from "./fixtures/successor-story-coverage.mjs";
 import { readFile } from "node:fs/promises";
 import { syntheticStoryEvents } from "./fixtures/synthetic-story-project.mjs";
 import {
@@ -58,7 +59,7 @@ const successorSource = {
   story: { blocks: [{ id: "block-safe", text: "A synthetic Story block.", evidence: [successorEvidence] }] },
   insights: [],
   evidence: { primary: successorEvidence, supporting: [] },
-  contextRetention: { excluded: [] },
+  coverage: testStoryCoverage(),
 };
 
 function useSuccessorSource(db) {

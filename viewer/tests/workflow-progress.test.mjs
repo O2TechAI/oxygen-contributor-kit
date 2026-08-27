@@ -143,11 +143,13 @@ test("workflow route hydrates count-only persistent state and the shell can reop
   assert.match(loader, /SELECT COUNT\(\*\)/);
   assert.match(route, /export async function POST/);
   assert.match(route, /workflow_runs/);
-  assert.match(route, /validateRecognizedStorySourcePackage/);
+  assert.match(route, /validateStoryActivationAuthority/);
+  assert.match(route, /readSemanticManifestAuthority/);
+  assert.match(route, /coverageManifest/);
   assert.match(route, /story_source_revision/);
   assert.match(route, /BODY_KEYS/);
   assert.doesNotMatch(`${route}\n${loader}`, /original_json|SELECT\s+content|safeStatusMessage|reasoning|prompt/i);
-  assert.doesNotMatch(route, /target_path|working_folder|session_name|story_payload|evidence_payload/i);
+  assert.doesNotMatch(route, /target_path|working_folder|session_name|story_payload|evidence_payload|memberIds|sourceBodies|excludedEvents/i);
   assert.match(db, /CREATE TABLE IF NOT EXISTS workflow_runs/);
   assert.doesNotMatch(db, /target_path|working_folder|session_name|free_form|payload_json/i);
   assert.match(workspace, /fetch\(`\/api\/workflow\$\{query\}`/);

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Convert a Codex rollout JSONL session into Oxygen trajectory v0.2.
 
-The extractor intentionally omits reasoning records, developer/system prompts,
-base instructions, token telemetry, and known credential files. Its automatic
-redaction is only a first safety pass; human review is required before release.
+The extractor retains recorded plaintext reasoning summaries, dialogue, Agent
+coordination, and meaningful progress. It omits encrypted reasoning bodies,
+developer/system prompts, base instructions, token telemetry, and known
+credential files. Its automatic redaction is only a first safety pass; human
+review is required before release.
 """
 
 from __future__ import annotations
@@ -120,14 +122,14 @@ def is_sensitive_path(path_text: str) -> bool:
     return "/.ssh/" in lowered or lowered.endswith(".pem") or lowered.endswith(".key")
 
 
-def extract_text(content: Any) -> tuple[str, list[dict[str, Any]]]:
+def extract_text(content: Any) -> tuple[str, list[tuple[int, dict[str, Any]]]]:
     if isinstance(content, str):
         return content, []
     texts: list[str] = []
-    attachments: list[dict[str, Any]] = []
+    attachments: list[tuple[int, dict[str, Any]]] = []
     if not isinstance(content, list):
         return "", attachments
-    for item in content:
+    for index, item in enumerate(content):
         if not isinstance(item, dict):
             continue
         item_type = item.get("type")
@@ -136,13 +138,33 @@ def extract_text(content: Any) -> tuple[str, list[dict[str, Any]]]:
             if isinstance(text, str):
                 texts.append(text)
         elif item_type in {"input_image", "image", "input_file", "file"}:
-            attachments.append(item)
+            attachments.append((index, item))
     return "\n".join(texts), attachments
 
 
-def is_platform_injected_user_text(text: str) -> bool:
-    stripped = text.lstrip()
-    return any(stripped.startswith(prefix) for prefix in PLATFORM_USER_PREFIXES)
+def strip_platform_injected_user_text(text: str) -> str:
+    """Remove only structurally complete leading platform envelopes.
+
+    A recorded user item can contain several injected XML-like envelopes and
+    then the contributor's actual message. Dropping by prefix erased that
+    meaningful suffix, so only known, closed leading blocks are removed.
+    """
+    remainder = text.lstrip()
+    while True:
+        matched = next(
+            (prefix for prefix in PLATFORM_USER_PREFIXES if remainder.startswith(prefix)),
+            None,
+        )
+        if matched is None:
+            return remainder
+        if not matched.startswith("<"):
+            return ""
+        tag = matched[1:-1]
+        closing = f"</{tag}>"
+        end = remainder.find(closing, len(matched))
+        if end < 0:
+            return ""
+        remainder = remainder[end + len(closing):].lstrip()
 
 
 def source_turn_id(payload: dict[str, Any]) -> str | None:
@@ -152,6 +174,91 @@ def source_turn_id(payload: dict[str, Any]) -> str | None:
     if isinstance(payload.get("turn_id"), str):
         return payload["turn_id"]
     return None
+
+
+def session_origin(payload: dict[str, Any]) -> str:
+    source = payload.get("source")
+    if (
+        payload.get("thread_source") == "subagent"
+        or isinstance(payload.get("parent_thread_id"), str)
+        or isinstance(payload.get("agent_path"), str)
+        or (isinstance(source, dict) and "subagent" in source)
+    ):
+        return "subagent"
+    return "top_level"
+
+
+def extract_reasoning_summary(payload: dict[str, Any]) -> str:
+    summary = payload.get("summary")
+    if isinstance(summary, str):
+        return summary
+    if not isinstance(summary, list):
+        return ""
+    texts: list[str] = []
+    for item in summary:
+        if not isinstance(item, dict) or item.get("type") != "summary_text":
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            texts.append(text)
+    return "\n".join(texts)
+
+
+def semantic_mirror_signature(
+    record: dict[str, Any],
+    home: Path,
+) -> tuple[str, str, str] | None:
+    """Identify only adjacent cross-envelope semantic mirrors.
+
+    Event messages have no stable source ID, so matching them globally or
+    non-adjacently could erase a legitimately repeated thought. Exact adjacent
+    response/event pairs are the one transport replay we can prove locally.
+    """
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    record_type = record.get("type")
+    payload_type = payload.get("type")
+    text = ""
+    family = ""
+    attachment_signature = ""
+    if record_type == "response_item" and payload_type == "reasoning":
+        family = "reasoning"
+        text = extract_reasoning_summary(payload)
+    elif record_type == "event_msg" and payload_type == "agent_reasoning":
+        family = "reasoning"
+        text = payload.get("text") if isinstance(payload.get("text"), str) else ""
+    elif (
+        record_type == "response_item"
+        and payload_type == "message"
+        and payload.get("role") in {"user", "assistant"}
+    ):
+        family = f"message:{payload.get('role')}"
+        text, attachments = extract_text(payload.get("content"))
+        if attachments:
+            # Carrier-specific attachment metadata cannot be proven to mirror
+            # an event_msg wrapper, so retain both rather than erase source.
+            attachment_signature = "response:" + canonical_json(
+                [attachment for _, attachment in attachments]
+            )
+    elif record_type == "event_msg" and payload_type == "agent_message":
+        family = "message:assistant"
+        text = payload.get("message") if isinstance(payload.get("message"), str) else ""
+    elif record_type == "event_msg" and payload_type == "user_message":
+        family = "message:user"
+        text = payload.get("message") if isinstance(payload.get("message"), str) else ""
+        attachment_fields = {
+            key: payload[key] for key in (
+                "images", "local_images", "audio", "local_audio", "text_elements",
+            ) if isinstance(payload.get(key), list) and payload[key]
+        }
+        if attachment_fields:
+            attachment_signature = "event:" + canonical_json(attachment_fields)
+    # Compare exact recorded plaintext in memory. Redaction is applied only to
+    # the emitted contribution; two distinct source statements must not become
+    # a false mirror merely because both redact to the same placeholder.
+    exact_text = text.strip()
+    return (family, exact_text, attachment_signature) if family and exact_text else None
 
 
 def infer_action(tool_name: str, raw_arguments: Any) -> str:
@@ -284,27 +391,100 @@ class Extractor:
         self.event_counter = 0
         self.session_id = self.session_path.stem
         self.cwd: str | None = None
+        self.origin = "top_level"
+        self.agent_path: str | None = None
         self.call_events: dict[str, str] = {}
+        self.semantic_call_events: dict[str, str] = {}
         self.call_started: dict[str, str] = {}
         self.call_metadata: dict[str, dict[str, Any]] = {}
         self.last_user_event_by_turn: dict[str, str] = {}
+        self.assistant_texts_by_turn: dict[str, set[str]] = {}
+        self.semantic_record_fingerprints: dict[tuple[str, str, str], str] = {}
+        self.duplicate_semantic_replays = 0
         self.warnings: list[str] = []
 
     def next_id(self) -> str:
         self.event_counter += 1
         return f"evt-{self.event_counter:06d}"
 
-    def source(self, payload: dict[str, Any], raw: bytes, line_number: int, record_type: str) -> dict[str, Any]:
-        record_id = payload.get("id") or payload.get("call_id") or f"line-{line_number}"
-        return {
+    def source(
+        self,
+        payload: dict[str, Any],
+        raw: bytes,
+        line_number: int,
+        record_type: str,
+        interaction_direction: str | None = None,
+    ) -> dict[str, Any]:
+        record_id = (
+            payload.get("id") or payload.get("client_id")
+            or payload.get("call_id") or payload.get("turn_id") or f"line-{line_number}"
+        )
+        source = {
             "system": "codex",
             "session_id": self.session_id,
             "record_id": str(record_id),
             "record_type": record_type,
+            "origin": self.origin,
             "locator": self.session_path.name,
             "line": line_number,
             "sha256": sha256_bytes(raw),
         }
+        if interaction_direction:
+            source["interaction_direction"] = interaction_direction
+        return source
+
+    def semantic_source(
+        self,
+        payload: dict[str, Any],
+        raw: bytes,
+        line_number: int,
+        record_type: str,
+        interaction_direction: str,
+        semantic_value: Any,
+    ) -> dict[str, Any]:
+        """Bind replay checks to recorded meaning before local redaction."""
+        source = self.source(
+            payload, raw, line_number, record_type, interaction_direction,
+        )
+        source["_semantic_sha256"] = sha256_bytes(
+            canonical_json(semantic_value).encode("utf-8")
+        )
+        return source
+
+    def agent_actor(self) -> dict[str, Any]:
+        if self.origin == "subagent":
+            return {
+                "id": "agent-codex-subagent",
+                "type": "ai",
+                "parent_agent_id": "agent-codex-parent",
+            }
+        return {"id": "agent-codex-01", "type": "ai", "parent_agent_id": None}
+
+    def record_assistant_text(self, turn_id: str | None, text: str) -> None:
+        if turn_id and text.strip():
+            self.assistant_texts_by_turn.setdefault(turn_id, set()).add(text.strip())
+
+    def should_emit_semantic_record(
+        self,
+        payload: dict[str, Any],
+        record_type: str,
+        semantic_value: Any,
+    ) -> bool:
+        record_id = payload.get("id")
+        if not isinstance(record_id, str) or not record_id:
+            return True
+        key = (self.origin, record_type, record_id)
+        fingerprint = sha256_bytes(canonical_json(semantic_value).encode("utf-8"))
+        previous = self.semantic_record_fingerprints.get(key)
+        if previous is None:
+            self.semantic_record_fingerprints[key] = fingerprint
+            return True
+        if previous != fingerprint:
+            raise ValueError(
+                f"conflicting semantic replay for {record_type} record {record_id}"
+            )
+        self.duplicate_semantic_replays += 1
+        return False
 
     def add_event(
         self,
@@ -388,29 +568,55 @@ class Extractor:
         text, attachments = extract_text(payload.get("content"))
         if not text and not attachments:
             return
-        if role == "user" and is_platform_injected_user_text(text):
-            self.warnings.append(
-                f"skipped platform-injected user metadata at line {line_number}"
-            )
+        if role == "user":
+            filtered_text = strip_platform_injected_user_text(text)
+            if filtered_text != text.lstrip():
+                self.warnings.append(
+                    f"removed platform-injected user metadata at line {line_number}"
+                )
+            text = filtered_text
+            if not text and not attachments:
+                return
+        semantic_value = {
+            "role": role,
+            "phase": payload.get("phase"),
+            "text": text,
+            "attachments": [attachment for _, attachment in attachments],
+        }
+        if not self.should_emit_semantic_record(payload, "message", semantic_value):
             return
+        if self.origin == "subagent":
+            direction = "agent_to_subagent" if role == "user" else "subagent_to_agent"
+            actor = (
+                {"id": "agent-codex-parent", "type": "ai", "parent_agent_id": None}
+                if role == "user"
+                else self.agent_actor()
+            )
+        else:
+            direction = "human_to_agent" if role == "user" else "agent_to_human"
+            actor = (
+                {"id": "participant-01", "type": "human", "parent_agent_id": None}
+                if role == "user"
+                else self.agent_actor()
+            )
         turn_id = source_turn_id(payload)
         relations: list[dict[str, str]] = []
         if role == "assistant" and turn_id and turn_id in self.last_user_event_by_turn:
             relations.append({"type": "reply_to", "event_id": self.last_user_event_by_turn[turn_id]})
-        source = self.source(payload, raw, line_number, "message")
+        source = self.semantic_source(
+            payload, raw, line_number, "message", direction, semantic_value,
+        )
         event_id = self.add_event(
             timestamp=record.get("timestamp"),
             event_type="message",
-            actor={
-                "id": "participant-01" if role == "user" else "agent-codex-01",
-                "type": "human" if role == "user" else "ai",
-                "parent_agent_id": None,
-            },
+            actor=actor,
             payload={
                 "role": role,
                 "phase": payload.get("phase"),
+                "interaction_direction": direction,
                 "text": redact_text(text, self.home),
                 "attachments": [],
+                "has_attachments": bool(attachments),
             },
             source=source,
             turn_id=turn_id,
@@ -418,7 +624,9 @@ class Extractor:
         )
         if role == "user" and turn_id:
             self.last_user_event_by_turn[turn_id] = event_id
-        for attachment in attachments:
+        elif role == "assistant":
+            self.record_assistant_text(turn_id, text)
+        for attachment_index, attachment in attachments:
             safe_attachment = sanitize(attachment, self.home)
             locator = safe_attachment.get("path") or safe_attachment.get("image_url") or safe_attachment.get("file_id")
             if locator and is_sensitive_path(str(locator)):
@@ -426,8 +634,463 @@ class Extractor:
                 continue
             serialized = canonical_json(safe_attachment)
             artifact = self.artifacts.write_text("attachment", serialized, ".json")
-            self.add_artifact_event(artifact, record.get("timestamp"), source, turn_id, event_id)
+            attachment_source = {
+                **source,
+                "record_type": f"message_attachment:{attachment_index}",
+            }
+            self.add_artifact_event(
+                artifact, record.get("timestamp"), attachment_source, turn_id, event_id,
+            )
             self.events[-1]["relations"].append({"type": "reply_to", "event_id": event_id})
+
+    def process_event_user_message(
+        self,
+        record: dict[str, Any],
+        raw: bytes,
+        line_number: int,
+    ) -> None:
+        payload = record["payload"]
+        text = payload.get("message") if isinstance(payload.get("message"), str) else ""
+        attachments: list[tuple[str, Any]] = []
+        for field in ("images", "local_images", "audio", "local_audio", "text_elements"):
+            values = payload.get(field)
+            if isinstance(values, list):
+                attachments.extend((field, value) for value in values)
+        filtered_text = strip_platform_injected_user_text(text)
+        text = filtered_text
+        if not text.strip() and not attachments:
+            return
+        semantic_value = {"text": text, "attachments": attachments}
+        if not self.should_emit_semantic_record(payload, "user_message", semantic_value):
+            return
+        if self.origin == "subagent":
+            direction = "agent_to_subagent"
+            actor = {"id": "agent-codex-parent", "type": "ai", "parent_agent_id": None}
+        else:
+            direction = "human_to_agent"
+            actor = {"id": "participant-01", "type": "human", "parent_agent_id": None}
+        turn_id = source_turn_id(payload)
+        source = self.semantic_source(
+            payload, raw, line_number, "user_message", direction, semantic_value,
+        )
+        event_id = self.add_event(
+            timestamp=record.get("timestamp"),
+            event_type="message",
+            actor=actor,
+            payload={
+                "role": "user",
+                "phase": payload.get("phase"),
+                "interaction_direction": direction,
+                "text": redact_text(text, self.home),
+                "attachments": [],
+                "has_attachments": bool(attachments),
+            },
+            source=source,
+            turn_id=turn_id,
+        )
+        for attachment_index, (field, value) in enumerate(attachments):
+            safe_attachment = sanitize({"field": field, "value": value}, self.home)
+            locator = safe_attachment.get("value") if isinstance(safe_attachment, dict) else None
+            if isinstance(locator, str) and is_sensitive_path(locator):
+                self.warnings.append(f"skipped sensitive attachment reference at line {line_number}")
+                continue
+            artifact = self.artifacts.write_text(
+                "attachment", canonical_json(safe_attachment), ".json",
+            )
+            attachment_source = {
+                **source,
+                "record_type": f"user_message_attachment:{attachment_index}",
+            }
+            self.add_artifact_event(
+                artifact, record.get("timestamp"), attachment_source, turn_id, event_id,
+            )
+            self.events[-1]["relations"].append({"type": "reply_to", "event_id": event_id})
+
+    def process_reasoning(self, record: dict[str, Any], raw: bytes, line_number: int) -> None:
+        payload = record["payload"]
+        text = extract_reasoning_summary(payload)
+        if not text.strip():
+            return
+        safe_text = redact_text(text, self.home)
+        if not self.should_emit_semantic_record(payload, "reasoning_summary", text):
+            return
+        direction = "subagent_internal_reasoning" if self.origin == "subagent" else "agent_internal_reasoning"
+        self.add_event(
+            timestamp=record.get("timestamp"),
+            event_type="reasoning",
+            actor=self.agent_actor(),
+            payload={
+                "role": "assistant",
+                "phase": "reasoning",
+                "interaction_direction": direction,
+                "text": safe_text,
+            },
+            source=self.semantic_source(
+                payload, raw, line_number, "reasoning_summary", direction, text,
+            ),
+            turn_id=source_turn_id(payload),
+        )
+    def process_task_complete_agent_message(
+        self,
+        record: dict[str, Any],
+        raw: bytes,
+        line_number: int,
+    ) -> None:
+        payload = record["payload"]
+        text = payload.get("last_agent_message")
+        if not isinstance(text, str) or not text.strip():
+            return
+        turn_id = source_turn_id(payload)
+        if turn_id and text.strip() in self.assistant_texts_by_turn.get(turn_id, set()):
+            self.duplicate_semantic_replays += 1
+            return
+        direction = "subagent_to_agent" if self.origin == "subagent" else "agent_to_human"
+        self.add_event(
+            timestamp=record.get("timestamp"),
+            event_type="message",
+            actor=self.agent_actor(),
+            payload={
+                "role": "assistant",
+                "phase": "final_answer",
+                "interaction_direction": direction,
+                "text": redact_text(text, self.home),
+                "attachments": [],
+            },
+            source=self.semantic_source(
+                payload,
+                raw,
+                line_number,
+                "task_complete_agent_message",
+                direction,
+                {"text": text, "turn_id": turn_id},
+            ),
+            turn_id=turn_id,
+        )
+        self.record_assistant_text(turn_id, text)
+
+    def process_agent_message(self, record: dict[str, Any], raw: bytes, line_number: int) -> None:
+        payload = record["payload"]
+        text, _ = extract_text(payload.get("content"))
+        if not text.strip():
+            return
+        semantic_value = {
+            "author": payload.get("author"),
+            "recipient": payload.get("recipient"),
+            "text": text,
+        }
+        if not self.should_emit_semantic_record(payload, "agent_message", semantic_value):
+            return
+        safe_value = {
+            "author": sanitize(payload.get("author"), self.home),
+            "recipient": sanitize(payload.get("recipient"), self.home),
+            "text": redact_text(text, self.home),
+        }
+        direction = "agent_to_agent"
+        self.add_event(
+            timestamp=record.get("timestamp"),
+            event_type="message",
+            actor=self.agent_actor(),
+            payload={
+                "role": "assistant",
+                "phase": "coordination",
+                "interaction_direction": direction,
+                "author": safe_value["author"],
+                "recipient": safe_value["recipient"],
+                "text": safe_value["text"],
+                "attachments": [],
+            },
+            source=self.semantic_source(
+                payload, raw, line_number, "agent_message", direction, semantic_value,
+            ),
+            turn_id=source_turn_id(payload),
+        )
+    def process_progress(self, record: dict[str, Any], raw: bytes, line_number: int) -> bool:
+        payload = record["payload"]
+        action = str(payload.get("type") or "")
+        goal = payload.get("goal")
+        goal_status = None
+        if action == "thread_goal_updated" and isinstance(goal, dict):
+            value = goal.get("objective")
+            goal_status = goal.get("status") if isinstance(goal.get("status"), str) else None
+        else:
+            value = goal if action == "thread_goal_updated" else payload.get("reason")
+        if not isinstance(value, str) or not value.strip():
+            return False
+        direction = "subagent_internal_progress" if self.origin == "subagent" else "agent_internal_progress"
+        self.add_event(
+            timestamp=record.get("timestamp"),
+            event_type="progress",
+            actor=self.agent_actor(),
+            payload={
+                "kind": action,
+                "status": goal_status,
+                "interaction_direction": direction,
+                "text": redact_text(value, self.home),
+            },
+            source=self.semantic_source(
+                payload,
+                raw,
+                line_number,
+                action,
+                direction,
+                {"text": value, "status": goal_status},
+            ),
+            turn_id=source_turn_id(payload),
+        )
+        return True
+
+    def process_event_reasoning(
+        self,
+        record: dict[str, Any],
+        raw: bytes,
+        line_number: int,
+    ) -> None:
+        payload = record["payload"]
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return
+        if not self.should_emit_semantic_record(payload, "agent_reasoning", text):
+            return
+        direction = "subagent_internal_reasoning" if self.origin == "subagent" else "agent_internal_reasoning"
+        self.add_event(
+            timestamp=record.get("timestamp"),
+            event_type="reasoning",
+            actor=self.agent_actor(),
+            payload={
+                "role": "assistant",
+                "phase": "reasoning",
+                "interaction_direction": direction,
+                "text": redact_text(text, self.home),
+            },
+            source=self.semantic_source(
+                payload, raw, line_number, "agent_reasoning", direction, text,
+            ),
+            turn_id=source_turn_id(payload),
+        )
+
+    def process_event_agent_message(
+        self,
+        record: dict[str, Any],
+        raw: bytes,
+        line_number: int,
+    ) -> None:
+        payload = record["payload"]
+        text = payload.get("message")
+        if not isinstance(text, str) or not text.strip():
+            return
+        semantic_value = {"message": text, "phase": payload.get("phase")}
+        if not self.should_emit_semantic_record(
+            payload, "agent_message_event", semantic_value,
+        ):
+            return
+        direction = "subagent_to_agent" if self.origin == "subagent" else "agent_to_human"
+        self.add_event(
+            timestamp=record.get("timestamp"),
+            event_type="message",
+            actor=self.agent_actor(),
+            payload={
+                "role": "assistant",
+                "phase": payload.get("phase"),
+                "interaction_direction": direction,
+                "text": redact_text(text, self.home),
+                "attachments": [],
+            },
+            source=self.semantic_source(
+                payload,
+                raw,
+                line_number,
+                "agent_message_event",
+                direction,
+                semantic_value,
+            ),
+            turn_id=source_turn_id(payload),
+        )
+        self.record_assistant_text(source_turn_id(payload), text)
+
+    def process_semantic_tool_content(
+        self,
+        record: dict[str, Any],
+        raw: bytes,
+        line_number: int,
+        call_id: str,
+        tool_name: str,
+        arguments: Any,
+    ) -> None:
+        if isinstance(arguments, str):
+            try:
+                value = json.loads(arguments)
+            except json.JSONDecodeError:
+                return
+        else:
+            value = arguments
+        if not isinstance(value, dict):
+            return
+        if tool_name in {"spawn_agent", "followup_task", "send_message"}:
+            message = value.get("message")
+            if not isinstance(message, str) or not message.strip():
+                return
+            record_type = f"coordination_prompt:{tool_name}"
+            semantic_value = {
+                "message": message,
+                "target": value.get("target"),
+                "task_name": value.get("task_name"),
+            }
+            if not self.should_emit_semantic_record(
+                record["payload"], record_type, semantic_value,
+            ):
+                return
+            recipient = value.get("target") or value.get("task_name")
+            direction = "agent_to_agent"
+            if tool_name == "spawn_agent":
+                direction = "agent_to_subagent"
+            elif tool_name == "followup_task":
+                direction = "agent_to_subagent"
+            if (
+                self.origin == "subagent"
+                and isinstance(self.agent_path, str)
+                and self.agent_path.startswith("/")
+                and isinstance(recipient, str)
+                and recipient.startswith("/")
+            ):
+                sender_depth = len([part for part in self.agent_path.split("/") if part])
+                recipient_depth = len([part for part in recipient.split("/") if part])
+                direction = (
+                    "subagent_to_agent" if recipient_depth < sender_depth
+                    else "agent_to_subagent" if recipient_depth > sender_depth
+                    else "agent_to_agent"
+                )
+            self.add_event(
+                timestamp=record.get("timestamp"),
+                event_type="message",
+                actor=self.agent_actor(),
+                payload={
+                    "role": "assistant",
+                    "phase": "coordination",
+                    "interaction_direction": direction,
+                    "recipient": sanitize(recipient, self.home),
+                    "text": redact_text(message, self.home),
+                    "attachments": [],
+                },
+                source=self.semantic_source(
+                    record["payload"],
+                    raw,
+                    line_number,
+                    record_type,
+                    direction,
+                    semantic_value,
+                ),
+                turn_id=source_turn_id(record["payload"]),
+            )
+            return
+        if tool_name == "request_user_input":
+            questions = value.get("questions")
+            if not isinstance(questions, list):
+                return
+            normalized: list[dict[str, Any]] = []
+            lines: list[str] = []
+            for question in questions:
+                if not isinstance(question, dict):
+                    continue
+                text = question.get("question")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                header = question.get("header")
+                options: list[dict[str, str]] = []
+                for option in question.get("options", []):
+                    if not isinstance(option, dict):
+                        continue
+                    label = option.get("label")
+                    description = option.get("description")
+                    if not isinstance(label, str) or not label.strip():
+                        continue
+                    options.append({
+                        "label": label,
+                        **({"description": description}
+                           if isinstance(description, str) and description.strip() else {}),
+                    })
+                normalized.append({
+                    "question": text,
+                    **({"header": header}
+                       if isinstance(header, str) and header.strip() else {}),
+                    "options": options,
+                })
+                lines.append(
+                    f"{header.strip()}: {text.strip()}"
+                    if isinstance(header, str) and header.strip() else text.strip()
+                )
+                lines.extend(
+                    f"- {option['label']}"
+                    + (f": {option['description']}" if option.get("description") else "")
+                    for option in options
+                )
+            if not normalized:
+                return
+            semantic_value = {"call_id": call_id, "questions": normalized}
+            direction = "agent_to_human"
+            event_id = self.add_event(
+                timestamp=record.get("timestamp"),
+                event_type="message",
+                actor=self.agent_actor(),
+                payload={
+                    "role": "assistant",
+                    "phase": "feedback_request",
+                    "interaction_direction": direction,
+                    "text": redact_text("\n".join(lines), self.home),
+                    "attachments": [],
+                },
+                source=self.semantic_source(
+                    record["payload"], raw, line_number, "human_question",
+                    direction, semantic_value,
+                ),
+                turn_id=source_turn_id(record["payload"]),
+            )
+            self.semantic_call_events[call_id] = event_id
+            return
+        if tool_name != "update_plan":
+            return
+        explanation = value.get("explanation")
+        lines = [explanation.strip()] if isinstance(explanation, str) and explanation.strip() else []
+        plan = value.get("plan")
+        semantic_rows: list[dict[str, str]] = []
+        if isinstance(plan, list):
+            for row in plan:
+                if not isinstance(row, dict):
+                    continue
+                step = row.get("step")
+                status = row.get("status")
+                if not isinstance(step, str) or not step.strip():
+                    continue
+                safe_status = status if isinstance(status, str) else ""
+                semantic_rows.append({"status": safe_status, "step": step})
+                lines.append(f"[{safe_status}] {step}" if safe_status else step)
+        if not lines:
+            return
+        semantic_value = {"explanation": explanation, "plan": semantic_rows}
+        if not self.should_emit_semantic_record(
+            record["payload"], "agent_plan", semantic_value,
+        ):
+            return
+        direction = "subagent_internal_reasoning" if self.origin == "subagent" else "agent_internal_reasoning"
+        self.add_event(
+            timestamp=record.get("timestamp"),
+            event_type="reasoning",
+            actor=self.agent_actor(),
+            payload={
+                "role": "assistant",
+                "phase": "planning",
+                "interaction_direction": direction,
+                "text": redact_text("\n".join(lines), self.home),
+            },
+            source=self.semantic_source(
+                record["payload"],
+                raw,
+                line_number,
+                "agent_plan",
+                direction,
+                semantic_value,
+            ),
+            turn_id=source_turn_id(record["payload"]),
+        )
 
     def process_tool_call(self, record: dict[str, Any], raw: bytes, line_number: int) -> None:
         payload = record["payload"]
@@ -436,6 +1099,9 @@ class Extractor:
         tool_name = str(payload.get("name") or "unknown")
         namespace = payload.get("namespace")
         arguments = payload.get("input", payload.get("arguments"))
+        self.process_semantic_tool_content(
+            record, raw, line_number, call_id, tool_name, arguments,
+        )
         sanitized_arguments = sanitize(arguments, self.home)
         argument_text = sanitized_arguments if isinstance(sanitized_arguments, str) else canonical_json(sanitized_arguments)
         argument_ref = None
@@ -476,6 +1142,114 @@ class Extractor:
         payload = record["payload"]
         call_id = str(payload.get("call_id") or payload.get("id") or f"call-{line_number}")
         turn_id = source_turn_id(payload)
+        tool_name = str(self.call_metadata.get(call_id, {}).get("tool_name") or "")
+        raw_output = payload.get("output", payload.get("result"))
+        if tool_name == "request_user_input":
+            response_value = raw_output
+            if isinstance(response_value, str):
+                try:
+                    response_value = json.loads(response_value)
+                except json.JSONDecodeError:
+                    response_value = {"answer": response_value}
+            answer_parts: list[str] = []
+            if isinstance(response_value, dict):
+                answers = response_value.get("answers")
+                if isinstance(answers, dict):
+                    answer_parts.extend(
+                        answer for answer in answers.values()
+                        if isinstance(answer, str) and answer.strip()
+                    )
+                for key in ("answer", "response", "selected"):
+                    answer = response_value.get(key)
+                    if isinstance(answer, str) and answer.strip() and answer not in answer_parts:
+                        answer_parts.append(answer)
+            if answer_parts:
+                answer_text = "\n".join(answer_parts)
+                direction = "human_to_agent"
+                semantic_value = {"call_id": call_id, "answers": answer_parts}
+                self.add_event(
+                    timestamp=record.get("timestamp"),
+                    event_type="message",
+                    actor={"id": "participant-01", "type": "human", "parent_agent_id": None},
+                    payload={
+                        "role": "user",
+                        "phase": "feedback",
+                        "interaction_kind": "feedback",
+                        "interaction_direction": direction,
+                        "text": redact_text(answer_text, self.home),
+                        "attachments": [],
+                    },
+                    source=self.semantic_source(
+                        payload,
+                        raw,
+                        line_number,
+                        "human_tool_response",
+                        direction,
+                        semantic_value,
+                    ),
+                    turn_id=turn_id,
+                    relations=[{
+                        "type": "reply_to",
+                        "event_id": self.semantic_call_events[call_id],
+                    }] if call_id in self.semantic_call_events else [],
+                )
+        if tool_name == "wait":
+            semantic_output = raw_output
+            if isinstance(semantic_output, str):
+                try:
+                    semantic_output = json.loads(semantic_output)
+                except json.JSONDecodeError:
+                    semantic_output = None
+            if (
+                isinstance(semantic_output, list)
+                and semantic_output
+                and all(
+                    isinstance(block, dict)
+                    and set(block) == {"type", "text"}
+                    and block.get("type") == "input_text"
+                    and isinstance(block.get("text"), str)
+                    for block in semantic_output
+                )
+            ):
+                for block_index, block in enumerate(semantic_output):
+                    finding = block.get("text")
+                    if not isinstance(finding, str) or not finding.strip():
+                        continue
+                    semantic_payload = {**payload, "id": f"{call_id}:{block_index}"}
+                    semantic_value = {
+                        "call_id": call_id,
+                        "block_index": block_index,
+                        "text": finding,
+                    }
+                    if not self.should_emit_semantic_record(
+                        semantic_payload, "subagent_finding", semantic_value,
+                    ):
+                        continue
+                    self.add_event(
+                        timestamp=record.get("timestamp"),
+                        event_type="message",
+                        actor={
+                            "id": "agent-codex-subagent",
+                            "type": "ai",
+                            "parent_agent_id": "agent-codex-parent",
+                        },
+                        payload={
+                            "role": "assistant",
+                            "phase": "coordination",
+                            "interaction_direction": "subagent_to_agent",
+                            "text": redact_text(finding, self.home),
+                            "attachments": [],
+                        },
+                        source=self.semantic_source(
+                            semantic_payload,
+                            raw,
+                            line_number,
+                            "subagent_finding",
+                            "subagent_to_agent",
+                            semantic_value,
+                        ),
+                        turn_id=turn_id,
+                    )
         text, _ = extract_text(payload.get("output"))
         if not text:
             value = payload.get("output", payload.get("result"))
@@ -654,18 +1428,49 @@ class Extractor:
         )
 
     def process_agent_event(self, record: dict[str, Any], raw: bytes, line_number: int) -> None:
-        payload = sanitize(record["payload"], self.home)
+        raw_payload = record["payload"]
+        payload = sanitize(raw_payload, self.home)
         payload.pop("type", None)
+        semantic_text = next((
+            value for value in (
+                raw_payload.get("text"), raw_payload.get("message"), raw_payload.get("reason"),
+            ) if isinstance(value, str) and value.strip()
+        ), "")
+        direction = str(raw_payload.get("interaction_direction") or (
+            "subagent_internal_progress" if self.origin == "subagent"
+            else "agent_internal_progress"
+        ))
+        projected_payload: dict[str, Any] = {"action": "activity", "details": payload}
+        if semantic_text:
+            projected_payload.update({
+                "interaction_direction": direction,
+                "text": redact_text(semantic_text, self.home),
+            })
         self.add_event(
             timestamp=record.get("timestamp"),
             event_type="agent",
             actor={"id": "agent-codex-01", "type": "ai", "parent_agent_id": None},
-            payload={"action": "activity", "details": payload},
-            source=self.source(record["payload"], raw, line_number, "sub_agent_activity"),
+            payload=projected_payload,
+            source=(
+                self.semantic_source(
+                    raw_payload,
+                    raw,
+                    line_number,
+                    "sub_agent_activity",
+                    direction,
+                    semantic_text,
+                )
+                if semantic_text else self.source(
+                    raw_payload, raw, line_number, "sub_agent_activity",
+                )
+            ),
             turn_id=source_turn_id(record["payload"]),
         )
 
     def process(self) -> None:
+        previous_mirror: tuple[str, str, str] | None = None
+        previous_record_type: str | None = None
+        previous_emitted_start: int | None = None
         with self.session_path.open("rb") as handle:
             for line_number, raw in enumerate(handle, 1):
                 raw = raw.rstrip(b"\r\n")
@@ -681,13 +1486,45 @@ class Extractor:
                 payload = record["payload"]
                 record_type = record.get("type")
                 payload_type = payload.get("type")
+                mirror = semantic_mirror_signature(record, self.home)
+                skip_adjacent_event_mirror = bool(
+                    mirror
+                    and mirror == previous_mirror
+                    and record_type == "event_msg"
+                    and previous_record_type == "response_item"
+                )
+                if (
+                    mirror
+                    and mirror == previous_mirror
+                    and record_type == "response_item"
+                    and previous_record_type == "event_msg"
+                    and previous_emitted_start is not None
+                    and previous_emitted_start < len(self.events)
+                ):
+                    removed = len(self.events) - previous_emitted_start
+                    del self.events[previous_emitted_start:]
+                    self.event_counter -= removed
+                    self.duplicate_semantic_replays += 1
                 if record_type == "session_meta":
                     self.session_id = str(payload.get("session_id") or payload.get("id") or self.session_id)
                     cwd = payload.get("cwd")
                     self.cwd = str(cwd) if isinstance(cwd, str) else None
+                    self.origin = session_origin(payload)
+                    self.agent_path = (
+                        payload.get("agent_path")
+                        if isinstance(payload.get("agent_path"), str) else None
+                    )
+                    previous_mirror = None
+                    previous_record_type = record_type
+                    previous_emitted_start = None
                     continue
+                before = len(self.events)
                 if record_type == "response_item" and payload_type == "message":
                     self.process_message(record, raw, line_number)
+                elif record_type == "response_item" and payload_type == "reasoning":
+                    self.process_reasoning(record, raw, line_number)
+                elif record_type == "response_item" and payload_type == "agent_message":
+                    self.process_agent_message(record, raw, line_number)
                 elif record_type == "response_item" and payload_type in {"custom_tool_call", "function_call"}:
                     self.process_tool_call(record, raw, line_number)
                 elif record_type == "response_item" and payload_type in {"custom_tool_call_output", "function_call_output"}:
@@ -695,11 +1532,34 @@ class Extractor:
                 elif record_type == "event_msg" and payload_type == "patch_apply_end":
                     self.process_patch_result(record, raw, line_number)
                 elif record_type == "event_msg" and payload_type in {"task_started", "task_complete", "turn_aborted", "thread_settings_applied"}:
+                    if payload_type == "task_complete":
+                        self.process_task_complete_agent_message(record, raw, line_number)
                     self.process_system_event(record, raw, line_number)
+                elif record_type == "event_msg" and payload_type == "thread_goal_updated":
+                    self.process_progress(record, raw, line_number)
+                elif record_type == "event_msg" and payload_type == "agent_reasoning":
+                    if skip_adjacent_event_mirror:
+                        self.duplicate_semantic_replays += 1
+                    else:
+                        self.process_event_reasoning(record, raw, line_number)
+                elif record_type == "event_msg" and payload_type == "agent_message":
+                    if skip_adjacent_event_mirror:
+                        self.duplicate_semantic_replays += 1
+                    else:
+                        self.process_event_agent_message(record, raw, line_number)
+                elif record_type == "event_msg" and payload_type == "user_message":
+                    if skip_adjacent_event_mirror:
+                        self.duplicate_semantic_replays += 1
+                    else:
+                        self.process_event_user_message(record, raw, line_number)
                 elif record_type == "event_msg" and payload_type == "sub_agent_activity":
                     self.process_agent_event(record, raw, line_number)
-                # Explicitly skipped: reasoning, agent_reasoning, developer/system
-                # messages, base instructions, token counts, and world state.
+                # Encrypted reasoning bodies, developer/system messages, base
+                # instructions, token counts, and world state are intentionally
+                # not normalized as contributions.
+                previous_mirror = mirror
+                previous_record_type = str(record_type)
+                previous_emitted_start = before if len(self.events) > before else None
 
     def write(self) -> None:
         events_path = self.trajectory_dir / "events.jsonl"
@@ -721,6 +1581,9 @@ class Extractor:
             ],
             "event_count": len(self.events),
             "artifact_count": self.artifacts.count,
+            "source_normalization": {
+                "duplicate_semantic_replay_count": self.duplicate_semantic_replays,
+            },
             "redaction_status": "automatic_only",
             "warnings": self.warnings,
         }
@@ -732,8 +1595,9 @@ class Extractor:
             "trajectory_id": self.trajectory_id,
             "automatic_redaction": True,
             "excluded_record_types": [
-                "reasoning",
-                "agent_reasoning",
+                "encrypted_reasoning_body",
+                "duplicate_agent_reasoning_mirror",
+                "duplicate_agent_message_mirror",
                 "developer_message",
                 "system_message",
                 "base_instructions",

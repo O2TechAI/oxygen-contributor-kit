@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { testStoryCoverage } from "./fixtures/successor-story-coverage.mjs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import {
@@ -152,7 +153,9 @@ function buildSuccessorFixture(caseId) {
         id: personItem.id,
         releaseLabel: personItem.id,
         role: personItem.id.replace(/^person-/, "").replaceAll("-", " "),
-        description: "Supported actor in this synthetic Chapter.",
+        description: `In this Chapter, the recorded involvement was: ${
+          records.get(personItem.recordIds[0]).text
+        }`,
         localIdentityState: "not_identified",
         evidence: personItem.recordIds.map((recordId) => evidenceReference(documentId, recordId)),
       })),
@@ -174,10 +177,10 @@ function buildSuccessorFixture(caseId) {
         primary: evidenceReference(documentId, chapterRecordIds[0]),
         supporting: chapterRecordIds.slice(1).map((recordId) => evidenceReference(documentId, recordId)),
       },
-      contextRetention: { excluded: [] },
+      coverage: testStoryCoverage({ representedUnitIds: [`unit-${index + 1}`] }),
     };
     return {
-      id: chapterItem.id,
+      id: chapterRecordIds[0],
       documentId,
       sequence: index + 1,
       summary: SUCCESSOR_STORY_PREFIX + JSON.stringify(source),
@@ -458,13 +461,61 @@ test("successor source omits old drama, role, assistance, and current-state gate
   }
 });
 
-test("successor traceability accounts for every allowed Evidence input", () => {
+test("optional transition and bounded chips are accepted only in their canonical shape", () => {
+  const { candidateRows } = buildSuccessorFixture("one-insight");
+  const source = sourceFromRow(candidateRows[0]);
+  source.transition = {
+    before: "The synthetic boundary had not been checked.",
+    after: "The recorded check established the next action.",
+  };
+  source.chips = ["boundary check", "1 decision"];
+  assert.deepEqual(parseSuccessorStorySource(
+    SUCCESSOR_STORY_PREFIX + JSON.stringify(source),
+  ), source);
+
+  const absent = sourceFromRow(candidateRows[0]);
+  assert.notEqual(parseSuccessorStorySource(
+    SUCCESSOR_STORY_PREFIX + JSON.stringify(absent),
+  ), null);
+  absent.chips = [];
+  assert.notEqual(parseSuccessorStorySource(
+    SUCCESSOR_STORY_PREFIX + JSON.stringify(absent),
+  ), null);
+
+  for (const invalid of [
+    { ...source, transition: { before: "", after: "after" } },
+    { ...source, transition: { before: "x".repeat(501), after: "after" } },
+    { ...source, chips: ["duplicate", "duplicate"] },
+    { ...source, chips: Array.from({ length: 13 }, (_, index) => `chip-${index}`) },
+    { ...source, chips: ["x".repeat(201)] },
+  ]) assert.equal(parseSuccessorStorySource(
+    SUCCESSOR_STORY_PREFIX + JSON.stringify(invalid),
+  ), null);
+});
+
+test("People descriptions are Chapter-specific and Evidence-supported", () => {
+  for (const fixture of storyFirstSemanticCases) {
+    const { candidateRows } = buildSuccessorFixture(fixture.id);
+    for (const row of candidateRows) {
+      const source = sourceFromRow(row);
+      for (const person of source.people) {
+        assert.match(person.description, /^In this Chapter, the recorded involvement was:/);
+        assert.notEqual(person.description, "Supported actor in this synthetic Chapter.");
+        assert.ok(person.evidence.length > 0);
+      }
+    }
+  }
+});
+
+test("successor Evidence stays exact while completeness is owned by bounded units", () => {
   const { candidateRows, evidenceRows } = buildSuccessorFixture("zero-insights");
   const source = sourceFromRow(candidateRows[0]);
   source.story.blocks.pop();
-  assert.deepEqual(validateSuccessorStorySourcePackage(
+  assert.equal(validateSuccessorStorySourcePackage(
     [rowWithSource(candidateRows[0], source)], evidenceRows,
-  ), { ok: false, code: "SUCCESSOR_STORY_CONTEXT_RETENTION_INVALID" });
+  ).ok, true);
+  assert.equal(JSON.stringify(source).includes("contextRetention"), false);
+  assert.equal(JSON.stringify(source.coverage).includes("members"), false);
 
   const foreignBlockEvidence = sourceFromRow(candidateRows[0]);
   foreignBlockEvidence.story.blocks[0].evidence = [{ documentId: "fixture-zero-insights", eventId: "missing-record" }];
@@ -526,7 +577,7 @@ test("successor packages activate only through exact permanent dispatch", async 
     "../lib/story-release.ts": /SUCCESSOR_REVIEWED_STORY_SCHEMA/,
     "../lib/story-release-server.ts": /validateRecognizedStorySourcePackage/,
     "../app/api/organization/export/route.ts": /oxygen\.reviewed-story\/2/,
-    "../app/api/workflow/route.ts": /validateRecognizedStorySourcePackage/,
+    "../app/api/workflow/route.ts": /validateStoryActivationAuthority/,
     "../lib/workflow-progress.ts": /storySourceSchema/,
   };
   for (const [path, pattern] of Object.entries(laneConsumers)) {

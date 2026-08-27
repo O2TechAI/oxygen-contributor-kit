@@ -46,6 +46,29 @@ def write_jsonl(path: Path, records: list[dict]) -> None:
 
 
 class BoundedMetadataScanTest(unittest.TestCase):
+    def test_codex_container_identity_does_not_collapse_shared_parent_thread(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "first.jsonl"
+            second = root / "second.jsonl"
+            write_jsonl(first, [{
+                "timestamp": "2026-01-02T03:04:05.000Z",
+                "type": "session_meta",
+                "payload": {"id": "container-a", "session_id": "shared-thread", "cwd": EXACT},
+            }])
+            write_jsonl(second, [{
+                "timestamp": "2026-01-02T03:04:06.000Z",
+                "type": "session_meta",
+                "payload": {"id": "container-b", "session_id": "shared-thread", "cwd": EXACT},
+            }])
+            first_id = MODULE.stable_trajectory_id(first, "codex", "synthetic")
+            second_id = MODULE.stable_trajectory_id(second, "codex", "synthetic")
+            self.assertNotEqual(first_id, second_id)
+            self.assertEqual(
+                first_id,
+                MODULE.stable_trajectory_id(first, "codex", "synthetic"),
+            )
+
     def test_cwd_near_beginning_stops_early(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary, "session.jsonl")
@@ -250,6 +273,36 @@ class DiscoveryContractTest(unittest.TestCase):
 
 
 class CollectorMainBoundaryTest(unittest.TestCase):
+    def test_rerun_prunes_only_stale_derived_trajectory_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary, "collector-output")
+            trajectories = out / "trajectories"
+            current = trajectories / "traj-current"
+            stale = trajectories / "traj-stale"
+            current.mkdir(parents=True)
+            stale.mkdir()
+            (current / "events.jsonl").write_text("current\n", encoding="utf-8")
+            (stale / "events.jsonl").write_text("stale\n", encoding="utf-8")
+            (out / "index.json").write_text(json.dumps({
+                "tool": "collect_repo_trajectories",
+            }), encoding="utf-8")
+
+            self.assertTrue(MODULE.validate_rerunnable_output(out))
+            self.assertEqual(
+                MODULE.prune_stale_trajectory_outputs(out, {"traj-current"}), 1,
+            )
+            self.assertTrue((current / "events.jsonl").is_file())
+            self.assertFalse(stale.exists())
+
+    def test_nonempty_unidentified_output_is_never_cleaned_as_a_rerun(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary, "unowned-output")
+            out.mkdir()
+            (out / "preserve.txt").write_text("preserve\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not an identified collector run"):
+                MODULE.validate_rerunnable_output(out)
+            self.assertEqual((out / "preserve.txt").read_text(encoding="utf-8"), "preserve\n")
+
     def test_default_cli_keeps_cwd_filtering_and_excludes_global_memory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -264,7 +317,7 @@ class CollectorMainBoundaryTest(unittest.TestCase):
             (home / ".codex" / "AGENTS.md").write_text("global", encoding="utf-8")
             (repo / "AGENTS.md").write_text("project", encoding="utf-8")
 
-            def fake_extract(session, system, out_root, source_home, user):
+            def fake_extract(session, system, out_root, source_home, user, semantic_source_registry, claimed_trajectory_ids):
                 return {
                     "trajectory_id": session.stem,
                     "system": system,
@@ -309,7 +362,7 @@ class CollectorMainBoundaryTest(unittest.TestCase):
             session = session_root / "approved.jsonl"
             write_jsonl(session, [codex_session_meta(str(repo), "approved")])
 
-            def fake_extract(session_path, system, out_root, masking_home, user):
+            def fake_extract(session_path, system, out_root, masking_home, user, semantic_source_registry, claimed_trajectory_ids):
                 return {
                     "trajectory_id": session_path.stem,
                     "system": system,

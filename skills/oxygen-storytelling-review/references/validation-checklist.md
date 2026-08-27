@@ -22,7 +22,7 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
       introduces no unsupported industry prior.
 - [ ] Passage assistance is optional, local, human-facing, non-authoritative, non-readiness, and
       non-release; no Story block requires why-it-mattered, what-was-learned, or a reusable lesson.
-- [ ] Complete-history consideration, context retention, failure retention, chronology, attribution,
+- [ ] Complete bounded semantic-universe consideration, failure retention, chronology, attribution,
       causal restraint, uncertainty, Privacy, Evidence traceability, and non-fabrication remain.
 - [ ] The canonical live mapping is `/3` source -> session `/2` -> reviewed-story `/2`; the server
       revalidates exact source revision/digest and review completion rather than treating generation
@@ -166,8 +166,13 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
 - [ ] Every Chapter has at least one evidence-supported Person. Empty People fails activation with
       `STORY_VALIDATION_FAILED`. Later human Privacy redaction may hide a supported Person without
       changing the original activation proof.
-- [ ] Routine machine-only events remain Timeline/Exact Evidence data. A machine failure can support
-      a Chapter only when a supported actor diagnoses, decides, executes, reviews, approves, or responds.
+- [ ] Mechanical execution envelopes, raw commands/results, telemetry, and generic execution markers
+      were removed before Organization; recorded reasoning, coordination, findings, and meaningful
+      progress remain eligible semantic source.
+- [ ] The filtered contribution universe is the exact disjoint union of current semantic-unit
+      memberships, within the 512-unit / 2,200,000-byte manifest bounds.
+- [ ] Every semantic unit has exactly one represented or explicit excluded coverage owner; no
+      complement is inferred from omission and no Story field contains raw member identities.
 - [ ] Story is a structured, context-sufficient article with clear causal progression and uncertainty.
 - [ ] Project Story remains scan-first while each Chapter is context-complete durable project memory;
       Chapter length follows decision-relevant Evidence density and has no global word, sentence,
@@ -185,12 +190,11 @@ Use behavioral/model/structural tests plus visible browser verification. Avoid b
       relationships, participant interaction, judgment, failure, durable progress, substantive
       iteration, result, or open state in a traceable Story block. Do not require unsupported
       universal problem/final-action/result roles, and never invent a judgment moment.
-- [ ] A context-retention ledger classifies every reviewed conversational or independently meaningful
-      nested source unit in the complete milestone Evidence cluster. Each represented unit has a
-      stable privacy-safe identity, exact Evidence, Story block IDs, and matching factual-claim
-      `unitIds`; each exclusion uses only duplicate, routine-status, outside-milestone, or
-      Privacy-withheld. Multiple units sharing one Evidence event remain distinct, and no source copy
-      enters the ledger or release.
+- [ ] Organization proves the filtered contribution universe is the exact disjoint union of current
+      semantic-unit memberships. The server-owned normalized coverage manifest gives every unit one
+      represented owner or one explicit authorized exclusion. Story contains only bounded unit and
+      manifest references; exact members and per-event negative identities never enter Story or
+      release.
 - [ ] Every material factual claim has exact Chapter-contained Evidence traceability, every Person
       and Story block has support, every existing Insight has explicit Evidence inputs, and none of
       this local metadata enters release/export.

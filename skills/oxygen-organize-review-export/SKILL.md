@@ -1,58 +1,47 @@
 ---
 name: oxygen-organize-review-export
-description: Continue the progress-first local Viewer after collection, separate mixed-project content across one or many Oxygen trajectories, identify the dominant project, synthesize one chronological main-project timeline, and export one final ZIP. Use after project histories or meetings have been collected and before any upload or publication decision.
+description: Continue the progress-first local Viewer after deterministic source projection, organize the complete contribution universe into bounded semantic units, identify the dominant project, build the reviewed Story, and export one final ZIP. Use after project histories or meetings have been collected and before any upload or publication decision.
 ---
 
 # Organize, review, and export
 
 ## Organize projects first
 
-Read every human/assistant conversation in the ingest run. Tool events are supporting evidence,
-not standalone projects. Then write `<run>/project-map.json` using
+Read every projected contribution record in the ingest run. The early deterministic projection
+keeps recorded human dialogue, Agent reasoning/dialogue, agent/subagent coordination and findings,
+meaningful progress, meetings, feedback, and human-supplied sources. Tool envelopes/results, raw
+commands/output, generic execution markers, telemetry, and other mechanics are already absent; do
+not recreate or request them. Then write `<run>/project-map.json` using
 [references/project-map-contract.md](references/project-map-contract.md).
 
 1. Find topic changes both within a conversation and across conversations.
 2. Group events by the actual product, repository, or workstream being discussed.
 3. Choose `primary_project` by sustained user intent, substantive turns, artifacts, and
    continuity over time—not merely by the most repeated token.
-4. Give every event a project label. Attach tool/system events to the nearest substantive
-   project context; use `Unrelated / uncertain` when evidence is weak.
-5. For primary-project human/assistant events, use AI to rewrite a compact timeline description
-   of what changed, was decided, was questioned, or was produced. Preserve timestamps and
-   evidence IDs, but never paste or lightly paraphrase the full source message.
-6. Build exactly one chronological timeline per project across all trajectories.
+4. Group the complete filtered contribution universe into semantic units by meaning, not by
+   filename, session, timestamp, record count, or future Chapter shape.
+5. Give every contribution record exactly one unit owner. Use a bounded `routine` unit when
+   semantic narration is retained but later may be explicitly dispositioned as non-narrative.
+6. Finalize the manifest provider-free so exact disjoint membership and digests are proved before
+   the Viewer accepts Organization as complete.
 
-## Project timeline is the unit of organization
+## Semantic unit is the authority of organization
 
-- A trajectory is evidence, not a timeline. Never create one timeline per trajectory.
-- Merge events from every matching trajectory into the timeline for their assigned project.
-- A project appears once in the Viewer, even when it spans many conversations or source systems.
-- Keep trajectory/document IDs on every timeline event so **Open source event** can return to
-  the exact evidence.
-- Order each project timeline globally by source timestamp, then source sequence for ties.
-- Distill each project into evidence-supported meaningful milestones without using a numeric quota.
-  Never show hundreds of raw conversation turns as timeline cards; retain every omitted turn in
-  source evidence.
-- Cover the project's full time range. Include consequential decisions and changes, durable
-  progress, substantive iterations, failures or diagnostic cases that affected later work,
-  validations, handoffs, and the current state. Exclude greetings, repeated status updates, routine
-  tool narration, and reruns that add no new result or understanding.
-- The default Viewer selection is the primary project's combined timeline.
-- Source trajectories may be listed for evidence inspection, but they must not look like
-  separate project timelines.
+- A trajectory is source provenance, not a semantic boundary.
+- A unit may span trajectories when the recorded meaning belongs to one episode.
+- Every filtered contribution belongs to exactly one unit; omission is never an exclusion signal.
+- Exact member IDs remain in the local manifest and server tables. Story receives only stable unit
+  IDs, revisions, counts, digests, kind, and an optional privacy-safe projection.
+- Keep chronology, causal continuity, ordinary setup that later matters, failures, corrections,
+  decisions, validation, handoffs, and current unresolved state. Do not discard recorded semantic
+  narration merely because its raw family was Agent reasoning, delegation, or status/progress.
+- Do not create one unit per raw record, one unit per session, or a second coverage ledger.
+- Use progressive exact Evidence access by unit when Story needs member bodies.
 
-Parallelize per-trajectory summaries when there are many conversations, then reconcile project
-aliases globally. Use the user's configured model/key; never require a bundled Oxygen key.
-
-Timeline descriptions must be glanceable:
-
-- one sentence and one idea;
-- at most 18 English words or 32 Chinese characters;
-- start with a concrete action, decision, question, or outcome;
-- remove greetings, setup narration, repeated context, implementation detail, and filler;
-- do not include timestamps, project names, confidence, or source quotations because the UI
-  presents those separately;
-- when a source event is long, summarize its project significance rather than its contents.
+Parallelize source reading when needed, then reconcile semantic-unit boundaries globally before
+finalization. Use the user's configured model/key; never require a bundled Oxygen key. The
+optional Story-facing unit projection is one privacy-safe label and summary, not a substitute for
+exact local membership.
 
 ## Delegate Storytelling after the reviewed boundary
 
@@ -94,8 +83,9 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --workflow-run-id "<run-id>"
 ```
 
-Attach mode verifies ownership of the exact workflow run, imports the project map and source
-records, and advances organization in the existing Viewer. Reattach the prepared reviewed run
+Attach mode verifies ownership of the exact workflow run, requires a finalized semantic manifest,
+imports the project map and source records, and atomically publishes Organization authority in the
+existing Viewer. Reattach the prepared reviewed run
 after privacy-boundary preparation, and reattach again when validated Story metadata changes;
 these are idempotent updates to the same canonical runtime, not new Viewers.
 When the reattach changes only organization or staged Story metadata, the Viewer preserves the
@@ -139,11 +129,10 @@ Do not use `--no-browser` except for automated tests or headless environments.
 
 ## Review
 
-- Confirm every event has the correct project label, confidence, and explanation.
+- Confirm every projected contribution has exactly one semantic-unit owner.
 - Confirm the selected main project reflects sustained user intent.
-- Read the cross-trajectory timeline for missing, duplicated, or out-of-order milestones.
-- Inspect `Unrelated / uncertain` events and revise the project map when needed.
-- Use **Source events** to compare the concise timeline against complete original content.
+- Reject missing, double-owned, foreign, duplicated, or stale membership.
+- Inspect units progressively against exact Evidence; do not expose the full member ledger to Story.
 - Never treat organization as publication approval.
 
 ## Export

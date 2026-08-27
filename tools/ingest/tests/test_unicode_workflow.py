@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -63,22 +64,38 @@ class UnicodeWorkflowTest(unittest.TestCase):
             trajectory.mkdir(parents=True)
             events = [
                 {
-                    "event_id": "event-1",
+                    "event_id": f"evt-{hashlib.sha256(b'unicode-1').hexdigest()}",
                     "event_type": "message",
                     "actor": {"type": "human"},
                     "payload": {"text": "中文问题 😀"},
                 },
                 {
-                    "event_id": "event-2",
+                    "event_id": f"evt-{hashlib.sha256(b'unicode-2').hexdigest()}",
                     "event_type": "message",
                     "actor": {"type": "assistant"},
                     "payload": {"text": "English answer with 精确语义 🚀"},
                 },
             ]
-            (trajectory / "events.jsonl").write_text(
-                "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
-                encoding="utf-8",
+            serialized_events = "".join(
+                json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+                for event in events
             )
+            (trajectory / "events.jsonl").write_text(serialized_events, encoding="utf-8")
+            projected_digest = hashlib.sha256(serialized_events.encode("utf-8")).hexdigest()
+            (trajectory / "manifest.json").write_text(json.dumps({
+                "trajectory_id": "traj-unicode",
+                "event_count": 2,
+                "contribution_projection": {
+                    "policy_id": "oxygen-human-semantic-source-boundary-2026-08-26",
+                    "raw_source_digest": "a" * 64,
+                    "projected_universe_digest": projected_digest,
+                    "raw_event_count": 3,
+                    "normalized_event_count": 3,
+                    "kept_event_count": 2,
+                    "dropped_event_count": 1,
+                    "cross_trajectory_semantic_replay_count": 0,
+                },
+            }), encoding="utf-8")
             project_map = run_python(
                 "skills/oxygen-organize-review-export/scripts/build_project_map.py",
                 run,
@@ -91,6 +108,34 @@ class UnicodeWorkflowTest(unittest.TestCase):
             mapped = json.loads((run / "project-map.json").read_text(encoding="utf-8"))
             self.assertEqual(mapped["primary_project"], "氧气 Windows 🚀")
             self.assertEqual(mapped["summary"], "在原生 Windows 上保留中文与 emoji 😀")
+            self.assertIsNone(mapped["semantic_manifest"])
+            mapped["semantic_units"] = [{
+                "id": "语义单元-😀",
+                "kind": "discussion",
+                "members": [
+                    f"evt-{hashlib.sha256(b'unicode-1').hexdigest()}",
+                    f"evt-{hashlib.sha256(b'unicode-2').hexdigest()}",
+                ],
+                "storyProjection": {
+                    "label": "中文讨论 😀",
+                    "summary": "保留精确 UTF-8 语义。",
+                },
+            }]
+            (run / "project-map.json").write_text(
+                json.dumps(mapped, ensure_ascii=False), encoding="utf-8"
+            )
+            finalized = run_python(
+                "skills/oxygen-organize-review-export/scripts/build_project_map.py",
+                run,
+                "--primary-project",
+                "氧气 Windows 🚀",
+                "--summary",
+                "在原生 Windows 上保留中文与 emoji 😀",
+                "--finalize",
+            )
+            self.assertEqual(finalized.returncode, 0, finalized.stderr)
+            mapped = json.loads((run / "project-map.json").read_text(encoding="utf-8"))
+            self.assertEqual(mapped["semantic_manifest"]["units"][0]["id"], "语义单元-😀")
 
     def test_coverage_count_matches_dialogue_for_unicode(self):
         with tempfile.TemporaryDirectory(prefix="oxygen coverage ") as temporary:

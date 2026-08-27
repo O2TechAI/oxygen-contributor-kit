@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { testStoryCoverage } from "./fixtures/successor-story-coverage.mjs";
 import { readFile } from "node:fs/promises";
 import {
   applySuccessorChapterReview,
@@ -76,7 +77,7 @@ function source(insights = [], overrides = {}, privateValue = PRIVATE) {
     },
     insights,
     evidence: { primary: evidence, supporting: [] },
-    contextRetention: { excluded: [] },
+    coverage: testStoryCoverage(),
     ...overrides,
   };
 }

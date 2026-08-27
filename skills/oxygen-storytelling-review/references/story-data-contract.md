@@ -88,6 +88,8 @@ type StorySource = {
   kind?: string;
   title: string;
   overview: string;
+  transition?: { before: string; after: string };
+  chips?: string[];
   people: StoryPerson[];
   story: {
     blocks: StoryBlock[];
@@ -98,10 +100,13 @@ type StorySource = {
     primary: EvidenceReference;
     supporting: EvidenceReference[];
   };
-  contextRetention: {
-    excluded: Array<{
-      evidence: EvidenceReference;
-      reason: "duplicate" | "routine_status" | "outside_milestone" | "privacy_withheld";
+  coverage: {
+    semanticManifest: { revision: number; digest: string };
+    coverageManifest: { revision: number; digest: string };
+    representedUnitIds: string[];
+    excludedUnits: Array<{
+      unitId: string;
+      reason: "duplicate" | "privacy_withheld" | "routine_non_narrative" | "outside_story_scope";
     }>;
   };
 };
@@ -109,6 +114,11 @@ type StorySource = {
 
 Use the repository parser as the exact source-shape authority. Do not add compatibility fields,
 review state, UI state, raw Evidence, free-form reasoning, or a second generation schema.
+
+`transition` and `chips` are optional presentation metadata. Emit `transition` only when exact
+Evidence supports a real Before → After change. Emit at most 12 unique, Evidence-supported chips,
+each at most 200 characters; empty or absent is valid. Never fabricate a transition or fill a chip
+quota.
 
 ## Chapter and Story blocks
 
@@ -135,10 +145,10 @@ actor entry and attach exact reviewed Evidence references. Humans, users, Agents
 speakers, owners, and operators may be actors when supported.
 
 Preserve role uncertainty and release-safe identity. Never infer a name, employer, title,
-relationship, response, consensus, or identity merge. Attribute each action, review, and decision
-to the actor supported by the reviewed history. Routine machine-only activity cannot become a
-standalone Chapter without a supported actor who diagnosed, decided, executed, reviewed, approved,
-or responded.
+relationship, response, consensus, or identity merge. Each description states that actor's
+Evidence-supported involvement in this Chapter—what the actor asked, reasoned, delegated, found,
+corrected, decided, reviewed, or reported—rather than generic boilerplate. Mechanical execution
+traces cannot become a standalone Chapter merely because they occurred.
 
 ## Chapter-first Phase grouping
 
@@ -188,11 +198,35 @@ background, chronology, relationships, participant actions, ordinary progress ne
 understanding, failures, corrections, decisions, validation, consequences, uncertainty, and
 current state. Do not omit a passage because it lacks an Insight.
 
-For each Chapter, declare one primary Evidence reference plus every supporting reference needed for
-the coherent arc. The exact Chapter Evidence allowlist must reconcile: every allowed reference is
-represented by at least one Story block or appears once in `contextRetention.excluded` with an
-allowed fixed reason. Represented and excluded references do not overlap. Duplicates, unresolved or
-ambiguous Evidence, document mismatch, foreign references, and incomplete accounting fail closed.
+The completeness denominator is the filtered human-semantic contribution universe, after
+Organization has grouped it into bounded semantic units. The server/tool owns exact unit
+membership and proves that every contribution record belongs to exactly one current unit. Story
+receives only the bounded unit projection and progressively requests exact local Evidence.
+
+Every approved semantic unit has exactly one normalized server-owned coverage disposition:
+represented by one Chapter owner, or explicitly excluded with an authorized bounded reason. Story
+declares the represented unit IDs owned by each Chapter and every explicit exclusion; omission is
+never interpreted as exclusion. The same exact Evidence may be cited repeatedly without creating
+another coverage owner. Evidence belonging to an excluded unit cannot support Story copy.
+
+Do not put exact unit member lists or a per-event negative ledger in Story JSON or browser state.
+The bounded candidate item carrying a Chapter must be that Chapter's exact primary Evidence item;
+the server derives its document, sequence, timestamp, and project for deterministic Story order.
+Carrier identity is not a separate coverage owner and cannot be chosen from unrelated Evidence.
+Duplicate exclusion requires an exact upstream duplicate relation; routine exclusion requires the
+unit's bounded `routine` category; `privacy_withheld` requires current Privacy authority; outside
+scope is explicit rather than inferred. Duplicates, unresolved or ambiguous Evidence, document
+mismatch, foreign references, stale manifest identity, and incomplete accounting fail closed.
+
+Write the unit-level ownership rows as a local coverage draft containing only `rows`, then run
+`scripts/finalize_story_coverage.mjs` against the finalized project map. On regeneration, pass the
+last server-accepted normalized authority with `--previous`; never treat an unaccepted local output
+as prior authority. Omit `--previous` for the first attempt and for a retry when no coverage was
+accepted. The provider-free finalizer validates the explicit prior authority and deterministically
+retains or increments its revision while normalizing rows and computing the coverage digest; the
+server independently revalidates the transition at activation. Use the returned semantic/coverage
+revision and digest in every Chapter's bounded `coverage` reference. Do not ask the model to invent
+a revision or digest.
 
 This accounting is validation metadata, not permission to retain source copy or private reasoning.
 Chronology, attribution, causal restraint, uncertainty, Privacy, and non-fabrication remain
@@ -216,8 +250,8 @@ incomplete, stale, or unsafe localization never blocks the valid English candida
 
 Use this semantic order inside the existing Build Project Story stage:
 
-1. understand the complete approved project history;
-2. determine coherent Chapter narrative arcs;
+1. read the complete bounded semantic-unit projection and progressively inspect exact Evidence;
+2. explicitly disposition every semantic unit and determine coherent Chapter narrative arcs;
 3. write the complete ordered Chapter and Project Story narrative;
 4. verify continuity, chronology, attribution, Evidence, causal restraint, Privacy, and
    uncertainty;
@@ -237,7 +271,9 @@ Fail closed when any of these conditions is false:
 - Chapters are chronological and each is a complete coherent arc;
 - every Chapter has nonempty supported People with exact Evidence;
 - every Chapter has nonempty safe Story blocks with exact Evidence;
-- Evidence ownership and represented/excluded accounting reconcile exactly;
+- semantic-manifest revision/digest and normalized coverage-manifest revision/digest are current;
+- every semantic unit is represented once or explicitly excluded once, with no inferred complement;
+- Story JSON contains no exact member list or per-event negative ledger;
 - Phases group adjacent already-determined Chapters and use precise one- or two-word labels;
 - Insight cardinality is `0..n` without a quota;
 - every existing Insight has Background, Quote, Directly Acquired Experience, and Principle;

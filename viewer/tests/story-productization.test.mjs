@@ -217,10 +217,12 @@ test("the normal workflow delegates to the canonical repository Story runtime", 
   assert.match(skill, /Direct typing, caret insertion, selection replacement\/deletion/);
   assert.match(skill, /human direct edits and\/or compatible legacy review records/);
   assert.match(skill, /completely fresh, contextless Agent[\s\S]*normal public Oxygen workflow request/);
-  assert.match(skill, /Missing, incomplete, or stale Chinese never blocks[\s\S]*English candidate/);
+  assert.match(skill, /Missing,[\s\S]*stale[\s\S]*Chinese never blocks the English candidate/);
   assert.match(skill, /private latent reasoning/);
   assert.match(skill, /Every\s+Chapter requires at least one supported Person or actor/);
-  assert.match(skill, /machine-only events[\s\S]*cannot stand alone/);
+  assert.match(skill, /Mechanical execution traces are removed before this[\s\S]*Recorded Agent reasoning, coordination,[\s\S]*meaningful progress/);
+  assert.match(skill, /every[\s\S]*semantic unit is represented by exactly one coverage owner or explicitly excluded/);
+  assert.doesNotMatch(skill, /per-event negative ledgers? as Story authority/);
   assert.match(skill, /Background, Quote, Directly Acquired Experience,[\s\S]*Principle/);
   assert.match(skill, /beforeinput` as optional metadata/);
   assert.match(workspace, /export function InlineWorkspace/);

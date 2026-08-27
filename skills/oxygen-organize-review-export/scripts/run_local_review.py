@@ -31,6 +31,12 @@ TOOLS_ROOT = KIT_ROOT / "tools"
 if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
+from ingest.human_source_projection import (
+    POLICY_ID as HUMAN_SOURCE_POLICY_ID,
+    meeting_contribution_ids,
+    projected_event_content,
+    projected_contribution_id,
+)
 from oxygen_utf8 import configure_utf8_stdio, text_subprocess_options
 
 
@@ -43,6 +49,7 @@ INPUT_MEETING_ID_DUPLICATE = "INPUT_MEETING_ID_DUPLICATE"
 INPUT_PATH_OUTSIDE_RUN = "INPUT_PATH_OUTSIDE_RUN"
 INPUT_PATH_MISSING = "INPUT_PATH_MISSING"
 INPUT_FILE_INVALID = "INPUT_FILE_INVALID"
+INPUT_PROJECTION_INVALID = "INPUT_PROJECTION_INVALID"
 
 _WINDOWS_BOOTSTRAP = """\
 import ctypes
@@ -607,26 +614,10 @@ def resolve_contained_path(candidate: Path, approved_root: Path) -> Path:
 
 
 def event_content(event: dict, trajectory_dir: Path) -> str:
-    payload = event.get("payload") or {}
-    if event.get("event_type") == "artifact" and isinstance(payload.get("path"), str):
-        try:
-            candidate = resolve_contained_path(trajectory_dir / payload["path"], trajectory_dir)
-            data = candidate.read_bytes()
-            if b"\0" not in data:
-                return data.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise SystemExit(f"artifact is not valid UTF-8 text: {candidate}: {error}") from error
-        except (OSError, ValueError):
-            pass
-    for key in ("text", "content", "stdout", "stderr", "message", "summary", "note"):
-        if isinstance(payload.get(key), str) and payload[key]:
-            return payload[key]
-    if event.get("event_type") == "tool_call":
-        return " · ".join(str(value) for value in (
-            payload.get("tool_name") or (event.get("executor") or {}).get("tool") or "tool",
-            payload.get("action"),
-        ) if value)
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    try:
+        return projected_event_content(event, trajectory_dir)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"artifact source is unavailable: {error}") from error
 
 
 def import_trajectory(opener, base_url: str, prepared: dict, project_map: dict):
@@ -660,11 +651,10 @@ def import_trajectory(opener, base_url: str, prepared: dict, project_map: dict):
     event_labels = project_map.get("events") or {}
     items = []
     for index, event in enumerate(events, 1):
-        event_id = event.get("event_id")
-        # Event IDs restart inside every trajectory, so prefer the qualified key.
-        label = event_labels.get(f"{trajectory_id}:{event_id}", event_labels.get(event_id, {}))
+        event_id = projected_contribution_id(event)
+        label = event_labels.get(event_id, {})
         items.append({
-            "id": f"{trajectory_id}:{event_id or f'event-{index}'}",
+            "id": event_id,
             "sequence": event.get("sequence", index),
             "eventType": event.get("event_type"),
             "actorId": (event.get("actor") or {}).get("id"),
@@ -676,10 +666,9 @@ def import_trajectory(opener, base_url: str, prepared: dict, project_map: dict):
             "organizationConfidence": label.get("confidence"),
             "organizationReason": label.get("summary") or label.get("reason"),
         })
-    for start in range(0, max(1, len(items)), 75):
-        request_json(opener, f"{base_url}/api/documents", method="POST", body={
-            "document": document, "items": items[start:start + 75],
-        })
+    request_json(opener, f"{base_url}/api/documents", method="POST", body={
+        "document": document, "items": items,
+    })
     return len(items)
 
 
@@ -700,14 +689,15 @@ def import_meeting(opener, base_url: str, prepared: dict):
         "itemCount": len(records),
     }
     items = []
-    for index, record in enumerate(records, 1):
+    record_identities = meeting_contribution_ids(meeting_id, records)
+    for index, (record, contribution_id) in enumerate(zip(records, record_identities), 1):
         sequence = record.get("sequence_in_meeting")
         if sequence is None:
             sequence = record.get("order")
         if sequence is None:
             sequence = index
         items.append({
-            "id": f"{meeting_id}:{record.get('record_id') or f'record-{index}'}",
+            "id": contribution_id,
             "sequence": sequence,
             "eventType": "record",
             "actorId": record.get("speaker"),
@@ -716,10 +706,9 @@ def import_meeting(opener, base_url: str, prepared: dict):
             "content": record.get("text", ""),
             "original": record,
         })
-    for start in range(0, max(1, len(items)), 75):
-        request_json(opener, f"{base_url}/api/documents", method="POST", body={
-            "document": document, "items": items[start:start + 75],
-        })
+    request_json(opener, f"{base_url}/api/documents", method="POST", body={
+        "document": document, "items": items,
+    })
     return len(items)
 
 
@@ -794,6 +783,34 @@ def _prepare_trajectory(directory: Path, approved_run: Path) -> dict:
         raise SystemExit(INPUT_FILE_INVALID) from None
     if not all(isinstance(event, dict) for event in events):
         raise SystemExit(INPUT_FILE_INVALID)
+    projection = manifest.get("contribution_projection")
+    if not isinstance(projection, dict):
+        raise SystemExit(INPUT_PROJECTION_INVALID)
+    projected_digest = hashlib.sha256()
+    for event in events:
+        projected_digest.update(json.dumps(
+            event, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8"))
+        projected_digest.update(b"\n")
+    raw_count = projection.get("raw_event_count")
+    normalized_count = projection.get("normalized_event_count")
+    kept_count = projection.get("kept_event_count")
+    dropped_count = projection.get("dropped_event_count")
+    replay_count = projection.get("cross_trajectory_semantic_replay_count")
+    if (
+        projection.get("policy_id") != HUMAN_SOURCE_POLICY_ID
+        or not re.fullmatch(r"[0-9a-f]{64}", str(projection.get("raw_source_digest") or ""))
+        or projection.get("projected_universe_digest") != projected_digest.hexdigest()
+        or not isinstance(raw_count, int) or isinstance(raw_count, bool)
+        or not all(isinstance(value, int) and not isinstance(value, bool) for value in (
+            normalized_count, kept_count, dropped_count, replay_count,
+        ))
+        or kept_count != len(events)
+        or raw_count - replay_count != normalized_count
+        or normalized_count - kept_count != dropped_count
+        or manifest.get("event_count") != len(events)
+    ):
+        raise SystemExit(INPUT_PROJECTION_INVALID)
     return {
         "directory": directory,
         "manifest": manifest,
@@ -833,7 +850,19 @@ def locate_inputs(run: Path):
         if not isinstance(index, dict):
             raise SystemExit(INPUT_INDEX_INVALID)
         entries = index.get("trajectories") or []
-        if not isinstance(entries, list):
+        trajectory_failures = index.get("trajectory_failures", 0)
+        if (
+            not isinstance(entries, list)
+            or not isinstance(trajectory_failures, int)
+            or isinstance(trajectory_failures, bool)
+            or trajectory_failures < 0
+            or trajectory_failures != sum(
+                1 for entry in entries
+                if isinstance(entry, dict) and entry.get("ok", True) is False
+            )
+        ):
+            raise SystemExit(INPUT_INDEX_INVALID)
+        if trajectory_failures:
             raise SystemExit(INPUT_INDEX_INVALID)
         selected_entries = 0
         seen_ids = set()
@@ -841,14 +870,12 @@ def locate_inputs(run: Path):
             if not isinstance(entry, dict) or ("ok" in entry and not isinstance(entry["ok"], bool)):
                 raise SystemExit(INPUT_INDEX_INVALID)
             trajectory_id = entry.get("trajectory_id")
-            if trajectory_id is None and entry.get("ok", True) is False:
-                continue
             trajectory_id = _validated_trajectory_id(trajectory_id)
             if trajectory_id in seen_ids:
                 raise SystemExit(INPUT_INDEX_INVALID)
             seen_ids.add(trajectory_id)
             if entry.get("ok", True) is False:
-                continue
+                raise SystemExit(INPUT_INDEX_INVALID)
             selected_entries += 1
             directory = _located_input(approved_run / "trajectories" / trajectory_id, approved_run)
             if not directory.is_dir():
@@ -922,13 +949,28 @@ def import_run(opener, base_url: str, run: Path) -> tuple[int, int]:
     return len(trajectories) + len(meetings), event_count
 
 
-def complete_organization(opener, base_url: str) -> dict:
-    current = request_json(opener, f"{base_url}/api/organization")
-    while current["status"] not in {"complete", "empty"}:
-        current = request_json(
-            opener, f"{base_url}/api/organization", method="POST", body={}
+def finalized_semantic_manifest(run: Path) -> dict:
+    approved_run = _located_input(run, run)
+    project_map_path = _located_file(
+        approved_run / "project-map.json", approved_run, required=True
+    )
+    assert project_map_path is not None
+    project_map = _read_json_object(project_map_path)
+    manifest = project_map.get("semantic_manifest")
+    if not isinstance(manifest, dict):
+        raise SystemExit(
+            "project-map.json must contain a finalized semantic_manifest before Viewer import"
         )
-    return current
+    return manifest
+
+
+def complete_organization(opener, base_url: str, semantic_manifest: dict) -> dict:
+    return request_json(
+        opener,
+        f"{base_url}/api/organization",
+        method="POST",
+        body={"semanticManifest": semantic_manifest},
+    )
 
 
 def establish_workflow_run(opener, base_url: str, workflow_run_id: str | None = None) -> str:
@@ -949,8 +991,9 @@ def attach_run(base_url: str, workflow_run_id: str, run: Path) -> None:
     workflow = request_json(opener, f"{base_url}/api/workflow")
     if workflow.get("workflowRunId") != workflow_run_id:
         raise SystemExit("The target Viewer does not own the requested workflow run ID")
+    semantic_manifest = finalized_semantic_manifest(run)
     document_count, event_count = import_run(opener, base_url, run)
-    organization = complete_organization(opener, base_url)
+    organization = complete_organization(opener, base_url, semantic_manifest)
     print(json.dumps({
         "attached_to": base_url,
         "workflow_run_id": workflow_run_id,
@@ -974,6 +1017,8 @@ def update_story_workflow(
     story_event: str,
     completed: int | None = None,
     total: int | None = None,
+    coverage_manifest: dict | None = None,
+    story_candidates: list[dict] | None = None,
 ) -> dict:
     opener = urllib.request.build_opener(
         urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
@@ -984,6 +1029,13 @@ def update_story_workflow(
     }
     if story_event == "progress":
         payload.update({"completed": completed, "total": total})
+    if story_event == "ready":
+        if not isinstance(coverage_manifest, dict):
+            raise SystemExit("Story activation requires a normalized coverage manifest")
+        if not isinstance(story_candidates, list) or not story_candidates:
+            raise SystemExit("Story activation requires bounded Story candidates")
+        payload["coverageManifest"] = coverage_manifest
+        payload["storyCandidates"] = story_candidates
     workflow = request_json(
         opener, f"{base_url}/api/workflow", method="POST", body=payload
     )
@@ -1020,6 +1072,8 @@ def main():
     parser.add_argument("--story-event", choices=sorted(STORY_WORKFLOW_EVENTS))
     parser.add_argument("--story-completed", type=int)
     parser.add_argument("--story-total", type=int)
+    parser.add_argument("--coverage-manifest", type=Path)
+    parser.add_argument("--story-candidates", type=Path)
     parser.add_argument("--port", type=int)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--skip-install", action="store_true")
@@ -1037,9 +1091,34 @@ def main():
                 parser.error("Story progress counts must satisfy 0 <= completed <= total")
         elif has_counts:
             parser.error("Story counts are accepted only with --story-event progress")
+        if args.story_event == "ready" and (
+            args.coverage_manifest is None or args.story_candidates is None
+        ):
+            parser.error("Story ready requires --coverage-manifest and --story-candidates")
+        if args.story_event != "ready" and (
+            args.coverage_manifest is not None or args.story_candidates is not None
+        ):
+            parser.error(
+                "--coverage-manifest and --story-candidates are accepted only with --story-event ready"
+            )
+        coverage_manifest = (
+            _read_json_object(args.coverage_manifest.resolve(strict=True))
+            if args.coverage_manifest is not None else None
+        )
+        story_candidates = None
+        if args.story_candidates is not None:
+            try:
+                story_candidates = json.loads(
+                    args.story_candidates.resolve(strict=True).read_text(encoding="utf-8")
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                raise SystemExit(INPUT_FILE_INVALID) from None
+            if not isinstance(story_candidates, list):
+                raise SystemExit(INPUT_FILE_INVALID)
         update_story_workflow(
             normalize_local_viewer_url(args.attach_url), args.workflow_run_id,
-            args.story_event, args.story_completed, args.story_total,
+            args.story_event, args.story_completed, args.story_total, coverage_manifest,
+            story_candidates,
         )
         return
 
@@ -1115,7 +1194,9 @@ def main():
                     print(json.dumps({"smoke_test": "passed", "workflow": workflow}))
                     return
             else:
+                semantic_manifest = finalized_semantic_manifest(run)
                 document_count, event_count = import_run(opener, base_url, run)
+                organization = complete_organization(opener, base_url, semantic_manifest)
                 print(f"\nOxygen local review: {base_url}", flush=True)
                 print("No password is required for this localhost-only viewer", flush=True)
                 print(
@@ -1125,10 +1206,9 @@ def main():
                 )
                 print("Nothing has been uploaded. Press Ctrl+C to stop.\n", flush=True)
                 if args.smoke_test:
-                    status = complete_organization(opener, base_url)
-                    if event_count and status["status"] != "complete":
-                        raise SystemExit(f"Organizer did not complete: {status}")
-                    print(json.dumps({"smoke_test": "passed", "organization": status}))
+                    if event_count and organization["status"] != "complete":
+                        raise SystemExit(f"Organizer did not complete: {organization}")
+                    print(json.dumps({"smoke_test": "passed", "organization": organization}))
                     return
                 if not args.no_browser:
                     webbrowser.open(base_url)

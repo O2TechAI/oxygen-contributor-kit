@@ -43,6 +43,60 @@ export const organizationJobs = sqliteTable("organization_jobs", {
   completedAt: text("completed_at"),
 });
 
+export const semanticManifests = sqliteTable("semantic_manifests", {
+  workflowRunId: text("workflow_run_id").primaryKey(),
+  projectId: text("project_id").notNull(),
+  revision: integer("revision").notNull(),
+  sourceRevision: integer("source_revision").notNull(),
+  sourceDigest: text("source_digest").notNull(),
+  universeDigest: text("universe_digest").notNull(),
+  manifestDigest: text("manifest_digest").notNull(),
+  unitCount: integer("unit_count").notNull(),
+  serializedBytes: integer("serialized_bytes").notNull(),
+  storyProjectionBytes: integer("story_projection_bytes").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const semanticUnits = sqliteTable("semantic_units", {
+  id: text("id").primaryKey(),
+  workflowRunId: text("workflow_run_id").notNull(),
+  revision: integer("revision").notNull(),
+  projectId: text("project_id").notNull(),
+  kind: text("kind").notNull(),
+  memberCount: integer("member_count").notNull(),
+  membershipDigest: text("membership_digest").notNull(),
+  duplicateOfUnitId: text("duplicate_of_unit_id"),
+  storyProjectionJson: text("story_projection_json").notNull().default("{}"),
+});
+
+export const semanticUnitMembers = sqliteTable("semantic_unit_members", {
+  itemId: text("item_id").primaryKey(),
+  workflowRunId: text("workflow_run_id").notNull(),
+  unitId: text("unit_id").notNull(),
+  sourceDigest: text("source_digest").notNull(),
+});
+
+export const storyCoverageManifests = sqliteTable("story_coverage_manifests", {
+  workflowRunId: text("workflow_run_id").primaryKey(),
+  revision: integer("revision").notNull(),
+  semanticManifestRevision: integer("semantic_manifest_revision").notNull(),
+  semanticManifestDigest: text("semantic_manifest_digest").notNull(),
+  coverageDigest: text("coverage_digest").notNull(),
+  unitCount: integer("unit_count").notNull(),
+  serializedBytes: integer("serialized_bytes").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const storyCoverageRows = sqliteTable("story_coverage_rows", {
+  unitId: text("unit_id").primaryKey(),
+  workflowRunId: text("workflow_run_id").notNull(),
+  disposition: text("disposition").notNull(),
+  ownerId: text("owner_id").notNull(),
+  exclusionReason: text("exclusion_reason"),
+});
+
 // Sanitized operational state begins before collection. It intentionally has
 // no target path, free-form message, model output, or project payload column.
 export const workflowRuns = sqliteTable("workflow_runs", {

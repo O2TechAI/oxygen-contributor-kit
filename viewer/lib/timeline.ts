@@ -135,6 +135,23 @@ export type SuccessorStoryInsight = {
   evidence: EvidenceReference[];
 };
 
+export const STORY_SEMANTIC_EXCLUSION_REASONS = [
+  "duplicate",
+  "privacy_withheld",
+  "routine_non_narrative",
+  "outside_story_scope",
+] as const;
+export const MAX_STORY_SEMANTIC_UNIT_REFERENCES = 512;
+
+export type StorySemanticExclusionReason = typeof STORY_SEMANTIC_EXCLUSION_REASONS[number];
+
+export type SuccessorStoryCoverage = {
+  semanticManifest: { revision: number; digest: string };
+  coverageManifest: { revision: number; digest: string };
+  representedUnitIds: string[];
+  excludedUnits: Array<{ unitId: string; reason: StorySemanticExclusionReason }>;
+};
+
 export type SuccessorStorySource = {
   schema: "oxygen.story/3";
   key: string;
@@ -142,6 +159,8 @@ export type SuccessorStorySource = {
   kind?: MilestoneKind;
   title: string;
   overview: string;
+  transition?: { before: string; after: string };
+  chips?: string[];
   people: SuccessorStoryPerson[];
   story: {
     blocks: SuccessorStoryBlock[];
@@ -152,12 +171,7 @@ export type SuccessorStorySource = {
     primary: EvidenceReference;
     supporting: EvidenceReference[];
   };
-  contextRetention: {
-    excluded: Array<{
-      evidence: EvidenceReference;
-      reason: StoryContextExclusionReason;
-    }>;
-  };
+  coverage: SuccessorStoryCoverage;
 };
 
 export type StoryChapter = {
@@ -1052,8 +1066,8 @@ export function parseSuccessorStorySource(summary?: string): SuccessorStorySourc
     const value = JSON.parse(summary.slice(SUCCESSOR_STORY_PREFIX.length)) as Partial<SuccessorStorySource>;
     if (!value || typeof value !== "object" || Array.isArray(value)
       || !onlyKeys(value, [
-        "schema", "key", "phase", "kind", "title", "overview", "people", "story",
-        "insights", "evidence", "contextRetention",
+        "schema", "key", "phase", "kind", "title", "overview", "transition", "chips",
+        "people", "story", "insights", "evidence", "coverage",
       ])
       || value.schema !== "oxygen.story/3"
       || !validStableId(value.key)
@@ -1063,6 +1077,17 @@ export function parseSuccessorStorySource(summary?: string): SuccessorStorySourc
       || (value.kind !== undefined && !KINDS.has(value.kind))
       || !nonEmptyString(value.title) || value.title.length > 500
       || !nonEmptyString(value.overview) || value.overview.length > 20_000
+      || (value.transition !== undefined && (
+        !value.transition || typeof value.transition !== "object" || Array.isArray(value.transition)
+        || !onlyKeys(value.transition, ["before", "after"])
+        || !nonEmptyString(value.transition.before) || value.transition.before.length > 500
+        || !nonEmptyString(value.transition.after) || value.transition.after.length > 500
+      ))
+      || (value.chips !== undefined && (
+        !Array.isArray(value.chips) || value.chips.length > 12
+        || !value.chips.every((chip) => nonEmptyString(chip) && chip.length <= 200)
+        || !uniqueValues(value.chips)
+      ))
       || !Array.isArray(value.people) || !value.people.every(validSuccessorStoryPerson)
       || !uniqueValues(value.people.map((person) => person.id))
       || !value.story || typeof value.story !== "object" || Array.isArray(value.story)
@@ -1079,15 +1104,41 @@ export function parseSuccessorStorySource(summary?: string): SuccessorStorySourc
       || !validEvidence(value.evidence.primary)
       || !Array.isArray(value.evidence.supporting) || !value.evidence.supporting.every(validEvidence)
       || !uniqueValues([value.evidence.primary, ...value.evidence.supporting].map(evidenceKey))
-      || !value.contextRetention || typeof value.contextRetention !== "object"
-      || Array.isArray(value.contextRetention) || !onlyKeys(value.contextRetention, ["excluded"])
-      || !Array.isArray(value.contextRetention.excluded)
-      || !value.contextRetention.excluded.every((item) => Boolean(item
+      || !value.coverage || typeof value.coverage !== "object" || Array.isArray(value.coverage)
+      || !onlyKeys(value.coverage, [
+        "semanticManifest", "coverageManifest", "representedUnitIds", "excludedUnits",
+      ])
+      || !value.coverage.semanticManifest
+      || typeof value.coverage.semanticManifest !== "object"
+      || Array.isArray(value.coverage.semanticManifest)
+      || !onlyKeys(value.coverage.semanticManifest, ["revision", "digest"])
+      || !Number.isSafeInteger(value.coverage.semanticManifest.revision)
+      || value.coverage.semanticManifest.revision <= 0
+      || typeof value.coverage.semanticManifest.digest !== "string"
+      || !/^[0-9a-f]{64}$/.test(value.coverage.semanticManifest.digest)
+      || !value.coverage.coverageManifest
+      || typeof value.coverage.coverageManifest !== "object"
+      || Array.isArray(value.coverage.coverageManifest)
+      || !onlyKeys(value.coverage.coverageManifest, ["revision", "digest"])
+      || !Number.isSafeInteger(value.coverage.coverageManifest.revision)
+      || value.coverage.coverageManifest.revision <= 0
+      || typeof value.coverage.coverageManifest.digest !== "string"
+      || !/^[0-9a-f]{64}$/.test(value.coverage.coverageManifest.digest)
+      || !Array.isArray(value.coverage.representedUnitIds)
+      || !value.coverage.representedUnitIds.every(validStableId)
+      || !uniqueValues(value.coverage.representedUnitIds)
+      || !Array.isArray(value.coverage.excludedUnits)
+      || value.coverage.representedUnitIds.length + value.coverage.excludedUnits.length
+        > MAX_STORY_SEMANTIC_UNIT_REFERENCES
+      || !value.coverage.excludedUnits.every((item) => Boolean(item
         && typeof item === "object" && !Array.isArray(item)
-        && onlyKeys(item, ["evidence", "reason"])
-        && validEvidence(item.evidence)
-        && STORY_CONTEXT_EXCLUSION_REASONS.includes(item.reason)))
-      || !uniqueValues(value.contextRetention.excluded.map((item) => evidenceKey(item.evidence)))) return null;
+        && onlyKeys(item, ["unitId", "reason"])
+        && validStableId(item.unitId)
+        && STORY_SEMANTIC_EXCLUSION_REASONS.includes(item.reason)))
+      || !uniqueValues(value.coverage.excludedUnits.map((item) => item.unitId))
+      || value.coverage.excludedUnits.some((item) => (
+        value.coverage?.representedUnitIds.includes(item.unitId)
+      ))) return null;
     return value as SuccessorStorySource;
   } catch {
     return null;

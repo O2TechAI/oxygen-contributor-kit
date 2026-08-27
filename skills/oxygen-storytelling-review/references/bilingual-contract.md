@@ -67,7 +67,7 @@ When Chinese is present, it should preserve the same factual claims, causal rela
 failures, uncertainty, decisions, and Insight meanings when present. Chinese should be natural editorial Chinese rather
 than literal word-for-word translation. These are localization quality goals, not activation gates.
 
-Apply the context-retention and voice rules from
+Apply the semantic-coverage and voice rules from
 [product-contract.md](product-contract.md) to both presentations. The English project summary is
 normally 2–3 concise sentences; Chinese conveys the same start, turn, and current boundary in
 equally economical natural prose rather than mirroring English sentence structure. Prefer one- or
@@ -104,8 +104,9 @@ keys and validate the following safety identities before displaying or exporting
 - matching participant/insight/privacy IDs;
 - matching reconstruction and important-detail semantic block counts, or an explicit alignment map;
 - safe optional passage assistance when present; it is not a source-readiness gate;
-- one shared complete Chapter coverage ledger, context-retention ledger, and claim/Evidence
-  traceability map; source-unit identities and Story block mappings are language-independent;
+- one shared current semantic-manifest and normalized coverage-manifest identity; unit coverage,
+  Evidence identities, and Story block mappings are language-independent, while exact unit
+  membership stays server/tool-owned;
 - presence of every required technical/semantic anchor in canonical English; matching Chinese
   anchors are desirable but do not gate the English package;
 - one shared evidence set;

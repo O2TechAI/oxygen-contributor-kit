@@ -20,6 +20,7 @@ import {
   LEGACY_STORY_PREFIX,
   STORY_PREFIX,
   SUCCESSOR_STORY_PREFIX,
+  compareStorySourceIdentity,
   parseSuccessorStorySource,
 } from "./timeline";
 import { deriveWorkflowProgress, isStoryReviewReady } from "./workflow-progress";
@@ -172,9 +173,7 @@ export async function loadWorkspaceBootstrap() {
   };
   const events = documents.flatMap((document) => (document.formatted_summary?.highlights || [])
     .map((event) => ({ ...event, documentId: document.id })))
-    .sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || ""))
-      || left.documentId.localeCompare(right.documentId)
-      || Number(left.sequence || 0) - Number(right.sequence || 0));
+    .sort(compareStorySourceIdentity);
   const recognizedEvents = events.filter((event) => String(event.summary || "").startsWith(STORY_PREFIX)
     || String(event.summary || "").startsWith(LEGACY_STORY_PREFIX)
     || String(event.summary || "").startsWith(SUCCESSOR_STORY_PREFIX));

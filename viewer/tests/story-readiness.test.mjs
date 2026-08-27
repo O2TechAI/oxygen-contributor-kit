@@ -939,7 +939,7 @@ test("ordered explicit Phases and one complete canonical English Chapter per mil
 });
 
 test("refresh, direct navigation, activation, and progress remain persisted and fail closed", async () => {
-  const [workspace, page, workflowRoute, workflowLoader, sessionRoute, sessionServer, database] = await Promise.all([
+  const [workspace, page, workflowRoute, workflowLoader, sessionRoute, sessionServer, database, publication] = await Promise.all([
     read("../app/workspace.tsx"),
     read("../app/page.tsx"),
     read("../app/api/workflow/route.ts"),
@@ -947,6 +947,7 @@ test("refresh, direct navigation, activation, and progress remain persisted and 
     read("../app/api/story-review-session/route.ts"),
     read("../lib/story-review-session-server.ts"),
     read("../db/index.ts"),
+    read("../lib/story-source-publication.ts"),
   ]);
   assert.match(workspace, /const storyReviewReady = isStoryReviewReady\(workflow\)/);
   assert.match(workspace, /const storyWorkspaceReady = isStoryWorkspaceReady\(workflow/);
@@ -971,9 +972,9 @@ test("refresh, direct navigation, activation, and progress remain persisted and 
   assert.doesNotMatch(workflowLoader, /SELECT\s+content|original_json|reasoning|prompt|tool.?arg/i);
   assert.match(database, /story_generation_status TEXT NOT NULL DEFAULT 'not_started'/);
   assert.match(database, /active_story_digest TEXT/);
-  assert.match(workflowRoute, /validateRecognizedStorySourcePackage/);
-  assert.match(workflowRoute, /story_source_revision=\?/);
-  assert.match(workflowRoute, /story_generation_status='ready_for_human_review'/);
+  assert.match(workflowRoute, /validateStoryActivationAuthority/);
+  assert.match(publication, /story_source_revision=\?/);
+  assert.match(publication, /story_generation_status='ready_for_human_review'/);
   assert.match(workflowRoute, /Cache-Control": "no-store, max-age=0"/);
   assert.match(workflowRoute, /loadWorkflowProgress\(requestedRunId \|\| undefined\)/);
   assert.match(sessionServer, /story_generation_status/);

@@ -95,18 +95,41 @@ class ClaudeExtractor:
         line_number: int,
         record_type: str,
         block_index: int | None = None,
+        interaction_direction: str | None = None,
     ) -> dict[str, Any]:
         raw_id = record.get("uuid") or record.get("sessionId") or f"line-{line_number}"
         record_id = f"{raw_id}:{block_index}" if block_index is not None else str(raw_id)
-        return {
+        source = {
             "system": "claude-code",
             "session_id": self.session_id,
             "record_id": record_id,
             "record_type": record_type,
+            "origin": "subagent" if self.is_subagent else "top_level",
             "locator": self.session_path.name,
             "line": line_number,
             "sha256": common.sha256_bytes(raw),
         }
+        if interaction_direction:
+            source["interaction_direction"] = interaction_direction
+        return source
+
+    def semantic_source(
+        self,
+        record: dict[str, Any],
+        raw: bytes,
+        line_number: int,
+        record_type: str,
+        block_index: int | None,
+        interaction_direction: str,
+        semantic_value: Any,
+    ) -> dict[str, Any]:
+        source = self.source(
+            record, raw, line_number, record_type, block_index, interaction_direction,
+        )
+        source["_semantic_sha256"] = common.sha256_bytes(
+            common.canonical_json(semantic_value).encode("utf-8")
+        )
+        return source
 
     def relations_for_parent(self, record: dict[str, Any], relation_type: str = "caused_by") -> list[dict[str, str]]:
         parent = record.get("parentUuid")
@@ -190,14 +213,25 @@ class ClaudeExtractor:
         role: str,
         text: str,
         block_index: int | None,
+        *,
+        has_attachments: bool = False,
     ) -> str | None:
-        if not text.strip():
+        if not text.strip() and not has_attachments:
             return None
-        actor = {
-            "id": f"participant-{self.source_user}" if role == "user" else f"agent-claude-{self.source_user}",
-            "type": "human" if role == "user" else "ai",
-            "parent_agent_id": None,
-        }
+        if self.is_subagent:
+            direction = "agent_to_subagent" if role == "user" else "subagent_to_agent"
+            actor = {
+                "id": "agent-claude-parent" if role == "user" else f"agent-claude-{self.source_user}",
+                "type": "ai",
+                "parent_agent_id": None if role == "user" else "agent-claude-parent",
+            }
+        else:
+            direction = "human_to_agent" if role == "user" else "agent_to_human"
+            actor = {
+                "id": f"participant-{self.source_user}" if role == "user" else f"agent-claude-{self.source_user}",
+                "type": "human" if role == "user" else "ai",
+                "parent_agent_id": None,
+            }
         relation_type = "reply_to" if role == "assistant" else "caused_by"
         return self.add_event(
             timestamp=record.get("timestamp"),
@@ -206,11 +240,53 @@ class ClaudeExtractor:
             payload={
                 "role": role,
                 "phase": None,
+                "interaction_direction": direction,
                 "text": common.redact_text(text, self.source_home),
                 "attachments": [],
+                "has_attachments": has_attachments,
             },
-            source=self.source(record, raw, line_number, "message", block_index),
+            source=self.semantic_source(
+                record,
+                raw,
+                line_number,
+                "message",
+                block_index,
+                direction,
+                {"text": text, "has_attachments": has_attachments},
+            ),
             relations=self.relations_for_parent(record, relation_type),
+        )
+
+    def process_thinking(
+        self,
+        record: dict[str, Any],
+        raw: bytes,
+        line_number: int,
+        block: dict[str, Any],
+        block_index: int,
+    ) -> str | None:
+        text = block.get("thinking") or block.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return None
+        direction = "subagent_internal_reasoning" if self.is_subagent else "agent_internal_reasoning"
+        return self.add_event(
+            timestamp=record.get("timestamp"),
+            event_type="reasoning",
+            actor={
+                "id": f"agent-claude-{self.source_user}",
+                "type": "ai",
+                "parent_agent_id": "agent-claude-parent" if self.is_subagent else None,
+            },
+            payload={
+                "role": "assistant",
+                "phase": "reasoning",
+                "interaction_direction": direction,
+                "text": common.redact_text(text, self.source_home),
+            },
+            source=self.semantic_source(
+                record, raw, line_number, "thinking", block_index, direction, text,
+            ),
+            relations=self.relations_for_parent(record),
         )
 
     def process_image(
@@ -219,6 +295,7 @@ class ClaudeExtractor:
         raw: bytes,
         line_number: int,
         block: dict[str, Any],
+        block_index: int,
         parent_event: str | None,
     ) -> str | None:
         source = block.get("source")
@@ -233,7 +310,27 @@ class ClaudeExtractor:
         media_type = str(source.get("media_type") or "application/octet-stream")
         suffix = mimetypes.guess_extension(media_type) or ".bin"
         artifact = self.artifacts.write_bytes("image", data, suffix, media_type)
-        return self.add_artifact_event(artifact, record, raw, line_number, parent_event)
+        relations = [{"type": "produced", "event_id": parent_event}] if parent_event else []
+        return self.add_event(
+            timestamp=record.get("timestamp"),
+            event_type="artifact",
+            actor={"id": "system-claude", "type": "system", "parent_agent_id": None},
+            payload={
+                "artifact_id": artifact.artifact_id,
+                "kind": artifact.kind,
+                "original_name": artifact.original_name,
+                "stored_name": Path(artifact.path).name,
+                "path": artifact.path,
+                "media_type": artifact.media_type,
+                "size_bytes": artifact.size_bytes,
+                "sha256": artifact.sha256,
+                "created_by_event": parent_event,
+            },
+            source=self.source(
+                record, raw, line_number, "artifact:image", block_index,
+            ),
+            relations=relations,
+        )
 
     def process_tool_use(
         self,
@@ -249,6 +346,106 @@ class ClaudeExtractor:
         arguments_text = common.canonical_json(arguments)
         artifact = self.artifacts.write_text("arguments", arguments_text, ".json")
         action = claude_action(tool_name, arguments)
+        semantic_event_id: str | None = None
+        if tool_name.casefold() in {"agent", "task"} and isinstance(block.get("input"), dict):
+            raw_arguments = block["input"]
+            prompt_parts: list[str] = []
+            for key in ("prompt", "message", "description"):
+                value = raw_arguments.get(key)
+                if isinstance(value, str) and value.strip() and value not in prompt_parts:
+                    prompt_parts.append(value)
+            prompt = "\n\n".join(prompt_parts)
+            if prompt:
+                record_type = f"coordination_prompt:{tool_name.casefold()}"
+                semantic_event_id = self.add_event(
+                    timestamp=record.get("timestamp"),
+                    event_type="message",
+                    actor={
+                        "id": f"agent-claude-{self.source_user}",
+                        "type": "ai",
+                        "parent_agent_id": None,
+                    },
+                    payload={
+                        "role": "assistant",
+                        "phase": "coordination",
+                        "interaction_direction": "agent_to_subagent",
+                        "text": common.redact_text(prompt, self.source_home),
+                        "attachments": [],
+                    },
+                    source=self.semantic_source(
+                        record,
+                        raw,
+                        line_number,
+                        record_type,
+                        block_index,
+                        "agent_to_subagent",
+                        {"prompt": prompt, "tool": tool_name.casefold()},
+                    ),
+                    relations=self.relations_for_parent(record),
+                )
+        elif tool_name.casefold() == "askuserquestion" and isinstance(block.get("input"), dict):
+            normalized: list[dict[str, Any]] = []
+            lines: list[str] = []
+            questions = block["input"].get("questions")
+            if isinstance(questions, list):
+                for question in questions:
+                    if not isinstance(question, dict):
+                        continue
+                    text = question.get("question")
+                    if not isinstance(text, str) or not text.strip():
+                        continue
+                    header = question.get("header")
+                    options: list[dict[str, str]] = []
+                    for option in question.get("options", []):
+                        if not isinstance(option, dict):
+                            continue
+                        label = option.get("label")
+                        description = option.get("description")
+                        if not isinstance(label, str) or not label.strip():
+                            continue
+                        options.append({
+                            "label": label,
+                            **({"description": description}
+                               if isinstance(description, str) and description.strip() else {}),
+                        })
+                    normalized.append({
+                        "question": text,
+                        **({"header": header}
+                           if isinstance(header, str) and header.strip() else {}),
+                        "options": options,
+                    })
+                    lines.append(
+                        f"{header.strip()}: {text.strip()}"
+                        if isinstance(header, str) and header.strip() else text.strip()
+                    )
+                    lines.extend(
+                        f"- {option['label']}"
+                        + (f": {option['description']}" if option.get("description") else "")
+                        for option in options
+                    )
+            if normalized:
+                direction = "agent_to_human"
+                semantic_event_id = self.add_event(
+                    timestamp=record.get("timestamp"),
+                    event_type="message",
+                    actor={
+                        "id": f"agent-claude-{self.source_user}",
+                        "type": "ai",
+                        "parent_agent_id": None,
+                    },
+                    payload={
+                        "role": "assistant",
+                        "phase": "feedback_request",
+                        "interaction_direction": direction,
+                        "text": common.redact_text("\n".join(lines), self.source_home),
+                        "attachments": [],
+                    },
+                    source=self.semantic_source(
+                        record, raw, line_number, "human_question", block_index,
+                        direction, {"call_id": call_id, "questions": normalized},
+                    ),
+                    relations=self.relations_for_parent(record),
+                )
         event_id = self.add_event(
             timestamp=record.get("timestamp"),
             event_type="tool_call",
@@ -277,9 +474,14 @@ class ClaudeExtractor:
                 value = arguments.get(key)
                 if isinstance(value, str) and not common.is_sensitive_path(value):
                     intended.append(common.redact_text(value, self.source_home))
-        self.tool_meta[call_id] = {"action": action, "intended_files": intended, "tool_name": tool_name}
+        self.tool_meta[call_id] = {
+            "action": action,
+            "intended_files": intended,
+            "tool_name": tool_name,
+            "semantic_event_id": semantic_event_id,
+        }
         self.add_artifact_event(artifact, record, raw, line_number, event_id)
-        return event_id
+        return semantic_event_id or event_id
 
     def process_tool_result(
         self,
@@ -297,6 +499,71 @@ class ClaudeExtractor:
         artifact = self.artifacts.write_text("stdout", text, ".txt") if text else None
         is_error = bool(block.get("is_error"))
         meta = self.tool_meta.get(call_id, {})
+        tool_name = str(meta.get("tool_name") or "")
+        semantic_parent = meta.get("semantic_event_id")
+        semantic_result_id: str | None = None
+        semantic_relations = self.relations_for_parent(record)
+        if isinstance(semantic_parent, str) and not any(
+            relation.get("event_id") == semantic_parent for relation in semantic_relations
+        ):
+            semantic_relations.append({"type": "reply_to", "event_id": semantic_parent})
+        if text and tool_name.casefold() in {"agent", "task"}:
+            direction = "subagent_to_agent"
+            semantic_result_id = self.add_event(
+                timestamp=record.get("timestamp"),
+                event_type="message",
+                actor={
+                    "id": "agent-claude-subagent",
+                    "type": "ai",
+                    "parent_agent_id": f"agent-claude-{self.source_user}",
+                },
+                payload={
+                    "role": "assistant",
+                    "phase": "coordination",
+                    "interaction_direction": direction,
+                    "text": common.redact_text(text, self.source_home),
+                    "attachments": [],
+                },
+                source=self.semantic_source(
+                    record,
+                    raw,
+                    line_number,
+                    "subagent_finding",
+                    block_index,
+                    direction,
+                    {"call_id": call_id, "text": text},
+                ),
+                relations=semantic_relations,
+            )
+        if text and tool_name.casefold() == "askuserquestion":
+            direction = "human_to_agent"
+            semantic_result_id = self.add_event(
+                timestamp=record.get("timestamp"),
+                event_type="message",
+                actor={
+                    "id": f"participant-{self.source_user}",
+                    "type": "human",
+                    "parent_agent_id": None,
+                },
+                payload={
+                    "role": "user",
+                    "phase": "feedback",
+                    "interaction_kind": "feedback",
+                    "interaction_direction": direction,
+                    "text": common.redact_text(text, self.source_home),
+                    "attachments": [],
+                },
+                source=self.semantic_source(
+                    record,
+                    raw,
+                    line_number,
+                    "human_tool_response",
+                    block_index,
+                    direction,
+                    {"call_id": call_id, "text": text},
+                ),
+                relations=semantic_relations,
+            )
         intended = list(meta.get("intended_files") or [])
         changed = intended if not is_error and meta.get("action") in {"create", "update", "move", "delete"} else []
         event_id = self.add_event(
@@ -307,7 +574,7 @@ class ClaudeExtractor:
                 "type": "tool",
                 "parent_agent_id": f"agent-claude-{self.source_user}",
             },
-            executor={"system": "claude-code", "tool": str(meta.get("tool_name") or "tool_result")},
+            executor={"system": "claude-code", "tool": tool_name or "tool_result"},
             payload={
                 "call_id": call_id,
                 "exit_code": 1 if is_error else 0,
@@ -327,7 +594,7 @@ class ClaudeExtractor:
         )
         if artifact:
             self.add_artifact_event(artifact, record, raw, line_number, event_id)
-        return event_id
+        return semantic_result_id or event_id
 
     def process_message_record(self, record: dict[str, Any], raw: bytes, line_number: int) -> None:
         if record.get("isMeta") is True:
@@ -349,6 +616,7 @@ class ClaudeExtractor:
             if event_id:
                 generated.append(event_id)
         elif isinstance(content, list):
+            attachment_carrier: str | None = None
             for index, block in enumerate(content):
                 if not isinstance(block, dict):
                     continue
@@ -361,8 +629,23 @@ class ClaudeExtractor:
                 elif block_type == "tool_result":
                     event_id = self.process_tool_result(record, raw, line_number, block, index)
                 elif block_type == "image":
-                    event_id = self.process_image(record, raw, line_number, block, generated[-1] if generated else None)
-                # thinking blocks are intentionally excluded.
+                    if attachment_carrier is None:
+                        attachment_carrier = self.process_text(
+                            record,
+                            raw,
+                            line_number,
+                            role,
+                            "",
+                            None,
+                            has_attachments=True,
+                        )
+                        if attachment_carrier:
+                            generated.append(attachment_carrier)
+                    event_id = self.process_image(
+                        record, raw, line_number, block, index, attachment_carrier,
+                    )
+                elif block_type == "thinking":
+                    event_id = self.process_thinking(record, raw, line_number, block, index)
                 if event_id:
                     generated.append(event_id)
         raw_uuid = record.get("uuid")
@@ -413,10 +696,17 @@ class ClaudeExtractor:
             "snapshot_at": common.utc_now(),
             "is_subagent": self.is_subagent,
             "parent_session_id": self.parent_session_id,
-            "participants": [
-                {"id": f"participant-{self.source_user}", "type": "human"},
-                {"id": f"agent-claude-{self.source_user}", "type": "ai"},
-            ],
+            "participants": (
+                [
+                    {"id": "agent-claude-parent", "type": "ai"},
+                    {"id": f"agent-claude-{self.source_user}", "type": "ai"},
+                ]
+                if self.is_subagent
+                else [
+                    {"id": f"participant-{self.source_user}", "type": "human"},
+                    {"id": f"agent-claude-{self.source_user}", "type": "ai"},
+                ]
+            ),
             "event_count": len(self.events),
             "artifact_count": self.artifacts.count,
             "redaction_status": "automatic_only",
@@ -430,7 +720,7 @@ class ClaudeExtractor:
             "trajectory_id": self.trajectory_id,
             "automatic_redaction": True,
             "excluded_record_types": [
-                "thinking",
+                "encrypted_thinking",
                 "queue-operation",
                 "last-prompt",
                 "harness-attachment-metadata",

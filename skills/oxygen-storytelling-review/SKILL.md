@@ -125,7 +125,7 @@ reviewed-Evidence-supported unit that materially explains the arc's background, 
 relationship, participant interaction, judgment, failed attempt, progress or iteration, result, or
 open state. Do not omit supported Story merely because it yields no Insight.
 
-Apply the canonical context-retention and voice rules in
+Apply the canonical semantic-coverage and voice rules in
 [product-contract.md](references/product-contract.md) and the evidence-driven roles in
 [narrative-writing-contract.md](references/narrative-writing-contract.md): consider the complete reviewed history at
 the approved boundary, then write a concise 2–3 sentence project arc and context-complete causal
@@ -186,10 +186,11 @@ Chapter.
 Establish the project context and functional role table before writing Chapters. For every selected
 human, user, Agent, reviewer, speaker, owner, or operator action, generate a neutral release-safe
 Person with reviewed Evidence references. Preserve role uncertainty and never infer a name,
-employer, title, identity, or relationship. If no participant can be supported, keep the event in
-Timeline or Exact Evidence and do not generate or activate a Chapter. Routine machine-only events
-cannot stand alone; they may support a Chapter only when reviewed Evidence also identifies an actor
-who diagnosed, decided, executed, reviewed, approved, or responded.
+employer, title, identity, or relationship. If no participant can be supported, keep the unit in
+Exact Evidence and do not generate a Chapter. Mechanical execution traces are removed before this
+stage. Recorded Agent reasoning, coordination, subagent findings, and meaningful progress are
+contribution material and may support a Chapter when their actual semantic content belongs in the
+narrative.
 
 At generation time, write every primary, supporting, and Person Evidence `eventId` as the exact
 fully qualified imported item ID. A bare event suffix is ineligible even when it currently resolves
@@ -197,10 +198,12 @@ once. Reject that candidate before staging. Regeneration after ambiguity wastes 
 
 The candidate is source-ready only when its English Project Summary is complete; every Chapter
 is one complete coherent arc with nonempty supported People and Story blocks; adjacent Chapters are
-grouped into precise one- or two-word Phases; Evidence and Privacy structures resolve; every allowed
-Evidence input is represented or uses one fixed safe exclusion reason; and no placeholder, fallback
-Chapter, partial job, or validation debt remains. Missing, incomplete, or stale Chinese never blocks
-the English candidate. Do not require a fixed number of Phases, Chapters, or Insights.
+grouped into precise one- or two-word Phases; Evidence and Privacy structures resolve; and every
+Organization semantic unit is represented by exactly one coverage owner or explicitly excluded
+with an authorized bounded reason. Story carries only manifest identities and bounded unit
+references—never exact memberships or per-event negative ledgers. Missing, incomplete, or stale
+Chinese never blocks the English candidate. Do not require a fixed number of Phases, Chapters, or
+Insights.
 
 Only after the complete Story is understood, generate zero or more independently warranted
 Insights. Every existing Insight contains exactly Background, Quote, Directly Acquired Experience,
@@ -209,7 +212,14 @@ copies raw/private Evidence. Directly Acquired Experience remains bounded to the
 moment. Principle may abstract only for a genuinely similar future condition and may not introduce
 unsupported industry prior. Insight title is optional presentation metadata.
 
-Before declaring source readiness, validate that every Chapter remains complete without an Insight,
+Before declaring source readiness, write a local unit-level coverage draft and run
+`scripts/finalize_story_coverage.mjs` against the finalized project map. Use its normalized output
+for activation and copy only its semantic/coverage revision and digest plus bounded unit references
+into each Chapter. The draft contains rows only; do not invent a revision or digest in model output.
+On regeneration, supply `--previous` only with the last server-accepted normalized coverage file;
+an output from a rejected activation is not prior authority.
+
+Then validate that every Chapter remains complete without an Insight,
 every Person and Story block is Evidence-supported, Phase grouping follows already-determined
 adjacent Chapters, Insight cardinality is `0..n` without a quota, and chronology, attribution,
 failure retention, causal restraint, uncertainty, Privacy, and non-fabrication remain intact. If any
@@ -225,10 +235,18 @@ workflow activation:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
-  --attach-url <viewer-url> --workflow-run-id <run-id> --story-event ready
+  --attach-url <viewer-url> --workflow-run-id <run-id> --story-event ready \
+  --coverage-manifest <normalized-coverage-manifest.json> \
+  --story-candidates <story-candidates.json>
 ```
 
-Activation must revalidate the exact homogeneous source package, source revision, and digest before
+`story-candidates.json` is a bounded JSON array containing only `{ "id", "summary" }` rows.
+Each ID is an existing fully qualified contribution item; the server derives document, sequence,
+timestamp, and project, rebuilds every document's bounded highlights, and publishes candidates,
+coverage, semantic source revision, and active digest through the same generation lease.
+
+Activation must revalidate the exact homogeneous source package, semantic manifest, normalized
+coverage manifest, source revision, and digest before
 entering Review Story. The live `/3` path creates or hydrates `oxygen.story-review-session/2`, opens
 the successor Viewer, and later reconstructs `oxygen.reviewed-story/2` server-side only after human
 review completion. Source readiness is not Accept/Reject resolution, All set, Final Release Memory,

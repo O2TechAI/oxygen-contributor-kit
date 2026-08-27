@@ -149,7 +149,11 @@ The Story should let a reader understand:
 - what was learned;
 - how the project arrived at its current state.
 
-Prioritize causal transitions and consequential moments. Compress routine commands, repeated implementation narration, ordinary test execution, and minor details that did not affect direction. Preserve technical terms, meaningful metrics, failures, uncertainty, disagreement, and evidence semantics.
+Prioritize causal transitions and consequential moments. Mechanical commands/results and ordinary
+execution traces were removed before Story. Compress only semantic units explicitly dispositioned
+as duplicate, bounded routine/non-narrative, or outside this Story scope; do not blanket-drop
+recorded Agent reasoning, coordination, subagent findings, or meaningful progress. Preserve
+technical terms, meaningful metrics, failures, uncertainty, disagreement, and Evidence semantics.
 
 Never turn a small remark into a turning point without evidence. Never rewrite uncertainty or a blocked round into a successful conclusion.
 

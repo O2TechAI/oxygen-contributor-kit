@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { testStoryCoverage } from "./fixtures/successor-story-coverage.mjs";
 import {
   isReservedStoryOrganizationReason,
   readReservedStoryCandidateRows,
@@ -11,8 +12,14 @@ import { releaseOrganizationReason } from "../lib/story-release.ts";
 import { readActiveStoryReviewContract } from "../lib/story-review-session-server.ts";
 import {
   STORY_SOURCE_WRITE_STATUS,
+  STORY_ACTIVATION_MAX_PACKAGE_STATEMENTS,
+  D1_JSON_PARAMETER_BYTES,
   abortStorySourceMutation,
+  assertStoryActivationQueryBudget,
+  beginStoryActivationMutation,
   beginStorySourceMutation,
+  jsonParameterBatches,
+  publishActivatedStorySourceMutation,
   publishCompletedStorySourceMutation,
 } from "../lib/story-source-publication.ts";
 import { SUCCESSOR_STORY_PREFIX } from "../lib/timeline.ts";
@@ -20,6 +27,33 @@ import { SUCCESSOR_STORY_PREFIX } from "../lib/timeline.ts";
 const RUN_ID = "source-authority-run";
 const ORIGINAL_SENTINEL = "PRIVATE_ORIGINAL_SENTINEL";
 const EVIDENCE_SENTINEL = "PRIVATE_EVIDENCE_SENTINEL";
+
+test("D1 JSON persistence batches keep 24796 bounded members below query and parameter limits", () => {
+  const rows = Array.from({ length: 24_796 }, (_, index) => ({
+    itemId: `item-${index}-${"x".repeat(280)}`,
+    unitId: `unit-${index % 512}-${"y".repeat(280)}`,
+    sourceDigest: "a".repeat(64),
+  }));
+  const payloads = jsonParameterBatches(rows);
+  assert.ok(payloads.length + 12 < 50, "Organization stays below the free-plan query invocation bound");
+  assert.ok(payloads.every((payload) => Buffer.byteLength(payload) <= D1_JSON_PARAMETER_BYTES));
+  assert.equal(payloads.reduce((total, payload) => total + JSON.parse(payload).length, 0), rows.length);
+  assert.throws(
+    () => jsonParameterBatches([{ value: "x".repeat(D1_JSON_PARAMETER_BYTES) }]),
+    /bounded parameter size/,
+  );
+});
+
+test("Story activation rejects package statements before the D1 invocation limit", () => {
+  assert.doesNotThrow(() => assertStoryActivationQueryBudget(
+    STORY_ACTIVATION_MAX_PACKAGE_STATEMENTS,
+  ));
+  assert.throws(
+    () => assertStoryActivationQueryBudget(STORY_ACTIVATION_MAX_PACKAGE_STATEMENTS + 1),
+    /bounded D1 query budget/,
+  );
+  assert.throws(() => assertStoryActivationQueryBudget(Number.NaN), /bounded D1 query budget/);
+});
 
 function sourceFor(identity) {
   const evidence = { documentId: identity.document_id, eventId: identity.id };
@@ -43,7 +77,7 @@ function sourceFor(identity) {
     },
     insights: [],
     evidence: { primary: evidence, supporting: [] },
-    contextRetention: { excluded: [] },
+    coverage: testStoryCoverage(),
   };
 }
 
@@ -158,6 +192,10 @@ class PublicationDb {
     this.status = status;
     this.revision = revision;
     this.digest = "previous-ready-digest";
+    this.semanticRevision = revision;
+    this.coverageRevision = 1;
+    this.coverageDigest = "c".repeat(64);
+    this.batchCalls = 0;
   }
 
   prepare(sql) {
@@ -165,6 +203,27 @@ class PublicationDb {
     return {
       bind(...next) { values = next; return this; },
       run: async () => {
+        if (/UPDATE semantic_manifests SET source_revision/.test(sql)) {
+          const expected = Number(values[3]);
+          if (this.semanticRevision !== expected
+            || this.revision !== Number(values[5])
+            || this.status !== values[6]
+            || this.coverageRevision !== Number(values[8])
+            || this.coverageDigest !== values[9]) return { meta: { changes: 0 } };
+          this.semanticRevision = Number(values[0]);
+          return { meta: { changes: 1 } };
+        }
+        if (/story_generation_status='ready_for_human_review'/.test(sql)) {
+          const expected = Number(values[5]);
+          if (this.status !== values[6] || this.revision !== expected
+            || this.semanticRevision !== Number(values[8])
+            || this.coverageRevision !== Number(values[10])
+            || this.coverageDigest !== values[11]) return { meta: { changes: 0 } };
+          this.status = "ready_for_human_review";
+          this.revision += 1;
+          this.digest = values[2];
+          return { meta: { changes: 1 } };
+        }
         if (/story_source_revision=story_source_revision\+1/.test(sql)) {
           if (![STORY_SOURCE_WRITE_STATUS.idle, STORY_SOURCE_WRITE_STATUS.resumeGeneration]
             .includes(this.status)) return { meta: { changes: 0 } };
@@ -174,6 +233,10 @@ class PublicationDb {
           return { meta: { changes: 1 } };
         }
         if (/story_generation_status='blocked'/.test(sql)) {
+          const expectedRevision = values.length > 4 ? Number(values[4]) : null;
+          if (expectedRevision !== null && this.revision !== expectedRevision) {
+            return { meta: { changes: 0 } };
+          }
           if ([STORY_SOURCE_WRITE_STATUS.idle, STORY_SOURCE_WRITE_STATUS.resumeGeneration]
             .includes(this.status)) this.status = "blocked";
           this.digest = null;
@@ -186,9 +249,22 @@ class PublicationDb {
           this.digest = null;
           return { meta: { changes: 1 } };
         }
+        if (/story_generation_status='running'/.test(sql)) {
+          if (this.status !== "running") return { meta: { changes: 0 } };
+          this.status = values[0];
+          this.digest = null;
+          return { meta: { changes: 1 } };
+        }
         throw new Error(`Unexpected publication SQL: ${sql}`);
       },
     };
+  }
+
+  async batch(statements) {
+    this.batchCalls += 1;
+    const results = [];
+    for (const statement of statements) results.push(await statement.run());
+    return results;
   }
 }
 
@@ -201,7 +277,7 @@ async function activationAttempt(db, items) {
   return true;
 }
 
-test("source revision publishes once after all chunks and partial valid rows cannot activate", async () => {
+test("one complete source document publishes one revision and partial rows cannot activate", async () => {
   const db = new PublicationDb();
   const items = [
     itemFor({
@@ -242,6 +318,52 @@ test("failed chunk writes remain non-ready and publish no source revision", asyn
   assert.equal(db.status, "blocked");
   assert.equal(db.revision, 20);
   assert.equal(await activationAttempt(db, []), false);
+});
+
+test("a stale writer cannot abort a newer revision-bound source lease", async () => {
+  const db = new PublicationDb(STORY_SOURCE_WRITE_STATUS.idle, 51);
+  await abortStorySourceMutation(db, RUN_ID, "2036-02-04T00:00:01.000Z", 50);
+  assert.equal(db.status, STORY_SOURCE_WRITE_STATUS.idle);
+  await abortStorySourceMutation(db, RUN_ID, "2036-02-04T00:00:02.000Z", 51);
+  assert.equal(db.status, "blocked");
+});
+
+test("Story activation lease is running-only and publishes semantic/source authority once", async () => {
+  const db = new PublicationDb("running", 30);
+  assert.equal(await beginStoryActivationMutation(
+    db, RUN_ID, "2036-02-05T00:00:00.000Z",
+  ), true);
+  assert.equal(db.status, STORY_SOURCE_WRITE_STATUS.resumeGeneration);
+  assert.equal(await beginStoryActivationMutation(
+    db, RUN_ID, "2036-02-05T00:00:00.100Z",
+  ), false, "a second ready attempt cannot claim an active lease");
+  assert.equal(await publishActivatedStorySourceMutation(
+    db, [], RUN_ID, 30, 2, "d".repeat(64), 1, "c".repeat(64),
+    "2036-02-05T00:00:01.000Z",
+  ), true);
+  assert.equal(db.status, "ready_for_human_review");
+  assert.equal(db.revision, 31);
+  assert.equal(db.semanticRevision, 31);
+  assert.equal(db.digest, "d".repeat(64));
+  assert.equal(db.batchCalls, 1, "package and activation publish through one durable batch");
+  assert.equal(await beginStoryActivationMutation(
+    db, RUN_ID, "2036-02-05T00:00:02.000Z",
+  ), false, "a stale ready request cannot reopen or block reviewed source");
+  assert.equal(db.status, "ready_for_human_review");
+});
+
+test("mismatched coverage cannot partially rebind semantic authority", async () => {
+  const db = new PublicationDb("running", 40);
+  assert.equal(await beginStoryActivationMutation(
+    db, RUN_ID, "2036-02-06T00:00:00.000Z",
+  ), true);
+  assert.equal(await publishActivatedStorySourceMutation(
+    db, [], RUN_ID, 40, 1, "d".repeat(64), 2, "e".repeat(64),
+    "2036-02-06T00:00:01.000Z",
+  ), false);
+  assert.equal(db.semanticRevision, 40);
+  assert.equal(db.revision, 40);
+  assert.equal(db.status, STORY_SOURCE_WRITE_STATUS.resumeGeneration);
 });
 
 test("activation, Viewer, release selection, and digest share one total source order", async (t) => {
