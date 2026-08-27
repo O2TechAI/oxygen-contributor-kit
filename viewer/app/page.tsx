@@ -1,6 +1,8 @@
 import { InlineWorkspace } from "./workspace";
 import { loadWorkspaceBootstrap } from "../lib/workflow-progress-server";
 
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
   const initial = await loadWorkspaceBootstrap();
   return <InlineWorkspace
