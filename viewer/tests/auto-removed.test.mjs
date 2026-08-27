@@ -76,13 +76,13 @@ test("package canonicalization fails closed on malformed persisted state", () =>
   })), /reversible must be true/);
 });
 
-test("Preference import and package routes use strict aggregate boundaries", async () => {
+test("Preference import validates aggregate authority and final package omits internal aggregate", async () => {
   const probesRoute = await readFile(new URL("../app/api/probes/route.ts", import.meta.url), "utf8");
   const packageRoute = await readFile(new URL("../app/api/package/route.ts", import.meta.url), "utf8");
   assert.match(probesRoute, /canonicalizeAutoRemoved\(body\.autoRemoved\)/);
   assert.doesNotMatch(probesRoute, /body\.run|crypto\.randomUUID|replaceAll/);
   assert.match(probesRoute, /status: 400/);
-  assert.match(packageRoute, /canonicalizeStoredAutoRemoved/);
-  assert.match(packageRoute, /status: 409/);
-  assert.doesNotMatch(packageRoute, /auto_removed:\s*clean/);
+  assert.doesNotMatch(packageRoute, /auto_removed|canonicalizeStoredAutoRemoved/);
+  assert.match(packageRoute, /bulkDecisions/);
+  assert.doesNotMatch(packageRoute, /evidence_sample/);
 });

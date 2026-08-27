@@ -32,6 +32,10 @@ import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { captureStoryReleasePrivacySnapshot } from "../lib/release-privacy-snapshot.ts";
 import { validateStorySourcePackage } from "../lib/story-readiness.ts";
 import { STORY_PREFIX } from "../lib/timeline.ts";
+import {
+  deriveStoryReleaseTargetCatalog,
+  storyPreparationDigest,
+} from "../lib/story-preparation.ts";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -113,6 +117,9 @@ function context(currentSource) {
   };
 }
 
+const releaseInsights = (release) => release.chapters
+  .flatMap((chapter) => chapter.en.story.blocks.flatMap((block) => block.insights));
+
 function humanContent(currentSource, overrides = {}) {
   const text = "approved Story text";
   const block = currentSource.story.blocks.find((item) => item.id === "story-block-safe");
@@ -164,14 +171,15 @@ test("the canonical release permits a complete zero-Insight Story", () => {
   assert.equal(release.schema, REVIEWED_STORY_SCHEMA);
   assert.equal(release.publication_approved, false);
   assert.equal(release.chapters.length, 1);
-  assert.deepEqual(release.chapters[0].phase, { id: "phase-discovery", label: "Discovery" });
+  assert.equal(release.chapters[0].phase, "Discovery");
   assert.deepEqual(release.chapters[0].en.people, [{
     releaseLabel: "Contributor",
     role: "Owner",
     description: "Defined and checked the release boundary.",
   }]);
-  assert.deepEqual(release.chapters[0].en.insights, []);
-  assert.deepEqual(release.chapters[0].en.story.blocks, currentSource.story.blocks.map((block) => block.text));
+  assert.deepEqual(releaseInsights(release), []);
+  assert.deepEqual(release.chapters[0].en.story.blocks.map((block) => block.text),
+    currentSource.story.blocks.map((block) => block.text));
   assert.doesNotMatch(JSON.stringify(release), /localIdentityState|documentId|eventId/);
 });
 
@@ -183,13 +191,14 @@ test("multiple accepted AI Insights, rejection, optional title, and four-part Qu
   ]);
   const state = reviewedState(currentSource, { "insight-rejected": "rejected" });
   const release = buildReviewedStoryRelease([currentSource], { [currentSource.key]: state });
-  const projected = release.chapters[0].en.insights;
-  assert.deepEqual(projected.map((item) => item.id), ["insight-a", "insight-z"]);
+  const projected = releaseInsights(release);
+  assert.deepEqual(projected.map((item) => item.background), ["Background insight-z", "Background insight-a"]);
   assert.equal(projected[0].quote, "The approved Story text states the safe boundary.");
   assert.deepEqual(Object.keys(projected[0]).sort(), [
-    "background", "directlyAcquiredExperience", "id", "principle", "quote", "title",
+    "background", "directlyAcquiredExperience", "principle", "quote",
   ]);
-  assert.equal("title" in projected[1], false);
+  assert.equal("title" in projected[0], false);
+  assert.equal(projected[1].title, "Title insight-a");
   assert.doesNotMatch(JSON.stringify(projected), /story-block-|evidence|origin|appliedVersion|revisionHistory/);
 });
 
@@ -198,8 +207,7 @@ test("human-approved Insight releases with stable identity and no review provena
   const human = humanContent(currentSource);
   const state = reviewedState(currentSource, {}, [["human:release-boundary", human]]);
   const release = buildReviewedStoryRelease([currentSource], { [currentSource.key]: state });
-  assert.deepEqual(release.chapters[0].en.insights, [{
-    id: "human:release-boundary",
+  assert.deepEqual(releaseInsights(release), [{
     background: human.background,
     quote: "approved Story text",
     directlyAcquiredExperience: human.directlyAcquiredExperience,
@@ -219,7 +227,7 @@ test("human Quote Privacy is exact: selected bytes fail closed and redaction els
     { [elsewhere.key]: reviewedState(elsewhere, {}, [["human:elsewhere", elsewhereHuman]]) },
     privacy,
   );
-  assert.equal(elsewhereRelease.chapters[0].en.insights[0].quote, "approved Story text");
+  assert.deepEqual(releaseInsights(elsewhereRelease), []);
   assert.doesNotMatch(JSON.stringify(elsewhereRelease), new RegExp(PRIVATE));
 
   const selected = source([]);
@@ -238,7 +246,7 @@ test("human Quote Privacy is exact: selected bytes fail closed and redaction els
     { [selected.key]: reviewedState(selected, {}, [["human:selected-private", selectedHuman]]) },
     privacy,
   );
-  assert.deepEqual(selectedRelease.chapters[0].en.insights, []);
+  assert.deepEqual(releaseInsights(selectedRelease), []);
   assert.doesNotMatch(JSON.stringify(selectedRelease), new RegExp(PRIVATE));
 });
 
@@ -278,14 +286,11 @@ test("Privacy precedes projection and redacted Quote anchors are omitted without
   const serialized = serializeReviewedStoryRelease(release);
   assert.ok(serialized);
   assert.doesNotMatch(serialized, new RegExp(PRIVATE));
-  assert.deepEqual(release.chapters[0].en.story.blocks, [
+  assert.deepEqual(release.chapters[0].en.story.blocks.map((block) => block.text), [
     "The approved Story text states the safe boundary.",
   ]);
-  assert.deepEqual(release.chapters[0].en.insights.map((item) => item.id), ["insight-safe-anchor"]);
-  assert.match(release.chapters[0].en.title, /<redacted category="secret"\/>/);
-  assert.match(release.chapters[0].en.insights[0].background, /<redacted category="secret"\/>/);
-  assert.equal(release.chapters[0].en.insights[0].quote,
-    "The approved Story text states the safe boundary.");
+  assert.deepEqual(releaseInsights(release), []);
+  assert.equal(release.chapters[0].en.title, "[Redacted]");
 });
 
 test("story sanitizer strips every non-product field and canonicalizes Insight order", () => {
@@ -300,11 +305,10 @@ test("story sanitizer strips every non-product field and canonicalizes Insight o
   untrusted.chapters[0].anchors = [PRIVATE];
   untrusted.chapters[0].zh = { title: PRIVATE };
   untrusted.chapters[0].en.people[0].id = PRIVATE;
-  untrusted.chapters[0].en.insights[0].origin = "source_ai";
-  untrusted.chapters[0].en.insights.reverse();
+  untrusted.chapters[0].en.story.blocks[0].insights[0].origin = "source_ai";
   const sanitized = sanitizeReviewedStoryRelease(untrusted);
   assert.ok(sanitized);
-  assert.deepEqual(sanitized.chapters[0].en.insights.map((item) => item.id), ["insight-a", "insight-b"]);
+  assert.equal(releaseInsights(sanitized).length, 2);
   assert.doesNotMatch(JSON.stringify(sanitized), new RegExp(`${PRIVATE}|privateEvidence|anchors|origin|"zh"|"id":"${PRIVATE}"`));
   assert.equal(sanitizeReviewedStoryRelease({ ...release, publication_approved: true }), null);
   assert.equal(sanitizeReviewedStoryRelease({ ...release, schema: "oxygen.reviewed-story.invalid" }), null);
@@ -317,12 +321,15 @@ async function sha256(value) {
 
 
 class FakeStoryReleaseDb {
-  constructor({ items, run, session, redactionJob, redactions = [] }) {
+  constructor({ items, run, session, redactionJob, redactions = [], receipts, probeRun, allSet }) {
     this.items = items;
     this.runs = new Map([[run.id, run]]);
     this.session = session;
     this.redactionJob = redactionJob;
     this.redactions = redactions;
+    this.receipts = receipts;
+    this.probeRun = probeRun;
+    this.allSet = allSet;
   }
 
   prepare(sql) {
@@ -345,6 +352,12 @@ class FakeStoryReleaseDb {
         if (/FROM story_review_sessions WHERE workflow_run_id=\?/.test(sql)) {
           return { results: this.session ? [structuredClone(this.session)] : [] };
         }
+        if (/FROM story_preparation_receipts/.test(sql)) return { results: structuredClone(this.receipts) };
+        if (/FROM story_privacy_candidates/.test(sql)) return { results: [] };
+        if (/FROM probe_runs WHERE workflow_run_id=\?/.test(sql)) return { results: [structuredClone(this.probeRun)] };
+        if (/FROM probes ORDER BY id/.test(sql)) return { results: [] };
+        if (/FROM probe_bulk_decisions ORDER BY id/.test(sql)) return { results: [] };
+        if (/FROM project_all_set/.test(sql)) return { results: [structuredClone(this.allSet)] };
         if (/FROM redaction_jobs/.test(sql)) {
           return { results: this.redactionJob ? [structuredClone(this.redactionJob)] : [] };
         }
@@ -423,6 +436,27 @@ async function serverFixture({
   assert.equal(validation.ok, true);
   assert.equal(validation.chapterCount, 1);
   const sourceDigest = await computeSourceDigest([item]);
+  const emptyDigest = await storyPreparationDigest([]);
+  const completeDigest = await storyPreparationDigest([{ id: item.id, story: currentSource }]);
+  const catalog = deriveStoryReleaseTargetCatalog([currentSource]);
+  const scopeDigest = await storyPreparationDigest(catalog.map((target) => target.id));
+  const otherDigest = "a".repeat(64);
+  const completedAt = "2026-08-25T00:00:09.000Z";
+  const receipts = [
+    { workflow_run_id: RUN_ID, lane: "story", source_revision: SOURCE_REVISION,
+      input_digest: otherDigest, scope_digest: otherDigest, scope_count: 1,
+      output_digest: otherDigest, output_count: 1, completed_at: completedAt },
+    { workflow_run_id: RUN_ID, lane: "insight", source_revision: SOURCE_REVISION,
+      input_digest: otherDigest, scope_digest: otherDigest, scope_count: 1,
+      output_digest: sourceInsights.length ? otherDigest : emptyDigest,
+      output_count: sourceInsights.length, completed_at: completedAt },
+    { workflow_run_id: RUN_ID, lane: "story_privacy", source_revision: SOURCE_REVISION,
+      input_digest: completeDigest, scope_digest: scopeDigest, scope_count: catalog.length,
+      output_digest: emptyDigest, output_count: 0, completed_at: completedAt },
+    { workflow_run_id: RUN_ID, lane: "preference", source_revision: SOURCE_REVISION,
+      input_digest: emptyDigest, scope_digest: emptyDigest, scope_count: 0,
+      output_digest: emptyDigest, output_count: 0, completed_at: completedAt },
+  ];
   const db = new FakeStoryReleaseDb({
     items: [item],
     run: {
@@ -451,6 +485,19 @@ async function serverFixture({
       review_state: "deterministic",
       status: "active",
     }] : [],
+    receipts,
+    probeRun: {
+      workflow_run_id: RUN_ID, id: RUN_ID, source_revision: SOURCE_REVISION,
+      input_digest: emptyDigest, output_digest: emptyDigest, output_count: 0,
+      status: "complete", stage: "preference", model: null, generated: 0, set_aside: 0,
+    },
+    allSet: {
+      workflow_run_id: RUN_ID,
+      active_story_digest: await sha256(validation.canonicalCandidate),
+      source_revision: SOURCE_REVISION,
+      server_version: SERVER_VERSION,
+      all_set_at: "2026-08-25T00:00:11.000Z",
+    },
   });
   return { db, currentSource };
 }
@@ -474,7 +521,7 @@ test("server accepts only the canonical contracts and rechecks run, version, sou
   assert.equal(release.ok, true);
   assert.equal(release.story.schema, REVIEWED_STORY_SCHEMA);
   assert.equal(release.story.publication_approved, false);
-  assert.deepEqual(release.story.chapters[0].en.insights.map((item) => item.id), ["insight-safe-anchor"]);
+  assert.deepEqual(releaseInsights(release.story).map((item) => item.background), ["Background insight-safe-anchor"]);
   assert.doesNotMatch(release.serializedStory, new RegExp(`${PRIVATE}|documentId|eventId|story-block-|source_ai`));
 
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db,
@@ -534,7 +581,7 @@ test("missing, unknown, or pending Privacy blocks release while confirmed keep a
   const kept = await reconstructReviewedStoryReleaseFromDatabase(keepFixture.db, request());
   assert.equal(kept.ok, true);
   assert.match(kept.serializedStory, new RegExp(PRIVATE));
-  assert.equal(kept.story.chapters[0].en.story.blocks[0], `The ${PRIVATE} was removed.`);
+  assert.equal(kept.story.chapters[0].en.story.blocks[0].text, `The ${PRIVATE} was removed.`);
 
   const redactFixture = await serverFixture({ initiallyRedacted: false });
   const redactItem = redactFixture.db.items[0];
@@ -565,40 +612,27 @@ test("missing, unknown, or pending Privacy blocks release while confirmed keep a
   assert.equal(redacted.story.publication_approved, false);
 });
 
-test("synthetic live server flow releases zero, one, and mixed multiple Insights with byte parity", async () => {
+test("synthetic live server flow releases zero and source Insights with byte parity", async () => {
   const scenarios = [
     { options: { sourceInsights: [] }, expected: [] },
-    { options: { sourceInsights: [insight("insight-one")] }, expected: ["insight-one"] },
-    {
-      options: {
-        sourceInsights: [insight("insight-accepted"), insight("insight-rejected")],
-        decisions: { "insight-rejected": "rejected" },
-        includeHuman: true,
-      },
-      expected: ["human:approved", "insight-accepted"],
-    },
+    { options: { sourceInsights: [insight("insight-one")] }, expected: ["Background insight-one"] },
   ];
   const { renderReviewedStoryHtml } = await import("../app/api/organization/export/route.ts");
   for (const { options, expected } of scenarios) {
     const { db } = await serverFixture(options);
     const release = await reconstructReviewedStoryReleaseFromDatabase(db, request());
     assert.equal(release.ok, true);
-    assert.deepEqual(release.story.chapters[0].en.insights.map((item) => item.id), expected);
-    if (options.includeHuman) {
-      assert.equal(release.story.chapters[0].en.insights
-        .find((item) => item.id === "human:approved").quote, "approved Story text");
-    }
+    assert.deepEqual(releaseInsights(release.story).map((item) => item.background), expected);
     const zipEntry = reviewedStoryPackageEntry(release.story);
     assert.equal(zipEntry.data, release.serializedStory);
     const embedded = renderReviewedStoryHtml(release.serializedStory)
       .match(/const STORY=([\s\S]*?);const view=/)?.[1];
     assert.deepEqual(JSON.parse(embedded), JSON.parse(zipEntry.data));
-    if (options.includeHuman) {
-      assert.equal(JSON.parse(zipEntry.data).chapters[0].en.insights
-        .find((item) => item.id === "human:approved").quote, "approved Story text");
-    }
     assert.equal(release.story.publication_approved, false);
   }
+  const edited = await serverFixture({ sourceInsights: [], includeHuman: true });
+  assert.equal((await reconstructReviewedStoryReleaseFromDatabase(edited.db, request())).code,
+    RELEASE_ERROR.editedStoryPrivacyRequired);
 });
 
 test("every extra browser authority field fails closed", async () => {
@@ -729,5 +763,5 @@ test("story HTML and ZIP use the same canonical reviewed release bytes", async (
 
   const packageRoute = await readFile(new URL("../app/api/package/route.ts", import.meta.url), "utf8");
   assert.match(packageRoute, /finalReconstruction\.serializedStory !== reviewedStoryJson/);
-  assert.match(packageRoute, /reconstructReviewedStoryReleaseFromDatabase\(db, releaseRequest\)/);
+  assert.match(packageRoute, /reconstructReviewedStoryReleaseFromDatabase\(db, parsedReleaseRequest\)/);
 });

@@ -24,6 +24,28 @@ const activeRedactionsSql = `SELECT id,item_id,document_id,start_offset,end_offs
 const storyItemsSql = `SELECT id,document_id,sequence,event_type,actor_id,actor_type,timestamp,
   content,organization_reason FROM items ORDER BY document_id,sequence,id`;
 
+const preparationReceiptsSql = `SELECT workflow_run_id,lane,source_revision,input_digest,
+  scope_digest,scope_count,output_digest,output_count,completed_at
+  FROM story_preparation_receipts WHERE workflow_run_id=? ORDER BY lane`;
+
+const storyPrivacyCandidatesSql = `SELECT workflow_run_id,candidate_id,candidate_json,
+  decision,decision_version,decided_at FROM story_privacy_candidates
+  WHERE workflow_run_id=? ORDER BY candidate_id`;
+
+const releaseProbeRunSql = `SELECT workflow_run_id,id,source_revision,input_digest,output_digest,
+  output_count,status,stage,model,generated,set_aside,auto_removed_json,started_at,updated_at,
+  completed_at FROM probe_runs WHERE workflow_run_id=?`;
+
+const releaseProbesSql = `SELECT id,document_id,document_kind,event_ids_json,timestamp,signal,
+  score,turns,recap,question,options_json,presentations_json,allow_other,allow_skip,
+  answer_choice,answer_text,answered_at,created_at FROM probes ORDER BY id`;
+
+const releaseBulkSql = `SELECT id,kind,count,question,default_answer,answer,answered_at,
+  evidence_sample_json,presentations_json,created_at FROM probe_bulk_decisions ORDER BY id`;
+
+const allSetSql = `SELECT workflow_run_id,active_story_digest,source_revision,server_version,
+  all_set_at FROM project_all_set WHERE workflow_run_id=?`;
+
 const packageDocumentsSql = `SELECT id,kind,title,source_system,source_timestamp,item_count,
   metadata_json,formatted_summary_json FROM documents ORDER BY source_timestamp,title,id`;
 
@@ -86,6 +108,12 @@ export async function captureStoryReleasePrivacySnapshot(
     db.prepare(storyItemsSql),
     db.prepare(reviewRedactionsSql),
     db.prepare(activeRedactionsSql),
+    db.prepare(preparationReceiptsSql).bind(workflowRunId),
+    db.prepare(storyPrivacyCandidatesSql).bind(workflowRunId),
+    db.prepare(releaseProbeRunSql).bind(workflowRunId),
+    db.prepare(releaseProbesSql),
+    db.prepare(releaseBulkSql),
+    db.prepare(allSetSql).bind(workflowRunId),
   ]);
   const authorityRows = rows(results, 0);
   const runRows = rows(results, 1);
@@ -94,6 +122,12 @@ export async function captureStoryReleasePrivacySnapshot(
   const itemRows = rows(results, 4);
   const redactionReviewRows = rows(results, 5);
   const redactionRows = safeActiveRows(results, 6);
+  const preparationReceiptRows = rows(results, 7);
+  const storyPrivacyCandidateRows = rows(results, 8);
+  const probeRunRows = rows(results, 9);
+  const probeRows = rows(results, 10);
+  const bulkRows = rows(results, 11);
+  const allSetRows = rows(results, 12);
   const value = {
     authorityRows,
     runRows,
@@ -101,6 +135,12 @@ export async function captureStoryReleasePrivacySnapshot(
     redactionJobRows,
     itemRows,
     redactionReviewRows,
+    preparationReceiptRows,
+    storyPrivacyCandidateRows,
+    probeRunRows,
+    probeRows,
+    bulkRows,
+    allSetRows,
   };
   return {
     ...value,
@@ -108,6 +148,8 @@ export async function captureStoryReleasePrivacySnapshot(
     session: sessionRows[0] || null,
     redactionJob: redactionJobRows[0] || null,
     redactionRows,
+    probeRun: probeRunRows[0] || null,
+    allSet: allSetRows[0] || null,
     digest: await snapshotDigest("story", value),
   };
 }

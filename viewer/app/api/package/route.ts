@@ -2,15 +2,14 @@ import { createZip } from "../../../lib/zip.ts";
 import {
   activeRedactionFragments,
   redactKnownFragments,
-  redactKnownValue,
   releaseDocument,
   releaseItem,
   redactionSummary,
 } from "../../../lib/release.mjs";
 import { computeSourceDigest, redactionReleaseError } from "../../../lib/redaction-pass.mjs";
-import { canonicalizeStoredAutoRemoved } from "../../../lib/auto-removed.mjs";
 import {
   capturePackageReleasePrivacySnapshot,
+  captureStoryReleasePrivacySnapshot,
   type ReleaseSnapshotTestOptions,
 } from "../../../lib/release-privacy-snapshot.ts";
 import {
@@ -19,14 +18,16 @@ import {
 } from "../../../lib/story-release.ts";
 import {
   RELEASE_ERROR,
+  parseServerOwnedReleaseRequest,
   reconstructReviewedStoryRelease,
   reconstructReviewedStoryReleaseFromDatabase,
   releaseErrorResponse,
 } from "../../../lib/story-release-server.ts";
 
-const clean = <T,>(value: string, fallback: T): T => {
-  try { return JSON.parse(value) as T; } catch { return fallback; }
-};
+function parseStoredJson(value: unknown) {
+  if (typeof value !== "string" || !value) throw new Error("stored JSON is missing");
+  return JSON.parse(value) as unknown;
+}
 const canonicalId = (prefix: string, index: number) => `${prefix}-${String(index + 1).padStart(6, "0")}`;
 
 type Summary = { primary_project?: string; project_summary?: string };
@@ -42,10 +43,26 @@ type PackageDatabase = Parameters<typeof capturePackageReleasePrivacySnapshot>[0
 
 export async function buildPackageFromDatabase(
   db: PackageDatabase,
-  reviewedStoryJson?: string,
-  releaseRequest?: unknown,
+  reviewedStoryJson: string,
+  releaseRequest: unknown,
   options: ReleaseSnapshotTestOptions = {},
 ) {
+  const parsedReleaseRequest = parseServerOwnedReleaseRequest(releaseRequest);
+  if (!parsedReleaseRequest) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.requestInvalid });
+  }
+  const initialStorySnapshot = await captureStoryReleasePrivacySnapshot(
+    db,
+    parsedReleaseRequest.workflowRunId,
+  );
+  const initialReconstruction = await reconstructReviewedStoryReleaseFromDatabase(
+    db,
+    parsedReleaseRequest,
+  );
+  if (!initialReconstruction.ok) return releaseErrorResponse(initialReconstruction);
+  if (initialReconstruction.serializedStory !== reviewedStoryJson) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
+  }
   const privacySnapshot = await capturePackageReleasePrivacySnapshot(db);
   const redactionJob = privacySnapshot.redactionJob;
   const preliminaryError = redactionReleaseError(
@@ -76,38 +93,43 @@ export async function buildPackageFromDatabase(
   const documentIds = new Map<string, string>();
   const summaries = new Map<string, Summary>();
   let sourceWarningCount = 0;
-  const sourceDocuments: ReleaseDocument[] = documentResult.results.map((row: Record<string, unknown>, index: number) => {
-    const id = canonicalId("document", index);
-    documentIds.set(String(row.id), id);
-    summaries.set(String(row.id), clean<Summary>(String(row.formatted_summary_json || "{}"), {}));
-    const metadata = clean<Record<string, unknown>>(String(row.metadata_json || "{}"), {});
-    const manifest = metadata.manifest && typeof metadata.manifest === "object"
-      ? metadata.manifest as Record<string, unknown>
-      : {};
-    const warnings = Number(metadata.source_warning_count ?? manifest.source_warning_count ?? 0);
-    if (Number.isInteger(warnings) && warnings >= 0) sourceWarningCount += warnings;
-    return releaseDocument(row, id) as ReleaseDocument;
-  });
+  const sourceDocuments: ReleaseDocument[] = [];
+  try {
+    for (const [index, row] of documentResult.results.entries()) {
+      const id = canonicalId("document", index);
+      documentIds.set(String(row.id), id);
+      const summary = parseStoredJson(row.formatted_summary_json);
+      const metadata = parseStoredJson(row.metadata_json);
+      if (!summary || typeof summary !== "object" || Array.isArray(summary)
+        || !metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+        throw new Error("stored document JSON has invalid shape");
+      }
+      summaries.set(String(row.id), summary as Summary);
+      const metadataRecord = metadata as Record<string, unknown>;
+      const manifest = metadataRecord.manifest && typeof metadataRecord.manifest === "object"
+        && !Array.isArray(metadataRecord.manifest)
+        ? metadataRecord.manifest as Record<string, unknown>
+        : {};
+      const warnings = Number(metadataRecord.source_warning_count ?? manifest.source_warning_count ?? 0);
+      if (!Number.isInteger(warnings) || warnings < 0) throw new Error("invalid source warning count");
+      sourceWarningCount += warnings;
+      sourceDocuments.push(releaseDocument(row, id) as ReleaseDocument);
+    }
+  } catch {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
+  }
   const redactionsByItem = new Map<string, Record<string, unknown>[]>();
   for (const span of redactionResult.results as Record<string, unknown>[]) {
     const itemId = String(span.item_id);
     redactionsByItem.set(itemId, [...(redactionsByItem.get(itemId) || []), span]);
   }
 
-  const evidenceIds = new Map<string, string>();
-  const unqualifiedEvidenceIds = new Map<string, string | null>();
   const sensitiveFragments: Array<{ text: string; category: string }> = [];
   let releaseError = "";
   const items = itemResult.results.map((row: Record<string, unknown>, index: number) => {
     const id = canonicalId("event", index);
     const originalId = String(row.id);
     const originalDocumentId = String(row.document_id);
-    const separator = originalId.indexOf(":");
-    const bareId = separator >= 0 ? originalId.slice(separator + 1) : originalId;
-    evidenceIds.set(`${originalDocumentId}:${bareId}`, id);
-    const existingEvidenceId = unqualifiedEvidenceIds.get(bareId);
-    if (existingEvidenceId === undefined) unqualifiedEvidenceIds.set(bareId, id);
-    else if (existingEvidenceId !== id) unqualifiedEvidenceIds.set(bareId, null);
     try {
       const spans = redactionsByItem.get(originalId) || [];
       sensitiveFragments.push(...activeRedactionFragments(String(row.content || ""), spans));
@@ -154,17 +176,20 @@ export async function buildPackageFromDatabase(
     Array.from(summaries.values()).find((summary) => summary.project_summary)
       ?.project_summary || ""
   );
-  const reviewedStory = reviewedStoryJson
-    ? sanitizeReviewedStoryRelease(clean<unknown>(reviewedStoryJson, null))
-    : null;
-  if (reviewedStoryJson && !reviewedStory) {
+  let reviewedStory: ReturnType<typeof sanitizeReviewedStoryRelease> = null;
+  try {
+    reviewedStory = sanitizeReviewedStoryRelease(parseStoredJson(reviewedStoryJson));
+  } catch {
+    reviewedStory = null;
+  }
+  if (!reviewedStory) {
     return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
   }
-  const reviewedTimeline = reviewedStory?.chapters.map((chapter) => ({
-    id: chapter.key,
+  const reviewedTimeline = reviewedStory.chapters.map((chapter, index) => ({
+    id: canonicalId("chapter", index),
     summary: chapter.en.title,
-    content: [chapter.en.overview, ...chapter.en.story.blocks].join("\n\n"),
-  })) ?? [];
+    content: [chapter.en.overview, ...chapter.en.story.blocks.map((block) => block.text)].join("\n\n"),
+  }));
   const projectNames = Array.from(new Set(releaseItems.map((item) => item.organization_category)));
   const projects = projectNames.map((name) => ({
     name,
@@ -181,7 +206,6 @@ export async function buildPackageFromDatabase(
     },
   ]));
   const projectMap = {
-    schema_version: "1",
     primary_project: primaryProject,
     summary: projectSummary,
     projects,
@@ -189,63 +213,23 @@ export async function buildPackageFromDatabase(
   };
   const privacy = redactionSummary(redactionResult.results, redactionJob);
 
-  let autoRemoved = { total: 0, reversible: true, categories: [] as Array<{ kind: string; count: number }> };
-  if (probeRun) {
-    try {
-      autoRemoved = canonicalizeStoredAutoRemoved(String(probeRun.auto_removed_json || ""));
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "invalid aggregate";
-      return Response.json(
-        { error: `ZIP export blocked: invalid stored auto_removed: ${detail}` },
-        { status: 409 },
-      );
-    }
-  }
-
   const probes = probeResult.results.map((row: Record<string, unknown>, index: number) => {
-    const originalDocumentId = String(row.document_id);
-    const eventIds = clean<string[]>(String(row.event_ids_json || "[]"), [])
-      .map((eventId) => evidenceIds.get(`${originalDocumentId}:${eventId}`))
-      .filter((eventId): eventId is string => Boolean(eventId));
     const choice = row.answer_choice ? String(row.answer_choice) : null;
     return {
       id: canonicalId("probe", index),
-      document_id: documentIds.get(originalDocumentId) || "document-unknown",
-      document_kind: row.document_kind || "trajectory",
-      event_ids: eventIds,
-      timestamp: row.timestamp || null,
-      signal: row.signal,
-      score: Number(row.score || 0),
-      turns: Number(row.turns || 0),
-      recap: safeText(row.recap),
       question: safeText(row.question),
-      options: redactKnownValue(clean(String(row.options_json || "[]"), []), sensitiveFragments),
-      allow_other: true,
-      allow_skip: true,
       answer: choice
         ? { choice: choice === "none" ? "skip" : choice, ...(choice === "other" ? { text: safeText(row.answer_text) } : {}) }
         : null,
     };
   });
   const preferenceProbes = {
-    schema_version: "1",
-    primary_project: primaryProject,
-    generated_from: "project-map.json",
-    auto_removed: autoRemoved,
-    bulk_decisions: bulkResult.results.map((row: Record<string, unknown>, index: number) => ({
+    bulkDecisions: bulkResult.results.map((row: Record<string, unknown>, index: number) => ({
       id: canonicalId("bulk-decision", index),
-      kind: safeText(row.kind),
-      count: Number(row.count || 0),
       question: safeText(row.question),
-      default: "keep",
       answer: row.answer ? safeText(row.answer) : null,
-      evidence_sample: clean<string[]>(String(row.evidence_sample_json || "[]"), [])
-        .map((eventId) => evidenceIds.get(String(eventId))
-          ?? unqualifiedEvidenceIds.get(String(eventId)))
-        .filter((eventId): eventId is string => Boolean(eventId)),
     })),
     probes,
-    set_aside: Number(probeRun?.set_aside || 0),
   };
 
   const exportedAt = options.exportedAt ?? new Date().toISOString();
@@ -261,7 +245,6 @@ export async function buildPackageFromDatabase(
   };
   const manifest = {
     format: "oxygen-contribution",
-    version: 1,
     exported_at: exportedAt,
     publication_approved: false,
     document_count: documents.length,
@@ -293,21 +276,24 @@ export async function buildPackageFromDatabase(
       data: JSON.stringify(preferenceProbes, null, 2),
     });
   }
-  if (reviewedStoryJson) entries.push({
+  entries.push({
     name: "story/reviewed-project-story.json",
     data: reviewedStoryJson,
   });
   const zip = createZip(entries);
   await options.beforeFinalPrivacyCheck?.();
-  if (reviewedStoryJson && releaseRequest !== undefined) {
-    const finalReconstruction = await reconstructReviewedStoryReleaseFromDatabase(db, releaseRequest);
-    if (!finalReconstruction.ok) return releaseErrorResponse(finalReconstruction);
-    if (finalReconstruction.serializedStory !== reviewedStoryJson) {
-      return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
-    }
+  const finalReconstruction = await reconstructReviewedStoryReleaseFromDatabase(db, parsedReleaseRequest);
+  if (!finalReconstruction.ok) return releaseErrorResponse(finalReconstruction);
+  if (finalReconstruction.serializedStory !== reviewedStoryJson) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
   }
   const finalPrivacySnapshot = await capturePackageReleasePrivacySnapshot(db);
-  if (finalPrivacySnapshot.digest !== privacySnapshot.digest) {
+  const finalStorySnapshot = await captureStoryReleasePrivacySnapshot(
+    db,
+    parsedReleaseRequest.workflowRunId,
+  );
+  if (finalPrivacySnapshot.digest !== privacySnapshot.digest
+    || finalStorySnapshot.digest !== initialStorySnapshot.digest) {
     return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.privacyConflict });
   }
   return new Response(zip, { headers: {
@@ -317,13 +303,16 @@ export async function buildPackageFromDatabase(
   } });
 }
 
-async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown) {
+async function buildPackage(reviewedStoryJson: string, releaseRequest: unknown) {
   const { getLocalDatabase } = await import("../../../db/index.ts");
   return buildPackageFromDatabase(await getLocalDatabase(), reviewedStoryJson, releaseRequest);
 }
 
 export async function GET() {
-  return buildPackage();
+  return Response.json({ error: "Method not allowed" }, {
+    status: 405,
+    headers: { allow: "POST" },
+  });
 }
 
 export async function POST(request: Request) {

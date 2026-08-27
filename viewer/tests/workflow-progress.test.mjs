@@ -97,7 +97,9 @@ test("workflow progress derives completed, current, next, waiting, and blocked s
   assert.equal(reviewing.requiresHumanAction, true);
   assert.deepEqual(reviewing.stages.map((stage) => stage.id), WORKFLOW_STAGE_IDS);
 
-  const handoff = withHumanReviewProgress(reviewing, 14, 14);
+  assert.equal(withHumanReviewProgress(reviewing, 14, 14).currentStageId, "review",
+    "Chapter count alone is not project All set authority");
+  const handoff = withHumanReviewProgress(reviewing, 14, 14, true);
   assert.equal(handoff.currentStageId, "handoff");
   assert.equal(handoff.safeStatusCode, "release_handoff_ready");
   assert.equal(handoff.completedStages, 5);
@@ -110,7 +112,7 @@ test("workflow progress is a strict sanitized operational projection", () => {
     storySourceSchema: "oxygen.story", storySessionSchema: "oxygen.story-review-session",
   }));
   assert.deepEqual(Object.keys(state).sort(), [
-    "completedStages", "currentStageId", "requiresHumanAction", "safeStatusCode", "stages",
+    "allSetConfirmed", "completedStages", "currentStageId", "requiresHumanAction", "safeStatusCode", "stages",
     "status", "storyGenerationStatus", "storySessionSchema", "storySourceSchema",
     "totalStages", "updatedAt", "workflowRunId",
   ]);

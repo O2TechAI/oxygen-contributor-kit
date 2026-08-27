@@ -37,8 +37,19 @@ type WorkflowRunRow = {
   story_generation_status: string;
   story_generation_completed: number;
   story_generation_total: number;
+  story_source_revision: number;
+  active_story_digest?: string;
   updated_at: string;
 };
+
+type AllSetRow = {
+  workflow_run_id?: string;
+  active_story_digest?: string;
+  source_revision?: number;
+  server_version?: number;
+};
+
+type SessionBindingRow = { server_version?: number; state_json?: string };
 
 /** Read the one sanitized persisted workflow projection used by both the
  * initial server render and the polling API. No Story or Evidence payload is
@@ -61,9 +72,9 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
   }
   const runQuery = db.prepare(`SELECT id,target_confirmed,collection_status,collection_completed,
       collection_total,story_generation_status,story_generation_completed,
-      story_generation_total,updated_at
+      story_generation_total,story_source_revision,active_story_digest,updated_at
       FROM workflow_runs WHERE id=?`).bind(authority.workflowRunId).first<WorkflowRunRow>();
-  const [items, documents, organization, redaction, run] = await Promise.all([
+  const [items, documents, organization, redaction, run, allSet, sessionBinding] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN organization_category IS NOT NULL THEN 1 ELSE 0 END) AS completed
       FROM items`).first<CountRow>(),
@@ -71,6 +82,10 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     db.prepare("SELECT id,status,updated_at FROM organization_jobs ORDER BY updated_at DESC LIMIT 1").first<JobRow>(),
     db.prepare("SELECT id,status,updated_at FROM redaction_jobs ORDER BY started_at DESC LIMIT 1").first<JobRow>(),
     runQuery,
+    db.prepare(`SELECT workflow_run_id,active_story_digest,source_revision,server_version
+      FROM project_all_set WHERE workflow_run_id=?`).bind(authority.workflowRunId).first<AllSetRow>(),
+    db.prepare(`SELECT server_version,state_json FROM story_review_sessions WHERE workflow_run_id=?`)
+      .bind(authority.workflowRunId).first<SessionBindingRow>(),
   ]);
   const updatedAt = [run?.updated_at, organization?.updated_at, redaction?.updated_at]
     .filter((value): value is string => Boolean(value))
@@ -79,6 +94,20 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
   const activeContract = run?.story_generation_status === "ready_for_human_review"
     ? await readActiveStoryReviewContract(db, authority.workflowRunId)
     : null;
+  let storedSourceRevision: number | null = null;
+  try {
+    const stored = JSON.parse(String(sessionBinding?.state_json || ""));
+    storedSourceRevision = Number.isSafeInteger(stored?.sourceRevision)
+      ? Number(stored.sourceRevision) : null;
+  } catch {
+    storedSourceRevision = null;
+  }
+  const allSetConfirmed = Boolean(run?.active_story_digest
+    && allSet?.workflow_run_id === authority.workflowRunId
+    && allSet.active_story_digest === run.active_story_digest
+    && Number(allSet.source_revision) === Number(run.story_source_revision)
+    && Number(allSet.server_version) === Number(sessionBinding?.server_version)
+    && storedSourceRevision === Number(run.story_source_revision));
   return deriveWorkflowProgress({
     workflowRunId: run?.id || authority.workflowRunId,
     targetConfirmed: Boolean(run?.target_confirmed),
@@ -95,6 +124,7 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     storyGenerationTotal: Number(run?.story_generation_total || 0),
     storySourceSchema: activeContract?.storySourceSchema || null,
     storySessionSchema: activeContract?.storySessionSchema || null,
+    allSetConfirmed,
     updatedAt,
   });
 }

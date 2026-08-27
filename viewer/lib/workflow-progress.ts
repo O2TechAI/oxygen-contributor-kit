@@ -58,6 +58,7 @@ export type WorkflowProgressState = {
   storyGenerationStatus: StoryGenerationStatus;
   storySourceSchema: StorySourceSchema | null;
   storySessionSchema: StorySessionSchema | null;
+  allSetConfirmed?: boolean;
   blockedReasonCode?:
     | "COLLECTION_FAILED"
     | "COLLECTION_EMPTY"
@@ -82,6 +83,7 @@ export type WorkflowFacts = {
   storyGenerationTotal?: number;
   storySourceSchema?: StorySourceSchema | null;
   storySessionSchema?: StorySessionSchema | null;
+  allSetConfirmed?: boolean;
   updatedAt?: string | null;
 };
 
@@ -127,6 +129,7 @@ function state(
     storyGenerationStatus: normalizeStoryGenerationStatus(facts.storyGenerationStatus),
     storySourceSchema: storyContract ? facts.storySourceSchema! : null,
     storySessionSchema: storyContract ? facts.storySessionSchema! : null,
+    allSetConfirmed: Boolean(facts.allSetConfirmed),
     ...(blockedReasonCode ? { blockedReasonCode } : {}),
   };
 }
@@ -279,11 +282,12 @@ export function withHumanReviewProgress(
   progress: WorkflowProgressState,
   confirmedChapters: number,
   totalChapters: number,
+  allSetConfirmed = progress.allSetConfirmed,
 ): WorkflowProgressState {
   if (progress.currentStageId !== "review" || progress.status === "blocked") return progress;
   const total = nonNegativeInteger(totalChapters);
   const confirmed = Math.min(nonNegativeInteger(confirmedChapters), total);
-  if (!total || confirmed < total) {
+  if (!total || confirmed < total || !allSetConfirmed) {
     return {
       ...progress,
       stages: progress.stages.map((stage) => stage.id === "review"

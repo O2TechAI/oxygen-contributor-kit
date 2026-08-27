@@ -152,12 +152,10 @@ export function redactionSummary(redactions, job) {
   }
   return {
     schema: "oxygen.ai-redaction-summary",
-    backend: "ai",
-    model: job?.model || null,
     status: job?.status || "missing",
     active_spans: redactions.length,
     categories,
     rejected: Number(job?.rejected || 0),
-    notice: "Best-effort AI redaction; original-contributor final review is required before release.",
+    notice: "Contributor-reviewed redaction summary for this local release.",
   };
 }

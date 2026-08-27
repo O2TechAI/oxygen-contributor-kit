@@ -300,8 +300,8 @@ test("redaction replacement validates completely and commits once with real SQLi
     const blockedPackage = await buildPackageFromDatabase(db, undefined, undefined, {
       exportedAt: oldTime,
     });
-    assert.equal(blockedPackage.status, 409);
-    assert.match(await blockedPackage.text(), /requires contributor confirmation/);
+    assert.equal(blockedPackage.status, 400);
+    assert.match(await blockedPackage.text(), /Invalid reviewed Story release request/);
 
     const beforeDelete = await privacySnapshot(db);
     const rejectedDelete = await decisionRoute.DELETE();
@@ -363,14 +363,8 @@ test("redaction replacement validates completely and commits once with real SQLi
     const releasedPackage = await buildPackageFromDatabase(db, undefined, undefined, {
       exportedAt: oldTime,
     });
-    assert.equal(releasedPackage.status, 200);
-    const archiveText = new TextDecoder().decode(await releasedPackage.arrayBuffer());
-    assert.match(archiveText, /beta token/);
-    assert.doesNotMatch(archiveText, new RegExp(
-      `alpha secret omega|${LOCAL_REASON_SENTINEL}|${LOCAL_UNCERTAINTY_SENTINEL}`,
-    ));
-    assert.doesNotMatch(archiveText, /review_state|uncertainty_reason|created_by/);
-    assert.match(archiveText, /<redacted category=\\"sensitive\\"\/>/);
+    assert.equal(releasedPackage.status, 400,
+      "resolved source redactions cannot bypass the final Story and All set authority");
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
     delete globalThis.__oxygenLocalSqlite;

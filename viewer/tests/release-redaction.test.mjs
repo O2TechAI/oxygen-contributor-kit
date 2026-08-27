@@ -278,7 +278,8 @@ test("package route is gated and never selects original event JSON", async () =>
   assert.match(route, /privacy\/redaction-summary\.json/);
   assert.match(route, /preference-probes\.json/);
   assert.match(route, /safeTextCache\.has\(source\)/);
-  assert.match(route, /turns: Number\(row\.turns/);
+  assert.doesNotMatch(route, /turns: Number\(row\.turns|event_ids|evidence_sample/);
+  assert.match(route, /question: safeText\(row\.question\)/);
   assert.match(route, /events: projectEvents/);
   assert.match(route, /source_types: sourceTypes/);
   assert.match(route, /details_omitted_for_privacy/);

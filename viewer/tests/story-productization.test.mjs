@@ -79,7 +79,8 @@ test("the dynamic source completes through review and deterministic release pack
   assert.equal(release.schema, REVIEWED_STORY_SCHEMA);
   assert.equal(release.publication_approved, false);
   assert.equal(release.chapters.length, 3);
-  assert.deepEqual(release.chapters.map((chapter) => chapter.en.insights.length), [0, 1, 2]);
+  assert.deepEqual(release.chapters.map((chapter) => chapter.en.story.blocks
+    .reduce((total, block) => total + block.insights.length, 0)), [0, 1, 2]);
   assert.equal(JSON.stringify(release).includes("documentId"), false);
   assert.equal(JSON.stringify(release).includes("eventId"), false);
 

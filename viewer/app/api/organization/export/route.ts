@@ -1,8 +1,4 @@
 import {
-  REVIEWED_STORY_SCHEMA,
-  type ReviewedStoryRelease,
-} from "../../../../lib/story-release.ts";
-import {
   RELEASE_ERROR,
   reconstructReviewedStoryRelease,
   releaseErrorResponse,
@@ -14,26 +10,18 @@ function safeSerializedStory(value: string) {
 
 export function renderReviewedStoryHtml(serializedStory: string) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Oxygen reviewed project story</title><style>
-  :root{--ink:#191b1a;--muted:#70756e;--paper:#f5f3ed;--panel:#fffef9;--line:#dedbd2;--acid:#d8ff46}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.65 Arial,sans-serif}header{background:#fffef9;border-bottom:1px solid var(--line);padding:18px 5vw;display:flex;align-items:center;gap:16px}header b{font-size:20px}main{max-width:880px;margin:auto;padding:36px 5vw}.chapter{border-bottom:1px solid var(--line);padding:12px 0 34px;margin-bottom:34px}.meta{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}h1,h2{font-family:Georgia,serif}.story p{white-space:pre-wrap}.insight{border-left:3px solid #7868d8;padding-left:14px;margin:24px 0}.empty{color:var(--muted)}</style></head><body>
+  :root{--ink:#191b1a;--muted:#70756e;--paper:#f5f3ed;--panel:#fffef9;--line:#dedbd2;--violet:#7868d8}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.65 Arial,sans-serif}header{background:#fffef9;border-bottom:1px solid var(--line);padding:18px 5vw;display:flex;align-items:center;gap:16px}header b{font-size:20px}main{max-width:1120px;margin:auto;padding:36px 5vw}.chapter{border-bottom:1px solid var(--line);padding:12px 0 34px;margin-bottom:34px}.meta{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}h1,h2{font-family:Georgia,serif}.story-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.62fr);gap:22px;align-items:start;margin:20px 0}.story-copy{white-space:pre-wrap;margin:0}.insights{display:grid;gap:12px}.insight{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--violet);border-radius:10px;padding:14px}.insight p{margin:8px 0}.empty{color:var(--muted)}@media(max-width:720px){.story-row{grid-template-columns:1fr}.insights{margin-top:4px}}</style></head><body>
   <header><b>O₂ Oxygen</b><span>Human-confirmed Final Release Memory · not publication approval</span></header><main id="view"></main>
   <script>const STORY=${safeSerializedStory(serializedStory)};const view=document.getElementById('view');const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const render=c=>{const x=c.en;return '<article class="chapter"><div class="meta">'+esc(c.phase.label)+' · Revision '+c.revision+(c.kind?' · '+esc(c.kind):'')+'</div><h1>'+esc(x.title)+'</h1><p>'+esc(x.overview)+'</p>'+x.people.map(p=>'<p><b>'+esc(p.releaseLabel)+'</b> · '+esc(p.role)+' — '+esc(p.description)+'</p>').join('')+'<section class="story">'+x.story.blocks.map(p=>'<p>'+esc(p)+'</p>').join('')+(x.story.uncertainty?'<p>'+esc(x.story.uncertainty)+'</p>':'')+'</section>'+x.insights.map(i=>'<aside class="insight">'+(i.title?'<b>'+esc(i.title)+'</b>':'')+'<p><b>Background</b> '+esc(i.background)+'</p><p><b>Quote</b> '+esc(i.quote)+'</p><p><b>Directly Acquired Experience</b> '+esc(i.directlyAcquiredExperience)+'</p><p><b>Principle</b> '+esc(i.principle)+'</p></aside>').join('')+'</article>'};
+  const card=i=>'<aside class="insight">'+(i.title?'<b>'+esc(i.title)+'</b>':'')+'<p><b>Background</b> '+esc(i.background)+'</p><p><b>Quote</b> '+esc(i.quote)+'</p><p><b>Directly Acquired Experience</b> '+esc(i.directlyAcquiredExperience)+'</p><p><b>Principle</b> '+esc(i.principle)+'</p></aside>';
+  const render=c=>{const x=c.en;return '<article class="chapter"><div class="meta">'+esc(c.phase)+(c.kind?' · '+esc(c.kind):'')+'</div><h1>'+esc(x.title)+'</h1><p>'+esc(x.overview)+'</p>'+(x.transition?'<p>'+esc(x.transition.before)+' → '+esc(x.transition.after)+'</p>':'')+x.people.map(p=>'<p><b>'+esc(p.releaseLabel)+'</b> · '+esc(p.role)+' — '+esc(p.description)+'</p>').join('')+'<section class="story">'+x.story.blocks.map(b=>'<div class="story-row"><p class="story-copy">'+esc(b.text)+'</p><div class="insights">'+b.insights.map(card).join('')+'</div></div>').join('')+(x.story.uncertainty?'<p>'+esc(x.story.uncertainty)+'</p>':'')+'</section></article>'};
   if(!STORY.chapters.length){view.innerHTML='<p class="empty">No Chapter has completed human review yet.</p>'}else{view.innerHTML=STORY.chapters.map(render).join('')}</script></body></html>`;
 }
 
-const emptyStory = (): ReviewedStoryRelease => ({
-  schema: REVIEWED_STORY_SCHEMA,
-  publication_approved: false,
-  chapters: [],
-});
-
 export async function GET() {
-  return new Response(renderReviewedStoryHtml(JSON.stringify(emptyStory())), {
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "content-disposition": 'attachment; filename="oxygen-reviewed-story.html"',
-      "cache-control": "no-store",
-    },
+  return Response.json({ error: "Method not allowed" }, {
+    status: 405,
+    headers: { allow: "POST" },
   });
 }
 

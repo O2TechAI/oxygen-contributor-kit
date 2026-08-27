@@ -178,7 +178,7 @@ test("Story edit and review data survive Apply, canonical session JSON, hydratio
   assert.equal(release.chapters.length, 1);
 
   const chapter = release.chapters[0];
-  assert.deepEqual(chapter.phase, { id: "proof", label: "Final Proof" });
+  assert.equal(chapter.phase, "Final Proof");
   assert.equal(chapter.en.title, source.title);
   assert.equal(chapter.en.overview, source.overview);
   assert.deepEqual(chapter.en.people, [{
@@ -186,7 +186,7 @@ test("Story edit and review data survive Apply, canonical session JSON, hydratio
     role: "Human reviewer",
     description: "Confirmed the final unversioned Story.",
   }]);
-  assert.deepEqual(chapter.en.story.blocks, [
+  assert.deepEqual(chapter.en.story.blocks.map((block) => block.text), [
     "The scene established a safe baseline.",
     "The first reconstruction preserved the observed turn.",
     "The reviewed reconstruction linked the turn to the final decision.",
@@ -194,13 +194,10 @@ test("Story edit and review data survive Apply, canonical session JSON, hydratio
     "The outcome made the final release path explicit.",
   ]);
   assert.equal(chapter.en.story.uncertainty, "The proof does not grant publication approval.");
-  assert.deepEqual(chapter.en.insights.map(({ id, quote }) => ({ id, quote })), [{
-    id: "ai:detail-proof",
-    quote: "The reviewed Detail recorded the exact bounded result.",
-  }, {
-    id: "human:scene-proof",
-    quote: "safe baseline",
-  }]);
+  assert.deepEqual(chapter.en.story.blocks.flatMap((block) => block.insights.map(({ quote }) => quote)), [
+    "safe baseline",
+    "The reviewed Detail recorded the exact bounded result.",
+  ]);
   assert.deepEqual(buildReviewedStoryRelease([source], { [source.key]: confirmed }), release);
 });
 
@@ -212,7 +209,8 @@ test("the same canonical path preserves a sparse zero-Insight Chapter", () => {
   const confirmed = markChapterReady(applied.state, context(source, applied.state));
   const session = createStoryReviewSession(workflowRunId, { [source.key]: confirmed }, {}, "2038-08-27T00:00:00.000Z");
   const hydrated = hydrateStoryReviewSession(JSON.parse(JSON.stringify(session)), workflowRunId, [source]);
-  assert.deepEqual(buildReviewedStoryRelease([source], hydrated.chapterReviews).chapters[0].en.insights, []);
+  assert.deepEqual(buildReviewedStoryRelease([source], hydrated.chapterReviews).chapters[0].en.story.blocks
+    .flatMap((block) => block.insights), []);
 });
 
 test("invalid and foreign Story targets fail closed before or during hydration", () => {

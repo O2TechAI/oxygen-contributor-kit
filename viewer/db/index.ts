@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const statements = [
   `CREATE TABLE IF NOT EXISTS documents (
@@ -162,6 +163,13 @@ const statements = [
     ),
     PRIMARY KEY (workflow_run_id, candidate_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS project_all_set (
+    workflow_run_id TEXT PRIMARY KEY,
+    active_story_digest TEXT NOT NULL,
+    source_revision INTEGER NOT NULL CHECK(source_revision > 0),
+    server_version INTEGER NOT NULL CHECK(server_version > 0),
+    all_set_at TEXT NOT NULL
+  )`,
 ];
 
 type Row = Record<string, unknown>;
@@ -172,9 +180,11 @@ const ordinaryRow = <T>(row: Row): T => ({ ...row }) as T;
 class LocalStatement {
   private values: unknown[] = [];
   private readonly statement: StatementSync;
+  private readonly schedule: <T>(operation: () => T) => Promise<T>;
 
-  constructor(statement: StatementSync) {
+  constructor(statement: StatementSync, schedule: <T>(operation: () => T) => Promise<T>) {
     this.statement = statement;
+    this.schedule = schedule;
   }
 
   bind(...values: unknown[]) {
@@ -183,16 +193,20 @@ class LocalStatement {
   }
 
   async first<T = Row>(): Promise<T | null> {
-    const row = this.statement.get(...(this.values as never[])) as Row | undefined;
-    return row ? ordinaryRow<T>(row) : null;
+    return this.schedule(() => {
+      const row = this.statement.get(...(this.values as never[])) as Row | undefined;
+      return row ? ordinaryRow<T>(row) : null;
+    });
   }
 
   async all<T = Row>(): Promise<{ results: T[] }> {
-    return { results: this.statement.all(...(this.values as never[])).map(ordinaryRow<T>) };
+    return this.schedule(() => ({
+      results: this.statement.all(...(this.values as never[])).map(ordinaryRow<T>),
+    }));
   }
 
   async run() {
-    return this.runSync();
+    return this.schedule(() => this.runSync());
   }
 
   execute(): StatementResult {
@@ -213,25 +227,60 @@ class LocalStatement {
 
 class LocalDatabase {
   private readonly database: DatabaseSync;
+  private readonly transactionContext = new AsyncLocalStorage<boolean>();
+  private transactionTail: Promise<void> = Promise.resolve();
 
   constructor(database: DatabaseSync) {
     this.database = database;
   }
 
   prepare(sql: string) {
-    return new LocalStatement(this.database.prepare(sql));
+    return new LocalStatement(this.database.prepare(sql), (operation) => this.serialized(operation));
   }
 
   async batch(statements: LocalStatement[]) {
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
-      const results = statements.map((statement) => statement.execute());
-      this.database.exec("COMMIT");
-      return results;
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
+    if (this.transactionContext.getStore()) {
+      return statements.map((statement) => statement.execute());
     }
+    return this.exclusive(async () => {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        const results = statements.map((statement) => statement.execute());
+        this.database.exec("COMMIT");
+        return results;
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
+  async transaction<T>(operation: () => Promise<T> | T): Promise<T> {
+    if (this.transactionContext.getStore()) return operation();
+    return this.exclusive(async () => {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        const value = await this.transactionContext.run(true, operation);
+        this.database.exec("COMMIT");
+        return value;
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
+  private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.transactionTail;
+    let release = () => {};
+    this.transactionTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await operation(); } finally { release(); }
+  }
+
+  private serialized<T>(operation: () => T): Promise<T> {
+    if (this.transactionContext.getStore()) return Promise.resolve(operation());
+    return this.exclusive(async () => operation());
   }
 }
 
