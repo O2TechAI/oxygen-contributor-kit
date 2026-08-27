@@ -1,5 +1,4 @@
 import { createZip } from "../../../lib/zip.ts";
-import { selectProjectTimeline } from "../../../lib/timeline.ts";
 import {
   activeRedactionFragments,
   redactKnownFragments,
@@ -16,6 +15,7 @@ import {
 } from "../../../lib/release-privacy-snapshot.ts";
 import {
   releaseOrganizationReason,
+  sanitizeReviewedStoryRelease,
 } from "../../../lib/story-release.ts";
 import {
   RELEASE_ERROR,
@@ -154,22 +154,23 @@ export async function buildPackageFromDatabase(
     Array.from(summaries.values()).find((summary) => summary.project_summary)
       ?.project_summary || ""
   );
+  const reviewedStory = reviewedStoryJson
+    ? sanitizeReviewedStoryRelease(clean<unknown>(reviewedStoryJson, null))
+    : null;
+  if (reviewedStoryJson && !reviewedStory) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
+  }
+  const reviewedTimeline = reviewedStory?.chapters.map((chapter) => ({
+    id: chapter.key,
+    summary: chapter.en.title,
+    content: [chapter.en.overview, ...chapter.en.story.blocks].join("\n\n"),
+  })) ?? [];
   const projectNames = Array.from(new Set(releaseItems.map((item) => item.organization_category)));
   const projects = projectNames.map((name) => ({
     name,
     primary: name === primaryProject,
     event_count: releaseItems.filter((item) => item.organization_category === name).length,
-    timeline: selectProjectTimeline(releaseItems
-      .filter((item) => item.organization_category === name && ["message", "record"].includes(item.event_type))
-      .map((item) => ({
-        id: item.id,
-        sequence: item.sequence,
-        timestamp: item.timestamp || undefined,
-        project: item.organization_category,
-        summary: item.organization_reason,
-        content: item.content,
-        document_id: item.document_id,
-      }))),
+    timeline: name === primaryProject ? reviewedTimeline : [],
   }));
   const projectEvents = Object.fromEntries(releaseItems.map((item) => [
     `${item.document_id}:${item.id}`,
@@ -180,7 +181,7 @@ export async function buildPackageFromDatabase(
     },
   ]));
   const projectMap = {
-    schema: "1",
+    schema_version: "1",
     primary_project: primaryProject,
     summary: projectSummary,
     projects,
@@ -227,7 +228,7 @@ export async function buildPackageFromDatabase(
     };
   });
   const preferenceProbes = {
-    schema: "1",
+    schema_version: "1",
     primary_project: primaryProject,
     generated_from: "project-map.json",
     auto_removed: autoRemoved,
