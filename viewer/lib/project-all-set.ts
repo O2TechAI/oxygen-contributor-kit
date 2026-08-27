@@ -11,9 +11,7 @@ type AllSetDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
 type AllSetRow = {
   workflow_run_id?: string;
-  active_story_digest?: string;
-  source_revision?: number;
-  server_version?: number;
+  review_gate_digest?: string;
   all_set_at?: string;
 };
 
@@ -34,7 +32,7 @@ export type AllSetSuccess = {
   ok: true;
   idempotent: boolean;
   workflowRunId: string;
-  activeStoryDigest: string;
+  reviewGateDigest: string;
   sourceRevision: number;
   serverVersion: number;
   allSetAt: string;
@@ -44,13 +42,11 @@ export type AllSetResult = AllSetSuccess | AllSetFailure;
 
 function sameBinding(row: AllSetRow | null, request: ServerOwnedReleaseRequest, digest: string) {
   return row?.workflow_run_id === request.workflowRunId
-    && row.active_story_digest === digest
-    && Number(row.source_revision) === request.sourceRevision
-    && Number(row.server_version) === request.serverVersion
+    && row.review_gate_digest === digest
     && typeof row.all_set_at === "string" && Boolean(row.all_set_at);
 }
 
-/** Establish one durable project All set authority inside a BEGIN IMMEDIATE
+/** Establish one durable final release confirmation inside a BEGIN IMMEDIATE
  * transaction. Full readiness is re-evaluated while the write lock is held;
  * therefore no checked source, receipt, decision, answer or session can change
  * between validation and the guarded insert. */
@@ -67,28 +63,28 @@ export async function confirmProjectAllSet(
         allowUnsetAllSet: true,
       });
       if (!readiness.ok) return readiness;
-      const current = await db.prepare(`SELECT workflow_run_id,active_story_digest,source_revision,
-        server_version,all_set_at FROM project_all_set WHERE workflow_run_id=?`)
+      const current = await db.prepare(`SELECT workflow_run_id,review_gate_digest,all_set_at
+        FROM project_all_set WHERE workflow_run_id=?`)
         .bind(request.workflowRunId).first<AllSetRow>();
-      if (sameBinding(current, request, readiness.binding.activeStoryDigest)) {
+      if (sameBinding(current, request, readiness.binding.reviewGateDigest)) {
         return {
           ok: true,
           idempotent: true,
           workflowRunId: request.workflowRunId,
-          activeStoryDigest: readiness.binding.activeStoryDigest,
+          reviewGateDigest: readiness.binding.reviewGateDigest,
           sourceRevision: request.sourceRevision,
           serverVersion: request.serverVersion,
           allSetAt: String(current!.all_set_at),
         };
       }
-      if (current) return { ok: false, code: ALL_SET_ERROR.stale };
       const inserted = await db.prepare(`INSERT INTO project_all_set
-        (workflow_run_id,active_story_digest,source_revision,server_version,all_set_at)
-        VALUES (?,?,?,?,?)`).bind(
+        (workflow_run_id,review_gate_digest,all_set_at) VALUES (?,?,?)
+        ON CONFLICT(workflow_run_id) DO UPDATE SET
+          review_gate_digest=excluded.review_gate_digest,
+          all_set_at=excluded.all_set_at
+        WHERE project_all_set.review_gate_digest<>excluded.review_gate_digest`).bind(
         request.workflowRunId,
-        readiness.binding.activeStoryDigest,
-        request.sourceRevision,
-        request.serverVersion,
+        readiness.binding.reviewGateDigest,
         serverNow,
       ).run();
       if (Number(inserted.meta?.changes || 0) !== 1) {
@@ -98,7 +94,7 @@ export async function confirmProjectAllSet(
         ok: true,
         idempotent: false,
         workflowRunId: request.workflowRunId,
-        activeStoryDigest: readiness.binding.activeStoryDigest,
+        reviewGateDigest: readiness.binding.reviewGateDigest,
         sourceRevision: request.sourceRevision,
         serverVersion: request.serverVersion,
         allSetAt: serverNow,
@@ -110,9 +106,9 @@ export async function confirmProjectAllSet(
 }
 
 const allSetMessages: Record<AllSetFailure["code"], string> = {
-  [ALL_SET_ERROR.requestInvalid]: "Invalid project All set request",
-  [ALL_SET_ERROR.stale]: "Project All set authority is stale",
-  [ALL_SET_ERROR.conflict]: "Project All set confirmation conflicted",
+  [ALL_SET_ERROR.requestInvalid]: "Invalid final release confirmation request",
+  [ALL_SET_ERROR.stale]: "Final release authority is stale",
+  [ALL_SET_ERROR.conflict]: "Final release confirmation conflicted",
   [RELEASE_ERROR.requestInvalid]: "Invalid reviewed Story release request",
   [RELEASE_ERROR.runConflict]: "Reviewed Story workflow run is not current",
   [RELEASE_ERROR.storyNotReady]: "Reviewed Story release is not ready",
@@ -125,9 +121,25 @@ const allSetMessages: Record<AllSetFailure["code"], string> = {
   [RELEASE_ERROR.preparationInvalid]: "Story preparation authority is invalid",
   [RELEASE_ERROR.storyPrivacyPending]: "Story Privacy decisions are incomplete",
   [RELEASE_ERROR.preferencePending]: "Preference answers are incomplete",
-  [RELEASE_ERROR.allSetRequired]: "Project All set confirmation is required",
-  [RELEASE_ERROR.editedStoryPrivacyRequired]: "Edited Story Privacy preparation is required",
+  [RELEASE_ERROR.allSetRequired]: "Final release confirmation is required",
 };
+
+/** Recompute the same current release gate used by confirmation and release.
+ * A stale persisted row is projected as false; no Chapter state is mutated. */
+export async function readProjectReleaseConfirmation(
+  db: AllSetDatabase,
+  input: ServerOwnedReleaseRequest,
+) {
+  return db.transaction(async () => {
+    const current = await reconstructReviewedStoryReleaseFromDatabase(db, input, {
+      allowUnsetAllSet: true,
+    });
+    if (!current.ok) return false;
+    const row = await db.prepare(`SELECT workflow_run_id,review_gate_digest,all_set_at
+      FROM project_all_set WHERE workflow_run_id=?`).bind(input.workflowRunId).first<AllSetRow>();
+    return sameBinding(row, input, current.binding.reviewGateDigest);
+  });
+}
 
 export function allSetErrorResponse(result: AllSetFailure) {
   return Response.json({

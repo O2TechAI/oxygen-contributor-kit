@@ -14,7 +14,7 @@ test("project All set sends one exact server-owned POST only after the durable S
   assert.match(action, /runDurableStoryReviewHandoff/);
   assert.match(action, /fetch\("\/api\/all-set",\{[\s\S]*method:"POST"/);
   assert.match(action, /body:JSON\.stringify\(\{workflowRunId,serverVersion,sourceRevision\}\)/);
-  assert.doesNotMatch(action, /activeStoryDigest|candidateDigest|receipt|release|privacyDecisions|method:"GET"/i);
+  assert.doesNotMatch(action, /activeStoryDigest|candidateDigest|receipt|privacyDecisions|method:"GET"/i);
   assert.equal((action.match(/fetch\("\/api\/all-set"/g) || []).length, 1);
 });
 
@@ -32,6 +32,8 @@ test("durable server progress is the only project All set confirmation and gates
 });
 
 test("Chapter All set, Story Privacy, and explicit completed Preferences remain separate prerequisites", () => {
+  assert.match(workspace, /projectAllSet:"Confirm ready for release"/);
+  assert.doesNotMatch(workspace, /projectAllSet:"Project All set"/);
   assert.match(workspace, /allCurrentChaptersConfirmed[\s\S]*storyPrivacyReleaseReady[\s\S]*allCurrentPreferencesComplete/);
   assert.match(workspace, /chapterReviewCompletionBlockers\(state,completionContext\(chapter\.source\)\)/);
   assert.match(workspace, /projectAllSetPreferencesComplete\(probeRun, probes, bulkDecisions\)/);
@@ -64,7 +66,7 @@ test("a 409 rehydrates without retry and requires another explicit click", () =>
   assert.match(action, /storyPersistenceRef\.current\?\.invalidate\(\)/);
   assert.match(action, /setStorySessionReadyRunId\(""\)/);
   assert.match(action, /loadCurrentWorkflow\(request\.signal\)/);
-  assert.match(action, /loadStoryPrivacy\("Project authority changed\.[\s\S]*true\)/);
+  assert.match(action, /loadStoryPrivacy\("Release authority changed\.[\s\S]*true\)/);
   assert.match(action, /loadProbes\(request\.signal\)/);
   assert.equal((action.match(/fetch\("\/api\/all-set"/g) || []).length, 1, "the mutation is never retried");
 });

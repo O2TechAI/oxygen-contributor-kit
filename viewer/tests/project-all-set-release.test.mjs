@@ -16,7 +16,7 @@ import {
   deriveStoryReleaseTargetCatalog,
   storyPreparationDigest,
 } from "../lib/story-preparation.ts";
-import { confirmProjectAllSet } from "../lib/project-all-set.ts";
+import { confirmProjectAllSet, readProjectReleaseConfirmation } from "../lib/project-all-set.ts";
 import {
   RELEASE_ERROR,
   reconstructReviewedStoryReleaseFromDatabase,
@@ -26,6 +26,11 @@ import { STORY_PREFIX } from "../lib/timeline.ts";
 import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
 import { buildPackageFromDatabase } from "../app/api/package/route.ts";
 import { renderReviewedStoryHtml } from "../app/api/organization/export/route.ts";
+import {
+  buildReviewedStoryPrivacyPreparationSnapshot,
+  decideStoryPrivacyCandidate,
+  importReviewedStoryPrivacyAuthority,
+} from "../lib/story-privacy-authority.ts";
 
 const RUN = "release-all-set-run";
 const REVISION = 7;
@@ -35,6 +40,30 @@ const NOW = "2026-08-27T08:00:00.000Z";
 async function sha256(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function completedPrivacyImport(snapshot, candidates = [], completedAt = "2026-08-27T08:00:02.000Z") {
+  candidates = [...candidates].sort((left, right) => Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)));
+  const terminalReceipt = {
+    schema: "oxygen.reviewed-story-privacy-terminal-receipt",
+    status: "complete",
+    ...Object.fromEntries(Object.entries(snapshot.binding).filter(([key]) => key !== "previousCandidateDigest")),
+    outputDigest: await storyPreparationDigest(candidates),
+    outputCount: candidates.length,
+    completedAt,
+  };
+  const receiptDigest = await storyPreparationDigest(terminalReceipt);
+  const core = {
+    schema: "oxygen.reviewed-story-privacy-import",
+    binding: snapshot.binding,
+    receiptDigest,
+    candidates,
+  };
+  return {
+    ...core,
+    terminalReceipt,
+    importDigest: await storyPreparationDigest(core),
+  };
 }
 
 function source(key, itemId, index) {
@@ -77,7 +106,7 @@ function reviewContext(story, state = null) {
 
 async function clear(db) {
   for (const table of [
-    "project_all_set", "story_privacy_candidates", "story_preparation_receipts",
+    "project_all_set", "story_privacy_authorities", "story_privacy_candidates", "story_preparation_receipts",
     "probe_runs", "probe_bulk_decisions", "probes", "story_review_sessions",
     "redactions", "redaction_jobs", "workflow_runs", "items", "documents",
   ]) await db.prepare(`DELETE FROM ${table}`).run();
@@ -264,6 +293,7 @@ test("Preference, receipt, session, edit, and final snapshot mutations block wit
   await db.prepare(`UPDATE story_privacy_candidates SET decision='redact',decision_version=1,decided_at=?
     WHERE candidate_id='candidate-human'`).bind(NOW).run();
   assert.equal((await confirmProjectAllSet(db, request, NOW)).ok, true);
+  assert.equal(await readProjectReleaseConfirmation(db, request), true);
 
   await db.prepare(`INSERT INTO probes
     (id,document_id,document_kind,event_ids_json,signal,recap,question,options_json,
@@ -277,7 +307,22 @@ test("Preference, receipt, session, edit, and final snapshot mutations block wit
     RELEASE_ERROR.preferencePending);
   await db.prepare("UPDATE probes SET answer_choice='skip',answered_at=? WHERE id='probe-unanswered'")
     .bind(NOW).run();
+  assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request)).code,
+    RELEASE_ERROR.allSetRequired);
+  assert.equal(await readProjectReleaseConfirmation(db, request), false);
+  assert.equal((await confirmProjectAllSet(db, request, "2026-08-27T08:00:01.000Z")).ok, true);
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request)).ok, true);
+  const chapterStateBeforePreferenceChange = (await db.prepare(
+    "SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?",
+  ).bind(RUN).first()).state_json;
+  await db.prepare("UPDATE probes SET answer_choice='keep',answered_at=? WHERE id='probe-unanswered'")
+    .bind("2026-08-27T08:00:02.000Z").run();
+  assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request)).code,
+    RELEASE_ERROR.allSetRequired);
+  assert.equal((await db.prepare("SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?")
+    .bind(RUN).first()).state_json, chapterStateBeforePreferenceChange);
+  assert.equal((await confirmProjectAllSet(db, request, "2026-08-27T08:00:03.000Z")).ok, true);
+  assert.equal(await readProjectReleaseConfirmation(db, request), true);
 
   const raced = await reconstructReviewedStoryReleaseFromDatabase(db, request, {
     beforeFinalPrivacyCheck: () => db.prepare(
@@ -288,22 +333,24 @@ test("Preference, receipt, session, edit, and final snapshot mutations block wit
   await db.prepare("UPDATE story_preparation_receipts SET completed_at=? WHERE lane='story'")
     .bind(NOW).run();
 
+  const currentGate = await db.prepare("SELECT review_gate_digest FROM project_all_set WHERE workflow_run_id=?")
+    .bind(RUN).first();
   const finalSnapshotRaces = [
     [
       "UPDATE story_privacy_candidates SET decision='keep' WHERE candidate_id='candidate-human'",
       "UPDATE story_privacy_candidates SET decision='redact' WHERE candidate_id='candidate-human'",
     ],
     [
-      "UPDATE probes SET answer_choice='keep' WHERE id='probe-unanswered'",
       "UPDATE probes SET answer_choice='skip' WHERE id='probe-unanswered'",
+      "UPDATE probes SET answer_choice='keep' WHERE id='probe-unanswered'",
     ],
     [
       "UPDATE story_review_sessions SET updated_at='2026-08-27T08:00:01.000Z' WHERE workflow_run_id='release-all-set-run'",
       "UPDATE story_review_sessions SET updated_at='2026-08-27T08:00:00.000Z' WHERE workflow_run_id='release-all-set-run'",
     ],
     [
-      "UPDATE project_all_set SET all_set_at='2026-08-27T08:00:01.000Z' WHERE workflow_run_id='release-all-set-run'",
-      "UPDATE project_all_set SET all_set_at='2026-08-27T08:00:00.000Z' WHERE workflow_run_id='release-all-set-run'",
+      "UPDATE project_all_set SET review_gate_digest='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' WHERE workflow_run_id='release-all-set-run'",
+      `UPDATE project_all_set SET review_gate_digest='${currentGate.review_gate_digest}' WHERE workflow_run_id='release-all-set-run'`,
     ],
   ];
   for (const [mutate, restore] of finalSnapshotRaces) {
@@ -351,7 +398,30 @@ test("Preference, receipt, session, edit, and final snapshot mutations block wit
   await db.prepare("UPDATE story_review_sessions SET state_json=?,server_version=2 WHERE workflow_run_id=?")
     .bind(JSON.stringify({ sourceRevision: REVISION, session: editedSession }), RUN).run();
   assert.equal((await confirmProjectAllSet(db, { ...request, serverVersion: 2 }, NOW)).code,
-    RELEASE_ERROR.editedStoryPrivacyRequired);
+    RELEASE_ERROR.preparationInvalid);
+
+  const privacyPreparation = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN);
+  assert.equal(privacyPreparation.ok, true);
+  assert.ok(privacyPreparation.snapshot.binding.changedTargetCount > 0);
+  const imported = await importReviewedStoryPrivacyAuthority(
+    db,
+    await completedPrivacyImport(privacyPreparation.snapshot),
+    "2026-08-27T08:00:02.000Z",
+  );
+  assert.equal(imported.ok, true);
+  const chapterBytesBeforeReconfirm = (await db.prepare(
+    "SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?",
+  ).bind(RUN).first()).state_json;
+  assert.equal((await confirmProjectAllSet(db, { ...request, serverVersion: 2 },
+    "2026-08-27T08:00:03.000Z")).ok, true);
+  assert.equal((await db.prepare("SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?")
+    .bind(RUN).first()).state_json, chapterBytesBeforeReconfirm);
+  const editedRelease = await reconstructReviewedStoryReleaseFromDatabase(
+    db,
+    { ...request, serverVersion: 2 },
+  );
+  assert.equal(editedRelease.ok, true);
+  assert.match(editedRelease.serializedStory, /release paragraph 1/i);
 
   await db.prepare("UPDATE story_review_sessions SET state_json='not-json' WHERE workflow_run_id=?")
     .bind(RUN).run();
@@ -379,13 +449,13 @@ test("HTML and ZIP are POST-only, byte-identical for reviewed Story, and exclude
   const zipText = new TextDecoder().decode(await zipResponse.arrayBuffer());
   assert.match(zipText, /oxygen\.reviewed-story/);
   assert.match(zipText, /"publication_approved": false/);
-  assert.doesNotMatch(zipText, /candidate-auto|candidate-human|whyFlagged|releaseTargets|decisionVersion/);
+  assert.doesNotMatch(zipText, /candidate-auto|candidate-human|whyFlagged|releaseTargets|decisionVersion|reviewGateDigest|review_gate_digest/);
   assert.doesNotMatch(zipText, /provider|model|evidence_sample|PRIVATE_/i);
 
   const racedZip = await buildPackageFromDatabase(db, release.serializedStory, request, {
     exportedAt: NOW,
     beforeFinalPrivacyCheck: () => db.prepare(
-      "UPDATE project_all_set SET all_set_at='2026-08-27T08:00:01.000Z' WHERE workflow_run_id=?",
+      "UPDATE project_all_set SET review_gate_digest='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' WHERE workflow_run_id=?",
     ).bind(RUN).run(),
   });
   assert.equal(racedZip.status, 409);
@@ -395,4 +465,71 @@ test("HTML and ZIP are POST-only, byte-identical for reviewed Story, and exclude
   const htmlRoute = await import("../app/api/organization/export/route.ts");
   assert.equal((await packageRoute.GET()).status, 405);
   assert.equal((await htmlRoute.GET()).status, 405);
+});
+
+test("edited Story release accepts one exact nonzero changed-block authority after its decision", async () => {
+  const { db, stories, reviews, request } = await setup();
+  await db.prepare(`UPDATE story_privacy_candidates SET decision='keep',decision_version=1,decided_at=?
+    WHERE candidate_id='candidate-human'`).bind(NOW).run();
+  const editedStory = stories[0];
+  const editing = recordStoryEdit(returnChapterToReview(reviews[editedStory.key]), {
+    storyKey: editedStory.key,
+    blockId: editedStory.story.blocks[0].id,
+    sourceLanguage: "en",
+    baseText: editedStory.story.blocks[0].text,
+    nextText: editedStory.story.blocks[0].text.replace("Safe ", ""),
+    workingRange: { start: 0, end: 5 },
+    insertedText: "",
+    now: 2,
+  });
+  assert.equal(editing.blockedReason, undefined);
+  const applied = applyChapterReview(editing.state, reviewContext(editedStory, editing.state));
+  assert.equal(applied.blockedReason, undefined);
+  const confirmed = markChapterReady(applied.state, reviewContext(editedStory, applied.state));
+  assert.equal(confirmed.stage, "human_confirmed");
+  const session = createStoryReviewSession(RUN, {
+    ...reviews,
+    [editedStory.key]: confirmed,
+  }, {}, NOW);
+  await db.prepare("UPDATE story_review_sessions SET state_json=?,server_version=2 WHERE workflow_run_id=?")
+    .bind(JSON.stringify({ sourceRevision: REVISION, session }), RUN).run();
+
+  const preparation = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN);
+  assert.equal(preparation.ok, true);
+  const target = preparation.snapshot.changedTargets[0].id;
+  const changedCandidate = {
+    id: "changed-block-current-candidate",
+    reviewState: "needs_confirmation",
+    title: "Current changed block",
+    whyFlagged: "The exact changed target requires one decision.",
+    uncertaintyReason: "Contributor confirmation is required.",
+    releaseTargets: [target],
+  };
+  const imported = await importReviewedStoryPrivacyAuthority(
+    db,
+    await completedPrivacyImport(preparation.snapshot, [changedCandidate]),
+    "2026-08-27T08:00:02.000Z",
+  );
+  assert.equal(imported.ok, true);
+  assert.equal((await confirmProjectAllSet(db, { ...request, serverVersion: 2 }, NOW)).code,
+    RELEASE_ERROR.storyPrivacyPending);
+  const decided = await decideStoryPrivacyCandidate(db, {
+    workflowRunId: RUN,
+    sourceRevision: REVISION,
+    activeStoryDigest: imported.authority.activeStoryDigest,
+    candidateDigest: imported.authority.candidateDigest,
+    expectedVersion: 0,
+    decision: "keep",
+  }, changedCandidate.id, "2026-08-27T08:00:03.000Z");
+  assert.equal(decided.ok, true);
+  assert.equal((await confirmProjectAllSet(db, { ...request, serverVersion: 2 },
+    "2026-08-27T08:00:04.000Z")).ok, true);
+  const release = await reconstructReviewedStoryReleaseFromDatabase(
+    db,
+    { ...request, serverVersion: 2 },
+  );
+  assert.equal(release.ok, true);
+  assert.match(release.serializedStory, /release paragraph 1/);
+  assert.equal((await db.prepare(`SELECT COUNT(*) AS count FROM story_privacy_candidates
+    WHERE candidate_id=?`).bind(changedCandidate.id).first()).count, 1);
 });

@@ -25,6 +25,7 @@ import {
   requireExactWorkflowRun,
 } from "./workflow-run-server";
 import type { WorkspaceDocument, WorkspaceStatus } from "./workspace-types";
+import { readProjectReleaseConfirmation } from "./project-all-set.ts";
 
 type CountRow = { total: number; completed: number };
 type JobRow = { id?: string; status?: string; updated_at?: string };
@@ -40,13 +41,6 @@ type WorkflowRunRow = {
   story_source_revision: number;
   active_story_digest?: string;
   updated_at: string;
-};
-
-type AllSetRow = {
-  workflow_run_id?: string;
-  active_story_digest?: string;
-  source_revision?: number;
-  server_version?: number;
 };
 
 type SessionBindingRow = { server_version?: number; state_json?: string };
@@ -74,7 +68,7 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
       collection_total,story_generation_status,story_generation_completed,
       story_generation_total,story_source_revision,active_story_digest,updated_at
       FROM workflow_runs WHERE id=?`).bind(authority.workflowRunId).first<WorkflowRunRow>();
-  const [items, documents, organization, redaction, run, allSet, sessionBinding] = await Promise.all([
+  const [items, documents, organization, redaction, run, sessionBinding] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN organization_category IS NOT NULL THEN 1 ELSE 0 END) AS completed
       FROM items`).first<CountRow>(),
@@ -82,8 +76,6 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     db.prepare("SELECT id,status,updated_at FROM organization_jobs ORDER BY updated_at DESC LIMIT 1").first<JobRow>(),
     db.prepare("SELECT id,status,updated_at FROM redaction_jobs ORDER BY started_at DESC LIMIT 1").first<JobRow>(),
     runQuery,
-    db.prepare(`SELECT workflow_run_id,active_story_digest,source_revision,server_version
-      FROM project_all_set WHERE workflow_run_id=?`).bind(authority.workflowRunId).first<AllSetRow>(),
     db.prepare(`SELECT server_version,state_json FROM story_review_sessions WHERE workflow_run_id=?`)
       .bind(authority.workflowRunId).first<SessionBindingRow>(),
   ]);
@@ -102,12 +94,17 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
   } catch {
     storedSourceRevision = null;
   }
+  const currentServerVersion = Number(sessionBinding?.server_version);
+  const currentSourceRevision = Number(run?.story_source_revision);
   const allSetConfirmed = Boolean(run?.active_story_digest
-    && allSet?.workflow_run_id === authority.workflowRunId
-    && allSet.active_story_digest === run.active_story_digest
-    && Number(allSet.source_revision) === Number(run.story_source_revision)
-    && Number(allSet.server_version) === Number(sessionBinding?.server_version)
-    && storedSourceRevision === Number(run.story_source_revision));
+    && Number.isSafeInteger(currentServerVersion) && currentServerVersion >= 0
+    && Number.isSafeInteger(currentSourceRevision) && currentSourceRevision >= 0
+    && storedSourceRevision === currentSourceRevision
+    && await readProjectReleaseConfirmation(db, {
+      workflowRunId: authority.workflowRunId,
+      serverVersion: currentServerVersion,
+      sourceRevision: currentSourceRevision,
+    }));
   return deriveWorkflowProgress({
     workflowRunId: run?.id || authority.workflowRunId,
     targetConfirmed: Boolean(run?.target_confirmed),

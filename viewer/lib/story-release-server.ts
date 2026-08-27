@@ -6,7 +6,6 @@ import {
   sanitizeReviewedStoryRelease,
   serializeReviewedStoryRelease,
 } from "./story-release.ts";
-import { applyStoryReviewToBlock } from "./story-review.ts";
 import {
   STORY_REVIEW_SESSION_SCHEMA,
   hydrateStoryReviewSession,
@@ -18,17 +17,19 @@ import {
   type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
-import { parseStorySource, type StorySource } from "./timeline.ts";
+import { parseStorySource } from "./timeline.ts";
 import { isWorkflowRunId } from "./workflow-progress.ts";
 import {
   captureStoryReleasePrivacySnapshot,
+  capturePackageReleasePrivacySnapshot,
+  computeReviewGateDigest,
   type ReleaseSnapshotTestOptions,
 } from "./release-privacy-snapshot.ts";
 import type { StoryReleaseTarget } from "./timeline.ts";
 import {
-  deriveStoryReleaseTargetCatalog,
-  storyPreparationDigest,
-} from "./story-preparation.ts";
+  readStoryPrivacyAuthority,
+  type StoryPrivacyCandidateResponse,
+} from "./story-privacy-authority.ts";
 
 type ReleaseDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
@@ -92,7 +93,6 @@ export const RELEASE_ERROR = {
   storyPrivacyPending: "RELEASE_STORY_PRIVACY_PENDING",
   preferencePending: "RELEASE_PREFERENCE_PENDING",
   allSetRequired: "RELEASE_ALL_SET_REQUIRED",
-  editedStoryPrivacyRequired: "RELEASE_EDITED_STORY_PRIVACY_REQUIRED",
 } as const;
 
 export type ReleaseErrorCode = typeof RELEASE_ERROR[keyof typeof RELEASE_ERROR];
@@ -113,6 +113,7 @@ type ReleaseSuccess = {
     activeStoryDigest: string;
     sourceRevision: number;
     serverVersion: number;
+    reviewGateDigest: string;
   };
 };
 
@@ -168,101 +169,11 @@ function exactTimestamp(value: unknown): value is string {
   try { return new Date(value).toISOString() === value; } catch { return false; }
 }
 
-function safeText(value: unknown): value is string {
-  return typeof value === "string" && Boolean(value.trim())
-    && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value);
-}
-
-function compareUtf8(left: string, right: string) {
-  const encoder = new TextEncoder();
-  const a = encoder.encode(left);
-  const b = encoder.encode(right);
-  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
-    if (a[index] !== b[index]) return a[index] - b[index];
-  }
-  return a.length - b.length;
-}
-
-async function releasePrivacyCandidates(
-  snapshot: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
-  workflowRunId: string,
-  sourceRevision: number,
-  sources: StorySource[],
-  storyRows: StoryCandidateRow[],
-): Promise<ReleasePrivacyCandidate[] | null> {
-  const receipt = snapshot.preparationReceiptRows.find((row) => row.lane === "story_privacy");
-  const catalog = deriveStoryReleaseTargetCatalog(sources);
-  if (!receipt || !catalog) return null;
-  const targetOrder = new Map(catalog.map((target, index) => [target.id, index]));
-  const candidates: ReleasePrivacyCandidate[] = [];
-  const candidateProducts: Array<Record<string, unknown>> = [];
-  for (const row of snapshot.storyPrivacyCandidateRows) {
-    if (row.workflow_run_id !== workflowRunId || typeof row.candidate_json !== "string") return null;
-    let value: unknown;
-    try { value = JSON.parse(row.candidate_json); } catch { return null; }
-    if (!isRecord(value)
-      || Object.keys(value).sort().join("|")
-        !== ["id", "releaseTargets", "reviewState", "title", "uncertaintyReason", "whyFlagged"].sort().join("|")
-      || !safeText(value.id) || row.candidate_id !== value.id
-      || (value.reviewState !== "deterministic" && value.reviewState !== "needs_confirmation")
-      || !safeText(value.title) || !safeText(value.whyFlagged)
-      || (value.reviewState === "deterministic" && value.uncertaintyReason !== null)
-      || (value.reviewState === "needs_confirmation" && !safeText(value.uncertaintyReason))
-      || !Array.isArray(value.releaseTargets) || value.releaseTargets.length === 0
-      || value.releaseTargets.some((target) => typeof target !== "string" || !targetOrder.has(target as StoryReleaseTarget))
-      || new Set(value.releaseTargets).size !== value.releaseTargets.length) return null;
-    const orders = value.releaseTargets.map((target) => targetOrder.get(target as StoryReleaseTarget)!);
-    if (orders.some((order, index) => index > 0 && orders[index - 1] >= order)) return null;
-    const decision = row.decision;
-    const decisionVersion = Number(row.decision_version);
-    if (value.reviewState === "deterministic") {
-      if (decision !== null || decisionVersion !== 0 || row.decided_at !== null) return null;
-    } else if (decision === null) {
-      if (decisionVersion !== 0 || row.decided_at !== null) return null;
-    } else if ((decision !== "keep" && decision !== "redact")
-      || decisionVersion !== 1 || !exactTimestamp(row.decided_at)) return null;
-    const product = {
-      id: value.id,
-      reviewState: value.reviewState,
-      title: value.title,
-      whyFlagged: value.whyFlagged,
-      uncertaintyReason: value.uncertaintyReason,
-      releaseTargets: [...value.releaseTargets] as StoryReleaseTarget[],
-    };
-    candidateProducts.push(product);
-    candidates.push({
-      id: value.id,
-      reviewState: value.reviewState,
-      releaseTargets: product.releaseTargets,
-      decision: decision as "keep" | "redact" | null,
-    });
-  }
-  if (candidates.some((candidate, index) => index > 0
-    && compareUtf8(candidates[index - 1].id, candidate.id) >= 0)
-    || Number(receipt.source_revision) !== sourceRevision
-    || Number(receipt.scope_count) !== catalog.length
-    || receipt.scope_digest !== await storyPreparationDigest(catalog.map((target) => target.id))
-    || receipt.input_digest !== await storyPreparationDigest(storyRows.map((row, index) => ({
-      id: row.id,
-      story: sources[index],
-    })).sort((left, right) => compareUtf8(left.id, right.id)))
-    || Number(receipt.output_count) !== candidates.length
-    || receipt.output_digest !== await storyPreparationDigest(candidateProducts)) return null;
-  return candidates;
-}
-
-type ReleasePrivacyCandidate = {
-  id: string;
-  reviewState: "deterministic" | "needs_confirmation";
-  releaseTargets: StoryReleaseTarget[];
-  decision: "keep" | "redact" | null;
-};
-
 function validPreparationAndPreference(
   snapshot: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
   workflowRunId: string,
   sourceRevision: number,
-  privacyCandidates: ReleasePrivacyCandidate[],
+  privacyCandidates: StoryPrivacyCandidateResponse[],
 ) {
   const receipts = snapshot.preparationReceiptRows;
   if (receipts.length !== 4
@@ -280,8 +191,7 @@ function validPreparationAndPreference(
       || !validRevision(Number(receipt.output_count))
       || !exactTimestamp(receipt.completed_at)) return false;
   }
-  const privacyReceipt = receipts.find((row) => row.lane === "story_privacy")!;
-  if (Number(privacyReceipt.output_count) !== privacyCandidates.length) return false;
+  void privacyCandidates;
 
   const preferenceReceipt = receipts.find((row) => row.lane === "preference")!;
   const probeRun = snapshot.probeRun;
@@ -300,31 +210,14 @@ function validPreparationAndPreference(
   return true;
 }
 
-function reviewChangesReleaseCopy(
-  sources: StorySource[],
-  reviews: Record<string, NonNullable<ReleaseSessionRecord["session"]>["chapterReviews"][string]>,
-) {
-  return sources.some((source) => {
-    const review = reviews[source.key];
-    if (!review) return true;
-    if (source.story.blocks.some((block) => (
-      applyStoryReviewToBlock(block.text, block.id, "en", review) !== block.text
-    ))) return true;
-    if (Object.keys(review.humanInsights).length) return true;
-    return Object.values(review.sourceInsightReviews).some((insight) => Boolean(insight.editedContent));
-  });
-}
-
 function exactAllSetBinding(
   snapshot: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
   request: ServerOwnedReleaseRequest,
-  activeStoryDigest: string,
+  reviewGateDigest: string,
 ) {
   const row = snapshot.allSet;
   return snapshot.allSetRows.length === 1 && row?.workflow_run_id === request.workflowRunId
-    && row.active_story_digest === activeStoryDigest
-    && Number(row.source_revision) === request.sourceRevision
-    && Number(row.server_version) === request.serverVersion
+    && row.review_gate_digest === reviewGateDigest
     && exactTimestamp(row.all_set_at);
 }
 
@@ -442,18 +335,13 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     || expectedKeys.some((key) => hydrated.chapterReviews[key]?.stage !== "human_confirmed")) {
     return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
   }
-  if (reviewChangesReleaseCopy(exactSources, hydrated.chapterReviews)) {
-    return failure(RELEASE_ERROR.editedStoryPrivacyRequired, boundedMetadata);
+  const storyPrivacy = await readStoryPrivacyAuthority(db, request.workflowRunId);
+  if (!storyPrivacy.ok || storyPrivacy.authority.sourceRevision !== activeSourceRevision
+    || storyPrivacy.authority.activeStoryDigest !== run.active_story_digest
+    || storyPrivacy.authority.status === "preparation_required") {
+    return failure(RELEASE_ERROR.preparationInvalid, boundedMetadata);
   }
-
-  const privacyCandidates = await releasePrivacyCandidates(
-    initialSnapshot,
-    request.workflowRunId,
-    activeSourceRevision,
-    exactSources,
-    candidateRows,
-  );
-  if (!privacyCandidates) return failure(RELEASE_ERROR.preparationInvalid, boundedMetadata);
+  const privacyCandidates = storyPrivacy.authority.candidates;
   if (privacyCandidates.some((candidate) => (
     candidate.reviewState === "needs_confirmation" && candidate.decision === null
   ))) return failure(RELEASE_ERROR.storyPrivacyPending, boundedMetadata);
@@ -463,10 +351,6 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     activeSourceRevision,
     privacyCandidates,
   )) return failure(RELEASE_ERROR.preferencePending, boundedMetadata);
-  if (!options.allowUnsetAllSet
-    && !exactAllSetBinding(initialSnapshot, request, String(run.active_story_digest))) {
-    return failure(RELEASE_ERROR.allSetRequired, boundedMetadata);
-  }
   const suppressedTargets = new Set<StoryReleaseTarget>();
   for (const candidate of privacyCandidates) {
     if (candidate.reviewState === "deterministic" || candidate.decision === "redact") {
@@ -497,9 +381,24 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
   if (!story || !serializedStory || story.chapters.length !== expectedKeys.length) {
     return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
   }
+  const initialPackageSnapshot = await capturePackageReleasePrivacySnapshot(db);
+  const reviewGateDigest = await computeReviewGateDigest(
+    initialSnapshot,
+    initialPackageSnapshot.digest,
+    storyPrivacy.authority,
+    serializedStory,
+  );
+  if (!options.allowUnsetAllSet
+    && !exactAllSetBinding(initialSnapshot, request, reviewGateDigest)) {
+    return failure(RELEASE_ERROR.allSetRequired, boundedMetadata);
+  }
   await options.beforeFinalPrivacyCheck?.();
   const finalSnapshot = await captureStoryReleasePrivacySnapshot(db, request.workflowRunId);
-  if (finalSnapshot.digest !== initialSnapshot.digest) {
+  const finalPackageSnapshot = await capturePackageReleasePrivacySnapshot(db);
+  if (finalSnapshot.digest !== initialSnapshot.digest
+    || finalPackageSnapshot.digest !== initialPackageSnapshot.digest
+    || (!options.allowUnsetAllSet
+      && !exactAllSetBinding(finalSnapshot, request, reviewGateDigest))) {
     return failure(RELEASE_ERROR.privacyConflict, boundedMetadata);
   }
   return {
@@ -511,6 +410,7 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
       activeStoryDigest: String(run.active_story_digest),
       sourceRevision: request.sourceRevision,
       serverVersion: request.serverVersion,
+      reviewGateDigest,
     },
   };
 }
@@ -533,8 +433,7 @@ const messages: Record<ReleaseErrorCode, string> = {
   [RELEASE_ERROR.preparationInvalid]: "Story preparation authority is invalid",
   [RELEASE_ERROR.storyPrivacyPending]: "Story Privacy decisions are incomplete",
   [RELEASE_ERROR.preferencePending]: "Preference answers are incomplete",
-  [RELEASE_ERROR.allSetRequired]: "Project All set confirmation is required",
-  [RELEASE_ERROR.editedStoryPrivacyRequired]: "Edited Story Privacy preparation is required",
+  [RELEASE_ERROR.allSetRequired]: "Final release confirmation is required",
 };
 
 export function releaseErrorResponse(result: ReleaseFailure) {

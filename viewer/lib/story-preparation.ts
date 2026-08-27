@@ -96,7 +96,7 @@ const safeText = (value: unknown): value is string => (
 const exactNonNegativeInteger = (value: unknown): value is number => (
   Number.isSafeInteger(value) && Number(value) >= 0
 );
-const compareUtf8 = (left: string, right: string) => {
+export const compareUtf8 = (left: string, right: string) => {
   const a = encoder.encode(left);
   const b = encoder.encode(right);
   const length = Math.min(a.length, b.length);

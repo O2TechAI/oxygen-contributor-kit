@@ -216,6 +216,24 @@ test("human-approved Insight releases with stable identity and no review provena
   assert.doesNotMatch(JSON.stringify(release), /human_created|chapterKey|storyBlockId|selection|baseRevision|appliedRevision/);
 });
 
+test("human Insight release ordering is UTF-8 byte stable across insertion order", () => {
+  const currentSource = source([]);
+  const accented = humanContent(currentSource, { background: "accented-first" });
+  const cjk = humanContent(currentSource, { background: "cjk-second" });
+  const left = reviewedState(currentSource, {}, [["human:中", cjk], ["human:é", accented]]);
+  const right = reviewedState(currentSource, {}, [["human:é", accented], ["human:中", cjk]]);
+  const leftBytes = serializeReviewedStoryRelease(buildReviewedStoryRelease(
+    [currentSource], { [currentSource.key]: left },
+  ));
+  const rightBytes = serializeReviewedStoryRelease(buildReviewedStoryRelease(
+    [currentSource], { [currentSource.key]: right },
+  ));
+  assert.equal(leftBytes, rightBytes);
+  assert.deepEqual(releaseInsights(JSON.parse(leftBytes)).map((item) => item.background), [
+    "accented-first", "cjk-second",
+  ]);
+});
+
 test("human Quote Privacy is exact: selected bytes fail closed and redaction elsewhere does not broaden", () => {
   const privacy = { redact: (copy) => copy.replaceAll(PRIVATE, '<redacted category="secret"/>') };
 
@@ -352,17 +370,24 @@ class FakeStoryReleaseDb {
         if (/FROM story_review_sessions WHERE workflow_run_id=\?/.test(sql)) {
           return { results: this.session ? [structuredClone(this.session)] : [] };
         }
-        if (/FROM story_preparation_receipts/.test(sql)) return { results: structuredClone(this.receipts) };
+        if (/FROM story_preparation_receipts/.test(sql)) return { results: structuredClone(
+          /lane='story_privacy'/.test(sql)
+            ? this.receipts.filter((receipt) => receipt.lane === "story_privacy")
+            : this.receipts,
+        ) };
+        if (/FROM story_privacy_authorities/.test(sql)) return { results: [] };
         if (/FROM story_privacy_candidates/.test(sql)) return { results: [] };
-        if (/FROM probe_runs WHERE workflow_run_id=\?/.test(sql)) return { results: [structuredClone(this.probeRun)] };
-        if (/FROM probes ORDER BY id/.test(sql)) return { results: [] };
-        if (/FROM probe_bulk_decisions ORDER BY id/.test(sql)) return { results: [] };
-        if (/FROM project_all_set/.test(sql)) return { results: [structuredClone(this.allSet)] };
+        if (/FROM probe_runs/.test(sql)) return { results: this.probeRun ? [structuredClone(this.probeRun)] : [] };
+        if (/FROM probes/.test(sql)) return { results: [] };
+        if (/FROM probe_bulk_decisions/.test(sql)) return { results: [] };
+        if (/FROM project_all_set/.test(sql)) return { results: this.allSet ? [structuredClone(this.allSet)] : [] };
+        if (/FROM documents/.test(sql)) return { results: [] };
         if (/FROM redaction_jobs/.test(sql)) {
           return { results: this.redactionJob ? [structuredClone(this.redactionJob)] : [] };
         }
         if (/organization_reason AS summary/.test(sql)) return { results: this.items.map((item) => ({
-          id: item.id, documentId: item.document_id, summary: item.organization_reason,
+          id: item.id, documentId: item.document_id, sequence: item.sequence,
+          timestamp: item.timestamp, summary: item.organization_reason,
         })) };
         if (/event_type AS eventType/.test(sql)) return { results: this.items.map((item) => ({
           id: item.id, documentId: item.document_id, eventType: item.event_type,
@@ -384,6 +409,10 @@ class FakeStoryReleaseDb {
         }
         if (/FROM story_review_sessions WHERE workflow_run_id=\?/.test(sql)) {
           return this.session ? structuredClone(this.session) : null;
+        }
+        if (/FROM story_privacy_authorities/.test(sql)) return null;
+        if (/FROM story_preparation_receipts/.test(sql)) {
+          return structuredClone(this.receipts.find((receipt) => receipt.lane === "story_privacy") || null);
         }
         if (/FROM redaction_jobs/.test(sql)) {
           return this.redactionJob ? structuredClone(this.redactionJob) : null;
@@ -491,14 +520,21 @@ async function serverFixture({
       input_digest: emptyDigest, output_digest: emptyDigest, output_count: 0,
       status: "complete", stage: "preference", model: null, generated: 0, set_aside: 0,
     },
-    allSet: {
-      workflow_run_id: RUN_ID,
-      active_story_digest: await sha256(validation.canonicalCandidate),
-      source_revision: SOURCE_REVISION,
-      server_version: SERVER_VERSION,
-      all_set_at: "2026-08-25T00:00:11.000Z",
-    },
+    allSet: null,
   });
+  const current = await reconstructReviewedStoryReleaseFromDatabase(db, request(), {
+    allowUnsetAllSet: true,
+  });
+  if (current.ok) {
+    db.allSet = {
+      workflow_run_id: RUN_ID,
+      review_gate_digest: current.binding.reviewGateDigest,
+      all_set_at: "2026-08-25T00:00:11.000Z",
+    };
+  } else {
+    assert.equal(includeHuman, true, JSON.stringify(current));
+    assert.equal(current.code, RELEASE_ERROR.preparationInvalid);
+  }
   return { db, currentSource };
 }
 
@@ -508,6 +544,18 @@ const request = (overrides = {}) => ({
   sourceRevision: SOURCE_REVISION,
   ...overrides,
 });
+
+async function refreshFakeGate(db) {
+  const current = await reconstructReviewedStoryReleaseFromDatabase(db, request(), {
+    allowUnsetAllSet: true,
+  });
+  assert.equal(current.ok, true, JSON.stringify(current));
+  db.allSet = {
+    workflow_run_id: RUN_ID,
+    review_gate_digest: current.binding.reviewGateDigest,
+    all_set_at: "2026-08-25T00:00:11.000Z",
+  };
+}
 
 test("server accepts only the canonical contracts and rechecks run, version, source, and digest", async () => {
   const { db } = await serverFixture();
@@ -578,6 +626,7 @@ test("missing, unknown, or pending Privacy blocks release while confirmed keep a
   };
   const keepSnapshot = await captureStoryReleasePrivacySnapshot(keepFixture.db, RUN_ID);
   assert.notEqual(keepSnapshot.digest, pendingSnapshot.digest);
+  await refreshFakeGate(keepFixture.db);
   const kept = await reconstructReviewedStoryReleaseFromDatabase(keepFixture.db, request());
   assert.equal(kept.ok, true);
   assert.match(kept.serializedStory, new RegExp(PRIVATE));
@@ -597,6 +646,7 @@ test("missing, unknown, or pending Privacy blocks release while confirmed keep a
     review_state: "confirmed_redact",
     status: "active",
   }];
+  await refreshFakeGate(redactFixture.db);
   const redacted = await reconstructReviewedStoryReleaseFromDatabase(redactFixture.db, request());
   assert.equal(redacted.ok, true);
   assert.doesNotMatch(redacted.serializedStory, new RegExp(PRIVATE));
@@ -632,7 +682,7 @@ test("synthetic live server flow releases zero and source Insights with byte par
   }
   const edited = await serverFixture({ sourceInsights: [], includeHuman: true });
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(edited.db, request())).code,
-    RELEASE_ERROR.editedStoryPrivacyRequired);
+    RELEASE_ERROR.preparationInvalid);
 });
 
 test("every extra browser authority field fails closed", async () => {
@@ -720,6 +770,7 @@ test("a contributor review decision during Story assembly fails the snapshot rac
     created_at: "2026-08-25T00:00:03.000Z",
     updated_at: "2026-08-25T00:00:03.000Z",
   };
+  await refreshFakeGate(fixture.db);
   const result = await reconstructReviewedStoryReleaseFromDatabase(
     fixture.db,
     request(),

@@ -13,6 +13,7 @@ import {
   type StorySource,
 } from "./timeline.ts";
 import { isReservedStoryOrganizationReason } from "./story-readiness.ts";
+import { compareUtf8 } from "./story-preparation.ts";
 
 export const REVIEWED_STORY_SCHEMA = "oxygen.reviewed-story" as const;
 const FIXED_REDACTION = "[Redacted]";
@@ -168,7 +169,7 @@ export function buildReviewedStoryRelease(
     }
 
     for (const [insightId, review] of Object.entries(state.humanInsights)
-      .sort(([left], [right]) => left.localeCompare(right))) {
+      .sort(([left], [right]) => compareUtf8(left, right))) {
       if (review.decision !== "human_approved" || review.resolution !== "applied"
         || review.appliedVersion !== review.version) return [];
       const anchorIndex = releaseBlockIndex.get(review.content.quote.storyBlockId);

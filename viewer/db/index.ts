@@ -184,9 +184,7 @@ const statements = [
   )`,
   `CREATE TABLE IF NOT EXISTS project_all_set (
     workflow_run_id TEXT PRIMARY KEY,
-    active_story_digest TEXT NOT NULL,
-    source_revision INTEGER NOT NULL CHECK(source_revision > 0),
-    server_version INTEGER NOT NULL CHECK(server_version > 0),
+    review_gate_digest TEXT NOT NULL,
     all_set_at TEXT NOT NULL
   )`,
 ];

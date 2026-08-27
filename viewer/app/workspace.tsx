@@ -144,7 +144,7 @@ const workspaceUi = {
     introTitle:"Chapters are the Story table of contents.", intro:"Open a chapter for People, Story, and Privacy. AI insights stay inside the narrative; local evidence stays secondary.",
     before:"BEFORE", after:"AFTER", timelineAiInsight:"AI Insight", evidence:"reviewed evidence event", read:"Read chapter", workflow:"Workflow",
     nextStep:"Read a Chapter to review the full story, evidence, direct learning, and reusable rules.",
-    projectAllSet:"Project All set", projectAllSetBusy:"Confirming project…", projectAllSetConfirmed:"Project All set confirmed",
+    projectAllSet:"Confirm ready for release", projectAllSetBusy:"Confirming release readiness…", projectAllSetConfirmed:"Ready for release confirmed",
     downloadReviewKicker:"Review required", downloadReviewTitle:"Review before download", downloadReviewIntro:"Complete these Chapter review items, then try the download again.", downloadReviewCount:"unresolved review items", openReview:"Open review", close:"Close", chapter:"Chapter",
     downloadBlockers:{
       review_state_invalid:"Review state needs attention", privacy_incomplete:"Privacy review is incomplete", evidence_unverified:"Evidence review is incomplete",
@@ -165,7 +165,7 @@ const workspaceUi = {
     introTitle:"章节构成故事目录。", intro:"打开一章，按人物、故事和隐私阅读；AI 洞察留在叙事中，本地证据保持为次要入口。",
     before:"之前", after:"之后", timelineAiInsight:"AI 洞察", evidence:"条已审阅证据", read:"阅读章节", workflow:"工作流",
     nextStep:"阅读任一章节，完整审阅故事、证据、直接经验与可复用规则。",
-    projectAllSet:"确认项目全部完成", projectAllSetBusy:"正在确认项目…", projectAllSetConfirmed:"项目全部完成已持久确认",
+    projectAllSet:"确认已准备发布", projectAllSetBusy:"正在确认发布准备状态…", projectAllSetConfirmed:"已确认准备发布",
     downloadReviewKicker:"需要审阅", downloadReviewTitle:"下载前请完成审阅", downloadReviewIntro:"请完成以下章节审阅项，然后再次尝试下载。", downloadReviewCount:"项待解决审阅", openReview:"打开审阅", close:"关闭", chapter:"章节",
     downloadBlockers:{
       review_state_invalid:"审阅状态需要处理", privacy_incomplete:"隐私审阅尚未完成", evidence_unverified:"证据审阅尚未完成",
@@ -920,7 +920,7 @@ export function InlineWorkspace({
   const confirmProjectAllSet = async () => {
     setError("");
     if (!projectAllSetEligible || projectAllSetConfirmed) {
-      setError("Complete every current Chapter, Story Privacy decision, and Preference answer before confirming project All set");
+      setError("Complete every current Chapter, Story Privacy decision, and Preference answer before confirming ready for release");
       return;
     }
     const request=projectAllSetRequests.begin(workflowRunId);
@@ -938,7 +938,7 @@ export function InlineWorkspace({
       if (!projectAllSetRequests.isCurrent(request) || !current) return;
       if (current.workflowRunId === request.workflowRunId) {
         await Promise.all([
-          loadStoryPrivacy("Project authority changed. The durable current result is shown; confirm again when ready.",true),
+          loadStoryPrivacy("Release authority changed. The durable current result is shown; confirm again when ready.",true),
           loadProbes(request.signal),
         ]);
       }
@@ -946,7 +946,7 @@ export function InlineWorkspace({
     try {
       const persistence=storyPersistenceRef.current;
       if (!persistence || storyPersistenceReadyRunRef.current !== workflowRunId) {
-        throw new Error("Story review persistence is not ready for project All set");
+        throw new Error("Story review persistence is not ready for final release confirmation");
       }
       const response=await runDurableStoryReviewHandoff({
         persistence,
@@ -966,20 +966,20 @@ export function InlineWorkspace({
       if (response.status===409) {
         await rehydrateCurrentAuthority();
         if (projectAllSetRequests.isCurrent(request)) {
-          setError(failure.error || "Project All set authority changed. Review the current state and confirm again.");
+          setError(failure.error || "Release authority changed. Review the current state and confirm again.");
         }
         return;
       }
-      if (!response.ok) throw new Error(failure.error || "Project All set could not be confirmed");
+      if (!response.ok) throw new Error(failure.error || "Release readiness could not be confirmed");
       const refreshed=await loadCurrentWorkflow(request.signal);
       if (!projectAllSetRequests.isCurrent(request)) return;
       if (refreshed?.workflowRunId !== request.workflowRunId) return;
       if (refreshed.allSetConfirmed !== true) {
-        throw new Error("Durable project All set confirmation could not be verified");
+        throw new Error("Durable final release confirmation could not be verified");
       }
     } catch (value) {
       if (projectAllSetRequests.isCurrent(request)) {
-        setError(value instanceof Error ? value.message : "Project All set could not be confirmed");
+        setError(value instanceof Error ? value.message : "Release readiness could not be confirmed");
       }
     } finally {
       if (projectAllSetRequests.isCurrent(request)) {
@@ -1005,11 +1005,11 @@ export function InlineWorkspace({
   const downloadReviewed = async (url:string,filename:string) => {
     setError("");
     if (!projectAllSetConfirmed) {
-      setError("Confirm durable project All set before download");
+      setError("Confirm ready for release before download");
       return;
     }
     if (!allCurrentPreferencesComplete) {
-      setError("Complete every current Preference answer and confirm project All set again before download");
+      setError("Complete every current Preference answer and confirm ready for release again before download");
       return;
     }
     if (!storyPrivacyReleaseReady) {
@@ -1086,8 +1086,8 @@ export function InlineWorkspace({
       <button className="download" disabled={projectAllSetBusy || projectAllSetConfirmed || !projectAllSetEligible} onClick={() => { void confirmProjectAllSet(); }}>
         {projectAllSetBusy?labels.projectAllSetBusy:projectAllSetConfirmed?labels.projectAllSetConfirmed:labels.projectAllSet}
       </button>
-      <button className="download" disabled={!projectReleaseReady} title={!projectAllSetConfirmed?"Confirm project All set first":undefined} onClick={() => downloadReviewed("/api/organization/export","oxygen-reviewed-story.html")}>Download HTML</button>
-      <button className="download primary" disabled={!projectReleaseReady} title={!projectAllSetConfirmed?"Confirm project All set first":undefined} onClick={() => downloadReviewed("/api/package","oxygen-contribution.zip")}>Download ZIP</button>
+      <button className="download" disabled={!projectReleaseReady} title={!projectAllSetConfirmed?"Confirm ready for release first":undefined} onClick={() => downloadReviewed("/api/organization/export","oxygen-reviewed-story.html")}>Download HTML</button>
+      <button className="download primary" disabled={!projectReleaseReady} title={!projectAllSetConfirmed?"Confirm ready for release first":undefined} onClick={() => downloadReviewed("/api/package","oxygen-contribution.zip")}>Download ZIP</button>
     </header>
     <div className={`workspace storytellingWorkspace ${activeChapter?"episodeOpen":""}`} style={workspaceStyle}>
       <aside className="rail storyRail">

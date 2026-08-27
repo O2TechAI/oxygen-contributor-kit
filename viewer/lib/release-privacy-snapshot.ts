@@ -32,6 +32,11 @@ const storyPrivacyCandidatesSql = `SELECT workflow_run_id,candidate_id,candidate
   decision,decision_version,decided_at FROM story_privacy_candidates
   WHERE workflow_run_id=? ORDER BY candidate_id`;
 
+const storyPrivacyAuthoritySql = `SELECT workflow_run_id,source_revision,active_story_digest,
+  server_version,reviewed_story_digest,target_catalog_json,target_catalog_digest,
+  changed_target_digest,changed_target_count,receipt_digest,batch_digest,candidate_digest,
+  candidate_count,imported_at FROM story_privacy_authorities WHERE workflow_run_id=?`;
+
 const releaseProbeRunSql = `SELECT workflow_run_id,id,source_revision,input_digest,output_digest,
   output_count,status,stage,model,generated,set_aside,auto_removed_json,started_at,updated_at,
   completed_at FROM probe_runs WHERE workflow_run_id=?`;
@@ -43,8 +48,8 @@ const releaseProbesSql = `SELECT id,document_id,document_kind,event_ids_json,tim
 const releaseBulkSql = `SELECT id,kind,count,question,default_answer,answer,answered_at,
   evidence_sample_json,presentations_json,created_at FROM probe_bulk_decisions ORDER BY id`;
 
-const allSetSql = `SELECT workflow_run_id,active_story_digest,source_revision,server_version,
-  all_set_at FROM project_all_set WHERE workflow_run_id=?`;
+const allSetSql = `SELECT workflow_run_id,review_gate_digest,all_set_at
+  FROM project_all_set WHERE workflow_run_id=?`;
 
 const packageDocumentsSql = `SELECT id,kind,title,source_system,source_timestamp,item_count,
   metadata_json,formatted_summary_json FROM documents ORDER BY source_timestamp,title,id`;
@@ -82,6 +87,40 @@ async function snapshotDigest(kind: "story" | "package", value: unknown) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export async function computeReviewGateDigest(
+  storySnapshot: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
+  packageSnapshotDigest: string,
+  storyPrivacyAuthority: unknown,
+  serializedStory: string,
+) {
+  return snapshotDigest("story", {
+    schema: "oxygen.review-gate",
+    workflow: {
+      authorityRows: storySnapshot.authorityRows,
+      runRows: storySnapshot.runRows,
+      sessionRows: storySnapshot.sessionRows,
+    },
+    sourcePrivacy: {
+      redactionJobRows: storySnapshot.redactionJobRows,
+      itemRows: storySnapshot.itemRows,
+      redactionReviewRows: storySnapshot.redactionReviewRows,
+    },
+    preparation: {
+      receiptRows: storySnapshot.preparationReceiptRows,
+      storyPrivacyAuthorityRows: storySnapshot.storyPrivacyAuthorityRows,
+      storyPrivacyCandidateRows: storySnapshot.storyPrivacyCandidateRows,
+    },
+    preferences: {
+      probeRunRows: storySnapshot.probeRunRows,
+      probeRows: storySnapshot.probeRows,
+      bulkRows: storySnapshot.bulkRows,
+    },
+    packageSnapshotDigest,
+    storyPrivacyAuthority,
+    serializedStory,
+  });
+}
+
 function rows(results: unknown[], index: number): SnapshotRow[] {
   return ((results[index] as BatchResult | undefined)?.results || []) as SnapshotRow[];
 }
@@ -109,6 +148,7 @@ export async function captureStoryReleasePrivacySnapshot(
     db.prepare(reviewRedactionsSql),
     db.prepare(activeRedactionsSql),
     db.prepare(preparationReceiptsSql).bind(workflowRunId),
+    db.prepare(storyPrivacyAuthoritySql).bind(workflowRunId),
     db.prepare(storyPrivacyCandidatesSql).bind(workflowRunId),
     db.prepare(releaseProbeRunSql).bind(workflowRunId),
     db.prepare(releaseProbesSql),
@@ -123,11 +163,12 @@ export async function captureStoryReleasePrivacySnapshot(
   const redactionReviewRows = rows(results, 5);
   const redactionRows = safeActiveRows(results, 6);
   const preparationReceiptRows = rows(results, 7);
-  const storyPrivacyCandidateRows = rows(results, 8);
-  const probeRunRows = rows(results, 9);
-  const probeRows = rows(results, 10);
-  const bulkRows = rows(results, 11);
-  const allSetRows = rows(results, 12);
+  const storyPrivacyAuthorityRows = rows(results, 8);
+  const storyPrivacyCandidateRows = rows(results, 9);
+  const probeRunRows = rows(results, 10);
+  const probeRows = rows(results, 11);
+  const bulkRows = rows(results, 12);
+  const allSetRows = rows(results, 13);
   const value = {
     authorityRows,
     runRows,
@@ -136,14 +177,15 @@ export async function captureStoryReleasePrivacySnapshot(
     itemRows,
     redactionReviewRows,
     preparationReceiptRows,
+    storyPrivacyAuthorityRows,
     storyPrivacyCandidateRows,
     probeRunRows,
     probeRows,
     bulkRows,
-    allSetRows,
   };
   return {
     ...value,
+    allSetRows,
     run: runRows[0] || null,
     session: sessionRows[0] || null,
     redactionJob: redactionJobRows[0] || null,
