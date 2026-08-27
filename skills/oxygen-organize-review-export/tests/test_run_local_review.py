@@ -359,6 +359,71 @@ class LauncherUnitTest(unittest.TestCase):
                 )
         printed.assert_not_called()
 
+    def test_cli_accepts_documented_story_started_command(self):
+        with (
+            mock.patch.object(sys, "argv", [
+                "run_local_review.py",
+                "--attach-url", "http://127.0.0.1:3298",
+                "--workflow-run-id", "run-1",
+                "--story-event", "started",
+            ]),
+            mock.patch.object(MODULE, "update_story_workflow") as update,
+        ):
+            MODULE.main()
+        update.assert_called_once_with(
+            "http://127.0.0.1:3298", "run-1", "started", None, None, None, None
+        )
+
+    def test_cli_accepts_documented_story_progress_command(self):
+        with (
+            mock.patch.object(sys, "argv", [
+                "run_local_review.py",
+                "--attach-url", "http://127.0.0.1:3298",
+                "--workflow-run-id", "run-1",
+                "--story-event", "progress",
+                "--story-completed", "4",
+                "--story-total", "4",
+            ]),
+            mock.patch.object(MODULE, "update_story_workflow") as update,
+        ):
+            MODULE.main()
+        update.assert_called_once_with(
+            "http://127.0.0.1:3298", "run-1", "progress", 4, 4, None, None
+        )
+
+    def test_cli_accepts_documented_story_ready_command_and_loads_payloads(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            coverage_manifest = {
+                "revision": 1,
+                "semanticManifestRevision": 1,
+                "semanticManifestDigest": "a" * 64,
+                "coverageDigest": "b" * 64,
+                "rows": [],
+            }
+            story_candidates = [{"id": "doc:item-1", "summary": "oxygen.story:{}"}]
+            coverage_path = root / "story-coverage-manifest.json"
+            candidates_path = root / "story-candidates.json"
+            coverage_path.write_text(json.dumps(coverage_manifest), encoding="utf-8")
+            candidates_path.write_text(json.dumps(story_candidates), encoding="utf-8")
+
+            with (
+                mock.patch.object(sys, "argv", [
+                    "run_local_review.py",
+                    "--attach-url", "http://127.0.0.1:3298",
+                    "--workflow-run-id", "run-1",
+                    "--story-event", "ready",
+                    "--coverage-manifest", str(coverage_path),
+                    "--story-candidates", str(candidates_path),
+                ]),
+                mock.patch.object(MODULE, "update_story_workflow") as update,
+            ):
+                MODULE.main()
+        update.assert_called_once_with(
+            "http://127.0.0.1:3298", "run-1", "ready", None, None,
+            coverage_manifest, story_candidates,
+        )
+
     @unittest.skipUnless(os.name == "posix", "POSIX npm layout test")
     def test_posix_regular_next_shim_is_detected(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -52,7 +52,16 @@ Release Preview shows what would be released, not a raw-source browser.
 - Unavailable originals are never inferred, approximated, reconstructed, searched for, or displayed.
 - Review metadata, source originals, offsets, anchors, Evidence IDs, Story JSON, prompts, and private ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
 
-Keep preserves existing safe release context. Redact suppresses the bound release targets. Neither decision deletes source evidence or authorizes publication.
+Only `needs_confirmation` rows are decision-editable. The final contributor actions are exactly:
+
+```text
+Keep
+Redact
+```
+
+Keep preserves existing safe release context. Redact suppresses the bound release targets. Neither decision deletes source evidence, changes category/status/reason metadata, soft-deletes a row, or authorizes publication. Pending confirmation blocks Story/package release.
+
+Raw Evidence and suppressed content are not exposed through Insight review. If a final Release Preview comparison UI has not been established by implementation audit, describe this section as the required release contract and readiness gate, not as an already verified UI.
 
 ## Story/Release Candidate Shape
 

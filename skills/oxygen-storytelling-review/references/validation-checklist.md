@@ -6,14 +6,19 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 
 - [ ] Active Story candidates use `oxygen.story:` and `schema: "oxygen.story"`.
 - [ ] Workflow progress reaches Review Story only through activation with `storySourceSchema: "oxygen.story"` and `storySessionSchema: "oxygen.story-review-session"`.
-- [ ] Story generation order is complete reviewed history -> Chapter arcs -> complete Story -> validation -> adjacent Phase grouping -> independent Insight pass -> zero or more Insights.
+- [ ] Public workflow order is Collect -> Organize -> upstream source Privacy preparation -> build Project Story using bounded semantic workers -> independent global sparse Insight pass -> Story/Release Privacy candidate preparation -> Preference-question generation -> Project Story human review -> Privacy Keep/Redact decisions -> Preference answers -> All set -> local reviewed release.
+- [ ] Review Story opens only after terminal results for Story generation, global Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation; completed-zero is explicit where valid.
+- [ ] Missing activation-time receipts for Insight, Story/Release Privacy, or Preference generation are reported as REQUIRED/NOT YET ENFORCED Wave B dependencies, not implemented runtime behavior.
+- [ ] Story generation order inside the Story lane is complete reviewed history -> Chapter arcs -> complete Story -> validation -> adjacent Phase grouping -> independent Insight pass -> zero or more Insights.
 - [ ] Every Chapter is one complete coherent arc with nonempty supported People and Story blocks.
 - [ ] Phases group adjacent completed Chapters and use precise one- or two-word labels.
 - [ ] Insights are `0..n`; every existing Insight has Background, Quote, Directly Acquired Experience, Principle, optional title, same-Chapter anchors, and Evidence support.
 - [ ] Passage assistance, if any local UI later exposes it, is optional, human-facing, non-authoritative, non-readiness, and non-release.
 - [ ] Reviewed archive/input integrity, member paths, manifest counts, source hash, and `publication_approved=false` are safe.
 - [ ] Every primary/supporting/Person/Story-block/Insight Evidence reference is exact, fully qualified, same-document when required, and resolves once.
+- [ ] Bounded semantic workers use deterministic input preparation, immutable input digest, explicit unit IDs, byte/content-balanced shard manifests, separate Story/Insight/Privacy/Preference-question workers, worker receipts, exact union coverage, no overlap, deterministic composition, revision authority outside workers, and fail-closed validation.
 - [ ] Semantic coverage authority represents or explicitly excludes every unit exactly once.
+- [ ] Coverage draft rows are exactly `{unitId, disposition, ownerId}` or `{unitId, disposition, exclusionReason}`.
 - [ ] No Story JSON contains raw member lists, per-event negative ledgers, Privacy candidates, source originals, prompts, hidden reasoning, or Preference answers.
 - [ ] Story/Release Privacy candidates are not claimed unless an implemented authority provides them outside `oxygen.story`.
 - [ ] Preferences are generated from reusable lessons/Insights, may be prepared before human review opens, remain unanswered until explicit contributor action, and are not stored in the Story review session.
@@ -31,7 +36,9 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 
 - [ ] Release Preview shows only the release-safe projection for deterministic/confirmed safe content.
 - [ ] `needs_confirmation` source Privacy items show only the minimum permitted local original, current safe projection, safe uncertainty reason, and Keep/Redact.
+- [ ] Only `needs_confirmation` rows are decision-editable; category/status/reason mutation, deletion, and soft deletion are not final contributor actions.
 - [ ] Unavailable originals are never reconstructed.
+- [ ] Pending confirmation blocks Story/package release, and Raw Evidence or suppressed content is not exposed through Insight review.
 - [ ] `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, and `oxygen-contribution.zip` omit originals, Evidence IDs, anchors, coverage metadata, review ledgers, offsets, prompts, and private notes.
 - [ ] HTML and ZIP contain materially equivalent safe Story content from the same server-owned serialized bytes.
 - [ ] ZIP member scan rejects absolute paths, `..`, symlinks, credentials, local databases, logs, private review artifacts, caches, `node_modules`, and virtual environments.
@@ -52,6 +59,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Narrow Project Story Timeline screenshot.
 - [ ] Desktop Chapter screenshot with rail, People, Story, and Review completion.
 - [ ] Narrow Chapter screenshot with no horizontal overflow.
+- [ ] Desktop Chapter screenshot showing right-side separate Insight companion cards aligned to Story paragraphs when Insights exist.
 - [ ] Story Edit Mode screenshot with notes and Undo/Redo.
 - [ ] Privacy available and unavailable screenshots when candidate authority exists.
 - [ ] Preferences screenshot with unanswered and answered states.
@@ -62,47 +70,96 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 
 ## Commands
 
-Run the focused Story launcher test after fixture changes:
+Run the focused launcher and document-contract tests:
 
-```bash
-python skills/oxygen-organize-review-export/tests/test_run_local_review.py
+```powershell
+python .\skills\oxygen-organize-review-export\tests\test_run_local_review.py
+Push-Location -LiteralPath ".\viewer"
+node --test .\tests\workflow-contracts.test.mjs
+Pop-Location
 ```
 
 Run Python compilation for changed Python:
 
-```bash
-python -m py_compile skills/oxygen-organize-review-export/tests/test_run_local_review.py
+```powershell
+python -m py_compile .\skills\oxygen-organize-review-export\tests\test_run_local_review.py
 ```
 
 Run full deterministic gates for a release-ready documentation or Story behavior change:
 
-```bash
-cd viewer
+```powershell
+Push-Location -LiteralPath ".\viewer"
 npm test
 npm run lint
 npx tsc --noEmit --strict
 npm run build
+Pop-Location
 ```
 
-Run residual scans over changed docs and tests for old Story product contracts, old Story identifiers, and retired lane labels supplied by the task:
+Run residual scans over public docs and tests for old Story product contracts, old Story identifiers, fake prior-coverage files, retired lane labels, placeholder scans, and hardcoded temporary diff bases:
 
-```bash
-rg -n "<retired-story-pattern>" skills/oxygen-storytelling-review SOP.md \
-  skills/oxygen-organize-review-export/tests/test_run_local_review.py
+```powershell
+$Docs = @(
+  "AGENTS.md",
+  "SOP.md",
+  "skills\oxygen-storytelling-review\SKILL.md",
+  "skills\oxygen-storytelling-review\references",
+  "skills\oxygen-elicit-contributor-preferences\SKILL.md",
+  "skills\oxygen-elicit-contributor-preferences\references",
+  "skills\oxygen-organize-review-export\tests\test_run_local_review.py",
+  "viewer\tests\workflow-contracts.test.mjs"
+)
+$RetiredPatterns = @(
+  "Stage 3: Check " + "privacy",
+  "server-accepted-story-" + "coverage\.json",
+  "oxygen\.story/(?:1|2|3)",
+  "oxygen\.story-review-session/[0-9]",
+  "oxygen\.reviewed-story/[0-9]",
+  "git diff --check [0-9a-f]{40}\.\.HEAD"
+)
+$Pattern = $RetiredPatterns -join "|"
+rg -n $Pattern @Docs
+if ($LASTEXITCODE -eq 0) { throw "Residual retired Story contract text remains" }
+if ($LASTEXITCODE -gt 1) { exit $LASTEXITCODE }
 ```
 
-Run diff and whitespace checks:
+Validate Story Skill reference links:
 
-```bash
-git diff --check 356b6760ab45cd9fcbc011c1d92e646b82011015..HEAD
-git diff --name-only 356b6760ab45cd9fcbc011c1d92e646b82011015..HEAD
+```powershell
+$StoryDocs = @("skills\oxygen-storytelling-review\SKILL.md") +
+  (Get-ChildItem -LiteralPath "skills\oxygen-storytelling-review\references" -Filter "*.md").FullName
+$Missing = foreach ($File in $StoryDocs) {
+  $Base = Split-Path -LiteralPath $File
+  Select-String -LiteralPath $File -Pattern "\[[^\]]+\]\((references/[^)#]+|[^/)#]+\.md)\)" -AllMatches |
+    ForEach-Object {
+      foreach ($Match in $_.Matches) {
+        $Target = $Match.Groups[1].Value -replace "/", "\"
+        if ($Target.StartsWith("references\")) {
+          $Resolved = Join-Path -Path (Split-Path -LiteralPath "skills\oxygen-storytelling-review\SKILL.md") -ChildPath $Target
+        } else {
+          $Resolved = Join-Path -Path $Base -ChildPath $Target
+        }
+        if (-not (Test-Path -LiteralPath $Resolved)) { "$File -> $Target" }
+      }
+    }
+}
+if ($Missing) { $Missing; exit 1 }
+```
+
+Run revision-independent diff and whitespace checks:
+
+```powershell
+git diff --check
+git diff --check --cached
+git diff --name-only --diff-filter=ACMRTUXB
+git status --short
 ```
 
 ## Forbidden Completion Shortcuts
 
 - [ ] No code edits during clean-room execution.
 - [ ] No production edits.
-- [ ] No Viewer test edits.
+- [ ] No production Viewer edits.
 - [ ] No JSON surgery.
 - [ ] No database repair.
 - [ ] No hidden prompts.

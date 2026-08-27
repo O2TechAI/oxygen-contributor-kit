@@ -16,10 +16,11 @@ const assertOrdered = (document, labels) => {
 };
 
 test("root routing is progressive and preserves the canonical stage owners", async () => {
-  const [agents, readme, sop, storyDiscovery] = await Promise.all([
+  const [agents, readme, sop, storySkill, storyDiscovery] = await Promise.all([
     read("AGENTS.md"),
     read("README.md"),
     read("SOP.md"),
+    read("skills/oxygen-storytelling-review/SKILL.md"),
     read("skills/oxygen-storytelling-review/agents/openai.yaml"),
   ]);
 
@@ -27,10 +28,16 @@ test("root routing is progressive and preserves the canonical stage owners", asy
   assertOrdered(agents, [
     "Collect",
     "Organize",
-    "Privacy",
-    "Build Project Story",
-    "Review Story",
-    "Release handoff",
+    "upstream source Privacy",
+    "Build Project Story with bounded semantic workers",
+    "independent global sparse",
+    "Story/Release Privacy candidate preparation",
+    "Preference-question generation",
+    "Project Story human review",
+    "Privacy Keep/Redact decisions",
+    "Preference answers",
+    "All set",
+    "local reviewed release",
   ]);
   assert.match(agents, /tools\/llm_redact\/REDACTION_PROMPT\.md/);
   assert.doesNotMatch(agents, /(?<!tools\/llm_redact\/)`REDACTION_PROMPT\.md`/);
@@ -58,11 +65,30 @@ test("root routing is progressive and preserves the canonical stage owners", asy
   for (const heading of [
     /Stage 1: Collect project history/i,
     /Stage 2: Organize project/i,
-    /Stage 3: Check privacy/i,
-    /Stage 4: Build Project Story/i,
-    /Stage 5: Review Story/i,
-    /Stage 6: Release handoff/i,
+    /Stage 3: Prepare upstream source Privacy/i,
+    /Stage 4: Build Project Story and candidate review artifacts/i,
+    /Stage 5: Human Story, Privacy, and Preference review/i,
+    /Stage 6: All set and release handoff/i,
   ]) assert.match(sop, heading);
+
+  for (const document of [sop, storySkill]) {
+    assertOrdered(document, [
+      "Collect",
+      "Organize",
+      "upstream source Privacy preparation",
+      "build Project Story using bounded semantic workers",
+      "independent global sparse Insight pass",
+      "Story/Release Privacy candidate preparation",
+      "Preference-question generation",
+      "Project Story human review",
+      "Privacy Keep/Redact decisions",
+      "Preference answers",
+      "All set",
+      "local reviewed release",
+    ]);
+  }
+  assert.match(storySkill, /REQUIRED\/NOT YET ENFORCED[\s\S]{0,120}Wave B runtime dependency/);
+  assert.match(storySkill, /completed-zero[\s\S]{0,120}Preference-question generation/);
 
   assert.match(storyDiscovery, /after privacy preparation/i);
   assert.match(storyDiscovery, /Project Story for human review/i);
@@ -101,8 +127,63 @@ test("reviewed Story has no numeric quota and Preferences stays inside the revie
   assert.doesNotMatch(preferenceSkill, /Apply the redaction pass/);
 
   const agents = await read("AGENTS.md");
-  assert.match(agents, /Pause for the contributor at Review Story/);
-  assert.match(agents, /same reviewed input without reopening raw history or rerunning Privacy/);
+  assert.match(agents, /Pause for the contributor at Project Story human review/);
+  assert.match(agents, /same reviewed input without reopening raw history[\s\S]{0,40}rerunning Privacy/);
   assert.match(agents, /publication_approved=false/);
   assert.match(agents, /Never[\s\S]{0,180}upload automatically[\s\S]{0,80}publish automatically/);
+});
+
+test("Story public contracts preserve coverage, Insight, and Privacy release semantics", async () => {
+  const [
+    storySkill,
+    productContract,
+    storyDataContract,
+    uiContract,
+    privacyContract,
+    validationChecklist,
+    sop,
+  ] = await Promise.all([
+    read("skills/oxygen-storytelling-review/SKILL.md"),
+    read("skills/oxygen-storytelling-review/references/product-contract.md"),
+    read("skills/oxygen-storytelling-review/references/story-data-contract.md"),
+    read("skills/oxygen-storytelling-review/references/ui-interaction-contract.md"),
+    read("skills/oxygen-storytelling-review/references/privacy-evidence-boundary.md"),
+    read("skills/oxygen-storytelling-review/references/validation-checklist.md"),
+    read("SOP.md"),
+  ]);
+  const documents = [
+    storySkill,
+    productContract,
+    storyDataContract,
+    uiContract,
+    privacyContract,
+    validationChecklist,
+    sop,
+  ].join("\n");
+
+  assert.match(productContract, /deterministic input/i);
+  assert.match(productContract, /immutable input digest/i);
+  assert.match(productContract, /byte\/content-balanced shard manifests/i);
+  assert.match(productContract, /separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning/i);
+  assert.match(productContract, /worker returns a receipt[\s\S]{0,160}input digest[\s\S]{0,80}unit IDs covered/);
+  assert.match(productContract, /exact union coverage[\s\S]{0,80}no overlap/i);
+  assert.match(productContract, /No worker may silently expand scope[\s\S]{0,80}repair another lane/i);
+
+  assert.match(storyDataContract, /type CoverageDraftRow/);
+  assert.match(storyDataContract, /disposition: "represented"; ownerId/);
+  assert.match(storyDataContract, /disposition: "excluded"; exclusionReason/);
+  assert.match(storyDataContract, /exact submitted `story-coverage-manifest\.json` becomes the prior accepted coverage authority/);
+  assert.doesNotMatch(documents, new RegExp("server-accepted-story-" + "coverage\\.json"));
+
+  assert.match(uiContract, /Insight is not Story prose/);
+  assert.match(uiContract, /left narrative column/);
+  assert.match(uiContract, /right-side companion column/);
+  assert.match(uiContract, /Multiple Insights[\s\S]{0,80}stack/);
+  assert.match(uiContract, /Do not insert Insights inline[\s\S]{0,120}generic Chapter-end list/i);
+
+  assert.match(privacyContract, /Only `needs_confirmation` rows are decision-editable/);
+  assert.match(privacyContract, /Keep[\s\S]{0,20}Redact/);
+  assert.match(privacyContract, /Pending confirmation blocks Story\/package release/);
+  assert.match(privacyContract, /Raw Evidence and suppressed content are not exposed through Insight review/);
+  assert.doesNotMatch(sop, /controls to change the category|delete the decision|soft delete/i);
 });

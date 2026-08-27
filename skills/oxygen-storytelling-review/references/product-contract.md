@@ -41,15 +41,34 @@ The public flow is:
 Collect
 Organize
 upstream source Privacy preparation producing the reviewed input boundary
-Build Project Story and independent global Insight pass
+build Project Story using bounded semantic workers
+independent global sparse Insight pass
 Story/Release Privacy candidate preparation
 Preference-question generation
-human Story, Privacy, and Preference review
+Project Story human review
+Privacy Keep/Redact decisions
+Preference answers
 All set
 local reviewed release
 ```
 
 The Story stage may use conceptual passes inside Build Project Story, but it must not add new public workflow stages or hide human pauses.
+
+## Review Readiness
+
+Opening Project Story for human review requires terminal results for Story generation, the independent global sparse Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation. Completed-zero is a valid terminal result for the Insight and Preference lanes when no warranted Insight or valid question exists.
+
+Current runtime enforces persisted Story activation before Review Story. Separate activation-time receipts for Insight, Story/Release Privacy, and Preference-question generation are **REQUIRED/NOT YET ENFORCED** and remain a Wave B dependency. Until then, a contextless contributor workflow must treat a missing terminal receipt as a blocker rather than a silent success.
+
+Preference questions may be generated before Project Story human review opens by using reusable lessons represented by generated Insight candidates. Generated questions are not confirmed preferences; answers exist only after explicit contributor action.
+
+## Bounded Semantic Workers
+
+Parallel semantic work is Master-owned. The owning Agent prepares deterministic inputs, computes one immutable input digest, assigns explicit semantic unit IDs, and writes byte/content-balanced shard manifests before any worker starts.
+
+Use separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning. Each worker returns a receipt naming the input digest, shard ID, unit IDs covered, output path, and terminal status. The owning Agent validates exact union coverage, no overlap, no foreign unit IDs, and no stale digest; then it deterministically deduplicates and composes outputs.
+
+Revision authority, coverage finalization, activation, human-pause enforcement, and release reconstruction stay outside worker scope. No worker may silently expand scope, reopen raw history, repair another lane, or treat another lane's failure as success. Validation fails closed on missing, overlapping, malformed, or scope-expanded work.
 
 ## Product Boundaries
 

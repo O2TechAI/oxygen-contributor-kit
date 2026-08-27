@@ -1,6 +1,7 @@
 # Preference probe contract
 
-Write UTF-8 JSON at `<run>/preference-probes.json`.
+Write UTF-8 JSON at `<run>-review/preference-probes.json`. Project Map and Preference Probe keep
+their independent `schema_version` fields; that is not a Story product version.
 
 ```json
 {
@@ -79,6 +80,8 @@ Write UTF-8 JSON at `<run>/preference-probes.json`.
 - `allow_other` and `allow_skip` are always `true`.
 - `set_aside` is the number of qualifying moments dropped by the cap. Report it to the
   contributor; silently truncating reads as "we found ten moments" when there were thirty.
+- A completed-zero generation result is represented by a valid document with `probes: []`,
+  `set_aside: 0`, exact `auto_removed` counts, and no fabricated answers.
 
 ## Answers
 

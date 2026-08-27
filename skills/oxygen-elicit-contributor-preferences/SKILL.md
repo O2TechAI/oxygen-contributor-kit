@@ -1,6 +1,6 @@
 ---
 name: oxygen-elicit-contributor-preferences
-description: Turn a privacy-prepared reviewed Oxygen run into a small set of answerable questions that recover the contributor's transferable preferences. Reuse validated privacy counts and reviewed exclusions, find the high-signal moments where preferences surfaced, reconstruct each situation, and offer three evidence-grounded candidate preferences plus an escape hatch. Use after human Story review during reviewed handoff.
+description: Turn a privacy-prepared reviewed Oxygen run into a small set of answerable questions that recover the contributor's transferable preferences. Reuse validated privacy counts, reviewed exclusions, and reusable lessons represented by generated Insight candidates; find high-signal moments where preferences surfaced; reconstruct each situation; and offer evidence-grounded candidate answers plus an escape hatch. Generate questions after reusable lessons/Insight candidates exist, including before Project Story human review opens when appropriate. Answers remain explicit contributor actions during reviewed handoff.
 ---
 
 # Elicit contributor preferences
@@ -35,6 +35,11 @@ validate probes only from this reviewed boundary.
 Work only on events whose project label is the primary project unless the contributor asks
 otherwise. Off-project events are noise and spending the contributor's attention on them is the
 main way this pass fails.
+
+Generated probes are questions, not confirmed preferences. They may be prepared before Project
+Story human review opens by using reusable lessons represented by generated Insight candidates, but
+they remain unanswered until the contributor acts. If no valid question is warranted, write a valid
+completed-zero probe batch rather than inventing a preference.
 
 ## Stage 1 — Verify the reviewed boundary and report prior removals
 
@@ -127,20 +132,20 @@ Rules that decide whether this works:
 
 ## Stage 5 — Write the results
 
-Write `work/<run>/preference-probes.json` per
+Write `work/<run>-review/preference-probes.json` per
 [references/preference-probe-contract.md](references/preference-probe-contract.md).
 
 Validate before handing off:
 
 ```bash
-python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py work/<run>
+python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py work/<run>-review
 ```
 
 Native Windows PowerShell equivalent:
 
 ```powershell
 python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
-  "work\<run>"
+  "work\<run>-review"
 ```
 
 Each confirmed preference becomes a checklist entry attached to its source document, carrying the

@@ -158,13 +158,31 @@ Story carries only bounded coverage references:
 
 The semantic manifest and normalized coverage manifest are server/tool-owned authority. Story JSON must not contain exact unit member lists or per-event negative ledgers. Every semantic unit is represented exactly once by one Chapter owner or excluded exactly once with one authorized reason.
 
-The local coverage draft contains `rows` only. Run the finalizer before activation:
+The local coverage draft contains `rows` only. Draft rows use only these shapes:
+
+```ts
+type CoverageDraftRow =
+  | { unitId: string; disposition: "represented"; ownerId: string }
+  | { unitId: string; disposition: "excluded"; exclusionReason: "duplicate" | "privacy_withheld" | "routine_non_narrative" | "outside_story_scope" };
+```
+
+The finalizer rejects omissions, overlaps, unknown unit IDs, stale semantic authority, invalid exclusion reasons, and any extra keys. Run it before activation:
 
 ```bash
 node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \
   work/<run>-review/project-map.json \
   work/<run>-review/story-coverage-draft.json \
   work/<run>-review/story-coverage-manifest.json
+```
+
+After a successful activation, the exact submitted `story-coverage-manifest.json` becomes the prior accepted coverage authority for the next regeneration. If activation is rejected, that output is not prior authority. For regeneration, pass `--previous` only to a local copy of the exact manifest from the last successful activation:
+
+```bash
+node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \
+  work/<run>-review/project-map.json \
+  work/<run>-review/story-coverage-draft.json \
+  work/<run>-review/story-coverage-manifest.json \
+  --previous work/<run>-review/story-coverage-manifest.accepted.json
 ```
 
 ## Activation Submission

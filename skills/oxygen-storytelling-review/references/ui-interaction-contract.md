@@ -76,6 +76,10 @@ Imported exact-range review records may render as restrained notes only after va
 
 ## Insights
 
+Insight is not Story prose. The Story paragraph remains in the left narrative column. Each Insight renders as a separate small card in the right-side companion column aligned with the exact paragraph or Story block it references. Multiple Insights for one paragraph stack in that paragraph's companion area. Responsive narrow layout may stack below the paragraph, but ownership and separate-card identity remain.
+
+Do not insert Insights inline, append them into a generic Chapter-end list, or merge them into Story paragraphs.
+
 Render Story independently of Insight count. If source AI Insights exist, render each one by stable ID with explicit Accept, Edit, and Do-not-preserve actions for the current version. Editing exposes optional Title plus Background, Quote, Directly Acquired Experience, and Principle.
 
 A human may add an Insight only from safe reviewed Story text within one current Story block. Cross-block or foreign selection is rejected. Human Save records a `human:` Insight and approves that saved version without a redundant Accept.
