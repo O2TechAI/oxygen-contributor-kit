@@ -18,6 +18,10 @@ import {
 } from "./story-privacy-ui";
 import { ProbePanel, type Probe, type BulkDecision, type ProbeRun } from "./probe-panel";
 import {
+  ProjectAllSetRequestGate,
+  projectAllSetPreferencesComplete,
+} from "./project-all-set-ui";
+import {
   StoryChapterEditor,
   type ChapterReviewState,
 } from "./story-chapter-editor";
@@ -140,6 +144,7 @@ const workspaceUi = {
     introTitle:"Chapters are the Story table of contents.", intro:"Open a chapter for People, Story, and Privacy. AI insights stay inside the narrative; local evidence stays secondary.",
     before:"BEFORE", after:"AFTER", timelineAiInsight:"AI Insight", evidence:"reviewed evidence event", read:"Read chapter", workflow:"Workflow",
     nextStep:"Read a Chapter to review the full story, evidence, direct learning, and reusable rules.",
+    projectAllSet:"Project All set", projectAllSetBusy:"Confirming project…", projectAllSetConfirmed:"Project All set confirmed",
     downloadReviewKicker:"Review required", downloadReviewTitle:"Review before download", downloadReviewIntro:"Complete these Chapter review items, then try the download again.", downloadReviewCount:"unresolved review items", openReview:"Open review", close:"Close", chapter:"Chapter",
     downloadBlockers:{
       review_state_invalid:"Review state needs attention", privacy_incomplete:"Privacy review is incomplete", evidence_unverified:"Evidence review is incomplete",
@@ -160,6 +165,7 @@ const workspaceUi = {
     introTitle:"章节构成故事目录。", intro:"打开一章，按人物、故事和隐私阅读；AI 洞察留在叙事中，本地证据保持为次要入口。",
     before:"之前", after:"之后", timelineAiInsight:"AI 洞察", evidence:"条已审阅证据", read:"阅读章节", workflow:"工作流",
     nextStep:"阅读任一章节，完整审阅故事、证据、直接经验与可复用规则。",
+    projectAllSet:"确认项目全部完成", projectAllSetBusy:"正在确认项目…", projectAllSetConfirmed:"项目全部完成已持久确认",
     downloadReviewKicker:"需要审阅", downloadReviewTitle:"下载前请完成审阅", downloadReviewIntro:"请完成以下章节审阅项，然后再次尝试下载。", downloadReviewCount:"项待解决审阅", openReview:"打开审阅", close:"关闭", chapter:"章节",
     downloadBlockers:{
       review_state_invalid:"审阅状态需要处理", privacy_incomplete:"隐私审阅尚未完成", evidence_unverified:"证据审阅尚未完成",
@@ -227,6 +233,7 @@ export function InlineWorkspace({
   const [chapterReviews,setChapterReviews] = useState<Record<string,ChapterReviewState>>(initialChapterReviews);
   const [storyDataReadyRunId,setStoryDataReadyRunId] = useState(initialStorySessionReadyRunId);
   const [storySessionReadyRunId,setStorySessionReadyRunId] = useState(initialStorySessionReadyRunId);
+  const [storyPersistenceReadyRunId,setStoryPersistenceReadyRunId] = useState("");
   const [downloadBlockerGroups,setDownloadBlockerGroups] = useState<DownloadReviewBlockerGroup[]>([]);
   const [downloadReviewFocus,setDownloadReviewFocus] = useState<StoryReviewFocusTarget|null>(null);
   const timelineScrollRef = useRef<HTMLDivElement|null>(null);
@@ -262,6 +269,8 @@ export function InlineWorkspace({
   const [storyPrivacyRunId,setStoryPrivacyRunId] = useState("");
   const [storyPrivacyBusy,setStoryPrivacyBusy] = useState("");
   const [storyPrivacyRequests] = useState(() => new StoryPrivacyRequestGate());
+  const [projectAllSetRequests] = useState(() => new ProjectAllSetRequestGate());
+  const [projectAllSetBusyRunId,setProjectAllSetBusyRunId] = useState("");
   const redactionJobStatus = redactionJob?.status;
   const storyPersistenceRef = useRef<StoryReviewSessionPersistenceQueue|null>(null);
   if (storyPersistenceRef.current == null) {
@@ -284,8 +293,10 @@ export function InlineWorkspace({
       },
       onStatus: (persistence) => {
         if (persistence.status === "conflict") {
+          setStoryPersistenceReadyRunId("");
           setError("Story review changed or its source was replaced. Reload before continuing.");
         } else if (persistence.status === "failed" && persistence.errorCode) {
+          setStoryPersistenceReadyRunId("");
           setError("Story review state could not be safely persisted");
         }
       },
@@ -296,7 +307,10 @@ export function InlineWorkspace({
     const query = scopedWorkflowRunId
       ? `?workflowRunId=${encodeURIComponent(scopedWorkflowRunId)}`
       : "";
-    const response = await fetch(`/api/workflow${query}`, { cache:"no-store", ...(signal ? { signal } : {}) });
+    let response = await fetch(`/api/workflow${query}`, { cache:"no-store", ...(signal ? { signal } : {}) });
+    if (response.status === 409 && scopedWorkflowRunId && !signal?.aborted) {
+      response = await fetch("/api/workflow", { cache:"no-store", ...(signal ? { signal } : {}) });
+    }
     if (!response.ok) return null;
     const next = await response.json() as WorkflowProgressState;
     if (signal?.aborted) return null;
@@ -304,10 +318,21 @@ export function InlineWorkspace({
     return next;
   }, [scopedWorkflowRunId]);
 
+  const loadCurrentWorkflow = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/workflow", { cache:"no-store", ...(signal ? { signal } : {}) });
+    if (!response.ok) return null;
+    const next = await response.json() as WorkflowProgressState;
+    if (signal?.aborted) return null;
+    setWorkflow(next);
+    return next;
+  }, []);
+
   useEffect(() => {
     const polling = setInterval(() => { void loadWorkflow(); }, 2000);
     return () => clearInterval(polling);
   }, [loadWorkflow]);
+
+  useEffect(() => () => projectAllSetRequests.retire(), [projectAllSetRequests, workflowRunId]);
 
   const loadRedactions = useCallback(async () => {
     const response = await fetch("/api/redactions", { cache:"no-store" });
@@ -358,10 +383,11 @@ export function InlineWorkspace({
   const [probeBusy,setProbeBusy] = useState("");
   const probeRunStatus = probeRun?.status;
 
-  const loadProbes = useCallback(async () => {
-    const response = await fetch("/api/probes", { cache:"no-store" });
+  const loadProbes = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/probes", { cache:"no-store", ...(signal ? { signal } : {}) });
     if (!response.ok) return;
     const payload = await response.json() as { probes: Probe[]; bulkDecisions: BulkDecision[]; run: ProbeRun };
+    if (signal?.aborted) return;
     setProbes(payload.probes || []);
     setBulkDecisions(payload.bulkDecisions || []);
     setProbeRun(payload.run);
@@ -385,6 +411,7 @@ export function InlineWorkspace({
       body: JSON.stringify(patch),
     });
     await loadProbes();
+    await loadWorkflow();
     setProbeBusy("");
   }
 
@@ -674,6 +701,7 @@ export function InlineWorkspace({
           setChapterReviews(restored.chapterReviews);
           storySessionHydratedRunRef.current = workflowRunId;
           storyPersistenceReadyRunRef.current = workflowRunId;
+          setStoryPersistenceReadyRunId(workflowRunId);
           setStorySessionReadyRunId(workflowRunId);
         }
       } catch (value) {
@@ -876,6 +904,90 @@ export function InlineWorkspace({
         completionBlockers:chapterReviewCompletionBlockers(state,completionContext(chapter.source)),
       };
     }));
+  const allCurrentChaptersConfirmed = storySelection.chapters.length > 0
+    && currentDownloadReviewBlockerGroups().length === 0;
+  const allCurrentPreferencesComplete = projectAllSetPreferencesComplete(probeRun, probes, bulkDecisions);
+  const projectAllSetConfirmed = workflow.allSetConfirmed === true;
+  const projectAllSetBusy = projectAllSetBusyRunId === workflowRunId;
+  const projectAllSetEligible = allCurrentChaptersConfirmed
+    && storyPrivacyReleaseReady
+    && allCurrentPreferencesComplete
+    && !probeBusy
+    && !storyPrivacyBusy
+    && storySessionReadyRunId === workflowRunId
+    && storyPersistenceReadyRunId === workflowRunId;
+  const projectReleaseReady = projectAllSetConfirmed && projectAllSetEligible && !projectAllSetBusy;
+  const confirmProjectAllSet = async () => {
+    setError("");
+    if (!projectAllSetEligible || projectAllSetConfirmed) {
+      setError("Complete every current Chapter, Story Privacy decision, and Preference answer before confirming project All set");
+      return;
+    }
+    const request=projectAllSetRequests.begin(workflowRunId);
+    if (!request) return;
+    setProjectAllSetBusyRunId(workflowRunId);
+    const rehydrateCurrentAuthority = async () => {
+      storyPrivacyRequests.retire();
+      storyPersistenceRef.current?.invalidate();
+      storyPersistenceReadyRunRef.current="";
+      setStoryPersistenceReadyRunId("");
+      storySessionHydratedRunRef.current="";
+      setStorySessionReadyRunId("");
+      setStoryPrivacy({status:"loading",authority:null,message:""});
+      const current=await loadCurrentWorkflow(request.signal);
+      if (!projectAllSetRequests.isCurrent(request) || !current) return;
+      if (current.workflowRunId === request.workflowRunId) {
+        await Promise.all([
+          loadStoryPrivacy("Project authority changed. The durable current result is shown; confirm again when ready.",true),
+          loadProbes(request.signal),
+        ]);
+      }
+    };
+    try {
+      const persistence=storyPersistenceRef.current;
+      if (!persistence || storyPersistenceReadyRunRef.current !== workflowRunId) {
+        throw new Error("Story review persistence is not ready for project All set");
+      }
+      const response=await runDurableStoryReviewHandoff({
+        persistence,
+        currentSession: () => {
+          const current=currentStoryStateRef.current;
+          return createStoryReviewSession(workflowRunId,current.chapterReviews,{});
+        },
+        handoff: ({workflowRunId,serverVersion,sourceRevision}) => fetch("/api/all-set",{
+          method:"POST",
+          headers:{"content-type":"application/json"},
+          body:JSON.stringify({workflowRunId,serverVersion,sourceRevision}),
+          signal:request.signal,
+        }),
+      });
+      if (!projectAllSetRequests.isCurrent(request)) return;
+      const failure=await response.json().catch(()=>({})) as {error?:string};
+      if (response.status===409) {
+        await rehydrateCurrentAuthority();
+        if (projectAllSetRequests.isCurrent(request)) {
+          setError(failure.error || "Project All set authority changed. Review the current state and confirm again.");
+        }
+        return;
+      }
+      if (!response.ok) throw new Error(failure.error || "Project All set could not be confirmed");
+      const refreshed=await loadCurrentWorkflow(request.signal);
+      if (!projectAllSetRequests.isCurrent(request)) return;
+      if (refreshed?.workflowRunId !== request.workflowRunId) return;
+      if (refreshed.allSetConfirmed !== true) {
+        throw new Error("Durable project All set confirmation could not be verified");
+      }
+    } catch (value) {
+      if (projectAllSetRequests.isCurrent(request)) {
+        setError(value instanceof Error ? value.message : "Project All set could not be confirmed");
+      }
+    } finally {
+      if (projectAllSetRequests.isCurrent(request)) {
+        setProjectAllSetBusyRunId("");
+        projectAllSetRequests.finish(request);
+      }
+    }
+  };
   const openDownloadReviewBlocker = (group:DownloadReviewBlockerGroup,blocker:DownloadReviewBlocker) => {
     setDownloadBlockerGroups([]);
     if(!navigationCandidates.some((chapter) => chapter.project===group.project && chapter.story.key===group.chapterKey)) return;
@@ -892,6 +1004,14 @@ export function InlineWorkspace({
   };
   const downloadReviewed = async (url:string,filename:string) => {
     setError("");
+    if (!projectAllSetConfirmed) {
+      setError("Confirm durable project All set before download");
+      return;
+    }
+    if (!allCurrentPreferencesComplete) {
+      setError("Complete every current Preference answer and confirm project All set again before download");
+      return;
+    }
     if (!storyPrivacyReleaseReady) {
       setError("Resolve the current Story Privacy authority in Release Preview before download");
       openGlobalStoryPrivacy();
@@ -963,8 +1083,11 @@ export function InlineWorkspace({
         <span>|</span>
         <button className={storyLanguage==="zh"?"active":""} onClick={() => setLanguage("zh")} aria-pressed={storyLanguage==="zh"}>中文</button>
       </div>
-      <button className="download" aria-disabled={!storyPrivacyReleaseReady} title={!storyPrivacyReleaseReady?"Resolve Story Privacy first":undefined} onClick={() => downloadReviewed("/api/organization/export","oxygen-reviewed-story.html")}>Download HTML</button>
-      <button className="download primary" aria-disabled={!storyPrivacyReleaseReady} title={!storyPrivacyReleaseReady?"Resolve Story Privacy first":undefined} onClick={() => downloadReviewed("/api/package","oxygen-contribution.zip")}>Download ZIP</button>
+      <button className="download" disabled={projectAllSetBusy || projectAllSetConfirmed || !projectAllSetEligible} onClick={() => { void confirmProjectAllSet(); }}>
+        {projectAllSetBusy?labels.projectAllSetBusy:projectAllSetConfirmed?labels.projectAllSetConfirmed:labels.projectAllSet}
+      </button>
+      <button className="download" disabled={!projectReleaseReady} title={!projectAllSetConfirmed?"Confirm project All set first":undefined} onClick={() => downloadReviewed("/api/organization/export","oxygen-reviewed-story.html")}>Download HTML</button>
+      <button className="download primary" disabled={!projectReleaseReady} title={!projectAllSetConfirmed?"Confirm project All set first":undefined} onClick={() => downloadReviewed("/api/package","oxygen-contribution.zip")}>Download ZIP</button>
     </header>
     <div className={`workspace storytellingWorkspace ${activeChapter?"episodeOpen":""}`} style={workspaceStyle}>
       <aside className="rail storyRail">
