@@ -12,14 +12,12 @@ import tempfile
 from typing import Any
 
 
-CONTEXT_SCHEMA = "oxygen.preference-context.v1"
-STORY_CANDIDATES_SCHEMA = "oxygen.story-candidates.v1"
-REVIEWED_EVIDENCE_SCHEMA = "oxygen.reviewed-evidence.v1"
-PRIVACY_SUMMARY_SCHEMA = "oxygen.privacy-summary.v1"
+CONTEXT_SCHEMA = "oxygen.preference-context"
 AUTO_REMOVED_KINDS = {
     "credential", "private-personal", "sensitive", "internal-metric",
     "internal-timeline", "mosaic-reidentification", "user_path", "third_party_contact",
 }
+REVIEW_STATES = {"deterministic", "needs_confirmation"}
 
 
 def canonical_json(value: Any) -> str:
@@ -130,46 +128,126 @@ def parse_story(summary: Any) -> dict[str, Any]:
     return {"key": story["key"], "insights": parsed}
 
 
-def read_reviewed_evidence(review_dir: Path) -> dict[tuple[str, str], str]:
-    authority = read_json(review_dir / "reviewed-evidence.json")
-    if not exact_object(authority, {"schema", "documents"}) or authority["schema"] != REVIEWED_EVIDENCE_SCHEMA:
-        raise ValueError("reviewed evidence authority is missing or malformed")
-    documents = authority["documents"]
-    if not isinstance(documents, list):
-        raise ValueError("reviewed evidence authority is malformed")
+def read_privacy_authority(
+    redacted_dir: Path, privacy_report_path: Path,
+) -> tuple[dict[tuple[str, str], str], dict[str, Any]]:
+    report = read_json(privacy_report_path)
+    report_fields = {
+        "categories", "total_applied", "rejected", "rejects",
+        "missing_worker_output", "per_trajectory",
+    }
+    if not exact_object(report, report_fields):
+        raise ValueError("completed Privacy report is malformed")
+    if (type(report["total_applied"]) is not int or report["total_applied"] < 0
+            or type(report["rejected"]) is not int or report["rejected"] != 0
+            or report["rejects"] != [] or report["missing_worker_output"] != []
+            or not isinstance(report["categories"], dict)
+            or not isinstance(report["per_trajectory"], list)):
+        raise ValueError("completed Privacy report is incomplete")
+
+    reported_counts: dict[str, int] = {}
+    for kind, count in report["categories"].items():
+        if kind not in AUTO_REMOVED_KINDS or type(count) is not int or count <= 0:
+            raise ValueError("completed Privacy report categories are malformed")
+        reported_counts[kind] = count
+    if sum(reported_counts.values()) != report["total_applied"]:
+        raise ValueError("completed Privacy report aggregate is inconsistent")
+
+    reported_documents: dict[str, tuple[int, int]] = {}
+    for row in report["per_trajectory"]:
+        if (not exact_object(row, {"trajectory", "turns", "applied"})
+                or not nonempty(row["trajectory"])
+                or row["trajectory"] in reported_documents
+                or type(row["turns"]) is not int or row["turns"] < 0
+                or type(row["applied"]) is not int or row["applied"] < 0):
+            raise ValueError("completed Privacy report documents are malformed")
+        reported_documents[row["trajectory"]] = (row["turns"], row["applied"])
+
+    if not redacted_dir.is_dir():
+        raise ValueError("reviewed redaction directory is missing")
+    bundle_paths = [
+        path for path in sorted(redacted_dir.glob("*.json"), key=lambda item: item.name.encode("utf-8"))
+        if path.name != "index.json"
+    ]
+    if not bundle_paths:
+        raise ValueError("reviewed redaction directory is empty")
+
     events: dict[tuple[str, str], str] = {}
-    document_ids: set[str] = set()
-    for document in documents:
-        if not exact_object(document, {"documentId", "documentKind", "events"}):
-            raise ValueError("reviewed evidence authority is malformed")
-        document_id = document["documentId"]
-        if not nonempty(document_id) or document_id in document_ids or document["documentKind"] not in {"trajectory", "meeting"}:
-            raise ValueError("reviewed evidence authority is malformed")
-        document_ids.add(document_id)
-        if not isinstance(document["events"], list):
-            raise ValueError("reviewed evidence authority is malformed")
-        for event in document["events"]:
-            if not exact_object(event, {"eventId"}) or not nonempty(event["eventId"]):
-                raise ValueError("reviewed evidence authority is malformed")
-            identity = (document_id, event["eventId"])
+    observed_documents: dict[str, tuple[int, int]] = {}
+    observed_counts: dict[str, int] = {}
+    for path in bundle_paths:
+        bundle = read_json(path)
+        if not exact_object(bundle, {"trajectory", "document_kind", "turns", "chars"}):
+            raise ValueError("reviewed redaction bundle is malformed")
+        document_id = bundle["trajectory"]
+        document_kind = bundle["document_kind"]
+        turns = bundle["turns"]
+        if (not nonempty(document_id) or path.stem != document_id
+                or document_kind not in {"trajectory", "meeting"}
+                or not isinstance(turns, list)
+                or type(bundle["chars"]) is not int or bundle["chars"] < 0
+                or document_id in observed_documents):
+            raise ValueError("reviewed redaction bundle is malformed")
+        applied = 0
+        character_count = 0
+        for turn in turns:
+            fields = {
+                "event_id", "document_id", "item_id", "role", "timestamp", "text",
+                "redactions", "redacted_text",
+            }
+            if (not exact_object(turn, fields) or not nonempty(turn["event_id"])
+                    or turn["document_id"] != document_id or not nonempty(turn["item_id"])
+                    or not isinstance(turn["text"], str) or not isinstance(turn["redacted_text"], str)
+                    or not isinstance(turn["redactions"], list)):
+                raise ValueError("reviewed redaction turn is malformed")
+            identity = (document_id, turn["item_id"])
             if identity in events:
                 raise ValueError("reviewed evidence authority is duplicated")
-            events[identity] = document["documentKind"]
-    return events
+            events[identity] = document_kind
+            character_count += len(turn["text"])
+            for span in turn["redactions"]:
+                span_fields = {
+                    "start", "end", "category", "confidence", "reason",
+                    "review_state", "uncertainty_reason",
+                }
+                if (not exact_object(span, span_fields)
+                        or type(span["start"]) is not int or type(span["end"]) is not int
+                        or not 0 <= span["start"] < span["end"] <= len(turn["text"])
+                        or span["category"] not in AUTO_REMOVED_KINDS
+                        or span["review_state"] not in REVIEW_STATES):
+                    raise ValueError("reviewed redaction span is malformed")
+                if (span["review_state"] == "needs_confirmation"
+                        and not nonempty(span["uncertainty_reason"])):
+                    raise ValueError("reviewed redaction span is malformed")
+                if (span["review_state"] == "deterministic"
+                        and span["uncertainty_reason"] is not None):
+                    raise ValueError("reviewed redaction span is malformed")
+                observed_counts[span["category"]] = observed_counts.get(span["category"], 0) + 1
+                applied += 1
+        if character_count != bundle["chars"]:
+            raise ValueError("reviewed redaction bundle character count is stale")
+        observed_documents[document_id] = (len(turns), applied)
+
+    if observed_documents != reported_documents or observed_counts != reported_counts:
+        raise ValueError("completed Privacy report does not bind the reviewed redaction bundles")
+    auto_removed = canonical_auto_removed({
+        "total": report["total_applied"],
+        "reversible": True,
+        "categories": [
+            {"kind": kind, "count": reported_counts[kind]}
+            for kind in sorted(reported_counts, key=lambda item: item.encode("utf-8"))
+        ],
+    })
+    return events, auto_removed
 
 
-def prepare(story_candidates_path: Path, review_dir: Path, privacy_summary_path: Path) -> dict[str, Any]:
+def prepare(
+    story_candidates_path: Path, redacted_dir: Path, privacy_report_path: Path,
+) -> dict[str, Any]:
     candidates = read_json(story_candidates_path)
-    if not exact_object(candidates, {"schema", "candidates"}) or candidates["schema"] != STORY_CANDIDATES_SCHEMA:
+    if not isinstance(candidates, list):
         raise ValueError("story-candidates authority is malformed")
-    if not isinstance(candidates["candidates"], list):
-        raise ValueError("story-candidates authority is malformed")
-    reviewed = read_reviewed_evidence(review_dir)
-    privacy = read_json(privacy_summary_path)
-    if (not exact_object(privacy, {"schema", "status", "autoRemoved"})
-            or privacy["schema"] != PRIVACY_SUMMARY_SCHEMA or privacy["status"] != "complete"):
-        raise ValueError("validated Privacy summary is missing or malformed")
-    auto_removed = canonical_auto_removed(privacy["autoRemoved"])
+    reviewed, auto_removed = read_privacy_authority(redacted_dir, privacy_report_path)
 
     lessons: list[dict[str, Any]] = []
     identities: list[dict[str, str]] = []
@@ -178,13 +256,9 @@ def prepare(story_candidates_path: Path, review_dir: Path, privacy_summary_path:
     seen_candidate_ids: set[str] = set()
     seen_identities: set[tuple[str, str]] = set()
     seen_evidence: set[tuple[str, str]] = set()
-    for candidate in candidates["candidates"]:
-        required = {"id", "documentId", "sequence", "timestamp", "summary"}
-        if not exact_object(candidate, required) or not nonempty(candidate["id"]) or not nonempty(candidate["documentId"]):
-            raise ValueError("story candidate is malformed")
-        if candidate["id"] in seen_candidate_ids or type(candidate["sequence"]) is not int or candidate["sequence"] < 0:
-            raise ValueError("story candidate is malformed")
-        if candidate["timestamp"] is not None and not nonempty(candidate["timestamp"]):
+    for candidate in candidates:
+        if (not exact_object(candidate, {"id", "summary"}) or not nonempty(candidate["id"])
+                or candidate["id"] in seen_candidate_ids):
             raise ValueError("story candidate is malformed")
         seen_candidate_ids.add(candidate["id"])
         story = parse_story(candidate["summary"])
@@ -230,12 +304,12 @@ def write_atomic(path: Path, value: Any) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--story-candidates", required=True, type=Path)
-    parser.add_argument("--review-dir", required=True, type=Path)
-    parser.add_argument("--privacy-summary", required=True, type=Path)
+    parser.add_argument("--redacted", required=True, type=Path)
+    parser.add_argument("--privacy-report", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
-        context = prepare(args.story_candidates, args.review_dir, args.privacy_summary)
+        context = prepare(args.story_candidates, args.redacted, args.privacy_report)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -92,7 +92,7 @@ def presentations(value: Any, options: list[dict[str, str]], bulk: bool = False)
 
 def probe(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
     if not exact(value, PROBE_KEYS):
-        raise ValueError("candidate probe has extra, legacy, or missing fields")
+        raise ValueError("candidate probe has extra, unknown, or missing fields")
     if not nonempty(value["id"]) or not nonempty(value["documentId"]) or value["documentKind"] not in {"trajectory", "meeting"} or value["signal"] not in SIGNALS:
         raise ValueError("candidate probe identity, kind, or signal is invalid")
     if type(value["score"]) is not int or not 0 <= value["score"] <= 100 or type(value["turns"]) is not int or value["turns"] < 0:
@@ -124,7 +124,7 @@ def probe(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
 
 def bulk(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
     if not exact(value, BULK_KEYS):
-        raise ValueError("candidate bulk decision has extra, legacy, or missing fields")
+        raise ValueError("candidate bulk decision has extra, unknown, or missing fields")
     if not all(nonempty(value[field]) for field in ("id", "kind", "question")) or type(value["count"]) is not int or value["count"] < 0:
         raise ValueError("candidate bulk decision is invalid")
     sample = value["evidenceSample"]

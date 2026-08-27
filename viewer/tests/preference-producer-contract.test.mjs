@@ -26,7 +26,7 @@ const FINALIZER = join(ROOT, "skills", "oxygen-elicit-contributor-preferences", 
 const RUN_ID = "preference-producer-contract";
 
 const context = {
-  schema: "oxygen.preference-context.v1",
+  schema: "oxygen.preference-context",
   reusableLessons: [{ storyKey: "chapter-a", insightId: "insight-a", background: "Reviewed background.", directlyAcquiredExperience: "Reviewed experience.", principle: "Reviewed principle." }],
   insightIdentities: [{ storyKey: "chapter-a", insightId: "insight-a" }],
   reviewedEvidence: [{ documentId: "doc-a", eventId: "event-a", documentKind: "trajectory" }],
@@ -82,7 +82,7 @@ test("producer sources have no HTTP, SQLite, or provider execution surface", asy
   }
 });
 
-test("owned preference scope has no tracked legacy push protocol", async () => {
+test("owned preference scope has no tracked retired push protocol", async () => {
   assert.equal(existsSync(join(ROOT, "tools", "llm_redact", ["push", "probes.py"].join("_"))), false);
   assert.equal(existsSync(join(ROOT, "tools", "llm_redact", ["PROBE", "PROMPT.md"].join("_"))), false);
   const owned = await Promise.all([

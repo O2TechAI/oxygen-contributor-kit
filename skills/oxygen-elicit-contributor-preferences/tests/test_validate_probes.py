@@ -17,7 +17,7 @@ SPEC.loader.exec_module(VALIDATOR)
 
 def context():
     return {
-        "schema": "oxygen.preference-context.v1",
+        "schema": "oxygen.preference-context",
         "reusableLessons": [{
             "storyKey": "chapter-a", "insightId": "lesson-a", "title": "Lesson A",
             "background": "A reviewed background.", "directlyAcquiredExperience": "A learned fact.",

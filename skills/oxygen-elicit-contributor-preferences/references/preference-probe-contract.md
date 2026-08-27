@@ -7,25 +7,27 @@ release, or publication action in either script.
 
 ## Context preparation
 
-`prepare_preference_context.py` accepts only:
+`prepare_preference_context.py` accepts only the existing unversioned workflow artifacts:
 
 ```text
-story-candidates.json       {"schema":"oxygen.story-candidates.v1","candidates":[...]}
-reviewed-evidence.json      {"schema":"oxygen.reviewed-evidence.v1","documents":[...]}
-privacy-summary.json        {"schema":"oxygen.privacy-summary.v1","status":"complete",...}
+story-candidates.json       [{"id":"existing-imported-item-id","summary":"oxygen.story:{...}"}]
+<redaction>/redacted/*.json exact reviewed bundles produced by merge_and_apply.py
+<redaction>/report.json     exact completed merge report with zero rejects and zero missing workers
 ```
 
-Each ordered candidate has exactly `id`, `documentId`, `sequence`, `timestamp`, and `summary`.
-`summary` is a valid `oxygen.story:` JSON source. The reviewed-evidence authority contains only
-`documentId`, `documentKind`, and exact `eventId` records. A final Story Insight may cite only one
-of those reviewed records. Missing, foreign, duplicate, cross-document, raw, unreviewed, or
-malformed authority fails closed without replacing the output.
+Each ordered candidate has exactly `id` and `summary`, matching the sole Story activation contract.
+`summary` is a valid `oxygen.story:` JSON source. The preparation step projects only
+`documentId`, `documentKind`, and exact imported item identities from the reviewed bundles; source
+text and redacted text never enter the Preference context. The report's per-document counts and
+category aggregate must exactly bind those bundles. A final Story Insight may cite only one of those
+reviewed records. Missing, foreign, duplicate, cross-document, raw, unreviewed, rejected, incomplete,
+stale, or malformed authority fails closed without replacing the output.
 
 The output has exactly these fields:
 
 ```json
 {
-  "schema": "oxygen.preference-context.v1",
+  "schema": "oxygen.preference-context",
   "reusableLessons": [],
   "insightIdentities": [],
   "reviewedEvidence": [],
@@ -35,7 +37,8 @@ The output has exactly these fields:
 
 `reusableLessons` is exactly Core's ordered final Insight lesson projection. `insightIdentities`
 uses Chapter-local `{storyKey, insightId}` pairs. `reviewedEvidence` contains only Insight-cited
-reviewed event identities. `autoRemoved` is copied only from the completed Privacy authority.
+reviewed event identities. `autoRemoved` is derived only from the completed report after its counts
+are recomputed from and matched to the exact reviewed bundles.
 
 ## Candidate and final bundle
 

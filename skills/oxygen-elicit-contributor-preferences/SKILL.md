@@ -26,16 +26,16 @@ sensitive" destroys the exact thing this workflow exists to capture.
 
 ## Input
 
-Prepare a bounded privacy-prepared reviewed run context from the final ordered
-`story-candidates.json`, the reviewed evidence authority, and the completed Privacy summary.
+Prepare a bounded privacy-prepared reviewed run context from the final ordered unversioned
+`story-candidates.json`, the exact reviewed redaction bundles, and their completed merge report.
 Do not reopen the raw organized run or independently apply or rerun redaction.
 - do not independently apply or rerun redaction from any other source.
 
 ```powershell
 python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference_context.py `
   --story-candidates "$Review\story-candidates.json" `
-  --review-dir "$Review" `
-  --privacy-summary "$Review\privacy-summary.json" `
+  --redacted "$Redaction\redacted" `
+  --privacy-report "$Redaction\report.json" `
   --output "$Review\preference-context.json"
 ```
 
@@ -54,7 +54,8 @@ validate a completed-zero probe batch rather than inventing a preference.
 
 ## Stage 1 — Verify the reviewed boundary and report prior removals
 
-Read the validated Privacy summary already attached to the reviewed input. Report its aggregate,
+Read the aggregate from the exact completed Privacy merge report bound to the reviewed redaction
+bundles. Report that aggregate,
 never removed content and never a new mutation:
 
 ```text
