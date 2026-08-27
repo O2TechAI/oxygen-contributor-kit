@@ -11,6 +11,7 @@ import {
   parseStoryPrivacyAuthority,
   storyPrivacyAuthorityComplete,
   storyPrivacyCandidateResolved,
+  StoryPrivacyRequestGate,
   type StoryPrivacyCandidate,
   type StoryPrivacyDecision,
   type StoryPrivacyState,
@@ -260,6 +261,7 @@ export function InlineWorkspace({
   });
   const [storyPrivacyRunId,setStoryPrivacyRunId] = useState("");
   const [storyPrivacyBusy,setStoryPrivacyBusy] = useState("");
+  const [storyPrivacyRequests] = useState(() => new StoryPrivacyRequestGate());
   const redactionJobStatus = redactionJob?.status;
   const storyPersistenceRef = useRef<StoryReviewSessionPersistenceQueue|null>(null);
   if (storyPersistenceRef.current == null) {
@@ -485,19 +487,22 @@ export function InlineWorkspace({
   const storyContract = workflow.storySourceSchema === "oxygen.story"
     && workflow.storySessionSchema === STORY_REVIEW_SESSION_SCHEMA;
   const storyReady = storyContract && storyPackageReady;
-  const loadStoryPrivacy = useCallback(async (signal?: AbortSignal, message = "") => {
+  const loadStoryPrivacy = useCallback(async (message?: string, replace = false) => {
     if (!scopedWorkflowRunId) {
+      storyPrivacyRequests.retire();
       setStoryPrivacyRunId("");
       setStoryPrivacy({ status:"unavailable", authority:null, message:"Story review is not ready." });
       return null;
     }
+    const request = storyPrivacyRequests.begin(replace);
+    if (!request) return null;
     setStoryPrivacyRunId(scopedWorkflowRunId);
     try {
       const response = await fetch(`/api/story-privacy?workflowRunId=${encodeURIComponent(scopedWorkflowRunId)}`, {
-        cache:"no-store", ...(signal ? { signal } : {}),
+        cache:"no-store", signal:request.signal,
       });
       const payload = await response.json().catch(() => ({})) as unknown;
-      if (signal?.aborted) return null;
+      if (!storyPrivacyRequests.isCurrent(request)) return null;
       if (!response.ok) {
         const failure = payload as { error?: string };
         throw new Error(failure.error || "Current Story Privacy authority is unavailable");
@@ -506,34 +511,46 @@ export function InlineWorkspace({
       if (!authority || authority.workflowRunId !== scopedWorkflowRunId) {
         throw new Error("Current Story Privacy authority is invalid");
       }
-      setStoryPrivacy({ status:"ready", authority, message });
+      setStoryPrivacy((current) => ({
+        status:"ready",
+        authority,
+        message:message ?? (current.status === "ready" ? current.message : ""),
+      }));
       return authority;
     } catch (value) {
-      if (signal?.aborted) return null;
+      if (!storyPrivacyRequests.isCurrent(request)) return null;
       setStoryPrivacy({
         status:"error",
         authority:null,
         message:value instanceof Error ? value.message : "Current Story Privacy authority is unavailable",
       });
       return null;
+    } finally {
+      storyPrivacyRequests.finish(request);
     }
-  }, [scopedWorkflowRunId]);
+  }, [scopedWorkflowRunId, storyPrivacyRequests]);
 
   const storyPrivacyEligible = storyReviewReady && storyReady
     && storyDataReadyRunId === workflowRunId && Boolean(scopedWorkflowRunId);
   useEffect(() => {
-    if (!storyPrivacyEligible) return;
-    const controller = new AbortController();
+    if (!storyPrivacyEligible) {
+      storyPrivacyRequests.retire();
+      return;
+    }
     const start = setTimeout(() => {
       setStoryPrivacyRunId(workflowRunId);
       setStoryPrivacy({ status:"loading", authority:null, message:"" });
-      void loadStoryPrivacy(controller.signal);
+      void loadStoryPrivacy("", true);
     }, 0);
+    const polling = setInterval(() => {
+      void loadStoryPrivacy();
+    }, 2000);
     return () => {
       clearTimeout(start);
-      controller.abort();
+      clearInterval(polling);
+      storyPrivacyRequests.retire();
     };
-  }, [loadStoryPrivacy, storyPrivacyEligible, workflowRunId]);
+  }, [loadStoryPrivacy, storyPrivacyEligible, storyPrivacyRequests, workflowRunId]);
 
   const presentedStoryPrivacy: StoryPrivacyState = storyPrivacyEligible
     ? storyPrivacyRunId === workflowRunId
@@ -570,12 +587,12 @@ export function InlineWorkspace({
       const payload = await response.json().catch(() => ({})) as { error?: string };
       if (response.status === 409) {
         setStoryPrivacy({ status:"loading", authority:null, message:"" });
-        await loadStoryPrivacy(undefined, "The authority changed while deciding. The durable current result is shown; no mutation was retried.");
+        await loadStoryPrivacy("The authority changed while deciding. The durable current result is shown; no mutation was retried.", true);
         return;
       }
       if (!response.ok) throw new Error(payload.error || "Story Privacy decision was not accepted");
       setStoryPrivacy({ status:"loading", authority:null, message:"" });
-      await loadStoryPrivacy(undefined, "Decision saved to the current Story Privacy authority.");
+      await loadStoryPrivacy("Decision saved to the current Story Privacy authority.", true);
     } catch (value) {
       setStoryPrivacy({
         status:"error", authority:null,
@@ -777,9 +794,6 @@ export function InlineWorkspace({
   const activeChapterPrivacyCandidates = activeSourceChapter
     ? chapterStoryPrivacyCandidates(currentStoryPrivacyAuthority, activeSourceChapter.source.key)
     : [];
-  const activeChapterPrivacyReady = presentedStoryPrivacy.status === "ready"
-    && Boolean(currentStoryPrivacyAuthority)
-    && activeChapterPrivacyCandidates.every(storyPrivacyCandidateResolved);
   const insightProgress = projectChapters.reduce((progress,chapter) => {
     progress.total+=chapter.source.insights.length;
     progress.resolved+=chapter.source.insights.filter((insight) => {
@@ -1059,7 +1073,7 @@ export function InlineWorkspace({
             onReviewFocusHandled={clearDownloadReviewFocus}
             storyPrivacyState={presentedStoryPrivacy.status}
             storyPrivacyCandidates={activeChapterPrivacyCandidates}
-            storyPrivacyReady={activeChapterPrivacyReady}
+            storyPrivacyReady={storyPrivacyReleaseReady}
             onOpenStoryPrivacy={openGlobalStoryPrivacy}
             onChapterReview={(review) => updateChapterReview(activeSourceChapter.source.key,review)}
             onClose={closeStory}

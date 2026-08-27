@@ -5,6 +5,8 @@ import {
   chapterStoryPrivacyCandidates,
   parseStoryPrivacyAuthority,
   storyPrivacyAuthorityComplete,
+  storyPrivacyCandidateResolved,
+  StoryPrivacyRequestGate,
 } from "../app/story-privacy-ui.ts";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
@@ -60,6 +62,60 @@ test("cross-Chapter candidates remain one global identity while Chapter referenc
   assert.deepEqual(chapterStoryPrivacyCandidates(authority, "chapter"), []);
 });
 
+test("an unrelated-Chapter pending candidate blocks the whole Story authority", () => {
+  const globallyPending = {
+    ...authority,
+    candidates: [{ ...authority.candidates[0] }, {
+      ...authority.candidates[1],
+      id: "unrelated-pending",
+      releaseTargets: ["chapter-b::overview"],
+    }],
+  };
+  const chapterA = chapterStoryPrivacyCandidates(globallyPending, "chapter-a");
+  assert.deepEqual(chapterA.map(({ id }) => id), ["automatic"]);
+  assert.equal(chapterA.every(storyPrivacyCandidateResolved), true);
+  assert.equal(storyPrivacyAuthorityComplete(globallyPending), false);
+});
+
+test("Story Privacy request epochs stay single-flight and suppress a slow replaced response", async () => {
+  const gate = new StoryPrivacyRequestGate();
+  const accepted = [];
+  let resolveOld;
+  let resolveCurrent;
+  const oldAuthority = new Promise((resolve) => { resolveOld = resolve; });
+  const currentAuthority = new Promise((resolve) => { resolveCurrent = resolve; });
+  const oldTicket = gate.begin();
+  assert.ok(oldTicket);
+  assert.equal(gate.begin(), null, "a poll cannot overlap the active request");
+  const oldCommit = oldAuthority.then((value) => {
+    if (gate.isCurrent(oldTicket)) accepted.push(value);
+    gate.finish(oldTicket);
+  });
+  const currentTicket = gate.begin(true);
+  assert.ok(currentTicket);
+  assert.equal(oldTicket.signal.aborted, true);
+  const currentCommit = currentAuthority.then((value) => {
+    if (gate.isCurrent(currentTicket)) accepted.push(value);
+    gate.finish(currentTicket);
+  });
+  const replacement = {
+    ...authority,
+    sourceRevision: 4,
+    activeStoryDigest: "d".repeat(64),
+    candidateDigest: "e".repeat(64),
+  };
+  resolveCurrent(parseStoryPrivacyAuthority(replacement));
+  await currentCommit;
+  resolveOld(parseStoryPrivacyAuthority(authority));
+  await oldCommit;
+  assert.deepEqual(accepted, [replacement]);
+  const retired = gate.begin();
+  assert.ok(retired);
+  gate.retire();
+  assert.equal(retired.signal.aborted, true);
+  assert.equal(gate.isCurrent(retired), false);
+});
+
 test("Release Preview source shows one pending decision without original reconstruction or product metadata", async () => {
   const component = await read("../app/story-privacy-review.tsx");
   assert.match(component, /Candidate \{resolved \+ 1\} of \{total\}/);
@@ -77,11 +133,15 @@ test("Workspace hydrates Story Privacy separately, sends exact CAS, and never st
   const decision = workspace.slice(workspace.indexOf("const decideStoryPrivacy"), workspace.indexOf("const effectiveError"));
   assert.match(decision, /method:"PATCH"/);
   assert.match(decision, /workflowRunId:authority\.workflowRunId,[\s\S]*sourceRevision:authority\.sourceRevision,[\s\S]*activeStoryDigest:authority\.activeStoryDigest,[\s\S]*candidateDigest:authority\.candidateDigest,[\s\S]*expectedVersion:0,[\s\S]*decision/);
-  assert.match(decision, /response\.status === 409[\s\S]*loadStoryPrivacy\(undefined, "The authority changed while deciding/);
+  assert.match(decision, /response\.status === 409[\s\S]*loadStoryPrivacy\("The authority changed while deciding[\s\S]*, true\)/);
   assert.equal((decision.match(/method:"PATCH"/g) || []).length, 1, "a conflict must not retry the mutation");
   assert.doesNotMatch(workspace, /setPrivacyDecisions|current\.privacyDecisions/);
   assert.match(workspace, /createStoryReviewSession\(workflowRunId,current\.chapterReviews,\{\}\)/);
   assert.match(workspace, /if \(!storyPrivacyReleaseReady\)[\s\S]*openGlobalStoryPrivacy\(\);[\s\S]*return;/);
+  assert.match(workspace, /const polling = setInterval\([\s\S]*void loadStoryPrivacy\(\);[\s\S]*2000\);/);
+  assert.match(workspace, /clearInterval\(polling\);[\s\S]*storyPrivacyRequests\.retire\(\);/);
+  assert.match(workspace, /storyPrivacyReady=\{storyPrivacyReleaseReady\}/);
+  assert.doesNotMatch(workspace, /activeChapterPrivacyCandidates\.every\(storyPrivacyCandidateResolved\)/);
 });
 
 test("source Privacy is decision-only and surfaces API failures", async () => {

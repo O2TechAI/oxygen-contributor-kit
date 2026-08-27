@@ -25,6 +25,39 @@ export type StoryPrivacyState =
   | { status: "unavailable" | "loading" | "error"; authority: null; message: string }
   | { status: "ready"; authority: StoryPrivacyAuthority; message: string };
 
+export type StoryPrivacyRequestTicket = {
+  generation: number;
+  signal: AbortSignal;
+};
+
+export class StoryPrivacyRequestGate {
+  #generation = 0;
+  #active: { generation: number; controller: AbortController } | null = null;
+
+  begin(replace = false): StoryPrivacyRequestTicket | null {
+    if (this.#active && !replace) return null;
+    this.#active?.controller.abort();
+    const controller = new AbortController();
+    const generation = ++this.#generation;
+    this.#active = { generation, controller };
+    return { generation, signal:controller.signal };
+  }
+
+  isCurrent(ticket: StoryPrivacyRequestTicket) {
+    return !ticket.signal.aborted && this.#active?.generation === ticket.generation;
+  }
+
+  finish(ticket: StoryPrivacyRequestTicket) {
+    if (this.#active?.generation === ticket.generation) this.#active = null;
+  }
+
+  retire() {
+    this.#generation += 1;
+    this.#active?.controller.abort();
+    this.#active = null;
+  }
+}
+
 const digest = /^[0-9a-f]{64}$/u;
 
 function exactKeys(value: Record<string, unknown>, keys: string[]) {
