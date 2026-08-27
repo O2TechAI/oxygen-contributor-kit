@@ -253,9 +253,9 @@ test("package route is gated and never selects original event JSON", async () =>
   assert.doesNotMatch(route, /original_json/);
   assert.match(redactions, /'running','validating'/);
   assert.match(redactions, /source_digest/);
-  assert.match(documents, /sourceImportMatchesExisting/);
-  assert.match(documents, /\.\.\.\(sourceChanged/);
-  assert.match(documents, /source_changed/);
+  assert.doesNotMatch(documents, /sourceImportMatchesExisting|sourceChanged/);
+  assert.match(documents, /publishFinalizedCorpusSourceMutation/);
+  assert.match(documents, /UPDATE redaction_jobs[\s\S]*source_changed/);
   assert.match(compare, /const items = allItems/);
   assert.match(compare, /Redaction pass is not releasable/);
 });

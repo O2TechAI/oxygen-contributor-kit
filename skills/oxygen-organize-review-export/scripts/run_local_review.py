@@ -620,7 +620,7 @@ def event_content(event: dict, trajectory_dir: Path) -> str:
         raise SystemExit(f"artifact source is unavailable: {error}") from error
 
 
-def import_trajectory(opener, base_url: str, prepared: dict, project_map: dict):
+def trajectory_document(prepared: dict, project_map: dict) -> dict:
     directory = prepared["directory"]
     manifest = prepared["manifest"]
     redaction = prepared["redaction"]
@@ -666,13 +666,10 @@ def import_trajectory(opener, base_url: str, prepared: dict, project_map: dict):
             "organizationConfidence": label.get("confidence"),
             "organizationReason": label.get("summary") or label.get("reason"),
         })
-    request_json(opener, f"{base_url}/api/documents", method="POST", body={
-        "document": document, "items": items,
-    })
-    return len(items)
+    return {"document": document, "items": items}
 
 
-def import_meeting(opener, base_url: str, prepared: dict):
+def meeting_document(prepared: dict) -> dict:
     dataset = prepared["dataset"]
     records = dataset.get("records") or []
     meeting_id = prepared["meeting_id"]
@@ -706,10 +703,7 @@ def import_meeting(opener, base_url: str, prepared: dict):
             "content": record.get("text", ""),
             "original": record,
         })
-    request_json(opener, f"{base_url}/api/documents", method="POST", body={
-        "document": document, "items": items,
-    })
-    return len(items)
+    return {"document": document, "items": items}
 
 
 def _validated_trajectory_id(value) -> str:
@@ -939,14 +933,30 @@ def import_run(opener, base_url: str, run: Path) -> tuple[int, int]:
     meeting_ids = [prepared["meeting_id"] for prepared in prepared_meetings]
     if len(set(meeting_ids)) != len(meeting_ids):
         raise SystemExit(INPUT_MEETING_ID_DUPLICATE)
-    event_count = sum(
-        import_trajectory(opener, base_url, prepared, project_map)
+    documents = [
+        trajectory_document(prepared, project_map)
         for prepared in prepared_trajectories
+    ] + [meeting_document(prepared) for prepared in prepared_meetings]
+    document_count = len(documents)
+    event_count = sum(len(entry["items"]) for entry in documents)
+    finalized = request_json(
+        opener,
+        f"{base_url}/api/documents",
+        method="POST",
+        body={"documents": documents},
     )
-    event_count += sum(
-        import_meeting(opener, base_url, prepared) for prepared in prepared_meetings
-    )
-    return len(trajectories) + len(meetings), event_count
+    if (
+        not isinstance(finalized, dict)
+        or finalized.get("finalized") is not True
+        or finalized.get("documentCount") != document_count
+        or finalized.get("itemCount") != event_count
+        or type(finalized.get("corpusRevision")) is not int
+        or finalized["corpusRevision"] < 1
+        or not isinstance(finalized.get("corpusDigest"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", finalized["corpusDigest"]) is None
+    ):
+        raise SystemExit("Viewer did not finalize the complete source corpus")
+    return document_count, event_count
 
 
 def finalized_semantic_manifest(run: Path) -> dict:

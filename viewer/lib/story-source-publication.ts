@@ -4,6 +4,9 @@ type SourcePublicationDatabase = Awaited<ReturnType<typeof getD1>>;
 type SourcePublicationStatement = Parameters<SourcePublicationDatabase["batch"]>[0][number];
 
 export const D1_JSON_PARAMETER_BYTES = 1_750_000;
+export const D1_MAX_STATEMENTS_PER_INVOCATION = 50;
+export const FINALIZED_CORPUS_PRE_BATCH_STATEMENTS = 3;
+export const FINALIZED_CORPUS_ABORT_RESERVE_STATEMENTS = 1;
 export const STORY_SOURCE_LEASE_STALE_MINUTES = 30;
 export const STORY_ACTIVATION_MAX_PACKAGE_STATEMENTS = 33;
 
@@ -42,6 +45,20 @@ export function assertStoryActivationQueryBudget(packageStatementCount: number) 
     || packageStatementCount > STORY_ACTIVATION_MAX_PACKAGE_STATEMENTS) {
     throw new Error("Story activation exceeds the bounded D1 query budget");
   }
+}
+
+/** Count the sole-run guard, lease claim, leased-authority read, complete atomic
+ * replacement batch, and one failure-only abort before any source mutation. */
+export function assertFinalizedCorpusQueryBudget(replacementBatchStatementCount: number) {
+  const total = FINALIZED_CORPUS_PRE_BATCH_STATEMENTS
+    + replacementBatchStatementCount
+    + FINALIZED_CORPUS_ABORT_RESERVE_STATEMENTS;
+  if (!Number.isSafeInteger(replacementBatchStatementCount)
+    || replacementBatchStatementCount < 1
+    || total > D1_MAX_STATEMENTS_PER_INVOCATION) {
+    throw new Error("Finalized corpus replacement exceeds the bounded D1 query budget");
+  }
+  return total - FINALIZED_CORPUS_ABORT_RESERVE_STATEMENTS;
 }
 
 export const STORY_SOURCE_WRITE_STATUS = {
@@ -123,6 +140,51 @@ export async function publishCompletedStorySourceMutation(
   return Number(result.meta.changes || 0) === 1;
 }
 
+/** Replace every source row, publish its finalized manifest, and advance Story
+ * source authority through one guarded D1 transaction. D1 batch rolls the entire
+ * replacement back if any prepared statement fails. */
+export async function publishFinalizedCorpusSourceMutation(
+  db: SourcePublicationDatabase,
+  replacementStatements: SourcePublicationStatement[],
+  workflowRunId: string,
+  expectedSourceRevision: number,
+  corpusRevision: number,
+  corpusDigest: string,
+  documentCount: number,
+  itemCount: number,
+  now: string,
+) {
+  const results = await db.batch([
+    ...replacementStatements,
+    db.prepare(`UPDATE workflow_runs
+      SET story_generation_status=CASE
+            WHEN story_generation_status=? THEN 'running' ELSE 'not_started' END,
+          story_source_revision=story_source_revision+1,updated_at=?
+      WHERE id=? AND story_source_revision=? AND story_generation_status IN (?,?)
+        AND EXISTS (SELECT 1 FROM finalized_corpus_manifests
+          WHERE workflow_run_id=? AND corpus_revision=? AND corpus_digest=?
+            AND document_count=? AND item_count=?)
+        AND (SELECT COUNT(*) FROM documents)=?
+        AND (SELECT COUNT(*) FROM items)=?`)
+      .bind(
+        STORY_SOURCE_WRITE_STATUS.resumeGeneration,
+        now,
+        workflowRunId,
+        expectedSourceRevision,
+        STORY_SOURCE_WRITE_STATUS.idle,
+        STORY_SOURCE_WRITE_STATUS.resumeGeneration,
+        workflowRunId,
+        corpusRevision,
+        corpusDigest,
+        documentCount,
+        itemCount,
+        documentCount,
+        itemCount,
+      ),
+  ]);
+  return Number(results.at(-1)?.meta.changes || 0) === 1;
+}
+
 /** Persist one normalized semantic package and publish its source revision in
  * the same guarded D1 batch. */
 export async function publishCompletedSemanticSourceMutation(
@@ -131,6 +193,10 @@ export async function publishCompletedSemanticSourceMutation(
   workflowRunId: string,
   expectedRevision: number,
   semanticManifestDigest: string,
+  corpusRevision: number,
+  corpusDigest: string,
+  corpusDocumentCount: number,
+  corpusItemCount: number,
   now: string,
 ) {
   const results = await db.batch([
@@ -141,7 +207,9 @@ export async function publishCompletedSemanticSourceMutation(
           story_source_revision=story_source_revision+1,updated_at=?
       WHERE id=? AND story_source_revision=? AND story_generation_status IN (?,?)
         AND EXISTS (SELECT 1 FROM semantic_manifests
-          WHERE workflow_run_id=? AND source_revision=? AND manifest_digest=?)`)
+          WHERE workflow_run_id=? AND source_revision=? AND manifest_digest=?
+            AND corpus_revision=? AND corpus_digest=?
+            AND corpus_document_count=? AND corpus_item_count=?)`)
       .bind(
         STORY_SOURCE_WRITE_STATUS.resumeGeneration,
         now,
@@ -152,6 +220,10 @@ export async function publishCompletedSemanticSourceMutation(
         workflowRunId,
         expectedRevision + 1,
         semanticManifestDigest,
+        corpusRevision,
+        corpusDigest,
+        corpusDocumentCount,
+        corpusItemCount,
       ),
   ]);
   return Number(results.at(-1)?.meta.changes || 0) === 1;

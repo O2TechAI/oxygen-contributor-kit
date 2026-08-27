@@ -27,6 +27,7 @@ def write_trajectory(run: Path, trajectory_id: str) -> Path:
     directory.mkdir(parents=True)
     item = {
         "event_id": f"evt-{hashlib.sha256(trajectory_id.encode('utf-8')).hexdigest()}",
+        "trajectory_id": trajectory_id,
         "event_type": "message",
         "actor": {"id": "person-safe", "type": "human"},
         "payload": {"role": "user", "text": "safe synthetic contribution"},
@@ -72,6 +73,16 @@ def write_meeting(run: Path, meeting_id: str, *, root=False, directory_id=None) 
         "records": [{"record_id": "rec-00001", "order": 1, "text": "safe synthetic text"}],
     }), encoding="utf-8")
     return path
+
+
+def finalized_response(document_count: int, item_count: int) -> dict:
+    return {
+        "finalized": True,
+        "corpusRevision": 1,
+        "corpusDigest": "a" * 64,
+        "documentCount": document_count,
+        "itemCount": item_count,
+    }
 
 
 def symlink_or_skip(test_case: unittest.TestCase, link: Path, target: Path, *, directory=False):
@@ -181,6 +192,21 @@ class LauncherUnitTest(unittest.TestCase):
         ):
             MODULE.attach_run("http://127.0.0.1:3298", "run-1", Path("reviewed run"))
         imported.assert_called_once()
+
+    def test_attach_never_organizes_after_failed_corpus_finalization(self):
+        with (
+            mock.patch.object(MODULE, "request_json", return_value={"workflowRunId": "run-1"}),
+            mock.patch.object(MODULE, "finalized_semantic_manifest", return_value={"revision": 1}),
+            mock.patch.object(
+                MODULE,
+                "import_run",
+                side_effect=SystemExit("Viewer did not finalize the complete source corpus"),
+            ),
+            mock.patch.object(MODULE, "complete_organization") as organization,
+        ):
+            with self.assertRaisesRegex(SystemExit, "did not finalize"):
+                MODULE.attach_run("http://127.0.0.1:3298", "run-1", Path("reviewed run"))
+        organization.assert_not_called()
 
     def test_trajectory_requires_current_projection_provenance_before_import(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -678,14 +704,24 @@ class LocateInputsContainmentTest(unittest.TestCase):
 
             self.assertEqual(trajectories, [first.resolve(), second.resolve()])
             self.assertEqual(meetings, [])
-            with mock.patch.object(MODULE, "request_json") as request:
+            with mock.patch.object(
+                MODULE, "request_json", return_value=finalized_response(2, 2)
+            ) as request:
                 self.assertEqual(
                     MODULE.import_run(
                         mock.sentinel.opener, "http://127.0.0.1:3298", run
                     ),
                     (2, 2),
                 )
-            self.assertEqual(request.call_count, 2)
+            request.assert_called_once()
+            documents = request.call_args.kwargs["body"]["documents"]
+            self.assertEqual(len(documents), 2)
+            for entry in documents:
+                document_id = entry["document"]["id"]
+                self.assertTrue(all(
+                    item["original"]["trajectory_id"] == document_id
+                    for item in entry["items"]
+                ))
 
     def test_failed_collector_index_is_never_attached_as_an_exhaustive_run(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -728,14 +764,17 @@ class LocateInputsContainmentTest(unittest.TestCase):
             }
             self.assertEqual(len(meeting_ids), 2)
 
-            with mock.patch.object(MODULE, "request_json") as request:
+            with mock.patch.object(
+                MODULE, "request_json", return_value=finalized_response(2, 2)
+            ) as request:
                 self.assertEqual(
                     MODULE.import_run(
                         mock.sentinel.opener, "http://127.0.0.1:3298", run
                     ),
                     (2, 2),
                 )
-            imported = [call.kwargs["body"] for call in request.call_args_list]
+            request.assert_called_once()
+            imported = request.call_args.kwargs["body"]["documents"]
             self.assertEqual({body["document"]["id"] for body in imported}, meeting_ids)
             for body in imported:
                 document_id = body["document"]["id"]
@@ -752,14 +791,16 @@ class LocateInputsContainmentTest(unittest.TestCase):
 
             self.assertEqual(trajectories, [])
             self.assertEqual(meetings, [meeting.resolve()])
-            with mock.patch.object(MODULE, "request_json") as request:
+            with mock.patch.object(
+                MODULE, "request_json", return_value=finalized_response(1, 1)
+            ) as request:
                 self.assertEqual(
                     MODULE.import_run(
                         mock.sentinel.opener, "http://127.0.0.1:3298", run
                     ),
                     (1, 1),
                 )
-            self.assertEqual(request.call_count, 1)
+            request.assert_called_once()
 
     def test_multiple_trajectories_and_meetings_share_one_run(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -773,14 +814,33 @@ class LocateInputsContainmentTest(unittest.TestCase):
             write_meeting(run, "meeting-alpha")
             write_meeting(run, "meeting-beta")
 
-            with mock.patch.object(MODULE, "request_json") as request:
+            with mock.patch.object(
+                MODULE, "request_json", return_value=finalized_response(4, 4)
+            ) as request:
                 self.assertEqual(
                     MODULE.import_run(
                         mock.sentinel.opener, "http://127.0.0.1:3298", run
                     ),
                     (4, 4),
                 )
-            self.assertEqual(request.call_count, 4)
+            request.assert_called_once()
+            self.assertEqual(len(request.call_args.kwargs["body"]["documents"]), 4)
+
+    def test_incomplete_corpus_acknowledgement_fails_the_whole_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_trajectory(run, "traj-alpha")
+            write_index(run, [{"trajectory_id": "traj-alpha", "ok": True}])
+            incomplete = finalized_response(1, 1)
+            incomplete["itemCount"] = 0
+            with mock.patch.object(
+                MODULE, "request_json", return_value=incomplete
+            ) as request:
+                with self.assertRaisesRegex(SystemExit, "did not finalize"):
+                    MODULE.import_run(
+                        mock.sentinel.opener, "http://127.0.0.1:3298", run
+                    )
+            request.assert_called_once()
 
     def test_duplicate_meeting_ids_fail_before_any_viewer_request(self):
         with tempfile.TemporaryDirectory() as temporary:

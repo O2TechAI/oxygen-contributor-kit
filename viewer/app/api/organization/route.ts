@@ -16,6 +16,7 @@ import {
   STORY_SOURCE_WRITE_STATUS,
   abortStorySourceMutation,
   beginStorySourceMutation,
+  isStorySourceWriteInProgress,
   jsonParameterBatches,
   publishCompletedSemanticSourceMutation,
 } from "../../../lib/story-source-publication";
@@ -23,6 +24,45 @@ import {
 const JOB_ID = "default";
 const MAX_SEMANTIC_EVIDENCE_PAGE_MEMBERS = 50;
 const MAX_SEMANTIC_EVIDENCE_RESPONSE_BYTES = 500_000;
+
+type FinalizedCorpusAuthority = {
+  corpusRevision: number;
+  corpusDigest: string;
+  documentCount: number;
+  itemCount: number;
+  currentDocumentCount: number;
+  currentItemCount: number;
+  storyGenerationStatus: string;
+};
+
+async function readFinalizedCorpusAuthority(
+  db: Awaited<ReturnType<typeof getD1>>,
+  workflowRunId: string,
+): Promise<FinalizedCorpusAuthority | null> {
+  const row = await db.prepare(`SELECT r.story_generation_status,
+      m.corpus_revision,m.corpus_digest,m.document_count,m.item_count,
+      (SELECT COUNT(*) FROM documents) AS current_document_count,
+      (SELECT COUNT(*) FROM items) AS current_item_count
+    FROM workflow_runs r LEFT JOIN finalized_corpus_manifests m ON m.workflow_run_id=r.id
+    WHERE r.id=?`).bind(workflowRunId).first<Record<string, unknown>>();
+  if (!row || !Number.isSafeInteger(Number(row.corpus_revision))
+    || Number(row.corpus_revision) < 1
+    || !/^[0-9a-f]{64}$/.test(String(row.corpus_digest || ""))) return null;
+  return {
+    corpusRevision: Number(row.corpus_revision),
+    corpusDigest: String(row.corpus_digest),
+    documentCount: Number(row.document_count),
+    itemCount: Number(row.item_count),
+    currentDocumentCount: Number(row.current_document_count),
+    currentItemCount: Number(row.current_item_count),
+    storyGenerationStatus: String(row.story_generation_status || ""),
+  };
+}
+
+function finalizedCorpusCountsMatch(authority: FinalizedCorpusAuthority) {
+  return authority.documentCount === authority.currentDocumentCount
+    && authority.itemCount === authority.currentItemCount;
+}
 
 async function status(db: Awaited<ReturnType<typeof getD1>>, workflowRunId: string) {
   const [job, counts, documents, manifest] = await Promise.all([
@@ -34,16 +74,28 @@ async function status(db: Awaited<ReturnType<typeof getD1>>, workflowRunId: stri
       .bind(workflowRunId).first<{ total: number; completed: number }>(),
     db.prepare("SELECT COUNT(*) AS count FROM documents").first<{ count: number }>(),
     db.prepare(`SELECT m.revision,m.source_revision,m.manifest_digest,m.unit_count,
-        r.story_source_revision FROM semantic_manifests m
-        JOIN workflow_runs r ON r.id=m.workflow_run_id WHERE m.workflow_run_id=?`).bind(workflowRunId)
-      .first<{ revision: number; source_revision: number; story_source_revision: number;
-        manifest_digest: string; unit_count: number }>(),
+        m.corpus_revision,m.corpus_digest,m.corpus_document_count,m.corpus_item_count,
+        r.story_source_revision,f.corpus_revision AS finalized_corpus_revision,
+        f.corpus_digest AS finalized_corpus_digest,
+        f.document_count AS finalized_document_count,f.item_count AS finalized_item_count,
+        (SELECT COUNT(*) FROM documents) AS current_document_count,
+        (SELECT COUNT(*) FROM items) AS current_item_count
+      FROM semantic_manifests m JOIN workflow_runs r ON r.id=m.workflow_run_id
+      JOIN finalized_corpus_manifests f ON f.workflow_run_id=m.workflow_run_id
+      WHERE m.workflow_run_id=?`).bind(workflowRunId)
+      .first<Record<string, unknown>>(),
   ]);
   const total = Number(counts?.total || 0);
   const completed = Number(counts?.completed || 0);
   const recordedStatus = String(job?.status || (total ? "idle" : "empty"));
   const currentManifest = manifest
-    && Number(manifest.source_revision) === Number(manifest.story_source_revision);
+    && Number(manifest.source_revision) === Number(manifest.story_source_revision)
+    && Number(manifest.corpus_revision) === Number(manifest.finalized_corpus_revision)
+    && String(manifest.corpus_digest) === String(manifest.finalized_corpus_digest)
+    && Number(manifest.corpus_document_count) === Number(manifest.finalized_document_count)
+    && Number(manifest.corpus_item_count) === Number(manifest.finalized_item_count)
+    && Number(manifest.current_document_count) === Number(manifest.finalized_document_count)
+    && Number(manifest.current_item_count) === Number(manifest.finalized_item_count);
   const complete = Boolean(currentManifest && completed === total);
   return {
     status: complete ? "complete" : recordedStatus === "complete" ? "idle" : recordedStatus,
@@ -57,6 +109,12 @@ async function status(db: Awaited<ReturnType<typeof getD1>>, workflowRunId: stri
       sourceRevision: Number(manifest.source_revision),
       digest: String(manifest.manifest_digest),
       unitCount: Number(manifest.unit_count),
+      finalizedCorpus: {
+        revision: Number(manifest.corpus_revision),
+        digest: String(manifest.corpus_digest),
+        documentCount: Number(manifest.corpus_document_count),
+        itemCount: Number(manifest.corpus_item_count),
+      },
     } : null,
     warnings: JSON.parse(String(job?.warnings_json || "[]")),
   };
@@ -68,10 +126,23 @@ async function readSemanticProjection(
 ) {
   const manifest = await db.prepare(`SELECT m.project_id,m.revision,m.source_revision,m.source_digest,
       m.universe_digest,m.manifest_digest,m.unit_count,m.serialized_bytes,m.story_projection_bytes,
-      r.story_source_revision FROM semantic_manifests m
-      JOIN workflow_runs r ON r.id=m.workflow_run_id WHERE m.workflow_run_id=?`).bind(workflowRunId)
+      m.corpus_revision,m.corpus_digest,m.corpus_document_count,m.corpus_item_count,
+      r.story_source_revision,f.corpus_revision AS finalized_corpus_revision,
+      f.corpus_digest AS finalized_corpus_digest,
+      f.document_count AS finalized_document_count,f.item_count AS finalized_item_count,
+      (SELECT COUNT(*) FROM documents) AS current_document_count,
+      (SELECT COUNT(*) FROM items) AS current_item_count
+      FROM semantic_manifests m JOIN workflow_runs r ON r.id=m.workflow_run_id
+      JOIN finalized_corpus_manifests f ON f.workflow_run_id=m.workflow_run_id
+      WHERE m.workflow_run_id=?`).bind(workflowRunId)
     .first<Record<string, unknown>>();
-  if (!manifest || Number(manifest.source_revision) !== Number(manifest.story_source_revision)) return null;
+  if (!manifest || Number(manifest.source_revision) !== Number(manifest.story_source_revision)
+    || Number(manifest.corpus_revision) !== Number(manifest.finalized_corpus_revision)
+    || String(manifest.corpus_digest) !== String(manifest.finalized_corpus_digest)
+    || Number(manifest.corpus_document_count) !== Number(manifest.finalized_document_count)
+    || Number(manifest.corpus_item_count) !== Number(manifest.finalized_item_count)
+    || Number(manifest.current_document_count) !== Number(manifest.finalized_document_count)
+    || Number(manifest.current_item_count) !== Number(manifest.finalized_item_count)) return null;
   const { results } = await db.prepare(`SELECT id,revision,kind,member_count,membership_digest,
       duplicate_of_unit_id,story_projection_json
       FROM semantic_units WHERE workflow_run_id=? ORDER BY id`).bind(workflowRunId)
@@ -86,6 +157,12 @@ async function readSemanticProjection(
     unitCount: Number(manifest.unit_count),
     serializedBytes: Number(manifest.serialized_bytes),
     storyProjectionBytes: Number(manifest.story_projection_bytes),
+    finalizedCorpus: {
+      revision: Number(manifest.corpus_revision),
+      digest: manifest.corpus_digest,
+      documentCount: Number(manifest.corpus_document_count),
+      itemCount: Number(manifest.corpus_item_count),
+    },
     units: results.map((row) => ({
       id: row.id,
       revision: Number(row.revision),
@@ -126,7 +203,12 @@ export async function GET(request: Request) {
     }
     const current = await db.prepare(`SELECT 1 AS current FROM semantic_manifests m
         JOIN workflow_runs r ON r.id=m.workflow_run_id
-        WHERE m.workflow_run_id=? AND m.source_revision=r.story_source_revision`)
+        JOIN finalized_corpus_manifests f ON f.workflow_run_id=m.workflow_run_id
+        WHERE m.workflow_run_id=? AND m.source_revision=r.story_source_revision
+          AND m.corpus_revision=f.corpus_revision AND m.corpus_digest=f.corpus_digest
+          AND m.corpus_document_count=f.document_count AND m.corpus_item_count=f.item_count
+          AND f.document_count=(SELECT COUNT(*) FROM documents)
+          AND f.item_count=(SELECT COUNT(*) FROM items)`)
       .bind(authority.workflowRunId).first<{ current: number }>();
     if (!current) return Response.json({ error: "Semantic manifest is stale" }, { status: 409 });
     const unit = await db.prepare(`SELECT id,revision,project_id,kind,member_count,
@@ -205,24 +287,69 @@ export async function POST(request: Request) {
     || Object.keys(body).some((key) => !["semanticManifest"].includes(key))) {
     return Response.json({ error: "Invalid semantic manifest" }, { status: 400 });
   }
+  const finalizedCorpus = await readFinalizedCorpusAuthority(db, authority.workflowRunId);
+  if (!finalizedCorpus) {
+    return Response.json({
+      error: "A finalized source corpus is required before Organization",
+      code: "FINALIZED_CORPUS_REQUIRED",
+    }, { status: 409 });
+  }
+  if (!finalizedCorpusCountsMatch(finalizedCorpus)) {
+    return Response.json({
+      error: "Finalized source corpus counts do not match current source rows",
+      code: "FINALIZED_CORPUS_COUNT_MISMATCH",
+    }, { status: 409 });
+  }
+  if (isStorySourceWriteInProgress(finalizedCorpus.storyGenerationStatus)) {
+    return Response.json({
+      error: "Finalized source corpus replacement is still running",
+      code: "FINALIZED_CORPUS_NOT_CURRENT",
+    }, { status: 409 });
+  }
   const now = new Date().toISOString();
   if (!await beginStorySourceMutation(db, authority.workflowRunId, now)) {
     return Response.json({ error: "Another Story source mutation is already running" }, { status: 409 });
   }
   let leasedRevision: number | undefined;
   try {
-    const [{ results: itemRows }, run, previousManifest] = await Promise.all([
+    const [{ results: itemRows }, run, storedPreviousManifest, leasedCorpus] = await Promise.all([
       db.prepare(`SELECT id,document_id,sequence,event_type,actor_id,actor_type,
           timestamp,content,original_json FROM items ORDER BY id`)
         .all<{ id: string; document_id: string; sequence: number; event_type: string | null;
           actor_id: string | null; actor_type: string | null; timestamp: string | null;
           content: string; original_json: string }>(),
-      db.prepare("SELECT story_source_revision FROM workflow_runs WHERE id=?")
-        .bind(authority.workflowRunId).first<{ story_source_revision: number }>(),
+      db.prepare(`SELECT r.story_source_revision,
+          (SELECT corpus_revision FROM semantic_manifests WHERE workflow_run_id=r.id)
+            AS semantic_corpus_revision,
+          (SELECT corpus_digest FROM semantic_manifests WHERE workflow_run_id=r.id)
+            AS semantic_corpus_digest
+        FROM workflow_runs r WHERE r.id=?`)
+        .bind(authority.workflowRunId).first<{
+          story_source_revision: number;
+          semantic_corpus_revision: number | null;
+          semantic_corpus_digest: string | null;
+        }>(),
       readStoredSemanticManifestAuthority(db, authority.workflowRunId),
+      readFinalizedCorpusAuthority(db, authority.workflowRunId),
     ]);
     if (!run) throw new Error("Workflow run not found");
     leasedRevision = Number(run.story_source_revision);
+    if (!leasedCorpus || !finalizedCorpusCountsMatch(leasedCorpus)
+      || leasedCorpus.corpusRevision !== finalizedCorpus.corpusRevision
+      || leasedCorpus.corpusDigest !== finalizedCorpus.corpusDigest
+      || leasedCorpus.documentCount !== finalizedCorpus.documentCount
+      || leasedCorpus.itemCount !== finalizedCorpus.itemCount
+      || itemRows.length !== leasedCorpus.itemCount) {
+      await abortStorySourceMutation(db, authority.workflowRunId, now, leasedRevision);
+      return Response.json({
+        error: "Finalized source corpus authority changed before Organization",
+        code: "FINALIZED_CORPUS_NOT_CURRENT",
+      }, { status: 409 });
+    }
+    const previousManifest = Number(run.semantic_corpus_revision) === leasedCorpus.corpusRevision
+      && String(run.semantic_corpus_digest || "") === leasedCorpus.corpusDigest
+      ? storedPreviousManifest
+      : null;
     const oversizedEvidence = itemRows.some((row) => new TextEncoder().encode(JSON.stringify({
       id: row.id,
       documentId: row.document_id,
@@ -311,8 +438,9 @@ export async function POST(request: Request) {
         .bind(authority.workflowRunId, ...leaseBindings),
       db.prepare(`INSERT INTO semantic_manifests
         (workflow_run_id,project_id,revision,source_revision,source_digest,universe_digest,
-         manifest_digest,unit_count,serialized_bytes,story_projection_bytes,created_at,updated_at)
-        SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE ${leaseSql}`).bind(
+         manifest_digest,unit_count,serialized_bytes,story_projection_bytes,
+         corpus_revision,corpus_digest,corpus_document_count,corpus_item_count,created_at,updated_at)
+        SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ${leaseSql}`).bind(
         authority.workflowRunId,
         manifest.projectId,
         manifest.revision,
@@ -323,6 +451,10 @@ export async function POST(request: Request) {
         manifest.units.length,
         manifest.serializedBytes,
         validation.storyProjectionBytes,
+        leasedCorpus.corpusRevision,
+        leasedCorpus.corpusDigest,
+        leasedCorpus.documentCount,
+        leasedCorpus.itemCount,
         now,
         now,
         ...leaseBindings,
@@ -399,6 +531,10 @@ export async function POST(request: Request) {
       authority.workflowRunId,
       leasedRevision,
       manifest.manifestDigest,
+      leasedCorpus.corpusRevision,
+      leasedCorpus.corpusDigest,
+      leasedCorpus.documentCount,
+      leasedCorpus.itemCount,
       now,
     )) {
       throw new Error("Story source publication boundary changed during semantic organization");

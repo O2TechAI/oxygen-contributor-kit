@@ -27,12 +27,19 @@ const statements = [
     warnings_json TEXT NOT NULL DEFAULT '[]', started_at TEXT NOT NULL,
     updated_at TEXT NOT NULL, completed_at TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS finalized_corpus_manifests (
+    workflow_run_id TEXT PRIMARY KEY, corpus_revision INTEGER NOT NULL,
+    corpus_digest TEXT NOT NULL, document_count INTEGER NOT NULL,
+    item_count INTEGER NOT NULL, finalized_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS semantic_manifests (
     workflow_run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
     revision INTEGER NOT NULL, source_revision INTEGER NOT NULL,
     source_digest TEXT NOT NULL, universe_digest TEXT NOT NULL,
     manifest_digest TEXT NOT NULL, unit_count INTEGER NOT NULL,
     serialized_bytes INTEGER NOT NULL, story_projection_bytes INTEGER NOT NULL,
+    corpus_revision INTEGER NOT NULL, corpus_digest TEXT NOT NULL,
+    corpus_document_count INTEGER NOT NULL, corpus_item_count INTEGER NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS semantic_units (
@@ -168,6 +175,20 @@ export async function getD1() {
         await env.DB.prepare(
           "ALTER TABLE semantic_unit_members ADD COLUMN source_digest TEXT NOT NULL DEFAULT ''",
         ).run();
+      }
+      const semanticManifestColumns = await env.DB.prepare("PRAGMA table_info(semantic_manifests)")
+        .all<{ name: string }>();
+      const semanticManifestNames = new Set(
+        semanticManifestColumns.results.map((column: { name: string }) => column.name),
+      );
+      const semanticManifestMigrations = [
+        ["corpus_revision", "ALTER TABLE semantic_manifests ADD COLUMN corpus_revision INTEGER NOT NULL DEFAULT 0"],
+        ["corpus_digest", "ALTER TABLE semantic_manifests ADD COLUMN corpus_digest TEXT NOT NULL DEFAULT ''"],
+        ["corpus_document_count", "ALTER TABLE semantic_manifests ADD COLUMN corpus_document_count INTEGER NOT NULL DEFAULT 0"],
+        ["corpus_item_count", "ALTER TABLE semantic_manifests ADD COLUMN corpus_item_count INTEGER NOT NULL DEFAULT 0"],
+      ] as const;
+      for (const [name, sql] of semanticManifestMigrations) {
+        if (!semanticManifestNames.has(name)) await env.DB.prepare(sql).run();
       }
       const sessionColumns = await env.DB.prepare("PRAGMA table_info(story_review_sessions)")
         .all<{ name: string }>();

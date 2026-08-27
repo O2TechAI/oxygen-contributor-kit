@@ -43,6 +43,15 @@ export const organizationJobs = sqliteTable("organization_jobs", {
   completedAt: text("completed_at"),
 });
 
+export const finalizedCorpusManifests = sqliteTable("finalized_corpus_manifests", {
+  workflowRunId: text("workflow_run_id").primaryKey(),
+  corpusRevision: integer("corpus_revision").notNull(),
+  corpusDigest: text("corpus_digest").notNull(),
+  documentCount: integer("document_count").notNull(),
+  itemCount: integer("item_count").notNull(),
+  finalizedAt: text("finalized_at").notNull(),
+});
+
 export const semanticManifests = sqliteTable("semantic_manifests", {
   workflowRunId: text("workflow_run_id").primaryKey(),
   projectId: text("project_id").notNull(),
@@ -54,6 +63,10 @@ export const semanticManifests = sqliteTable("semantic_manifests", {
   unitCount: integer("unit_count").notNull(),
   serializedBytes: integer("serialized_bytes").notNull(),
   storyProjectionBytes: integer("story_projection_bytes").notNull(),
+  corpusRevision: integer("corpus_revision").notNull(),
+  corpusDigest: text("corpus_digest").notNull(),
+  corpusDocumentCount: integer("corpus_document_count").notNull(),
+  corpusItemCount: integer("corpus_item_count").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
