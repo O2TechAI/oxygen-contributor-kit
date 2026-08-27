@@ -13,7 +13,7 @@ import {
   normalizeProbePresentations,
 } from "../../../viewer/lib/preference-presentation.ts";
 import { canonicalAuthorityJson } from "../../../viewer/lib/story-readiness.ts";
-import { compareStorySourceIdentity, parseStorySource } from "../../../viewer/lib/timeline.ts";
+import { parseStorySource } from "../../../viewer/lib/timeline.ts";
 
 const laneFiles = Object.freeze({
   story: "story.shards.json",
@@ -68,6 +68,8 @@ const safeText = (value) => typeof value === "string" && Boolean(value.trim())
 const boundedId = (value, maximum = 20_000) => stableId(value) && value.length <= maximum;
 const boundedText = (value, maximum = 20_000) => safeText(value) && value.length <= maximum;
 const nonnegative = (value) => Number.isSafeInteger(value) && value >= 0;
+const normalizeOptionText = (value) => value.trim().replace(/\.+$/u, "")
+  .replace(/[A-Z]/gu, (character) => String.fromCharCode(character.charCodeAt(0) + 32));
 
 async function jsonFile(path) {
   let text;
@@ -152,7 +154,7 @@ function finalCandidates(value) {
   }
   if (new Set(rows.map((row) => row.id)).size !== rows.length
     || new Set(rows.map((row) => row.story.key)).size !== rows.length) fail("FINAL_STORY_IDENTITIES_INVALID");
-  return rows.sort(compareStorySourceIdentity);
+  return rows.sort((left, right) => utf8(left.id, right.id));
 }
 
 function normalizedPrivacy(value, catalog) {
@@ -262,7 +264,7 @@ function preferenceProbe(value, evidence) {
     || value.options.some((option) => !preferenceOption(option))
     || new Set(value.options.map((option) => option.id)).size !== value.options.length
     || value.allowOther !== true || value.allowSkip !== true) fail("PREFERENCE_BUNDLE_INVALID");
-  const normalizedOptions = value.options.map((option) => option.text.trim().replace(/\.+$/u, "").toLowerCase());
+  const normalizedOptions = value.options.map((option) => normalizeOptionText(option.text));
   if (new Set(normalizedOptions).size !== normalizedOptions.length
     || normalizedOptions.some((option) => genericOptions.has(option))) fail("PREFERENCE_BUNDLE_INVALID");
   const presentations = normalizeProbePresentations(value.presentations, value.options);

@@ -76,14 +76,19 @@ function bulkDecision() {
   };
 }
 
-async function fixture({ insightIds = ["same", "same"], privacy = true, questions = true, reverse = false } = {}) {
+async function fixture({
+  insightIds = ["same", "same"], privacy = true, questions = true, reverse = false,
+  candidateIds = null,
+} = {}) {
   const directory = await mkdtemp(join(tmpdir(), "story-finalizer-"));
   const shards = join(directory, "shards");
   await mkdir(shards);
   const stories = [source("é", insightIds[0]), source("z", insightIds[1])];
-  const rows = rowsFor(stories);
+  const rows = rowsFor(stories).map((row, index) => ({
+    ...row, id: candidateIds?.[index] ?? row.id,
+  }));
   const storyByRowId = new Map(rows.map((row, index) => [row.id, stories[index]]));
-  const canonicalRows = [...rows].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+  const canonicalRows = [...rows].sort((left, right) => utf8(left.id, right.id));
   const canonicalStories = canonicalRows.map((row) => storyByRowId.get(row.id));
   const semanticCore = { projectId: "project", revision: 1, sourceDigest: "c".repeat(64),
     universeDigest: "d".repeat(64), units: [{ id: "unit-z" }, { id: "unit-é" }] };
@@ -204,6 +209,22 @@ test("four lanes finalize exact public Story rows with reordered shards and cros
   } finally { await first.cleanup(); await second.cleanup(); }
 });
 
+test("Story candidate order uses UTF-8 bytes for producer-identical lessons and digests", async () => {
+  const candidateIds = ["\u{1f600}", "\ue000"];
+  const first = await fixture({ candidateIds });
+  const second = await fixture({ candidateIds, reverse: true });
+  try {
+    const firstRun = run(first);
+    const secondRun = run(second);
+    assert.equal(firstRun.status, 0, firstRun.stderr);
+    assert.equal(secondRun.status, 0, secondRun.stderr);
+    assert.equal(await readFile(first.output, "utf8"), await readFile(second.output, "utf8"));
+    const result = await readJson(first.output);
+    const receipt = result.receipts.find((item) => item.lane === "preference");
+    assert.equal(receipt.inputDigest, digest(lessons([source("z", "same"), source("é", "same")])));
+  } finally { await first.cleanup(); await second.cleanup(); }
+});
+
 test("the exact CLI rejects trailing arguments without writing output", async () => {
   const value = await fixture();
   try {
@@ -274,6 +295,27 @@ test("the sole producer-shaped Preference bundle fails closed on extra authority
       assert.notEqual(run(value).status, 0);
     } finally { await value.cleanup(); }
   });
+});
+
+test("Preference option normalization trims ECMAScript space, strips ASCII dots, and folds only ASCII", async () => {
+  const unicodeDistinct = await fixture();
+  const asciiDuplicate = await fixture();
+  try {
+    await mutatePreferenceAuthority(unicodeDistinct, (value) => {
+      value.probes[0].options[0].text = "Äpfel";
+      value.probes[0].options[1].text = "äpfel";
+    });
+    const accepted = run(unicodeDistinct);
+    assert.equal(accepted.status, 0, accepted.stderr);
+
+    await mutatePreferenceAuthority(asciiDuplicate, (value) => {
+      value.probes[0].options[0].text = "\u00a0ÄPFEL...\ufeff";
+      value.probes[0].options[1].text = "Äpfel";
+    });
+    const rejected = run(asciiDuplicate);
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /PREFERENCE_BUNDLE_INVALID/u);
+  } finally { await unicodeDistinct.cleanup(); await asciiDuplicate.cleanup(); }
 });
 
 test("physical shard containment rejects junction escapes for receipts and outputs", async (t) => {
