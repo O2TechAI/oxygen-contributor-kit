@@ -144,6 +144,19 @@ class LauncherUnitTest(unittest.TestCase):
     def test_missing_executable_is_reported_as_none(self):
         self.assertIsNone(MODULE.resolve_executable("npm", platform="nt", which=lambda _: None))
 
+    def test_node_preflight_rejects_a_runtime_below_the_viewer_minimum(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            viewer = Path(temporary)
+            (viewer / "package.json").write_text(
+                '{"engines":{"node":">=22.15.0"}}', encoding="utf-8"
+            )
+            with (
+                mock.patch.object(MODULE, "resolve_executable", side_effect=["/opt/node/bin/node", "/opt/node/bin/npm"]),
+                mock.patch.object(MODULE, "command_version", side_effect=["v22.14.0", "10.9.0"]),
+            ):
+                with self.assertRaisesRegex(SystemExit, r"Viewer requires Node >= 22\.15\.0; resolved v22\.14\.0"):
+                    MODULE.validate_node_runtime(viewer)
+
     def test_viewer_binds_requested_ipv4_port_without_bridge(self):
         command = MODULE.viewer_command(3240, "/linux/npm")
         self.assertEqual(command[0], "/linux/npm")
