@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Create or finalize the one Organization-owned semantic manifest.
+"""Create the current skeleton and provide canonical Organization finalization authority.
 
-The initial command writes a bounded project-map skeleton. The Organization
-Agent groups the projected contribution records into semantic units, then runs
-the command again with ``--finalize``. Finalization is deterministic and
-provider-free: it proves exact disjoint membership and computes all digests.
+The public transport prepares and composes semantic worker outputs in separate
+provider-free scripts. This module remains the one deterministic digest,
+membership, duplicate-topology, and revision authority used for installation.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -41,6 +41,14 @@ SEMANTIC_UNIT_KINDS = {
     "duplicate",
 }
 SOURCE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}")
+CURRENT_PROJECT_MAP_KEYS = {
+    "schema_version", "primary_project", "summary", "projects",
+    "source_authority", "semantic_units", "semantic_manifest",
+}
+RECOLLECT_GUIDANCE = (
+    "current canonical contribution projections are required; re-collect this run "
+    "through tools/ingest/collect_repo_trajectories.py"
+)
 
 
 def digest(value: Any) -> str:
@@ -60,17 +68,88 @@ def read_object(path: Path) -> dict[str, Any]:
     return value
 
 
+def _is_reparse_point(path: Path) -> bool:
+    attributes = getattr(path.stat(follow_symlinks=False), "st_file_attributes", 0)
+    return bool(attributes & 0x400)
+
+
+def assert_literal_physical_path(
+    path: Path,
+    *,
+    allow_missing_leaf: bool = False,
+    reject_hardlinked_file: bool = True,
+) -> Path:
+    """Reject links/reparse points in every literal existing path component."""
+    literal = Path(os.path.abspath(path))
+    anchor = Path(literal.anchor)
+    current = anchor
+    parts = literal.parts[1:] if literal.anchor else literal.parts
+    for index, part in enumerate(parts):
+        current = current / part
+        missing_leaf = allow_missing_leaf and index == len(parts) - 1
+        if not current.exists() and not current.is_symlink():
+            if missing_leaf:
+                return literal
+            raise ValueError(f"path component is unavailable: {current}")
+        if current.is_symlink() or _is_reparse_point(current):
+            raise ValueError(f"path component is aliased: {current}")
+        info = current.stat(follow_symlinks=False)
+        if reject_hardlinked_file and current.is_file() and info.st_nlink != 1:
+            raise ValueError(f"file has hard-link aliases: {current}")
+    return literal
+
+
+def atomic_write_json(destination: Path, value: Any) -> None:
+    """Install one canonical JSON file without exposing a partial destination."""
+    assert_literal_physical_path(destination.parent)
+    if destination.exists() or destination.is_symlink():
+        assert_literal_physical_path(destination)
+    temporary = destination.parent / f".{destination.name}.{os.getpid()}.tmp"
+    if temporary.exists() or temporary.is_symlink():
+        raise ValueError(f"temporary output already exists: {temporary}")
+    data = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def contained_file(path: Path, run: Path) -> Path:
-    root = run.resolve(strict=True)
+    root = assert_literal_physical_path(run).resolve(strict=True)
+    assert_literal_physical_path(path)
     resolved = path.resolve(strict=True)
     if not resolved.is_relative_to(root) or not resolved.is_file():
         raise ValueError(f"source path leaves approved run: {path}")
     return resolved
 
 
+def physical_projected_event_content(event: dict[str, Any], trajectory_dir: Path) -> str:
+    if event.get("event_type") == "artifact":
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        raw_path = payload.get("path")
+        if isinstance(raw_path, str):
+            relative = Path(raw_path)
+            if (
+                not relative.is_absolute() and ".." not in relative.parts
+                and relative.parts and relative.parts[0] == "artifacts"
+            ):
+                assert_literal_physical_path(trajectory_dir / relative)
+    return projected_event_content(event, trajectory_dir)
+
+
 def direct_physical_child(path: Path, parent: Path, run: Path, *, directory: bool) -> Path:
     try:
+        assert_literal_physical_path(path)
         resolved = path.resolve(strict=True)
+    except ValueError as error:
+        if "hard-link" in str(error):
+            raise ValueError(f"meeting source file has hard-link aliases: {path}") from None
+        raise ValueError(f"meeting source path is aliased: {path}") from None
     except (OSError, RuntimeError):
         raise ValueError(f"meeting source path is invalid: {path}") from None
     if not resolved.is_relative_to(run.resolve(strict=True)):
@@ -87,8 +166,18 @@ def direct_physical_child(path: Path, parent: Path, run: Path, *, directory: boo
 def source_inventory(
     run: Path,
 ) -> tuple[list[str], list[dict[str, Any]], dict[str, str]]:
+    contribution_ids, sources, contribution_source_digests, _ = source_inventory_records(run)
+    return contribution_ids, sources, contribution_source_digests
+
+
+def source_inventory_records(
+    run: Path,
+) -> tuple[
+    list[str], list[dict[str, Any]], dict[str, str], list[dict[str, Any]],
+]:
     contribution_ids: list[str] = []
     contribution_source_digests: dict[str, str] = {}
+    contribution_records: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
     for candidate in sorted((run / "trajectories").glob("*/events.jsonl")):
         events_path = contained_file(candidate, run)
@@ -99,7 +188,7 @@ def source_inventory(
             raise ValueError("trajectory source identity is invalid")
         projection = manifest.get("contribution_projection")
         if not isinstance(projection, dict):
-            raise ValueError(f"trajectory lacks contribution projection: {trajectory_id}")
+            raise ValueError(f"{RECOLLECT_GUIDANCE}: {trajectory_id}")
         policy_id = projection.get("policy_id")
         raw_digest = projection.get("raw_source_digest")
         projected_digest = projection.get("projected_universe_digest")
@@ -126,7 +215,10 @@ def source_inventory(
             or raw_count - replay_count != normalized_count
             or normalized_count - kept_count != dropped_count
         ):
-            raise ValueError(f"trajectory projection provenance is invalid: {trajectory_id}")
+            raise ValueError(
+                f"current contribution projection is invalid; re-collect through current ingest: "
+                f"{trajectory_id}"
+            )
         sources.append({
             "kind": "trajectory",
             "id": trajectory_id,
@@ -138,19 +230,20 @@ def source_inventory(
             contribution_id = projected_contribution_id(event)
             contribution_ids.append(contribution_id)
             actor = event.get("actor") if isinstance(event.get("actor"), dict) else {}
+            record = {
+                "id": contribution_id,
+                "documentId": trajectory_id,
+                "sequence": event.get("sequence", index),
+                "eventType": event.get("event_type"),
+                "actorId": actor.get("id"),
+                "actorType": actor.get("type"),
+                "timestamp": event.get("timestamp") or event.get("started_at"),
+                "content": physical_projected_event_content(event, events_path.parent),
+            }
             contribution_source_digests[contribution_id] = imported_contribution_digest_value(
-                event,
-                {
-                    "id": contribution_id,
-                    "documentId": trajectory_id,
-                    "sequence": event.get("sequence", index),
-                    "eventType": event.get("event_type"),
-                    "actorId": actor.get("id"),
-                    "actorType": actor.get("type"),
-                    "timestamp": event.get("timestamp") or event.get("started_at"),
-                    "content": projected_event_content(event, events_path.parent),
-                },
+                event, record,
             )
+            contribution_records.append(record)
 
     root_meeting = run / "meeting.json"
     if root_meeting.exists() or root_meeting.is_symlink():
@@ -158,6 +251,10 @@ def source_inventory(
     meeting_candidates: list[tuple[str, Path]] = []
     meetings_root = run / "meetings"
     if meetings_root.exists() or meetings_root.is_symlink():
+        try:
+            assert_literal_physical_path(meetings_root)
+        except ValueError:
+            raise ValueError("meetings path is aliased") from None
         resolved_meetings = meetings_root.resolve(strict=True)
         resolved_run = run.resolve(strict=True)
         if not resolved_meetings.is_relative_to(resolved_run) or not resolved_meetings.is_dir():
@@ -198,31 +295,35 @@ def source_inventory(
             if sequence is None:
                 sequence = index
             contribution_ids.append(contribution_id)
+            imported_record = {
+                "id": contribution_id,
+                "documentId": meeting_id,
+                "sequence": sequence,
+                "eventType": "record",
+                "actorId": record.get("speaker"),
+                "actorType": "human",
+                "timestamp": record.get("timestamp") or record.get("started_at"),
+                "content": record.get("text", ""),
+            }
             contribution_source_digests[contribution_id] = imported_contribution_digest_value(
-                record,
-                {
-                    "id": contribution_id,
-                    "documentId": meeting_id,
-                    "sequence": sequence,
-                    "eventType": "record",
-                    "actorId": record.get("speaker"),
-                    "actorType": "human",
-                    "timestamp": record.get("timestamp") or record.get("started_at"),
-                    "content": record.get("text", ""),
-                },
+                record, imported_record,
             )
+            contribution_records.append(imported_record)
 
     if len(set(contribution_ids)) != len(contribution_ids):
         raise ValueError("contribution identity is duplicated")
     source_ids = [(source["kind"], source["id"]) for source in sources]
     if len(set(source_ids)) != len(source_ids):
         raise ValueError("source identity is duplicated")
+    ordered_ids = sorted(contribution_ids, key=lambda value: value.encode("utf-8"))
+    records_by_id = {record["id"]: record for record in contribution_records}
     return (
-        sorted(contribution_ids, key=lambda value: value.encode("utf-8")),
+        ordered_ids,
         sorted(sources, key=lambda item: (
             item["kind"].encode("utf-8"), item["id"].encode("utf-8")
         )),
         contribution_source_digests,
+        [records_by_id[contribution_id] for contribution_id in ordered_ids],
     )
 
 
@@ -569,6 +670,69 @@ def canonical_project_map(
     }
 
 
+def validate_current_project_map_skeleton(
+    run: Path, project_map: Any, *, allow_stale_source: bool = False,
+) -> dict[str, Any]:
+    """Accept only the current builder-owned skeleton shape for this exact run."""
+    if not isinstance(project_map, dict) or set(project_map) != CURRENT_PROJECT_MAP_KEYS:
+        raise ValueError(f"project map is not the current canonical skeleton; {RECOLLECT_GUIDANCE}")
+    if project_map.get("schema_version") != "1":
+        raise ValueError(f"project map is not the current canonical skeleton; {RECOLLECT_GUIDANCE}")
+    project_id = project_map.get("primary_project")
+    projects = project_map.get("projects")
+    source_authority = project_map.get("source_authority")
+    if (
+        not bounded_text(project_id, 300)
+        or not isinstance(project_map.get("summary"), str)
+        or not isinstance(projects, list) or len(projects) != 1
+        or not isinstance(projects[0], dict)
+        or set(projects[0]) != {"name", "event_count", "reason"}
+        or projects[0].get("name") != project_id
+        or projects[0].get("reason") != "One repo-scoped projected contribution universe."
+        or not isinstance(projects[0].get("event_count"), int)
+        or isinstance(projects[0].get("event_count"), bool)
+        or projects[0]["event_count"] < 0
+        or not isinstance(source_authority, dict)
+        or set(source_authority) != {"sourceDigest", "sourceCount", "contributionCount"}
+        or not valid_digest(source_authority.get("sourceDigest"))
+        or any(
+            not isinstance(source_authority.get(key), int)
+            or isinstance(source_authority.get(key), bool)
+            or source_authority[key] < 0
+            for key in ("sourceCount", "contributionCount")
+        )
+    ):
+        raise ValueError(f"project map is not the current canonical skeleton; {RECOLLECT_GUIDANCE}")
+    raw_units = project_map.get("semantic_units")
+    if not isinstance(raw_units, list):
+        raise ValueError("current project-map skeleton semantic_units is invalid")
+    existing_manifest = project_map.get("semantic_manifest")
+    if existing_manifest is not None:
+        validate_previous_manifest(existing_manifest, project_id)
+    expected = canonical_project_map(
+        run,
+        project_map.get("primary_project"),
+        project_map.get("summary"),
+        raw_units,
+        finalize=False,
+        existing_manifest=existing_manifest,
+    )
+    comparable_expected = expected
+    comparable_actual = project_map
+    if allow_stale_source:
+        comparable_expected = {
+            key: value for key, value in expected.items()
+            if key not in {"projects", "source_authority"}
+        }
+        comparable_actual = {
+            key: value for key, value in project_map.items()
+            if key not in {"projects", "source_authority"}
+        }
+    if comparable_expected != comparable_actual:
+        raise ValueError("current project-map skeleton is stale or was hand-edited")
+    return expected
+
+
 def validate_project_map_authority(
     run: Path, project_map: Any,
 ) -> dict[str, Any]:
@@ -606,7 +770,9 @@ def main() -> None:
         help="Explicit prior project-map or semantic-manifest file used for revision lineage.",
     )
     args = parser.parse_args()
-    run = args.run.resolve(strict=True)
+    run = assert_literal_physical_path(args.run).resolve(strict=True)
+    if not run.is_dir():
+        raise ValueError("run is not a directory")
     destination = run / "project-map.json"
     if destination.exists() or destination.is_symlink():
         contained_file(destination, run)
@@ -615,11 +781,18 @@ def main() -> None:
         if destination.exists() or destination.is_symlink()
         else {}
     )
+    if existing:
+        validate_current_project_map_skeleton(run, existing, allow_stale_source=True)
     raw_units = existing.get("semantic_units", [])
     previous_manifest = None
     if args.previous is not None:
         previous_object = read_object(contained_file(args.previous, run))
-        previous_manifest = previous_object.get("semantic_manifest", previous_object)
+        if "semantic_manifest" not in previous_object:
+            raise ValueError("previous authority must be a current canonical project map")
+        validate_current_project_map_skeleton(
+            run, previous_object, allow_stale_source=True,
+        )
+        previous_manifest = previous_object["semantic_manifest"]
     output = canonical_project_map(
         run,
         args.primary_project,
@@ -629,10 +802,7 @@ def main() -> None:
         finalize=args.finalize,
         existing_manifest=existing.get("semantic_manifest"),
     )
-    destination.write_text(
-        json.dumps(output, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_json(destination, output)
     print(json.dumps({
         "project_map": str(destination),
         "contribution_records": output["source_authority"]["contributionCount"],

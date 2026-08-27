@@ -1,92 +1,136 @@
 # Project map and semantic-manifest contract
 
-The collector has already projected immutable raw source into a deterministic contribution
-universe. Organization must read every projected natural-language contribution record and group it
-into bounded semantic units. Do not repeat the source-relevance policy here and do not read dropped
-tool envelopes, command/results, telemetry, or machine artifacts.
+Current ingest owns the deterministic contribution projection. Organization consumes only that
+current projection and never reads raw trajectories, dropped records, or historical project maps.
+An absent or invalid projection is a hard stop with an instruction to re-collect through current
+ingest. There is no legacy migration, compatibility reader, fallback, or manual project-map edit.
 
-Create the skeleton with:
+## 1. Create the current skeleton
 
-```text
-python skills/oxygen-organize-review-export/scripts/build_project_map.py <run> \
-  --primary-project <project> --summary <summary>
+POSIX:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/build_project_map.py work/<run> \
+  --primary-project "<project>" --summary "<summary>"
 ```
 
-Then fill only `semantic_units` in `<run>/project-map.json`:
+Windows PowerShell:
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\build_project_map.py `
+  "work\<run>" --primary-project "<project>" --summary "<summary>"
+```
+
+The builder verifies current contribution-projection provenance, source and document identities,
+the exact contribution universe, and the semantic source digest. The skeleton is the only accepted
+Organization input. An older reviewed package remains immutable evidence and is not an input to
+this command.
+
+## 2. Prepare immutable bounded worker inputs
+
+POSIX:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/prepare_semantic_units.py \
+  work/<run> work/<run>-organization
+```
+
+Windows PowerShell:
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\prepare_semantic_units.py `
+  "work\<run>" "work\<run>-organization"
+```
+
+Preparation writes `semantic-context.json`, `shards.json`, and immutable
+`inputs/<shard-id>.json` files. It balances serialized UTF-8 bytes and content bytes while keeping
+each qualified contribution ID in exactly one shard. Worker context contains only normalized
+semantic fields: contribution and document identity, sequence, event type, actor type, timestamp,
+and content. It excludes raw tool envelopes/results, raw commands/output, local storage paths,
+actor identity, provider/model metadata, projection drop ledgers, and source secrets or metadata.
+
+This preparation/validation step is provider-free. It does not make semantic grouping decisions.
+The exact successful handoff marker is:
+
+```text
+PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS
+```
+
+## 3. Bounded worker proposal and terminal receipt
+
+Each external worker reads exactly one `inputs/<shard-id>.json` and returns one JSON array at
+`handoffs/<shard-id>.proposals.json`. The worker uses the user's configured model and credentials;
+semantic reasoning is not provider-free. A proposal has only these fields:
 
 ```json
 {
-  "schema_version": "1",
-  "primary_project": "Oxygen",
-  "summary": "Builds a privacy-reviewed contribution and Story workflow.",
-  "semantic_units": [
-    {
-      "id": "unit-source-boundary-decision",
-      "kind": "decision_episode",
-      "members": [
-        "evt-1111111111111111111111111111111111111111111111111111111111111111",
-        "evt-2222222222222222222222222222222222222222222222222222222222222222"
-      ],
-      "storyProjection": {
-        "label": "Source boundary",
-        "summary": "The recorded discussion narrows contribution source to semantic traces."
-      }
-    }
-  ],
-  "semantic_manifest": null
+  "unitId": "unit-source-boundary-decision",
+  "kind": "decision_episode",
+  "contributionIds": ["evt-..."],
+  "storyProjection": {
+    "label": "Source boundary",
+    "summary": "The recorded discussion narrows the contribution source boundary."
+  }
 }
 ```
 
-The first skeleton has `semantic_manifest: null`. On a later source update, the skeleton preserves
-the prior finalized manifest and editable units for inspection, but preserved output never becomes
-revision authority implicitly. It is stale until explicit finalization replaces it and cannot be
-attached to the Viewer because its source authority no longer matches.
+`duplicateOfUnitId` is allowed only for a `duplicate` unit and must name a current direct
+non-duplicate unit. `storyProjection` is optional; its label is at most 120 UTF-8 bytes and its
+summary at most 300 UTF-8 bytes. Allowed kinds are `discussion`, `decision_episode`,
+`failed_attempt`, `experiment`, `correction`, `handoff`, `review_cycle`, `progression`, `routine`,
+and `duplicate`.
 
-Allowed kinds are `discussion`, `decision_episode`, `failed_attempt`, `experiment`, `correction`,
-`handoff`, `review_cycle`, `progression`, `routine`, and `duplicate`. A `duplicate` unit also names
-the exact current `duplicateOfUnitId` relation. `storyProjection` is optional and privacy-safe; its
-label is at most 120 characters and summary at most 300 characters.
+Every shard contribution must occur exactly once across that worker's proposals. Use the same
+stable `unitId` in multiple shards when one semantic episode crosses shard boundaries. Do not use
+one unit per record, one unit per session, or future Story Chapters as a quota.
 
-Unit boundaries follow meaning: a discussion, decision episode, failed attempt, experiment,
-correction, handoff, review cycle, or meaningful progression. A filename, session, trajectory,
-timestamp, individual record, or eventual Chapter is not an automatic boundary. Never create one
-unit per record merely to satisfy exhaustiveness.
+Record each worker's strict terminal receipt and content-bound output without calculating digests
+or editing the generated project map:
 
-Every qualified contribution ID belongs to exactly one current semantic unit. No member may be
-missing, repeated, foreign, or double-owned. Stable unit IDs persist while the meaning persists.
-Do not supply revisions: the provider-free finalizer preserves an unchanged unit revision and
-increments it only when content-bound membership or semantic projection changes. Exact membership
-remains local/tool/server-owned and is never copied into Story output.
-
-Finalize deterministically after grouping:
-
-```text
-python skills/oxygen-organize-review-export/scripts/build_project_map.py <run> \
-  --primary-project <project> --summary <summary> --finalize
+```bash
+python3 skills/oxygen-organize-review-export/scripts/record_semantic_worker.py \
+  work/<run>-organization <shard-id> \
+  work/<run>-organization/handoffs/<shard-id>.proposals.json
 ```
 
-That command creates revision 1 and is safe to retry as revision 1. To update an already finalized
-manifest, explicitly name the prior content-bound authority (the current project map is valid):
-
-```text
-python skills/oxygen-organize-review-export/scripts/build_project_map.py <run> \
-  --primary-project <project> --summary <summary> --finalize \
-  --previous <run>/project-map.json
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\record_semantic_worker.py `
+  "work\<run>-organization" "<shard-id>" `
+  "work\<run>-organization\handoffs\<shard-id>.proposals.json"
 ```
 
-The finalizer rejects forged revisions, stale digests, malformed duplicate topology, or implicit
-lineage. A `duplicate` unit must point directly to one current non-duplicate unit; all other kinds
-must omit `duplicateOfUnitId`.
+The receipt binds terminal status, shard ID, shard input digest, exact contribution IDs, output
+path, output digest, and output count. The recorder and finalizer make no provider, model, network,
+Viewer, or release call and do not store prompts or responses in product output.
 
-Finalization computes content-bound member counts, membership digests, universe/source/manifest digests, sorts
-identities, proves an exact disjoint union, and enforces 512 units, 2,200,000 serialized manifest
-bytes, and 325,000 Story-facing projection bytes. These are measured UTF-8 byte limits: the
-24,796-record BOM projection occupies 2,097,713 bytes with every unit label and summary at its
-maximum, while its Story-facing projection occupies 317,229 bytes. Text and identity limits are
-UTF-8 byte limits.
-The source digest binds the semantic original plus the exact normalized ID, document, sequence,
-event type, actor, timestamp, and content fields consumed as Story Evidence.
-Raw-source digests remain projection provenance but do not invalidate unchanged filtered semantic
-authority. The Viewer independently revalidates the same
-authority before publication. Do not edit source files, timestamps, IDs, projection provenance, or
-`publication_approved=false`.
+## 4. Compose and install canonical authority
+
+After every terminal receipt exists, run:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/finalize_semantic_units.py \
+  work/<run> work/<run>-organization
+```
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\finalize_semantic_units.py `
+  "work\<run>" "work\<run>-organization"
+```
+
+Composition merges matching cross-shard `unitId` proposals only when kind, duplicate relation, and
+bounded Story projection agree. It then proves the exact global union with no missing, foreign,
+duplicate, or overlapping contribution. Missing, failed, stale, foreign, duplicated, overlapping,
+or tampered receipts and outputs fail before installation. Completed-zero is invalid for a
+nonempty universe.
+
+The existing canonical project-map builder is the sole membership-digest, manifest-digest, and
+revision authority. It sorts identities by UTF-8 bytes, validates duplicate topology and the 512
+unit, 2,200,000 manifest-byte, and 325,000 Story-projection-byte limits, preserves unchanged unit
+revisions, and advances only content-changed authority. Installation is atomic: failure leaves the
+previous skeleton or finalized map byte-identical, and retrying the same complete input is
+deterministic and idempotent.
+
+Input and output path components must be literal physical components. Junctions, reparse points,
+symlinks, existing file hard links, parent traversal, absolute worker paths, and writes outside the
+explicit semantic output root fail closed. `publication_approved` remains `false`; Organization
+does not own Viewer acceptance, Story review, release, upload, deployment, or publication.

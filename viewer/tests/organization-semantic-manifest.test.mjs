@@ -301,14 +301,32 @@ test("Python Organization finalizer and Viewer validator share one digest contra
         cross_trajectory_semantic_replay_count: 0,
       },
     }), "utf8");
-    writeFileSync(join(root, "project-map.json"), JSON.stringify({
-      semantic_units: [{
-        id: "unit-parity", kind: "discussion", members: [contributionId],
-      }],
-    }), "utf8");
-    const finalized = spawnSync("python", [
+    const skeleton = spawnSync("python", [
       script, root, "--primary-project", "Synthetic Project",
-      "--summary", "Cross-runtime parity.", "--finalize",
+      "--summary", "Cross-runtime parity.",
+    ], { cwd: repository, encoding: "utf8" });
+    assert.equal(skeleton.status, 0, skeleton.stderr);
+    const semanticRoot = join(root, "semantic-transport");
+    const prepared = spawnSync("python", [
+      join(repository, "skills", "oxygen-organize-review-export", "scripts", "prepare_semantic_units.py"),
+      root, semanticRoot,
+    ], { cwd: repository, encoding: "utf8" });
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const shards = JSON.parse(readFileSync(join(semanticRoot, "shards.json"), "utf8"));
+    assert.equal(shards.shards.length, 1);
+    const shardId = shards.shards[0].id;
+    const proposalPath = join(semanticRoot, "handoffs", `${shardId}.proposals.json`);
+    writeFileSync(proposalPath, JSON.stringify([{
+      unitId: "unit-parity", kind: "discussion", contributionIds: [contributionId],
+    }]), "utf8");
+    const receipt = spawnSync("python", [
+      join(repository, "skills", "oxygen-organize-review-export", "scripts", "record_semantic_worker.py"),
+      semanticRoot, shardId, proposalPath,
+    ], { cwd: repository, encoding: "utf8" });
+    assert.equal(receipt.status, 0, receipt.stderr);
+    const finalized = spawnSync("python", [
+      join(repository, "skills", "oxygen-organize-review-export", "scripts", "finalize_semantic_units.py"),
+      root, semanticRoot,
     ], { cwd: repository, encoding: "utf8" });
     assert.equal(finalized.status, 0, finalized.stderr);
     const projectMap = JSON.parse(readFileSync(join(root, "project-map.json"), "utf8"));

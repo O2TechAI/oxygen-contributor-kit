@@ -11,8 +11,31 @@ Read every projected contribution record in the ingest run. The early determinis
 keeps recorded human dialogue, Agent reasoning/dialogue, agent/subagent coordination and findings,
 meaningful progress, meetings, feedback, and human-supplied sources. Tool envelopes/results, raw
 commands/output, generic execution markers, telemetry, and other mechanics are already absent; do
-not recreate or request them. Then write `<run>/project-map.json` using
+not recreate or request them. Use the current transport in
 [references/project-map-contract.md](references/project-map-contract.md).
+
+On POSIX, create the canonical skeleton and immutable worker handoff:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/build_project_map.py work/<run> \
+  --primary-project "<project>" --summary "<summary>"
+python3 skills/oxygen-organize-review-export/scripts/prepare_semantic_units.py \
+  work/<run> work/<run>-organization
+```
+
+On Windows PowerShell:
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\build_project_map.py `
+  "work\<run>" --primary-project "<project>" --summary "<summary>"
+python .\skills\oxygen-organize-review-export\scripts\prepare_semantic_units.py `
+  "work\<run>" "work\<run>-organization"
+```
+
+Preparation validates only current ingest projections and the exact current skeleton. If a
+projection is absent or an old project map is present, stop and re-collect through current ingest;
+never read or upgrade a historical map. The command ends with the exact internal handoff marker
+`PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS`. This is a bounded worker pause, not a human-review pause.
 
 1. Find topic changes both within a conversation and across conversations.
 2. Group events by the actual product, repository, or workstream being discussed.
@@ -38,10 +61,44 @@ not recreate or request them. Then write `<run>/project-map.json` using
 - Do not create one unit per raw record, one unit per session, or a second coverage ledger.
 - Use progressive exact Evidence access by unit when Story needs member bodies.
 
-Parallelize source reading when needed, then reconcile semantic-unit boundaries globally before
-finalization. Use the user's configured model/key; never require a bundled Oxygen key. The
-optional Story-facing unit projection is one privacy-safe label and summary, not a substitute for
-exact local membership.
+Parallelize the immutable shard inputs when needed. Each external worker reads only its
+`inputs/<shard-id>.json`, uses the user's configured model/key, and returns only a strict proposal
+array at `handoffs/<shard-id>.proposals.json`. The Kit does not call a provider and does not retain
+prompts or responses. Semantic reasoning itself is performed by those external workers and is not
+provider-free.
+
+Record each terminal worker result without hand-editing generated authority:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/record_semantic_worker.py \
+  work/<run>-organization <shard-id> \
+  work/<run>-organization/handoffs/<shard-id>.proposals.json
+```
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\record_semantic_worker.py `
+  "work\<run>-organization" "<shard-id>" `
+  "work\<run>-organization\handoffs\<shard-id>.proposals.json"
+```
+
+Workers may use the same stable `unitId` across shards. The deterministic composition stage merges
+those proposals, rejects conflicting metadata, and proves the exact global union. After every
+receipt is complete, finalize and install atomically:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/finalize_semantic_units.py \
+  work/<run> work/<run>-organization
+```
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\finalize_semantic_units.py `
+  "work\<run>" "work\<run>-organization"
+```
+
+The finalizer rejects missing, foreign, duplicate, stale, overlapping, or tampered worker
+authority before replacing `project-map.json`. The existing project-map builder remains the sole
+digest and revision authority. The optional Story-facing unit projection is one privacy-safe label
+and summary, not a substitute for exact local membership.
 
 ## Delegate Storytelling after the reviewed boundary
 
