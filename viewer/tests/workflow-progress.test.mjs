@@ -5,6 +5,7 @@ import { parseWorkspaceStatus } from "../lib/workspace-types.ts";
 import {
   WORKFLOW_STAGE_IDS,
   deriveWorkflowProgress,
+  startWorkflowPolling,
   withHumanReviewProgress,
 } from "../lib/workflow-progress.ts";
 
@@ -98,7 +99,7 @@ test("workflow progress derives completed, current, next, waiting, and blocked s
   assert.deepEqual(reviewing.stages.map((stage) => stage.id), WORKFLOW_STAGE_IDS);
 
   assert.equal(withHumanReviewProgress(reviewing, 14, 14).currentStageId, "review",
-    "Chapter count alone is not project All set authority");
+    "Chapter count alone is not project release-confirmation authority");
   const handoff = withHumanReviewProgress(reviewing, 14, 14, true);
   assert.equal(handoff.currentStageId, "handoff");
   assert.equal(handoff.safeStatusCode, "release_handoff_ready");
@@ -112,7 +113,7 @@ test("workflow progress is a strict sanitized operational projection", () => {
     storySourceSchema: "oxygen.story", storySessionSchema: "oxygen.story-review-session",
   }));
   assert.deepEqual(Object.keys(state).sort(), [
-    "allSetConfirmed", "completedStages", "currentStageId", "requiresHumanAction", "safeStatusCode", "stages",
+    "completedStages", "currentStageId", "releaseConfirmed", "requiresHumanAction", "safeStatusCode", "stages",
     "status", "storyGenerationStatus", "storySessionSchema", "storySourceSchema",
     "totalStages", "updatedAt", "workflowRunId",
   ]);
@@ -176,4 +177,81 @@ test("workflow route hydrates count-only persistent state and the shell can reop
   assert.match(component, /const determinate = Boolean\(currentProgress && currentProgress\.total > 0\)/);
   assert.doesNotMatch(component, /completedPercent|state\.completedStages \/ state\.totalStages/);
   assert.match(css, /@media\(prefers-reduced-motion:reduce\)[\s\S]*\.progressTrack\.indeterminate div\{width:100%;animation:none/);
+});
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((next) => { resolve = next; });
+  return { promise, resolve };
+}
+
+test("workflow polling remains single-flight after a response exceeds two seconds", async () => {
+  const scheduled = [];
+  const response = deferred();
+  let elapsedMs = 0;
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  let completed = 0;
+  const lifecycle = startWorkflowPolling(async ({ signal }) => {
+    inFlight += 1;
+    maximumInFlight = Math.max(maximumInFlight, inFlight);
+    try {
+      await response.promise;
+      if (!signal.aborted) completed += 1;
+    } finally {
+      inFlight -= 1;
+    }
+  }, {
+    intervalMs: 2_000,
+    schedule: (callback, delay) => {
+      assert.equal(delay, 2_000);
+      scheduled.push(callback);
+      return callback;
+    },
+    cancel: (handle) => {
+      const index = scheduled.indexOf(handle);
+      if (index >= 0) scheduled.splice(index, 1);
+    },
+  });
+
+  assert.equal(scheduled.length, 1);
+  scheduled.shift()();
+  await Promise.resolve();
+  elapsedMs = 2_500;
+  assert.ok(elapsedMs > 2_000);
+  assert.equal(inFlight, 1);
+  assert.equal(scheduled.length, 0, "no next timeout exists while the delayed poll is active");
+  response.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completed, 1);
+  assert.equal(maximumInFlight, 1);
+  assert.equal(scheduled.length, 1, "the next poll is scheduled only after completion");
+  lifecycle.retire();
+  assert.equal(scheduled.length, 0);
+});
+
+test("workflow polling retirement aborts the active epoch and prevents stale updates", async () => {
+  const scheduled = [];
+  const response = deferred();
+  let staleUpdates = 0;
+  let activeSignal = null;
+  const lifecycle = startWorkflowPolling(async ({ signal }) => {
+    activeSignal = signal;
+    await response.promise;
+    if (!signal.aborted) staleUpdates += 1;
+  }, {
+    schedule: (callback) => { scheduled.push(callback); return callback; },
+    cancel: (handle) => {
+      const index = scheduled.indexOf(handle);
+      if (index >= 0) scheduled.splice(index, 1);
+    },
+  });
+  scheduled.shift()();
+  await Promise.resolve();
+  lifecycle.retire();
+  assert.equal(activeSignal.aborted, true);
+  response.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(staleUpdates, 0);
+  assert.equal(scheduled.length, 0);
 });

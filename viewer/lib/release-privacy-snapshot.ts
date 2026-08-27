@@ -48,8 +48,8 @@ const releaseProbesSql = `SELECT id,document_id,document_kind,event_ids_json,tim
 const releaseBulkSql = `SELECT id,kind,count,question,default_answer,answer,answered_at,
   evidence_sample_json,presentations_json,created_at FROM probe_bulk_decisions ORDER BY id`;
 
-const allSetSql = `SELECT workflow_run_id,review_gate_digest,all_set_at
-  FROM project_all_set WHERE workflow_run_id=?`;
+const releaseConfirmationSql = `SELECT workflow_run_id,review_gate_digest,confirmed_at
+  FROM project_release_confirmations WHERE workflow_run_id=?`;
 
 const packageDocumentsSql = `SELECT id,kind,title,source_system,source_timestamp,item_count,
   metadata_json,formatted_summary_json FROM documents ORDER BY source_timestamp,title,id`;
@@ -153,7 +153,7 @@ export async function captureStoryReleasePrivacySnapshot(
     db.prepare(releaseProbeRunSql).bind(workflowRunId),
     db.prepare(releaseProbesSql),
     db.prepare(releaseBulkSql),
-    db.prepare(allSetSql).bind(workflowRunId),
+    db.prepare(releaseConfirmationSql).bind(workflowRunId),
   ]);
   const authorityRows = rows(results, 0);
   const runRows = rows(results, 1);
@@ -168,7 +168,7 @@ export async function captureStoryReleasePrivacySnapshot(
   const probeRunRows = rows(results, 10);
   const probeRows = rows(results, 11);
   const bulkRows = rows(results, 12);
-  const allSetRows = rows(results, 13);
+  const releaseConfirmationRows = rows(results, 13);
   const value = {
     authorityRows,
     runRows,
@@ -185,13 +185,13 @@ export async function captureStoryReleasePrivacySnapshot(
   };
   return {
     ...value,
-    allSetRows,
+    releaseConfirmationRows,
     run: runRows[0] || null,
     session: sessionRows[0] || null,
     redactionJob: redactionJobRows[0] || null,
     redactionRows,
     probeRun: probeRunRows[0] || null,
-    allSet: allSetRows[0] || null,
+    releaseConfirmation: releaseConfirmationRows[0] || null,
     digest: await snapshotDigest("story", value),
   };
 }

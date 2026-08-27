@@ -92,7 +92,7 @@ export const RELEASE_ERROR = {
   preparationInvalid: "RELEASE_PREPARATION_INVALID",
   storyPrivacyPending: "RELEASE_STORY_PRIVACY_PENDING",
   preferencePending: "RELEASE_PREFERENCE_PENDING",
-  allSetRequired: "RELEASE_ALL_SET_REQUIRED",
+  releaseConfirmationRequired: "RELEASE_CONFIRMATION_REQUIRED",
 } as const;
 
 export type ReleaseErrorCode = typeof RELEASE_ERROR[keyof typeof RELEASE_ERROR];
@@ -120,7 +120,7 @@ type ReleaseSuccess = {
 export type ServerOwnedReleaseResult = ReleaseSuccess | ReleaseFailure;
 
 type ReleaseReconstructionOptions = ReleaseSnapshotTestOptions & {
-  allowUnsetAllSet?: boolean;
+  allowUnsetReleaseConfirmation?: boolean;
 };
 
 const REQUEST_KEYS = new Set(["workflowRunId", "serverVersion", "sourceRevision"]);
@@ -210,15 +210,16 @@ function validPreparationAndPreference(
   return true;
 }
 
-function exactAllSetBinding(
+function exactReleaseConfirmationBinding(
   snapshot: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
   request: ServerOwnedReleaseRequest,
   reviewGateDigest: string,
 ) {
-  const row = snapshot.allSet;
-  return snapshot.allSetRows.length === 1 && row?.workflow_run_id === request.workflowRunId
+  const row = snapshot.releaseConfirmation;
+  return snapshot.releaseConfirmationRows.length === 1
+    && row?.workflow_run_id === request.workflowRunId
     && row.review_gate_digest === reviewGateDigest
-    && exactTimestamp(row.all_set_at);
+    && exactTimestamp(row.confirmed_at);
 }
 
 function readReleaseSessionRecord(row: ReleaseSessionRow | null): ReleaseSessionRecord {
@@ -388,17 +389,17 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     storyPrivacy.authority,
     serializedStory,
   );
-  if (!options.allowUnsetAllSet
-    && !exactAllSetBinding(initialSnapshot, request, reviewGateDigest)) {
-    return failure(RELEASE_ERROR.allSetRequired, boundedMetadata);
+  if (!options.allowUnsetReleaseConfirmation
+    && !exactReleaseConfirmationBinding(initialSnapshot, request, reviewGateDigest)) {
+    return failure(RELEASE_ERROR.releaseConfirmationRequired, boundedMetadata);
   }
   await options.beforeFinalPrivacyCheck?.();
   const finalSnapshot = await captureStoryReleasePrivacySnapshot(db, request.workflowRunId);
   const finalPackageSnapshot = await capturePackageReleasePrivacySnapshot(db);
   if (finalSnapshot.digest !== initialSnapshot.digest
     || finalPackageSnapshot.digest !== initialPackageSnapshot.digest
-    || (!options.allowUnsetAllSet
-      && !exactAllSetBinding(finalSnapshot, request, reviewGateDigest))) {
+    || (!options.allowUnsetReleaseConfirmation
+      && !exactReleaseConfirmationBinding(finalSnapshot, request, reviewGateDigest))) {
     return failure(RELEASE_ERROR.privacyConflict, boundedMetadata);
   }
   return {
@@ -433,7 +434,7 @@ const messages: Record<ReleaseErrorCode, string> = {
   [RELEASE_ERROR.preparationInvalid]: "Story preparation authority is invalid",
   [RELEASE_ERROR.storyPrivacyPending]: "Story Privacy decisions are incomplete",
   [RELEASE_ERROR.preferencePending]: "Preference answers are incomplete",
-  [RELEASE_ERROR.allSetRequired]: "Final release confirmation is required",
+  [RELEASE_ERROR.releaseConfirmationRequired]: "Final release confirmation is required",
 };
 
 export function releaseErrorResponse(result: ReleaseFailure) {

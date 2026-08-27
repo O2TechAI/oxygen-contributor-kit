@@ -1,31 +1,31 @@
-import { getLocalDatabase } from "../db";
+import { getLocalDatabase } from "../db/index.ts";
 import {
   hydrateStoryReviewSession,
   STORY_REVIEW_SESSION_SCHEMA,
-} from "./story-review-session";
+} from "./story-review-session.ts";
 import {
   emptyChapterReview,
   type ChapterReviewState,
   type PrivacyDecision,
-} from "./story-review";
+} from "./story-review.ts";
 import {
   readActiveStoryReviewContract,
   readStoryReviewSessionRecord,
-} from "./story-review-session-server";
+} from "./story-review-session-server.ts";
 import {
   STORY_PREFIX,
   compareStorySourceIdentity,
   parseStorySource,
-} from "./timeline";
-import { deriveWorkflowProgress, isStoryReviewReady } from "./workflow-progress";
+} from "./timeline.ts";
+import { deriveWorkflowProgress, isStoryReviewReady } from "./workflow-progress.ts";
 import {
   WORKFLOW_RUN_AUTHORITY,
   WorkflowRunAuthorityError,
   requireEstablishedWorkflowRun,
   requireExactWorkflowRun,
-} from "./workflow-run-server";
-import type { WorkspaceDocument, WorkspaceStatus } from "./workspace-types";
-import { readProjectReleaseConfirmation } from "./project-all-set.ts";
+} from "./workflow-run-server.ts";
+import type { WorkspaceDocument, WorkspaceStatus } from "./workspace-types.ts";
+import { readProjectReleaseConfirmation } from "./project-release-confirmation.ts";
 
 type CountRow = { total: number; completed: number };
 type JobRow = { id?: string; status?: string; updated_at?: string };
@@ -96,7 +96,7 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
   }
   const currentServerVersion = Number(sessionBinding?.server_version);
   const currentSourceRevision = Number(run?.story_source_revision);
-  const allSetConfirmed = Boolean(run?.active_story_digest
+  const releaseConfirmed = Boolean(run?.active_story_digest
     && Number.isSafeInteger(currentServerVersion) && currentServerVersion >= 0
     && Number.isSafeInteger(currentSourceRevision) && currentSourceRevision >= 0
     && storedSourceRevision === currentSourceRevision
@@ -121,7 +121,7 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     storyGenerationTotal: Number(run?.story_generation_total || 0),
     storySourceSchema: activeContract?.storySourceSchema || null,
     storySessionSchema: activeContract?.storySessionSchema || null,
-    allSetConfirmed,
+    releaseConfirmed,
     updatedAt,
   });
 }

@@ -339,7 +339,7 @@ async function sha256(value) {
 
 
 class FakeStoryReleaseDb {
-  constructor({ items, run, session, redactionJob, redactions = [], receipts, probeRun, allSet }) {
+  constructor({ items, run, session, redactionJob, redactions = [], receipts, probeRun, releaseConfirmation }) {
     this.items = items;
     this.runs = new Map([[run.id, run]]);
     this.session = session;
@@ -347,7 +347,7 @@ class FakeStoryReleaseDb {
     this.redactions = redactions;
     this.receipts = receipts;
     this.probeRun = probeRun;
-    this.allSet = allSet;
+    this.releaseConfirmation = releaseConfirmation;
   }
 
   prepare(sql) {
@@ -380,7 +380,9 @@ class FakeStoryReleaseDb {
         if (/FROM probe_runs/.test(sql)) return { results: this.probeRun ? [structuredClone(this.probeRun)] : [] };
         if (/FROM probes/.test(sql)) return { results: [] };
         if (/FROM probe_bulk_decisions/.test(sql)) return { results: [] };
-        if (/FROM project_all_set/.test(sql)) return { results: this.allSet ? [structuredClone(this.allSet)] : [] };
+        if (/FROM project_release_confirmations/.test(sql)) {
+          return { results: this.releaseConfirmation ? [structuredClone(this.releaseConfirmation)] : [] };
+        }
         if (/FROM documents/.test(sql)) return { results: [] };
         if (/FROM redaction_jobs/.test(sql)) {
           return { results: this.redactionJob ? [structuredClone(this.redactionJob)] : [] };
@@ -520,16 +522,16 @@ async function serverFixture({
       input_digest: emptyDigest, output_digest: emptyDigest, output_count: 0,
       status: "complete", stage: "preference", model: null, generated: 0, set_aside: 0,
     },
-    allSet: null,
+    releaseConfirmation: null,
   });
   const current = await reconstructReviewedStoryReleaseFromDatabase(db, request(), {
-    allowUnsetAllSet: true,
+    allowUnsetReleaseConfirmation: true,
   });
   if (current.ok) {
-    db.allSet = {
+    db.releaseConfirmation = {
       workflow_run_id: RUN_ID,
       review_gate_digest: current.binding.reviewGateDigest,
-      all_set_at: "2026-08-25T00:00:11.000Z",
+      confirmed_at: "2026-08-25T00:00:11.000Z",
     };
   } else {
     assert.equal(includeHuman, true, JSON.stringify(current));
@@ -547,13 +549,13 @@ const request = (overrides = {}) => ({
 
 async function refreshFakeGate(db) {
   const current = await reconstructReviewedStoryReleaseFromDatabase(db, request(), {
-    allowUnsetAllSet: true,
+    allowUnsetReleaseConfirmation: true,
   });
   assert.equal(current.ok, true, JSON.stringify(current));
-  db.allSet = {
+  db.releaseConfirmation = {
     workflow_run_id: RUN_ID,
     review_gate_digest: current.binding.reviewGateDigest,
-    all_set_at: "2026-08-25T00:00:11.000Z",
+    confirmed_at: "2026-08-25T00:00:11.000Z",
   };
 }
 

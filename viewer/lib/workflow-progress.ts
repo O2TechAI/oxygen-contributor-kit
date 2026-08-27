@@ -58,7 +58,7 @@ export type WorkflowProgressState = {
   storyGenerationStatus: StoryGenerationStatus;
   storySourceSchema: StorySourceSchema | null;
   storySessionSchema: StorySessionSchema | null;
-  allSetConfirmed?: boolean;
+  releaseConfirmed?: boolean;
   blockedReasonCode?:
     | "COLLECTION_FAILED"
     | "COLLECTION_EMPTY"
@@ -83,7 +83,7 @@ export type WorkflowFacts = {
   storyGenerationTotal?: number;
   storySourceSchema?: StorySourceSchema | null;
   storySessionSchema?: StorySessionSchema | null;
-  allSetConfirmed?: boolean;
+  releaseConfirmed?: boolean;
   updatedAt?: string | null;
 };
 
@@ -129,7 +129,7 @@ function state(
     storyGenerationStatus: normalizeStoryGenerationStatus(facts.storyGenerationStatus),
     storySourceSchema: storyContract ? facts.storySourceSchema! : null,
     storySessionSchema: storyContract ? facts.storySessionSchema! : null,
-    allSetConfirmed: Boolean(facts.allSetConfirmed),
+    releaseConfirmed: Boolean(facts.releaseConfirmed),
     ...(blockedReasonCode ? { blockedReasonCode } : {}),
   };
 }
@@ -141,6 +141,70 @@ const WORKFLOW_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export function isWorkflowRunId(value: unknown): value is string {
   return typeof value === "string" && WORKFLOW_RUN_ID.test(value);
+}
+
+export type WorkflowPollRequest = {
+  generation: number;
+  signal: AbortSignal;
+};
+
+type WorkflowPollingOptions = {
+  intervalMs?: number;
+  schedule?: (callback: () => void, delay: number) => unknown;
+  cancel?: (handle: unknown) => void;
+};
+
+/** Poll one workflow request at a time. Each next timeout is created only
+ * after the prior request settles; retirement cancels the timeout, aborts the
+ * active epoch, and makes its response ineligible for state updates. */
+export function startWorkflowPolling(
+  poll: (request: WorkflowPollRequest) => Promise<void>,
+  options: WorkflowPollingOptions = {},
+) {
+  const intervalMs = options.intervalMs ?? 2_000;
+  const schedule = options.schedule
+    ?? ((callback: () => void, delay: number) => globalThis.setTimeout(callback, delay));
+  const cancel = options.cancel
+    ?? ((handle: unknown) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
+  let generation = 0;
+  let retired = false;
+  let timer: unknown = null;
+  let active: (WorkflowPollRequest & { controller: AbortController }) | null = null;
+
+  const scheduleNext = () => {
+    if (retired) return;
+    timer = schedule(() => {
+      timer = null;
+      void run();
+    }, intervalMs);
+  };
+  const run = async () => {
+    if (retired || active) return;
+    const controller = new AbortController();
+    const request = { generation: ++generation, signal: controller.signal, controller };
+    active = request;
+    try {
+      await poll(request);
+    } catch {
+      // A passive polling failure is retried by the next completed epoch.
+    } finally {
+      if (active?.generation === request.generation) active = null;
+      scheduleNext();
+    }
+  };
+
+  scheduleNext();
+  return {
+    retire() {
+      if (retired) return;
+      retired = true;
+      generation += 1;
+      if (timer !== null) cancel(timer);
+      timer = null;
+      active?.controller.abort();
+      active = null;
+    },
+  };
 }
 
 function normalizeStoryGenerationStatus(value: unknown): StoryGenerationStatus {
@@ -282,12 +346,12 @@ export function withHumanReviewProgress(
   progress: WorkflowProgressState,
   confirmedChapters: number,
   totalChapters: number,
-  allSetConfirmed = progress.allSetConfirmed,
+  releaseConfirmed = progress.releaseConfirmed,
 ): WorkflowProgressState {
   if (progress.currentStageId !== "review" || progress.status === "blocked") return progress;
   const total = nonNegativeInteger(totalChapters);
   const confirmed = Math.min(nonNegativeInteger(confirmedChapters), total);
-  if (!total || confirmed < total || !allSetConfirmed) {
+  if (!total || confirmed < total || !releaseConfirmed) {
     return {
       ...progress,
       stages: progress.stages.map((stage) => stage.id === "review"
