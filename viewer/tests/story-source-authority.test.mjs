@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { testStoryCoverage } from "./fixtures/successor-story-coverage.mjs";
 import {
   isReservedStoryOrganizationReason,
@@ -12,13 +13,9 @@ import { releaseOrganizationReason } from "../lib/story-release.ts";
 import { readActiveStoryReviewContract } from "../lib/story-review-session-server.ts";
 import {
   STORY_SOURCE_WRITE_STATUS,
-  STORY_ACTIVATION_MAX_PACKAGE_STATEMENTS,
-  D1_JSON_PARAMETER_BYTES,
   abortStorySourceMutation,
-  assertStoryActivationQueryBudget,
   beginStoryActivationMutation,
   beginStorySourceMutation,
-  jsonParameterBatches,
   publishActivatedStorySourceMutation,
   publishCompletedStorySourceMutation,
 } from "../lib/story-source-publication.ts";
@@ -28,31 +25,30 @@ const RUN_ID = "source-authority-run";
 const ORIGINAL_SENTINEL = "PRIVATE_ORIGINAL_SENTINEL";
 const EVIDENCE_SENTINEL = "PRIVATE_EVIDENCE_SENTINEL";
 
-test("D1 JSON persistence batches keep 24796 bounded members below query and parameter limits", () => {
+test("Organization and Story activation use one JSON payload per logical row group", (context) => {
+  const organizationRoute = readFileSync(
+    new URL("../app/api/organization/route.ts", import.meta.url),
+    "utf8",
+  );
+  const workflowRoute = readFileSync(new URL("../app/api/workflow/route.ts", import.meta.url), "utf8");
+  assert.match(organizationRoute, /const unitPayload = JSON\.stringify\(persistedUnits\)/);
+  assert.match(organizationRoute, /const memberPayload = JSON\.stringify\(members\)/);
+  assert.match(workflowRoute, /const candidatePayload = JSON\.stringify\(candidateRows\)/);
+  assert.match(
+    workflowRoute,
+    /const documentSummaryPayload = JSON\.stringify\(documentSummaries\)/,
+  );
+  assert.match(workflowRoute, /const coveragePayload = JSON\.stringify\(coverageManifest\.rows\)/);
+  assert.doesNotMatch(`${organizationRoute}\n${workflowRoute}`, /for \(const payload/);
+
   const rows = Array.from({ length: 24_796 }, (_, index) => ({
     itemId: `item-${index}-${"x".repeat(280)}`,
     unitId: `unit-${index % 512}-${"y".repeat(280)}`,
     sourceDigest: "a".repeat(64),
   }));
-  const payloads = jsonParameterBatches(rows);
-  assert.ok(payloads.length + 12 < 50, "Organization stays below the free-plan query invocation bound");
-  assert.ok(payloads.every((payload) => Buffer.byteLength(payload) <= D1_JSON_PARAMETER_BYTES));
-  assert.equal(payloads.reduce((total, payload) => total + JSON.parse(payload).length, 0), rows.length);
-  assert.throws(
-    () => jsonParameterBatches([{ value: "x".repeat(D1_JSON_PARAMETER_BYTES) }]),
-    /bounded parameter size/,
-  );
-});
-
-test("Story activation rejects package statements before the D1 invocation limit", () => {
-  assert.doesNotThrow(() => assertStoryActivationQueryBudget(
-    STORY_ACTIVATION_MAX_PACKAGE_STATEMENTS,
-  ));
-  assert.throws(
-    () => assertStoryActivationQueryBudget(STORY_ACTIVATION_MAX_PACKAGE_STATEMENTS + 1),
-    /bounded D1 query budget/,
-  );
-  assert.throws(() => assertStoryActivationQueryBudget(Number.NaN), /bounded D1 query budget/);
+  const payload = JSON.stringify(rows);
+  assert.equal(JSON.parse(payload).length, 24_796);
+  context.diagnostic(JSON.stringify({ rowCount: rows.length, payloadBytes: Buffer.byteLength(payload) }));
 });
 
 function sourceFor(identity) {
@@ -311,7 +307,7 @@ test("one complete source document publishes one revision and partial rows canno
   assert.equal(db.status, "ready_for_human_review");
 });
 
-test("failed chunk writes remain non-ready and publish no source revision", async () => {
+test("failed source writes remain non-ready and publish no source revision", async () => {
   const db = new PublicationDb("not_started", 20);
   assert.equal(await beginStorySourceMutation(db, RUN_ID, "2036-02-04T00:00:00.000Z"), true);
   await abortStorySourceMutation(db, RUN_ID, "2036-02-04T00:00:01.000Z");

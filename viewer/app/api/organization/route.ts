@@ -17,7 +17,6 @@ import {
   abortStorySourceMutation,
   beginStorySourceMutation,
   isStorySourceWriteInProgress,
-  jsonParameterBatches,
   publishCompletedSemanticSourceMutation,
 } from "../../../lib/story-source-publication";
 
@@ -470,8 +469,8 @@ export async function POST(request: Request) {
       duplicateOfUnitId: unit.duplicateOfUnitId || null,
       storyProjectionJson: JSON.stringify(unit.storyProjection || {}),
     }));
-    for (const payload of jsonParameterBatches(persistedUnits)) {
-      statements.push(db.prepare(`INSERT INTO semantic_units
+    const unitPayload = JSON.stringify(persistedUnits);
+    statements.push(db.prepare(`INSERT INTO semantic_units
         (id,workflow_run_id,revision,project_id,kind,member_count,membership_digest,
           duplicate_of_unit_id,story_projection_json)
         SELECT json_extract(value,'$.id'),?,json_extract(value,'$.revision'),
@@ -479,8 +478,7 @@ export async function POST(request: Request) {
           json_extract(value,'$.memberCount'),json_extract(value,'$.membershipDigest'),
           json_extract(value,'$.duplicateOfUnitId'),json_extract(value,'$.storyProjectionJson')
         FROM json_each(?) WHERE ${leaseSql}`)
-        .bind(authority.workflowRunId, payload, ...leaseBindings));
-    }
+        .bind(authority.workflowRunId, unitPayload, ...leaseBindings));
     const members = manifest.units.flatMap((unit) => (
       unit.members.map((itemId) => ({
         itemId,
@@ -488,13 +486,12 @@ export async function POST(request: Request) {
         sourceDigest: sourceDigests.get(itemId)!,
       }))
     ));
-    for (const payload of jsonParameterBatches(members)) {
-      statements.push(db.prepare(`INSERT INTO semantic_unit_members
+    const memberPayload = JSON.stringify(members);
+    statements.push(db.prepare(`INSERT INTO semantic_unit_members
         (item_id,workflow_run_id,unit_id,source_digest)
         SELECT json_extract(value,'$.itemId'),?,json_extract(value,'$.unitId'),
           json_extract(value,'$.sourceDigest') FROM json_each(?) WHERE ${leaseSql}`)
-        .bind(authority.workflowRunId, payload, ...leaseBindings));
-    }
+        .bind(authority.workflowRunId, memberPayload, ...leaseBindings));
     statements.push(
       db.prepare(`UPDATE items SET
         organization_category=?,organization_confidence=100,

@@ -7,9 +7,7 @@ import {
 import {
   STORY_SOURCE_WRITE_STATUS,
   abortStorySourceMutation,
-  assertFinalizedCorpusQueryBudget,
   beginStorySourceMutation,
-  jsonParameterBatches,
   publishFinalizedCorpusSourceMutation,
 } from "../../../lib/story-source-publication";
 
@@ -41,21 +39,9 @@ type NormalizedDocument = {
 export type NormalizedFinalizedCorpus = {
   documents: NormalizedDocument[];
   itemCount: number;
-  normalizedBytes: number;
   canonicalPayload: string;
 };
 
-export const MAX_CORPUS_DOCUMENTS = 2_000;
-export const MAX_CORPUS_ITEMS = 25_000;
-export const MAX_CORPUS_REQUEST_BYTES = 64_000_000;
-export const MAX_CORPUS_NORMALIZED_BYTES = 64_000_000;
-export const MAX_CORPUS_CONTENT_BYTES = 400_000;
-export const MAX_CORPUS_ORIGINAL_JSON_BYTES = 600_000;
-export const MAX_CORPUS_DOCUMENT_JSON_BYTES = 750_000;
-
-const MAX_ID_BYTES = 300;
-const MAX_TITLE_BYTES = 4_096;
-const MAX_OPTIONAL_TEXT_BYTES = 16_384;
 const DOCUMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
 const ITEM_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,299}$/;
 const encoder = new TextEncoder();
@@ -73,18 +59,12 @@ const ITEM_KEYS = new Set([
 
 export class CorpusValidationError extends Error {
   readonly code: string;
-  readonly status: number;
 
-  constructor(code: string, status = 400) {
+  constructor(code: string) {
     super(code);
     this.name = "CorpusValidationError";
     this.code = code;
-    this.status = status;
   }
-}
-
-function byteLength(value: string) {
-  return encoder.encode(value).byteLength;
 }
 
 function compareIdentity(left: string, right: string) {
@@ -124,9 +104,8 @@ export function canonicalCorpusJson(value: unknown): string {
   )).join(",")}}`;
 }
 
-function requiredString(value: unknown, maximumBytes: number, code: string) {
-  if (typeof value !== "string" || !value.length || value.includes("\0")
-    || byteLength(value) > maximumBytes) {
+function requiredString(value: unknown, code: string) {
+  if (typeof value !== "string" || !value.length || value.includes("\0")) {
     throw new CorpusValidationError(code);
   }
   return value;
@@ -134,35 +113,28 @@ function requiredString(value: unknown, maximumBytes: number, code: string) {
 
 function optionalString(value: unknown, code: string) {
   if (value === undefined || value === null || value === "") return null;
-  if (typeof value !== "string" || value.includes("\0")
-    || byteLength(value) > MAX_OPTIONAL_TEXT_BYTES) {
+  if (typeof value !== "string" || value.includes("\0")) {
     throw new CorpusValidationError(code);
   }
   return value;
 }
 
 function validDocumentId(value: unknown, code: string) {
-  const id = requiredString(value, MAX_ID_BYTES, code);
+  const id = requiredString(value, code);
   if (!DOCUMENT_ID_PATTERN.test(id) || id !== id.trim()) throw new CorpusValidationError(code);
   return id;
 }
 
 function validItemId(value: unknown, code: string) {
-  const id = requiredString(value, MAX_ID_BYTES, code);
+  const id = requiredString(value, code);
   if (!ITEM_ID_PATTERN.test(id) || id !== id.trim()) throw new CorpusValidationError(code);
   return id;
-}
-
-function boundedJson(value: unknown, maximumBytes: number, code: string) {
-  const serialized = canonicalCorpusJson(value);
-  if (byteLength(serialized) > maximumBytes) throw new CorpusValidationError(code, 413);
-  return serialized;
 }
 
 function normalizedDocumentJson(value: unknown, code: string) {
   if (value === undefined || value === null) return "{}";
   if (!isRecord(value)) throw new CorpusValidationError(code);
-  return boundedJson(value, MAX_CORPUS_DOCUMENT_JSON_BYTES, code);
+  return canonicalCorpusJson(value);
 }
 
 function normalizeItem(
@@ -189,14 +161,8 @@ function normalizeItem(
   }
   sequences.add(Number(sequence));
   const content = typeof item.content === "string" ? item.content : null;
-  if (content === null || byteLength(content) > MAX_CORPUS_CONTENT_BYTES) {
-    throw new CorpusValidationError("CORPUS_ITEM_CONTENT_INVALID", content === null ? 400 : 413);
-  }
-  const originalJson = boundedJson(
-    item.original,
-    MAX_CORPUS_ORIGINAL_JSON_BYTES,
-    "CORPUS_ITEM_ORIGINAL_TOO_LARGE",
-  );
+  if (content === null) throw new CorpusValidationError("CORPUS_ITEM_CONTENT_INVALID");
+  const originalJson = canonicalCorpusJson(item.original);
   const original = item.original;
   const originalEventId = isRecord(original) ? original.event_id : undefined;
   const originalTrajectoryId = isRecord(original) ? original.trajectory_id : undefined;
@@ -221,14 +187,7 @@ function normalizeItem(
   };
 }
 
-export function normalizeFinalizedCorpus(
-  value: unknown,
-  requestBytes = byteLength(JSON.stringify(value)),
-): NormalizedFinalizedCorpus {
-  if (!Number.isSafeInteger(requestBytes) || requestBytes < 0
-    || requestBytes > MAX_CORPUS_REQUEST_BYTES) {
-    throw new CorpusValidationError("CORPUS_REQUEST_TOO_LARGE", 413);
-  }
+export function normalizeFinalizedCorpus(value: unknown): NormalizedFinalizedCorpus {
   const body = requireExactObject(
     value,
     TOP_LEVEL_KEYS,
@@ -237,9 +196,6 @@ export function normalizeFinalizedCorpus(
   );
   if (!Array.isArray(body.documents) || body.documents.length < 1) {
     throw new CorpusValidationError("CORPUS_DOCUMENTS_REQUIRED");
-  }
-  if (body.documents.length > MAX_CORPUS_DOCUMENTS) {
-    throw new CorpusValidationError("CORPUS_DOCUMENT_LIMIT_EXCEEDED", 413);
   }
   const documentIds = new Set<string>();
   const itemIds = new Set<string>();
@@ -269,16 +225,13 @@ export function normalizeFinalizedCorpus(
       throw new CorpusValidationError("CORPUS_DOCUMENT_ITEM_COUNT_MISMATCH");
     }
     itemCount += entry.items.length;
-    if (itemCount > MAX_CORPUS_ITEMS) {
-      throw new CorpusValidationError("CORPUS_ITEM_LIMIT_EXCEEDED", 413);
-    }
     const sequences = new Set<number>();
     const items = entry.items.map((item) => normalizeItem(item, id, itemIds, sequences));
     items.sort((left, right) => left.sequence - right.sequence || compareIdentity(left.id, right.id));
     return {
       id,
       kind: document.kind,
-      title: requiredString(document.title, MAX_TITLE_BYTES, "CORPUS_DOCUMENT_TITLE_INVALID"),
+      title: requiredString(document.title, "CORPUS_DOCUMENT_TITLE_INVALID"),
       sourceUser: optionalString(document.sourceUser, "CORPUS_DOCUMENT_SOURCE_INVALID"),
       sourceSystem: optionalString(document.sourceSystem, "CORPUS_DOCUMENT_SOURCE_INVALID"),
       sourceTimestamp: optionalString(document.sourceTimestamp, "CORPUS_DOCUMENT_SOURCE_INVALID"),
@@ -293,11 +246,7 @@ export function normalizeFinalizedCorpus(
   });
   documents.sort((left, right) => compareIdentity(left.id, right.id));
   const canonicalPayload = canonicalCorpusJson({ documents });
-  const normalizedBytes = byteLength(canonicalPayload);
-  if (normalizedBytes > MAX_CORPUS_NORMALIZED_BYTES) {
-    throw new CorpusValidationError("CORPUS_NORMALIZED_PAYLOAD_TOO_LARGE", 413);
-  }
-  return { documents, itemCount, normalizedBytes, canonicalPayload };
+  return { documents, itemCount, canonicalPayload };
 }
 
 export async function finalizedCorpusDigest(corpus: NormalizedFinalizedCorpus) {
@@ -307,7 +256,7 @@ export async function finalizedCorpusDigest(corpus: NormalizedFinalizedCorpus) {
 
 function corpusErrorResponse(error: unknown) {
   if (error instanceof CorpusValidationError) {
-    return Response.json({ error: "Invalid finalized corpus", code: error.code }, { status: error.status });
+    return Response.json({ error: "Invalid finalized corpus", code: error.code }, { status: 400 });
   }
   return null;
 }
@@ -331,61 +280,27 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const declaredLength = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_CORPUS_REQUEST_BYTES) {
-    return Response.json({
-      error: "Invalid finalized corpus",
-      code: "CORPUS_REQUEST_TOO_LARGE",
-    }, { status: 413 });
-  }
-  let serialized: string;
-  try {
-    serialized = await request.text();
-  } catch {
-    return Response.json({ error: "Invalid finalized corpus", code: "CORPUS_PAYLOAD_INVALID" }, {
-      status: 400,
-    });
-  }
-  const requestBytes = byteLength(serialized);
-  if (requestBytes > MAX_CORPUS_REQUEST_BYTES) {
-    return Response.json({
-      error: "Invalid finalized corpus",
-      code: "CORPUS_REQUEST_TOO_LARGE",
-    }, { status: 413 });
-  }
   let corpus: NormalizedFinalizedCorpus;
   try {
-    corpus = normalizeFinalizedCorpus(JSON.parse(serialized), requestBytes);
+    corpus = normalizeFinalizedCorpus(await request.json());
   } catch (error) {
     return corpusErrorResponse(error) || Response.json({
       error: "Invalid finalized corpus",
       code: "CORPUS_PAYLOAD_INVALID",
     }, { status: 400 });
   }
-  let documentPayloads: string[];
-  let itemPayloads: string[];
-  try {
-    documentPayloads = jsonParameterBatches(corpus.documents.map((document) => ({
-      id: document.id,
-      kind: document.kind,
-      title: document.title,
-      sourceUser: document.sourceUser,
-      sourceSystem: document.sourceSystem,
-      sourceTimestamp: document.sourceTimestamp,
-      itemCount: document.itemCount,
-      metadataJson: document.metadataJson,
-      originalEnvelopeJson: document.originalEnvelopeJson,
-    })));
-    itemPayloads = jsonParameterBatches(corpus.documents.flatMap((document) => document.items));
-    assertFinalizedCorpusQueryBudget(7 + documentPayloads.length + itemPayloads.length);
-  } catch (error) {
-    const bounded = corpusErrorResponse(error);
-    if (bounded) return bounded;
-    return Response.json({
-      error: "Finalized corpus exceeds the D1 replacement bounds",
-      code: "CORPUS_D1_BOUNDS_EXCEEDED",
-    }, { status: 413 });
-  }
+  const documentPayload = JSON.stringify(corpus.documents.map((document) => ({
+    id: document.id,
+    kind: document.kind,
+    title: document.title,
+    sourceUser: document.sourceUser,
+    sourceSystem: document.sourceSystem,
+    sourceTimestamp: document.sourceTimestamp,
+    itemCount: document.itemCount,
+    metadataJson: document.metadataJson,
+    originalEnvelopeJson: document.originalEnvelopeJson,
+  })));
+  const itemPayload = JSON.stringify(corpus.documents.flatMap((document) => document.items));
   const corpusDigest = await finalizedCorpusDigest(corpus);
   const db = await getD1();
   const authority = await requireEstablishedWorkflowRun(db);
@@ -425,9 +340,7 @@ export async function POST(request: Request) {
     const statements: ReturnType<typeof db.prepare>[] = [
       db.prepare(`DELETE FROM items WHERE ${leaseSql}`).bind(...leaseBindings),
       db.prepare(`DELETE FROM documents WHERE ${leaseSql}`).bind(...leaseBindings),
-    ];
-    for (const payload of documentPayloads) {
-      statements.push(db.prepare(`INSERT INTO documents
+      db.prepare(`INSERT INTO documents
         (id,kind,title,source_user,source_system,source_timestamp,item_count,metadata_json,
          original_envelope_json,imported_at,updated_at,organization_status,formatted_summary_json)
         SELECT json_extract(value,'$.id'),json_extract(value,'$.kind'),
@@ -436,10 +349,8 @@ export async function POST(request: Request) {
           json_extract(value,'$.itemCount'),json_extract(value,'$.metadataJson'),
           json_extract(value,'$.originalEnvelopeJson'),?,?,'pending','{}'
         FROM json_each(?) WHERE ${leaseSql}`)
-        .bind(now, now, payload, ...leaseBindings));
-    }
-    for (const payload of itemPayloads) {
-      statements.push(db.prepare(`INSERT INTO items
+        .bind(now, now, documentPayload, ...leaseBindings),
+      db.prepare(`INSERT INTO items
         (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,original_json)
         SELECT json_extract(value,'$.id'),json_extract(value,'$.documentId'),
           json_extract(value,'$.sequence'),json_extract(value,'$.eventType'),
@@ -447,8 +358,8 @@ export async function POST(request: Request) {
           json_extract(value,'$.timestamp'),json_extract(value,'$.content'),
           json_extract(value,'$.originalJson')
         FROM json_each(?) WHERE ${leaseSql}`)
-        .bind(payload, ...leaseBindings));
-    }
+        .bind(itemPayload, ...leaseBindings),
+    ];
     statements.push(
       db.prepare(`DELETE FROM organization_jobs WHERE ${leaseSql}`).bind(...leaseBindings),
       db.prepare(`UPDATE redaction_jobs

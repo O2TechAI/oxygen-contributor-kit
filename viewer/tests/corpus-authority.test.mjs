@@ -3,12 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { fileURLToPath } from "node:url";
-import {
-  D1_JSON_PARAMETER_BYTES,
-  assertFinalizedCorpusQueryBudget,
-  jsonParameterBatches,
-  publishFinalizedCorpusSourceMutation,
-} from "../lib/story-source-publication.ts";
+import { publishFinalizedCorpusSourceMutation } from "../lib/story-source-publication.ts";
 
 const routePath = fileURLToPath(new URL("../app/api/documents/route.ts", import.meta.url));
 const routeSource = readFileSync(routePath, "utf8");
@@ -22,13 +17,12 @@ const dbSource = readFileSync(new URL("../db/index.ts", import.meta.url), "utf8"
 function loadCorpusHarness() {
   const start = routeSource.indexOf("type NormalizedItem");
   const end = routeSource.indexOf("function corpusErrorResponse");
-  assert.ok(start >= 0 && end > start, "documents route exposes one bounded pure validation region");
+  assert.ok(start >= 0 && end > start, "documents route exposes one pure validation region");
   const source = routeSource.slice(start, end).replace(/^export /gm, "");
   const javascript = stripTypeScriptTypes(source);
   return Function(`${javascript}\nreturn {
     normalizeFinalizedCorpus, finalizedCorpusDigest, canonicalCorpusJson,
-    CorpusValidationError, MAX_CORPUS_CONTENT_BYTES, MAX_CORPUS_ORIGINAL_JSON_BYTES,
-    MAX_CORPUS_REQUEST_BYTES
+    CorpusValidationError
   };`)();
 }
 
@@ -203,7 +197,7 @@ test("document and item IDs preserve canonical and exact ownership grammars", ()
   );
 });
 
-test("duplicate, ambiguous, foreign, malformed, and oversized corpora fail before mutation", () => {
+test("duplicate, ambiguous, foreign, malformed, and non-JSON corpora fail before mutation", () => {
   const first = trajectoryEntry("trajectory-a", "evt-a");
   assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({
     documents: [first, structuredClone(first)],
@@ -246,17 +240,14 @@ test("duplicate, ambiguous, foreign, malformed, and oversized corpora fail befor
   assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({ documents: [] })),
     "CORPUS_DOCUMENTS_REQUIRED");
 
-  const oversizedContent = structuredClone(first);
-  oversizedContent.items[0].content = "x".repeat(corpus.MAX_CORPUS_CONTENT_BYTES + 1);
-  assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({ documents: [oversizedContent] })),
+  const invalidContent = structuredClone(first);
+  invalidContent.items[0].content = { text: "not a string" };
+  assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({ documents: [invalidContent] })),
     "CORPUS_ITEM_CONTENT_INVALID");
-  const oversizedOriginal = structuredClone(first);
-  oversizedOriginal.items[0].original.padding = "x".repeat(corpus.MAX_CORPUS_ORIGINAL_JSON_BYTES);
-  assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({ documents: [oversizedOriginal] })),
-    "CORPUS_ITEM_ORIGINAL_TOO_LARGE");
-  assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus(
-    { documents: [first] }, corpus.MAX_CORPUS_REQUEST_BYTES + 1,
-  )), "CORPUS_REQUEST_TOO_LARGE");
+  const invalidOriginal = structuredClone(first);
+  invalidOriginal.items[0].original.payload.invalid = undefined;
+  assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({ documents: [invalidOriginal] })),
+    "CORPUS_JSON_INVALID");
 });
 
 test("corpus digest ignores input array and object-key order but binds every persisted source field", async () => {
@@ -402,16 +393,119 @@ test("failure during the replacement batch preserves the previous finalized corp
   assert.deepEqual(db.state, previous);
 });
 
-test("documents route has one whole-corpus atomic JSON-batched POST contract", () => {
+class CasZeroPublicationDb {
+  constructor() {
+    this.state = {
+      documents: ["existing-document"],
+      items: [{ id: "existing-item", documentId: "existing-document" }],
+      manifest: { revision: 7, digest: "b".repeat(64), documentCount: 1, itemCount: 1 },
+      sourceRevision: 12,
+      status: "ready_for_human_review",
+      organizationJob: { status: "complete" },
+      redactionJob: { status: "complete", stage: "complete" },
+    };
+    this.guardedMutationChanges = [];
+    this.leasePredicateResults = [];
+    this.finalCasChanges = null;
+  }
+
+  sharedLeasePredicate(expectedRevision) {
+    const matches = this.state.sourceRevision === expectedRevision
+      && ["source_writing", "source_writing_generation"].includes(this.state.status);
+    this.leasePredicateResults.push(matches);
+    return matches;
+  }
+
+  guardedStatement(expectedRevision, action) {
+    return {
+      run: async () => {
+        const changes = this.sharedLeasePredicate(expectedRevision) ? action(this.state) : 0;
+        this.guardedMutationChanges.push(changes);
+        return { meta: { changes } };
+      },
+    };
+  }
+
+  prepare(sql) {
+    assert.match(sql, /UPDATE workflow_runs/);
+    return {
+      bind: (...values) => ({
+        run: async () => {
+          const expectedRevision = Number(values[3]);
+          const changes = this.sharedLeasePredicate(expectedRevision) ? 1 : 0;
+          if (changes) this.state.sourceRevision += 1;
+          this.finalCasChanges = changes;
+          return { meta: { changes } };
+        },
+      }),
+    };
+  }
+
+  async batch(statements) {
+    const results = [];
+    for (const statement of statements) results.push(await statement.run());
+    return results;
+  }
+}
+
+test("CAS zero leaves every guarded corpus mutation and prior manifest unchanged", async () => {
+  const db = new CasZeroPublicationDb();
+  const previous = structuredClone(db.state);
+  const expectedRevision = 11;
+  assert.equal(db.sharedLeasePredicate(expectedRevision), false);
+  const replacement = [
+    db.guardedStatement(expectedRevision, (state) => { state.items = []; return 1; }),
+    db.guardedStatement(expectedRevision, (state) => { state.documents = []; return 1; }),
+    db.guardedStatement(expectedRevision, (state) => {
+      state.documents = ["replacement-document"];
+      return 1;
+    }),
+    db.guardedStatement(expectedRevision, (state) => {
+      state.items = [{ id: "replacement-item", documentId: "replacement-document" }];
+      return 1;
+    }),
+    db.guardedStatement(expectedRevision, (state) => { state.organizationJob = null; return 1; }),
+    db.guardedStatement(expectedRevision, (state) => {
+      state.redactionJob = { status: "stale", stage: "source_changed" };
+      return 1;
+    }),
+    db.guardedStatement(expectedRevision, (state) => { state.manifest = null; return 1; }),
+    db.guardedStatement(expectedRevision, (state) => {
+      state.manifest = {
+        revision: 8,
+        digest: "c".repeat(64),
+        documentCount: 1,
+        itemCount: 0,
+      };
+      return 1;
+    }),
+  ];
+  assert.equal(await publishFinalizedCorpusSourceMutation(
+    db, replacement, "run", expectedRevision, 8, "c".repeat(64), 1, 0, "2036-01-01",
+  ), false);
+  assert.deepEqual(db.guardedMutationChanges, [0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.equal(db.leasePredicateResults.length, 10);
+  assert.ok(db.leasePredicateResults.every((matches) => matches === false));
+  assert.equal(db.finalCasChanges, 0);
+  assert.deepEqual(db.state, previous);
+});
+
+test("documents route has one whole-corpus atomic single-payload POST contract", () => {
   assert.equal((routeSource.match(/export async function POST/g) || []).length, 1);
-  assert.match(routeSource, /normalizeFinalizedCorpus\(JSON\.parse\(serialized\), requestBytes\)/);
+  assert.match(routeSource, /normalizeFinalizedCorpus\(await request\.json\(\)\)/);
   assert.match(routeSource, /body\.documents/);
   assert.doesNotMatch(routeSource, /body\.document\b|sourceImportMatchesExisting|ON CONFLICT/);
   assert.match(routeSource, /DELETE FROM items WHERE \$\{leaseSql\}/);
   assert.match(routeSource, /DELETE FROM documents WHERE \$\{leaseSql\}/);
   assert.match(routeSource, /FROM json_each\(\?\) WHERE \$\{leaseSql\}/);
+  assert.match(routeSource, /const documentPayload = JSON\.stringify\(corpus\.documents\.map/);
+  assert.match(routeSource, /const itemPayload = JSON\.stringify\(corpus\.documents\.flatMap/);
   assert.match(routeSource, /publishFinalizedCorpusSourceMutation/);
-  assert.doesNotMatch(routeSource, /await db\.batch\(body\.items|start \+= 75/);
+  assert.doesNotMatch(
+    routeSource,
+    /status:\s*413|requestBytes|content-length/,
+  );
+  assert.doesNotMatch(routeSource, /await db\.batch\(body\.items|start \+= 75|for \(const payload/);
   assert.doesNotMatch(
     routeSource,
     /organizationCategory|organizationConfidence|organizationReason|organization_category|organization_confidence|organization_reason/,
@@ -467,11 +561,10 @@ test("Organization refuses absent or mismatched corpus authority and binds its s
   assert.match(schemaSource, /organizationReason: text\("organization_reason"\)/);
 });
 
-test("24796-item corpus remains within 33-statement replacement and D1 JSON bounds", (context) => {
+test("24796-item corpus preserves exact counts and digest in one item payload", async (context) => {
   const documentId = "synthetic-bom";
-  const padding = "x".repeat(1_125);
+  const padding = "x".repeat(128);
   const rawItems = [];
-  const persistedItems = [];
   for (let index = 0; index < 24_796; index += 1) {
     const id = `evt-${String(index).padStart(5, "0")}-${"a".repeat(56)}`;
     const original = {
@@ -489,17 +582,6 @@ test("24796-item corpus remains within 33-statement replacement and D1 JSON boun
       content: "c".repeat(100),
       original,
     });
-    persistedItems.push({
-      id,
-      documentId,
-      sequence: index + 1,
-      eventType: "record",
-      actorId: "person",
-      actorType: "human",
-      timestamp: "2036-01-01T00:00:00.000Z",
-      content: "c".repeat(100),
-      originalJson: JSON.stringify(original),
-    });
   }
   const request = { documents: [{
     document: {
@@ -510,34 +592,22 @@ test("24796-item corpus remains within 33-statement replacement and D1 JSON boun
     },
     items: rawItems,
   }] };
-  const totalRequestBytes = Buffer.byteLength(JSON.stringify(request));
-  const documentPayloads = jsonParameterBatches([{
-    id: documentId,
-    kind: "trajectory",
-    title: "Synthetic BOM",
-    sourceUser: null,
-    sourceSystem: null,
-    sourceTimestamp: null,
-    itemCount: persistedItems.length,
-    metadataJson: "{}",
-    originalEnvelopeJson: "{}",
-  }]);
-  const itemPayloads = jsonParameterBatches(persistedItems);
-  const replacementStatements = 7 + documentPayloads.length + itemPayloads.length;
-  const invocationStatements = assertFinalizedCorpusQueryBudget(replacementStatements);
-  const allPayloads = [...documentPayloads, ...itemPayloads];
-  const maxJsonParameterBytes = Math.max(...allPayloads.map((payload) => Buffer.byteLength(payload)));
-  assert.equal(itemPayloads.length, 24);
-  assert.equal(replacementStatements, 32);
-  assert.equal(invocationStatements, 35);
-  assert.ok(replacementStatements <= 33);
-  assert.ok(invocationStatements <= 36);
-  assert.ok(maxJsonParameterBytes <= D1_JSON_PARAMETER_BYTES);
-  assert.ok(totalRequestBytes <= corpus.MAX_CORPUS_REQUEST_BYTES);
+  const normalized = corpus.normalizeFinalizedCorpus(request);
+  const itemPayload = JSON.stringify(normalized.documents.flatMap((document) => document.items));
+  const digest = await corpus.finalizedCorpusDigest(normalized);
+  assert.equal(normalized.documents.length, 1);
+  assert.equal(normalized.documents[0].itemCount, 24_796);
+  assert.equal(normalized.itemCount, 24_796);
+  assert.equal(JSON.parse(itemPayload).length, 24_796);
+  assert.equal(await corpus.finalizedCorpusDigest(corpus.normalizeFinalizedCorpus(
+    structuredClone(request),
+  )), digest);
+  assert.equal(digest, "41918f114f67d12ad6fc4adf1020965ad52b9a1f95d88d0efab33774c1f605dc");
   context.diagnostic(JSON.stringify({
-    replacementStatements,
-    invocationStatements,
-    maxJsonParameterBytes,
-    totalRequestBytes,
+    documentCount: normalized.documents.length,
+    itemCount: normalized.itemCount,
+    payloadCount: 1,
+    itemPayloadBytes: Buffer.byteLength(itemPayload),
+    digest,
   }));
 });

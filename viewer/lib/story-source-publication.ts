@@ -3,63 +3,7 @@ import type { getD1 } from "../db";
 type SourcePublicationDatabase = Awaited<ReturnType<typeof getD1>>;
 type SourcePublicationStatement = Parameters<SourcePublicationDatabase["batch"]>[0][number];
 
-export const D1_JSON_PARAMETER_BYTES = 1_750_000;
-export const D1_MAX_STATEMENTS_PER_INVOCATION = 50;
-export const FINALIZED_CORPUS_PRE_BATCH_STATEMENTS = 3;
-export const FINALIZED_CORPUS_ABORT_RESERVE_STATEMENTS = 1;
 export const STORY_SOURCE_LEASE_STALE_MINUTES = 30;
-export const STORY_ACTIVATION_MAX_PACKAGE_STATEMENTS = 33;
-
-/** Encode many bounded rows behind one D1 parameter. D1's JSON extension
- * expands each payload with json_each, keeping both parameter and query counts
- * below platform limits without introducing another persistence schema. */
-export function jsonParameterBatches<T>(rows: readonly T[]): string[] {
-  const batches: string[] = [];
-  let parts: string[] = [];
-  let bytes = 2;
-  for (const row of rows) {
-    const serialized = JSON.stringify(row);
-    const rowBytes = new TextEncoder().encode(serialized).byteLength;
-    if (rowBytes + 2 > D1_JSON_PARAMETER_BYTES) {
-      throw new Error("D1 JSON row exceeds the bounded parameter size");
-    }
-    const addition = rowBytes + (parts.length ? 1 : 0);
-    if (parts.length && bytes + addition > D1_JSON_PARAMETER_BYTES) {
-      batches.push(`[${parts.join(",")}]`);
-      parts = [];
-      bytes = 2;
-    }
-    parts.push(serialized);
-    bytes += rowBytes + (parts.length > 1 ? 1 : 0);
-  }
-  if (parts.length) batches.push(`[${parts.join(",")}]`);
-  return batches;
-}
-
-/** Keep Story activation below D1's 50-query invocation limit. The route has
- * a conservatively counted 16 non-package queries (including final publish),
- * so 33 package statements leave one query of operational margin. */
-export function assertStoryActivationQueryBudget(packageStatementCount: number) {
-  if (!Number.isSafeInteger(packageStatementCount)
-    || packageStatementCount < 0
-    || packageStatementCount > STORY_ACTIVATION_MAX_PACKAGE_STATEMENTS) {
-    throw new Error("Story activation exceeds the bounded D1 query budget");
-  }
-}
-
-/** Count the sole-run guard, lease claim, leased-authority read, complete atomic
- * replacement batch, and one failure-only abort before any source mutation. */
-export function assertFinalizedCorpusQueryBudget(replacementBatchStatementCount: number) {
-  const total = FINALIZED_CORPUS_PRE_BATCH_STATEMENTS
-    + replacementBatchStatementCount
-    + FINALIZED_CORPUS_ABORT_RESERVE_STATEMENTS;
-  if (!Number.isSafeInteger(replacementBatchStatementCount)
-    || replacementBatchStatementCount < 1
-    || total > D1_MAX_STATEMENTS_PER_INVOCATION) {
-    throw new Error("Finalized corpus replacement exceeds the bounded D1 query budget");
-  }
-  return total - FINALIZED_CORPUS_ABORT_RESERVE_STATEMENTS;
-}
 
 export const STORY_SOURCE_WRITE_STATUS = {
   idle: "source_writing",
@@ -141,8 +85,8 @@ export async function publishCompletedStorySourceMutation(
 }
 
 /** Replace every source row, publish its finalized manifest, and advance Story
- * source authority through one guarded D1 transaction. D1 batch rolls the entire
- * replacement back if any prepared statement fails. */
+ * source authority through one guarded transaction. The transaction rolls the
+ * entire replacement back if any prepared statement fails. */
 export async function publishFinalizedCorpusSourceMutation(
   db: SourcePublicationDatabase,
   replacementStatements: SourcePublicationStatement[],
@@ -186,7 +130,7 @@ export async function publishFinalizedCorpusSourceMutation(
 }
 
 /** Persist one normalized semantic package and publish its source revision in
- * the same guarded D1 batch. */
+ * the same guarded transaction. */
 export async function publishCompletedSemanticSourceMutation(
   db: SourcePublicationDatabase,
   packageStatements: SourcePublicationStatement[],
@@ -289,7 +233,7 @@ export async function publishActivatedStorySourceMutation(
   return results.slice(-2).every((result) => Number(result.meta.changes || 0) === 1);
 }
 
-/** A failed chunk leaves no activatable source package and publishes no new
+/** A failed write leaves no activatable source package and publishes no new
  * revision. A later complete mutation may safely retry from blocked state. */
 export async function abortStorySourceMutation(
   db: SourcePublicationDatabase,

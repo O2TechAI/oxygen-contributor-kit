@@ -22,9 +22,7 @@ import {
 import {
   STORY_SOURCE_WRITE_STATUS,
   abortStorySourceMutation,
-  assertStoryActivationQueryBudget,
   beginStoryActivationMutation,
-  jsonParameterBatches,
   publishActivatedStorySourceMutation,
 } from "../../../lib/story-source-publication";
 
@@ -286,15 +284,14 @@ export async function POST(request: Request) {
         ),
       ];
       const candidateRows = normalized.rows.map((row) => ({ id: row.id, summary: row.summary }));
-      for (const payload of jsonParameterBatches(candidateRows)) {
-        statements.push(db.prepare(`WITH candidate_rows AS (
+      const candidatePayload = JSON.stringify(candidateRows);
+      statements.push(db.prepare(`WITH candidate_rows AS (
           SELECT json_extract(value,'$.id') AS id,
             json_extract(value,'$.summary') AS summary FROM json_each(?)
         ) UPDATE items SET organization_reason=(
           SELECT summary FROM candidate_rows WHERE candidate_rows.id=items.id
         ) WHERE id IN (SELECT id FROM candidate_rows) AND ${leaseSql}`)
-          .bind(payload, ...leaseBindings));
-      }
+          .bind(candidatePayload, ...leaseBindings));
       const documentSummaries: Array<{ id: string; formattedSummary: string }> = [];
       for (const document of documentRows) {
         let summary: Record<string, unknown> = {};
@@ -313,8 +310,8 @@ export async function POST(request: Request) {
         });
         documentSummaries.push({ id: document.id, formattedSummary });
       }
-      for (const payload of jsonParameterBatches(documentSummaries)) {
-        statements.push(db.prepare(`WITH document_summaries AS (
+      const documentSummaryPayload = JSON.stringify(documentSummaries);
+      statements.push(db.prepare(`WITH document_summaries AS (
           SELECT json_extract(value,'$.id') AS id,
             json_extract(value,'$.formattedSummary') AS formatted_summary
           FROM json_each(?)
@@ -323,17 +320,14 @@ export async function POST(request: Request) {
             WHERE document_summaries.id=documents.id),
           updated_at=?
           WHERE id IN (SELECT id FROM document_summaries) AND ${leaseSql}`)
-          .bind(payload, now, ...leaseBindings));
-      }
-      for (const payload of jsonParameterBatches(coverageManifest.rows)) {
-        statements.push(db.prepare(`INSERT INTO story_coverage_rows
+          .bind(documentSummaryPayload, now, ...leaseBindings));
+      const coveragePayload = JSON.stringify(coverageManifest.rows);
+      statements.push(db.prepare(`INSERT INTO story_coverage_rows
           (unit_id,workflow_run_id,disposition,owner_id,exclusion_reason)
           SELECT json_extract(value,'$.unitId'),?,json_extract(value,'$.disposition'),
             json_extract(value,'$.ownerId'),json_extract(value,'$.exclusionReason')
           FROM json_each(?) WHERE ${leaseSql}`)
-          .bind(workflowRunId, payload, ...leaseBindings));
-      }
-      assertStoryActivationQueryBudget(statements.length);
+          .bind(workflowRunId, coveragePayload, ...leaseBindings));
       if (!await publishActivatedStorySourceMutation(
         db,
         statements,
