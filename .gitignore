@@ -18,17 +18,15 @@ redaction-diff.html
 # covered without another edit here.
 node_modules/
 
-# The same two paths without a trailing slash: on a shared host they are
-# symlinks into a prepull cache, and a trailing slash matches only real
-# directories -- committing the symlink would leak an internal absolute path.
+# Keep local Viewer dependencies and runtime state out of the kit.
 viewer/node_modules
-viewer/.wrangler
-viewer/.vinext/
-viewer/dist/
-viewer/.dev.vars
 viewer/.oxygen-local.json
 tools/ingest/out/
 tools/ingest/webapp-data/
 tools/ingest/.venv-audio/
 __pycache__/
 .venv/
+*.db
+*.sqlite
+*.sqlite3
+*.log

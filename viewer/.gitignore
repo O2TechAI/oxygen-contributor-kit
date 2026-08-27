@@ -10,13 +10,8 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-
 # next.js
 /.next/
-/.vinext/
-/out/
 
 # misc
 .DS_Store
@@ -31,15 +26,12 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
-# vercel
-.vercel
-
 # typescript
 next-env.d.ts
-/dist/
-/.wrangler/
-/.wrangler
-/\.dev.vars
 /\.oxygen-local.json
 /outputs/
 /work/
+*.db
+*.sqlite
+*.sqlite3
+*.log

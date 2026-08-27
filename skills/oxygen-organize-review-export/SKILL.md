@@ -68,7 +68,7 @@ package, publish, or change `publication_approved`.
 
 The normal workflow already launched Workflow Progress before collection and retained its exact
 Viewer origin and stable workflow run ID. After `project-map.json` exists, attach the ingest run to
-that same process-owned D1 state:
+that same process-owned Viewer state:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run> \
@@ -104,7 +104,9 @@ progress-first Toolkit run.
 
 On native Windows and Linux/WSL it also verifies Node/npm and the platform-specific dependency
 installation, rebuilding incompatible modules with `npm ci`. Windows resolution uses the real
-`npm.cmd` command and rejects POSIX-only shims. Every launch receives fresh process-owned D1 state.
+`npm.cmd` command and rejects POSIX-only shims. Every official launcher invocation uses native Next
+and receives one fresh process-owned temporary local SQLite database. The Viewer owns cleanup when
+it stops; there is no online deployment path.
 Without `--port`, the launcher reserves an OS-selected free `127.0.0.1` port and announces only
 the exact port that becomes healthy. Use `--port <number>` when a specific isolated port is
 required. An occupied port fails without killing its owner or choosing a fallback port.
@@ -141,8 +143,8 @@ Use **Download ZIP** to create `oxygen-contribution.zip`, then inspect its membe
 contain `manifest.json`, normalized documents and events, `project-map.json`, and the offline
 HTML review file. The exporter must apply every active AI-redaction span, omit original event
 envelopes, include a safe aggregate redaction summary, and block when the model pass is incomplete
-or has rejected spans. The local SQLite/D1 database is temporary runtime state and must not enter
-the ZIP. Preserve `publication_approved=false`.
+or has rejected spans. The temporary local SQLite database is runtime state and must not enter the
+HTML or ZIP. Preserve `publication_approved=false`.
 
 Read [references/data-contract.md](references/data-contract.md) when the ingest directory is
 unrecognized or a new source format needs adapting.

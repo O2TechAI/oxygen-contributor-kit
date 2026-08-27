@@ -26,7 +26,7 @@ The normal workflow starts the canonical Viewer before collection. The repo coll
 events with nonnegative counts to that exact loopback Viewer. It never sends the working-folder
 path, matched session names, messages, prompts, reasoning, tool data, or extracted content. Hand
 the resulting ingest directory, Viewer origin, and stable run ID to the organizer so it can attach
-the run to the same launch-owned D1 state.
+the run to the same process-owned Viewer state.
 
 The Claude importer supports `conversations.json`, `memories.json`, `projects/*.json`, and
 `design_chats/*.json`. It deliberately excludes `users.json` because it is pure account PII.

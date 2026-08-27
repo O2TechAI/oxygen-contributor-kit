@@ -158,7 +158,7 @@ Report how many source records and events were assigned to each project, what wa
 which classification decisions remain uncertain.
 
 Attach the organized run to the already-running progress Viewer so organization advances in the
-same D1 workflow run:
+same workflow run:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/repo-run \
@@ -267,10 +267,12 @@ python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
 ```
 
 The initial launcher validates Node/npm, resolves the platform-native npm command, repairs missing
-or cross-OS `node_modules` with lockfile-preserving `npm ci`, and creates fresh launch-owned D1
-state. It reserves an OS-selected free `127.0.0.1` port by default and announces only the exact
-healthy URL. Do not move or delete `.wrangler`; the official launcher never reuses it. An explicit
-occupied `--port` fails immediately without killing the owning process or silently falling back.
+or cross-OS `node_modules` with lockfile-preserving `npm ci`, and starts native Next with one fresh
+process-owned temporary local SQLite database for this official launcher invocation. The Viewer
+owns cleanup when it stops; local database state is not reused. It reserves an OS-selected free
+`127.0.0.1` port by default and announces only the exact healthy URL. There is no online deployment
+path. An explicit occupied `--port` fails immediately without killing the owning process or
+silently falling back.
 
 After the server is healthy, push the validated AI spans from another terminal:
 
@@ -429,7 +431,8 @@ Requirements:
   original secrets.
 - Block ZIP generation if the AI pass is absent, incomplete, or reports any rejected span.
 - Exclude `.env*`, auth files, tokens, cookies, private keys, browser profiles, `node_modules`,
-  caches, `.wrangler`, databases, logs, model scratch output, and local virtual environments.
+  local databases and logs, private review artifacts, model scratch output, and local virtual
+  environments.
 - Inspect the ZIP member list after creation and reject unexpected absolute paths, `..` entries,
   symlinks, or excluded files.
 - Open the packaged HTML locally and verify that it states nothing was uploaded.
