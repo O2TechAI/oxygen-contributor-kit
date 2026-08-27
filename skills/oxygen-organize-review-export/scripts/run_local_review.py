@@ -881,12 +881,6 @@ def locate_inputs(run: Path):
     _located_file(approved_run / "project-map.json", approved_run, required=False)
 
     meetings = []
-    meeting_candidate = approved_run / "meeting.json"
-    if meeting_candidate.exists() or meeting_candidate.is_symlink():
-        meeting = _located_file(meeting_candidate, approved_run, required=True)
-        assert meeting is not None
-        meetings.append(meeting)
-
     meetings_candidate = approved_run / "meetings"
     if meetings_candidate.exists() or meetings_candidate.is_symlink():
         meetings_root = _located_input(meetings_candidate, approved_run)
@@ -1016,6 +1010,12 @@ _PREFERENCE_BUNDLE_FIELDS = {
     "workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount",
     "setAside", "probes", "bulkDecisions", "autoRemoved",
 }
+_AUTO_REMOVED_FIELDS = {"total", "reversible", "categories"}
+_AUTO_REMOVED_CATEGORY_FIELDS = {"kind", "count"}
+_AUTO_REMOVED_KINDS = {
+    "credential", "private-personal", "sensitive", "internal-metric",
+    "internal-timeline", "mosaic-reidentification", "user_path", "third_party_contact",
+}
 _PREPARATION_FIELDS = {
     "schema", "workflowRunId", "sourceRevision", "receipts", "storyPrivacyCandidates",
 }
@@ -1033,6 +1033,36 @@ def _digest(value: object) -> bool:
     return isinstance(value, str) and bool(_DIGEST.fullmatch(value))
 
 
+def _valid_auto_removed(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != _AUTO_REMOVED_FIELDS:
+        return False
+    total = value.get("total")
+    categories = value.get("categories")
+    if (
+        not _nonnegative_integer(total)
+        or not isinstance(value.get("reversible"), bool)
+        or not isinstance(categories, list)
+    ):
+        return False
+    seen: set[str] = set()
+    counted = 0
+    for category in categories:
+        if not isinstance(category, dict) or set(category) != _AUTO_REMOVED_CATEGORY_FIELDS:
+            return False
+        kind = category.get("kind")
+        count = category.get("count")
+        if (
+            not isinstance(kind, str)
+            or kind not in _AUTO_REMOVED_KINDS
+            or kind in seen
+            or not _nonnegative_integer(count)
+        ):
+            return False
+        seen.add(kind)
+        counted += count
+    return counted == total
+
+
 def validate_ready_authority(
     workflow_run_id: str,
     preference_bundle: object,
@@ -1048,7 +1078,8 @@ def validate_ready_authority(
         or not _digest(preference_bundle.get("outputDigest"))
         or not _nonnegative_integer(preference_bundle.get("outputCount"))
         or not _nonnegative_integer(preference_bundle.get("setAside"))
-        or not all(isinstance(preference_bundle.get(field), list) for field in ("probes", "bulkDecisions", "autoRemoved"))
+        or not all(isinstance(preference_bundle.get(field), list) for field in ("probes", "bulkDecisions"))
+        or not _valid_auto_removed(preference_bundle.get("autoRemoved"))
         or preference_bundle["outputCount"] != len(preference_bundle["probes"]) + len(preference_bundle["bulkDecisions"])
     ):
         raise SystemExit("Preference bundle authority is invalid")
@@ -1116,9 +1147,16 @@ def update_story_workflow(
         preference_result = request_json(
             opener, f"{base_url}/api/probes", method="POST", body=preference_bundle
         )
+        if not isinstance(preference_result, dict):
+            raise SystemExit("The Viewer did not import the exact Preference bundle")
+        imported = preference_result.get("imported")
+        bulk_imported = preference_result.get("bulkImported")
         if (
-            preference_result.get("imported") != preference_bundle["outputCount"]
-            or preference_result.get("bulkImported") != preference_bundle["outputCount"]
+            not _nonnegative_integer(imported)
+            or not _nonnegative_integer(bulk_imported)
+            or imported != len(preference_bundle["probes"])
+            or bulk_imported != len(preference_bundle["bulkDecisions"])
+            or imported + bulk_imported != preference_bundle["outputCount"]
         ):
             raise SystemExit("The Viewer did not import the exact Preference bundle")
         payload["coverageManifest"] = coverage_manifest

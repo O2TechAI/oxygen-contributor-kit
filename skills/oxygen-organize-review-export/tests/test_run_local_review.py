@@ -63,12 +63,38 @@ def write_index(run: Path, entries: list[dict]) -> None:
     )
 
 
-def ready_authority(workflow_run_id="run-1", *, output_count=1):
+def preference_probe(identifier="probe-a"):
+    return {
+        "id": identifier, "documentId": "doc-a", "documentKind": "trajectory",
+        "eventIds": ["event-a"], "timestamp": None, "signal": "explicit_rule",
+        "score": 90, "turns": 1, "recap": "A reviewed source set a boundary.",
+        "question": "What should the agent remember?",
+        "options": [
+            {"id": "one", "text": "Ask before changing this boundary."},
+            {"id": "two", "text": "Use a separate branch for this boundary."},
+        ],
+        "presentations": {}, "allowOther": True, "allowSkip": True,
+    }
+
+
+def bulk_decision(identifier="bulk-a"):
+    return {
+        "id": identifier, "kind": "privacy", "count": 1,
+        "question": "Keep this reviewed group?", "evidenceSample": ["event-a"],
+        "presentations": {},
+    }
+
+
+def ready_authority(workflow_run_id="run-1", *, probes=None, bulk_decisions=None):
+    probes = [preference_probe()] if probes is None else probes
+    bulk_decisions = [] if bulk_decisions is None else bulk_decisions
+    output_count = len(probes) + len(bulk_decisions)
     preference = {
         "workflowRunId": workflow_run_id, "sourceRevision": 7,
         "inputDigest": "a" * 64, "outputDigest": "b" * 64,
         "outputCount": output_count, "setAside": 0,
-        "probes": [{}] if output_count else [], "bulkDecisions": [], "autoRemoved": [],
+        "probes": probes, "bulkDecisions": bulk_decisions,
+        "autoRemoved": {"total": 0, "reversible": True, "categories": []},
     }
     receipt = lambda lane, **values: {
         "lane": lane, "status": "complete", "inputDigest": "c" * 64,
@@ -87,8 +113,8 @@ def ready_authority(workflow_run_id="run-1", *, output_count=1):
     return preference, preparation
 
 
-def write_meeting(run: Path, meeting_id: str, *, root=False, directory_id=None) -> Path:
-    directory = run if root else run / "meetings" / (directory_id or meeting_id)
+def write_meeting(run: Path, meeting_id: str, *, directory_id=None) -> Path:
+    directory = run / "meetings" / (directory_id or meeting_id)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "meeting.json"
     path.write_text(json.dumps({
@@ -350,7 +376,7 @@ class LauncherUnitTest(unittest.TestCase):
         preference_bundle, preparation_manifest = ready_authority()
         with (
             mock.patch.object(MODULE, "request_json", side_effect=[
-                {"imported": 1, "bulkImported": 1},
+                {"imported": 1, "bulkImported": 0},
                 {"currentStageId": "review", "storyGenerationStatus": "ready_for_human_review",
                  "requiresHumanAction": True},
             ]) as request,
@@ -383,7 +409,7 @@ class LauncherUnitTest(unittest.TestCase):
         preference_bundle, preparation_manifest = ready_authority()
         with (
             mock.patch.object(MODULE, "request_json", side_effect=[
-                {"imported": 1, "bulkImported": 1},
+                {"imported": 1, "bulkImported": 0},
                 {"currentStageId": "story", "storyGenerationStatus": "running",
                  "requiresHumanAction": False},
             ]),
@@ -400,7 +426,7 @@ class LauncherUnitTest(unittest.TestCase):
         printed.assert_not_called()
 
     def test_failed_preference_import_prevents_activation_and_completed_zero_is_valid(self):
-        preference_bundle, preparation_manifest = ready_authority(output_count=0)
+        preference_bundle, preparation_manifest = ready_authority(probes=[])
         with mock.patch.object(MODULE, "request_json", return_value={"imported": 0, "bulkImported": 1}) as request:
             with self.assertRaisesRegex(SystemExit, "did not import"):
                 MODULE.update_story_workflow(
@@ -410,6 +436,107 @@ class LauncherUnitTest(unittest.TestCase):
                 )
         request.assert_called_once_with(
             mock.ANY, "http://127.0.0.1:3298/api/probes", method="POST", body=preference_bundle)
+
+        with (
+            mock.patch.object(MODULE, "request_json", side_effect=[
+                {"imported": 0, "bulkImported": 0},
+                {"currentStageId": "review", "storyGenerationStatus": "ready_for_human_review",
+                 "requiresHumanAction": True},
+            ]) as request,
+            mock.patch("builtins.print"),
+        ):
+            MODULE.update_story_workflow(
+                "http://127.0.0.1:3298", "run-1", "ready",
+                coverage_manifest={}, story_candidates=[{"id": "doc:item-1"}],
+                preference_bundle=preference_bundle, preparation_manifest=preparation_manifest,
+            )
+        self.assertEqual(len(request.call_args_list), 2)
+
+    def test_story_ready_accepts_exact_nonempty_counter_partitions(self):
+        cases = (
+            ([preference_probe()], [], {"imported": 1, "bulkImported": 0}),
+            ([], [bulk_decision()], {"imported": 0, "bulkImported": 1}),
+            ([preference_probe()], [bulk_decision()], {"imported": 1, "bulkImported": 1}),
+        )
+        for probes, bulk_decisions, import_result in cases:
+            with self.subTest(import_result=import_result):
+                preference_bundle, preparation_manifest = ready_authority(
+                    probes=probes, bulk_decisions=bulk_decisions
+                )
+                if probes and bulk_decisions:
+                    preference_bundle["autoRemoved"] = {
+                        "total": 2, "reversible": True,
+                        "categories": [{"kind": "credential", "count": 2}],
+                    }
+                with (
+                    mock.patch.object(MODULE, "request_json", side_effect=[
+                        import_result,
+                        {"currentStageId": "review", "storyGenerationStatus": "ready_for_human_review",
+                         "requiresHumanAction": True},
+                    ]) as request,
+                    mock.patch("builtins.print"),
+                ):
+                    MODULE.update_story_workflow(
+                        "http://127.0.0.1:3298", "run-1", "ready",
+                        coverage_manifest={}, story_candidates=[{"id": "doc:item-1"}],
+                        preference_bundle=preference_bundle, preparation_manifest=preparation_manifest,
+                    )
+                self.assertEqual(request.call_args_list[0], mock.call(
+                    mock.ANY, "http://127.0.0.1:3298/api/probes", method="POST",
+                    body=preference_bundle,
+                ))
+                self.assertEqual(request.call_args_list[1].args[1], "http://127.0.0.1:3298/api/workflow")
+
+    def test_story_ready_rejects_mismatched_import_counters_before_activation(self):
+        preference_bundle, preparation_manifest = ready_authority(
+            probes=[preference_probe()], bulk_decisions=[bulk_decision()]
+        )
+        for result in (
+            {"imported": 2, "bulkImported": 0},
+            {"imported": 1, "bulkImported": 0},
+            {"imported": True, "bulkImported": 1},
+            [],
+        ):
+            with self.subTest(result=result), mock.patch.object(
+                MODULE, "request_json", return_value=result
+            ) as request:
+                with self.assertRaisesRegex(SystemExit, "did not import"):
+                    MODULE.update_story_workflow(
+                        "http://127.0.0.1:3298", "run-1", "ready",
+                        coverage_manifest={}, story_candidates=[{"id": "doc:item-1"}],
+                        preference_bundle=preference_bundle, preparation_manifest=preparation_manifest,
+                    )
+                request.assert_called_once_with(
+                    mock.ANY, "http://127.0.0.1:3298/api/probes", method="POST",
+                    body=preference_bundle,
+                )
+
+    def test_ready_authority_rejects_malformed_auto_removed_before_http(self):
+        malformed = (
+            [],
+            {"total": 0, "reversible": True},
+            {"total": 0, "reversible": True, "categories": [], "unexpected": True},
+            {"total": 1, "reversible": True, "categories": []},
+            {"total": 1, "reversible": True, "categories": [{"kind": "unknown", "count": 1}]},
+            {"total": 1, "reversible": True, "categories": [{"kind": [], "count": 1}]},
+            {"total": 2, "reversible": True, "categories": [
+                {"kind": "credential", "count": 1}, {"kind": "credential", "count": 1},
+            ]},
+            {"total": 1, "reversible": True, "categories": [{"kind": "credential", "count": True}]},
+        )
+        for auto_removed in malformed:
+            with self.subTest(auto_removed=auto_removed):
+                preference_bundle, preparation_manifest = ready_authority()
+                preference_bundle["autoRemoved"] = auto_removed
+                with mock.patch.object(MODULE, "request_json") as request:
+                    with self.assertRaisesRegex(SystemExit, "Preference bundle authority is invalid"):
+                        MODULE.update_story_workflow(
+                            "http://127.0.0.1:3298", "run-1", "ready",
+                            coverage_manifest={}, story_candidates=[{"id": "doc:item-1"}],
+                            preference_bundle=preference_bundle,
+                            preparation_manifest=preparation_manifest,
+                        )
+                request.assert_not_called()
 
     def test_ready_authority_rejects_identity_revision_and_receipt_mismatches_before_http(self):
         preference_bundle, preparation_manifest = ready_authority()
@@ -961,25 +1088,16 @@ class LocateInputsContainmentTest(unittest.TestCase):
                     item["id"].startswith(f"{document_id}:") for item in body["items"]
                 ))
 
-    def test_single_root_meeting_remains_compatible(self):
+    def test_root_meeting_is_not_a_supported_input(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary, "run")
-            meeting = write_meeting(run, "meeting-legacy", root=True)
+            run.mkdir(parents=True)
+            (run / "meeting.json").write_text(json.dumps({
+                "meeting_id": "meeting-root", "records": [],
+            }), encoding="utf-8")
 
-            trajectories, meetings = MODULE.locate_inputs(run)
-
-            self.assertEqual(trajectories, [])
-            self.assertEqual(meetings, [meeting.resolve()])
-            with mock.patch.object(
-                MODULE, "request_json", return_value=finalized_response(1, 1)
-            ) as request:
-                self.assertEqual(
-                    MODULE.import_run(
-                        mock.sentinel.opener, "http://127.0.0.1:3298", run
-                    ),
-                    (1, 1),
-                )
-            request.assert_called_once()
+            with self.assertRaisesRegex(SystemExit, f"^{MODULE.INPUT_RUN_INVALID}$"):
+                MODULE.locate_inputs(run)
 
     def test_multiple_trajectories_and_meetings_share_one_run(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1051,8 +1169,9 @@ class LocateInputsContainmentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             run = root / "run"
-            outside = root / "outside-meeting"
-            write_meeting(outside, "meeting-escape", root=True)
+            outside = write_meeting(
+                root, "meeting-escape", directory_id="outside-meeting"
+            ).parent
             (run / "meetings").mkdir(parents=True)
             directory_link_or_skip(self, run / "meetings" / "meeting-escape", outside)
 
