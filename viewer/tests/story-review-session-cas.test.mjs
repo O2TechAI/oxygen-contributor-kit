@@ -1,18 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { testStoryCoverage } from "./fixtures/successor-story-coverage.mjs";
+import { DatabaseSync } from "node:sqlite";
+import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
 import { readFile } from "node:fs/promises";
-import { syntheticStoryEvents } from "./fixtures/synthetic-story-project.mjs";
+import { STORY_PREFIX } from "../lib/timeline.ts";
 import {
   createStoryReviewSession,
-  createSuccessorStoryReviewSession,
   STORY_REVIEW_SESSION_SCHEMA,
-  SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
   storyReviewSessionSemanticJson,
 } from "../lib/story-review-session.ts";
 import {
-  editSuccessorHumanInsight,
-  emptySuccessorChapterReview,
+  editHumanInsight,
+  emptyChapterReview,
 } from "../lib/story-review.ts";
 
 const serverModule = await import("../lib/story-review-session-server.ts")
@@ -29,24 +28,12 @@ function serverContract() {
   };
 }
 
-const session = (label, updatedAt = "2099-01-01T00:00:00.000Z") => {
-  const value = createStoryReviewSession("review-run", {}, {}, updatedAt);
-  value.privacyDecisions = label ? { [JSON.stringify(["chapter", label])]: "keep" } : {};
-  return value;
-};
-
-const successorSession = (updatedAt = "2099-01-01T00:00:00.000Z") => (
-  createSuccessorStoryReviewSession("review-run", {
-    [successorSource.key]: emptySuccessorChapterReview(successorSource),
-  }, {}, updatedAt)
-);
-
-const successorEvidence = { documentId: "successor-doc", eventId: "successor-doc:successor-item" };
-const successorSource = {
-  schema: "oxygen.story/3",
-  key: "successor-chapter",
+const storyEvidence = { documentId: "story-doc", eventId: "story-doc:story-item" };
+const storySource = {
+  schema: "oxygen.story",
+  key: "story-chapter",
   phase: { id: "phase-review", label: "Review" },
-  title: "Synthetic successor Chapter",
+  title: "Synthetic story Chapter",
   overview: "A public-safe synthetic source exercises exact session dispatch.",
   people: [{
     id: "person-owner",
@@ -54,48 +41,137 @@ const successorSource = {
     role: "Reviewer",
     description: "Reviews the synthetic package.",
     localIdentityState: "not_identified",
-    evidence: [successorEvidence],
+    evidence: [storyEvidence],
   }],
-  story: { blocks: [{ id: "block-safe", text: "A synthetic Story block.", evidence: [successorEvidence] }] },
+  story: { blocks: [{ id: "block-safe", text: "A synthetic Story block.", evidence: [storyEvidence] }] },
   insights: [],
-  evidence: { primary: successorEvidence, supporting: [] },
+  evidence: { primary: storyEvidence, supporting: [] },
   coverage: testStoryCoverage(),
 };
 
-function useSuccessorSource(db) {
+function storySession(label = "", updatedAt = "2099-01-01T00:00:00.000Z") {
+  let review = emptyChapterReview(storySource);
+  if (label) {
+    review = editHumanInsight(review, storySource, `human:${label}`, {
+      background: `A bounded ${label} context.`,
+      quote: {
+        chapterKey: storySource.key,
+        storyBlockId: "block-safe",
+        selection: { start: 2, end: 17, text: "synthetic Story" },
+        baseRevision: 1,
+      },
+      directlyAcquiredExperience: "The exact source changed the reviewed decision.",
+      principle: "Validate durable review state against its exact source.",
+      evidence: [storyEvidence],
+    });
+  }
+  return createStoryReviewSession("review-run", { [storySource.key]: review }, {}, updatedAt);
+}
+
+const session = storySession;
+
+class SqliteReviewDb {
+  constructor() {
+    this.sqlite = new DatabaseSync(":memory:");
+    this.sqlite.exec(`
+      CREATE TABLE workflow_runs (
+        id TEXT PRIMARY KEY,
+        story_generation_status TEXT,
+        story_source_revision INTEGER
+      );
+      CREATE TABLE items (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        timestamp TEXT,
+        event_type TEXT,
+        actor_id TEXT,
+        actor_type TEXT,
+        organization_reason TEXT
+      );
+      CREATE TABLE story_review_sessions (
+        workflow_run_id TEXT PRIMARY KEY,
+        state_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        server_version INTEGER NOT NULL
+      );
+    `);
+    this.sqlite.prepare(`INSERT INTO workflow_runs
+      (id,story_generation_status,story_source_revision) VALUES (?,?,?)`)
+      .run("review-run", "ready_for_human_review", 1);
+    this.sqlite.prepare(`INSERT INTO items
+      (id,document_id,sequence,event_type,actor_id,actor_type,organization_reason)
+      VALUES (?,?,?,?,?,?,?)`).run(
+        storyEvidence.eventId,
+        storyEvidence.documentId,
+        1,
+        "message",
+        "owner",
+        "user",
+        `${STORY_PREFIX}${JSON.stringify(storySource)}`,
+      );
+  }
+
+  prepare(sql) {
+    const statement = this.sqlite.prepare(sql);
+    let values = [];
+    return {
+      bind(...next) { values = next; return this; },
+      all: async () => ({ results: statement.all(...values) }),
+      first: async () => statement.get(...values) ?? null,
+      run: async () => {
+        const result = statement.run(...values);
+        return { meta: { changes: Number(result.changes) } };
+      },
+    };
+  }
+
+  close() {
+    this.sqlite.close();
+  }
+}
+
+function useStorySource(db) {
   db.items = [{
-    id: successorEvidence.eventId,
-    document_id: successorEvidence.documentId,
+    id: storyEvidence.eventId,
+    document_id: storyEvidence.documentId,
     event_type: "message",
     actor_id: "owner",
     actor_type: "user",
-    summary: `oxygen.story/3:${JSON.stringify(successorSource)}`,
+    summary: `oxygen.story:${JSON.stringify(storySource)}`,
   }];
   return db;
 }
 
-function successorSessionWithHuman(updatedAt = "2099-01-01T00:00:00.000Z") {
-  const base = emptySuccessorChapterReview(successorSource);
-  const human = editSuccessorHumanInsight(base, successorSource, "human:valid", {
+function storySessionWithHuman(updatedAt = "2099-01-01T00:00:00.000Z") {
+  const base = emptyChapterReview(storySource);
+  const human = editHumanInsight(base, storySource, "human:valid", {
     background: "A bounded human-authored context.",
     quote: {
-      chapterKey: successorSource.key,
+      chapterKey: storySource.key,
       storyBlockId: "block-safe",
       selection: { start: 2, end: 17, text: "synthetic Story" },
       baseRevision: 1,
     },
     directlyAcquiredExperience: "The exact source changed the reviewed decision.",
     principle: "Validate durable review state against its exact source.",
-    evidence: [successorEvidence],
+    evidence: [storyEvidence],
   });
-  return createSuccessorStoryReviewSession("review-run", {
-    [successorSource.key]: human,
+  return createStoryReviewSession("review-run", {
+    [storySource.key]: human,
   }, {}, updatedAt);
 }
 
 class FakeReviewDb {
   runs = new Map([["review-run", { status: "ready_for_human_review", sourceRevision: 1 }]]);
-  items = syntheticStoryEvents.map((event) => ({ ...event }));
+  items = [{
+    id: storyEvidence.eventId,
+    document_id: storyEvidence.documentId,
+    event_type: "message",
+    actor_id: "owner",
+    actor_type: "user",
+    summary: `${STORY_PREFIX}${JSON.stringify(storySource)}`,
+  }];
   sessions = new Map();
   writeQueue = Promise.resolve();
 
@@ -105,7 +181,7 @@ class FakeReviewDb {
       bind(...next) { values = next; return this; },
       all: async () => {
         if (/organization_reason AS summary/.test(sql)) return { results: this.items
-          .filter((item) => /^oxygen\.story-(?:highlight|milestone)\/|^oxygen\.story\/3:/.test(item.summary))
+          .filter((item) => /^oxygen\.story:/.test(item.summary))
           .map((item) => ({
             id: item.id.includes(":") ? item.id : `${item.document_id}:${item.id}`,
             documentId: item.document_id,
@@ -184,45 +260,23 @@ class FakeReviewDb {
   }
 }
 
-test("server derives the compatibility session contract from the complete validated source package", async () => {
-  const { readActiveStoryReviewContract } = serverContract();
-  const db = new FakeReviewDb();
-  assert.deepEqual(await readActiveStoryReviewContract(db, "review-run"), {
-    ready: true,
-    sourceRevision: 1,
-    storySourceSchema: "oxygen.story-highlight/2",
-    storySessionSchema: "oxygen.story-review-session/1",
-  });
-  db.items.push({
-    ...db.items[0],
-    id: "historical-row",
-    summary: "oxygen.story-milestone/1:{}",
-  });
-  assert.deepEqual(await readActiveStoryReviewContract(db, "review-run"), {
-    ready: true,
-    sourceRevision: 1,
-    storySourceSchema: null,
-    storySessionSchema: null,
-  });
-});
-
-test("successor contract creates, saves, and refreshes only a schema-2 session", async () => {
+test("the canonical contract creates, saves, and refreshes one Story session", async () => {
   const { readActiveStoryReviewContract, readStoryReviewSessionRecord } = serverContract();
-  const db = useSuccessorSource(new FakeReviewDb());
+  const db = useStorySource(new FakeReviewDb());
   const active = await readActiveStoryReviewContract(db, "review-run");
-  assert.equal(active.storySourceSchema, "oxygen.story/3");
-  assert.equal(active.storySessionSchema, SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA);
+  assert.equal(active.storySourceSchema, "oxygen.story");
+  assert.equal(active.storySessionSchema, STORY_REVIEW_SESSION_SCHEMA);
   const saved = await serverModule.persistStoryReviewSessionCas(db, {
     workflowRunId: "review-run",
     expectedVersion: 0,
     sourceRevision: 1,
     storySessionSchema: active.storySessionSchema,
-    session: successorSession(),
+    session: storySession(),
   }, "2035-01-01T00:00:00.000Z");
   assert.equal(saved.ok, true);
   assert.equal(saved.serverVersion, 1);
   const refreshed = await readStoryReviewSessionRecord(db, "review-run");
-  assert.equal(refreshed.session.schema, SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA);
+  assert.equal(refreshed.session.schema, STORY_REVIEW_SESSION_SCHEMA);
   assert.equal(refreshed.sourceRevision, 1);
 });
 
@@ -276,44 +330,29 @@ test("semantic no-op ignores client updatedAt and does not mutate version or tim
   assert.deepEqual(db.sessions.get("review-run"), before);
 });
 
-test("schema-2 uses the same CAS, server timestamp, and semantic no-op path", async () => {
+test("the canonical session uses the CAS, server timestamp, and semantic no-op path", async () => {
   const { persistStoryReviewSessionCas, readStoryReviewSessionRecord } = serverContract();
-  const db = useSuccessorSource(new FakeReviewDb());
+  const db = useStorySource(new FakeReviewDb());
   const created = await persistStoryReviewSessionCas(db, {
     workflowRunId: "review-run", expectedVersion: 0, sourceRevision: 1,
-    session: successorSession("2999-12-31T23:59:59.999Z"),
+    session: storySession("", "2999-12-31T23:59:59.999Z"),
   }, "2035-01-01T00:00:00.000Z");
   assert.equal(created.serverVersion, 1);
   const stored = await readStoryReviewSessionRecord(db, "review-run");
-  assert.equal(stored.session.schema, "oxygen.story-review-session/2");
+  assert.equal(stored.session.schema, "oxygen.story-review-session");
   assert.equal(stored.session.updatedAt, "2035-01-01T00:00:00.000Z");
   const noChange = await persistStoryReviewSessionCas(db, {
     workflowRunId: "review-run", expectedVersion: 1, sourceRevision: 1,
-    session: successorSession("9999-12-31T23:59:59.999Z"),
+    session: storySession("", "9999-12-31T23:59:59.999Z"),
   }, "2035-01-01T00:00:09.000Z");
   assert.equal(noChange.noChange, true);
   assert.equal(noChange.serverVersion, 1);
 });
 
-test("CAS rejects a session that disagrees with the server-derived schema before writing", async () => {
-  const { STORY_SESSION_ERROR } = serverContract();
-  const db = useSuccessorSource(new FakeReviewDb());
-  const result = await serverModule.persistStoryReviewSessionCas(db, {
-    workflowRunId: "review-run",
-    expectedVersion: 0,
-    sourceRevision: 1,
-    storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
-    session: successorSession(),
-  }, "2035-01-01T00:00:00.000Z");
-  assert.deepEqual(result, { ok: false, code: STORY_SESSION_ERROR.stateInvalid });
-  assert.equal(db.sessions.size, 0);
-  assert.notEqual(STORY_REVIEW_SESSION_SCHEMA, SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA);
-});
-
-test("successor CAS rejects source-invalid updates without changing durable state or version", async () => {
+test("story CAS rejects source-invalid updates without changing durable state or version", async () => {
   const { persistStoryReviewSessionCas, readStoryReviewSessionRecord, STORY_SESSION_ERROR } = serverContract();
-  const db = useSuccessorSource(new FakeReviewDb());
-  const valid = successorSessionWithHuman();
+  const db = useStorySource(new FakeReviewDb());
+  const valid = storySessionWithHuman();
   const created = await persistStoryReviewSessionCas(db, {
     workflowRunId: "review-run", expectedVersion: 0, sourceRevision: 1, session: valid,
   }, "2035-01-01T00:00:00.000Z");
@@ -324,14 +363,14 @@ test("successor CAS rejects source-invalid updates without changing durable stat
   const missingChapter = structuredClone(valid);
   missingChapter.chapterReviews = {};
   const foreignInsight = structuredClone(valid);
-  foreignInsight.chapterReviews[successorSource.key].sourceInsightReviews.foreign = {
+  foreignInsight.chapterReviews[storySource.key].sourceInsightReviews.foreign = {
     origin: "source_ai", version: 1, decision: "pending", resolution: "pending",
   };
   const foreignAnchor = structuredClone(valid);
-  foreignAnchor.chapterReviews[successorSource.key]
+  foreignAnchor.chapterReviews[storySource.key]
     .humanInsights["human:valid"].content.quote.storyBlockId = "missing-block";
   const foreignEvidence = structuredClone(valid);
-  foreignEvidence.chapterReviews[successorSource.key]
+  foreignEvidence.chapterReviews[storySource.key]
     .humanInsights["human:valid"].content.evidence = [{ documentId: "foreign", eventId: "missing" }];
 
   for (const invalid of [missingChapter, foreignInsight, foreignAnchor, foreignEvidence]) {
@@ -344,26 +383,6 @@ test("successor CAS rejects source-invalid updates without changing durable stat
     assert.equal(durable.serverVersion, 1);
     assert.deepEqual(durable, durableRecordBefore);
   }
-});
-
-test("CAS rejects an in-place session schema switch and permits an explicit source revision transition", async () => {
-  const { persistStoryReviewSessionCas, readStoryReviewSessionRecord, STORY_SESSION_ERROR } = serverContract();
-  const db = new FakeReviewDb();
-  await persistStoryReviewSessionCas(db, {
-    workflowRunId: "review-run", expectedVersion: 0, sourceRevision: 1, session: session("legacy"),
-  }, "2035-01-01T00:00:00.000Z");
-  const rejected = await persistStoryReviewSessionCas(db, {
-    workflowRunId: "review-run", expectedVersion: 1, sourceRevision: 1, session: successorSession(),
-  }, "2035-01-01T00:00:01.000Z");
-  assert.equal(rejected.code, STORY_SESSION_ERROR.stateInvalid);
-  assert.equal((await readStoryReviewSessionRecord(db, "review-run")).session.schema, "oxygen.story-review-session/1");
-  db.runs.get("review-run").sourceRevision = 2;
-  useSuccessorSource(db);
-  const transitioned = await persistStoryReviewSessionCas(db, {
-    workflowRunId: "review-run", expectedVersion: 1, sourceRevision: 2, session: successorSession(),
-  }, "2035-01-01T00:00:02.000Z");
-  assert.equal(transitioned.serverVersion, 2);
-  assert.equal((await readStoryReviewSessionRecord(db, "review-run")).session.schema, "oxygen.story-review-session/2");
 });
 
 test("semantic comparison is deterministic across record insertion order", () => {
@@ -412,6 +431,29 @@ test("concurrent first writers leave one row at version 1 without overwrite", as
   assert.equal(db.sessions.get("review-run").serverVersion, 1);
   assert.equal(results.filter((result) => result.saved).length, 1);
   assert.equal(results.filter((result) => result.code === STORY_SESSION_ERROR.versionConflict).length, 1);
+});
+
+test("real SQLite CAS produces exactly one winner and one stale loser", async () => {
+  const { persistStoryReviewSessionCas, readStoryReviewSessionRecord, STORY_SESSION_ERROR } = serverContract();
+  const db = new SqliteReviewDb();
+  try {
+    const results = await Promise.all([
+      persistStoryReviewSessionCas(db, {
+        workflowRunId: "review-run", expectedVersion: 0, sourceRevision: 1, session: session("sqlite-a"),
+      }, "2035-01-01T00:00:00.000Z"),
+      persistStoryReviewSessionCas(db, {
+        workflowRunId: "review-run", expectedVersion: 0, sourceRevision: 1, session: session("sqlite-b"),
+      }, "2035-01-01T00:00:01.000Z"),
+    ]);
+    assert.equal(results.filter((result) => result.ok && result.saved).length, 1);
+    assert.equal(results.filter((result) => !result.ok && result.code === STORY_SESSION_ERROR.versionConflict).length, 1);
+    const record = await readStoryReviewSessionRecord(db, "review-run");
+    assert.equal(record.serverVersion, 1);
+    assert.equal(record.sourceRevision, 1);
+    assert.ok(record.session);
+  } finally {
+    db.close();
+  }
 });
 
 test("concurrent tabs with version N allow one N+1 winner and reject the stale tab", async () => {
@@ -471,25 +513,6 @@ test("source R1 to R2 rejects the old tab and advances one monotonic sequence", 
   }, "2035-01-01T00:00:02.000Z");
   assert.equal(fresh.serverVersion, 2);
   assert.equal((await readStoryReviewSessionRecord(db, "review-run")).sourceRevision, 2);
-});
-
-test("legacy schema-1 row remains readable at version 0 and first exact update reaches 1", async () => {
-  const { persistStoryReviewSessionCas, readStoryReviewSessionRecord } = serverContract();
-  const db = new FakeReviewDb();
-  db.sessions.set("review-run", {
-    stateJson: JSON.stringify(session("legacy")),
-    updatedAt: "2034-12-31T00:00:00.000Z",
-    serverVersion: 0,
-  });
-  const legacy = await readStoryReviewSessionRecord(db, "review-run");
-  assert.equal(legacy.session.schema, "oxygen.story-review-session/1");
-  assert.equal(legacy.serverVersion, 0);
-  assert.equal(legacy.sourceRevision, null);
-  const result = await persistStoryReviewSessionCas(db, {
-    workflowRunId: "review-run", expectedVersion: 0, sourceRevision: 1, session: session("legacy-updated"),
-  }, "2035-01-01T00:00:00.000Z");
-  assert.equal(result.serverVersion, 1);
-  assert.equal((await readStoryReviewSessionRecord(db, "review-run")).sourceRevision, 1);
 });
 
 test("current schema defines exactly one integer version field", async () => {

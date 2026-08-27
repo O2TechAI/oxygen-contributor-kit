@@ -14,9 +14,9 @@ import {
   validateCoverageManifestAuthority,
   validateSemanticManifestAuthority,
   validateStoryActivationAuthority,
-  validateSuccessorStorySourcePackage,
+  validateStorySourcePackage,
 } from "../lib/story-readiness.ts";
-import { SUCCESSOR_STORY_PREFIX } from "../lib/timeline.ts";
+import { STORY_PREFIX } from "../lib/timeline.ts";
 
 const hash = (value) => createHash("sha256").update(canonicalAuthorityJson(value)).digest("hex");
 const contributionRecords = (ids) => ids.map((id) => ({ id, sourceDigest: hash({ id }) }));
@@ -221,7 +221,7 @@ test("coverage revisions are monotonic server-owned authority", async () => {
 });
 
 test("Story candidate submission derives identity and publishes no raw content", () => {
-  const summary = `${SUCCESSOR_STORY_PREFIX}{}`;
+  const summary = `${STORY_PREFIX}{}`;
   const items = [{
     id: "doc:item-a", documentId: "doc", sequence: 7,
     timestamp: "2026-08-26T00:00:00Z", project: "Synthetic Project",
@@ -232,7 +232,7 @@ test("Story candidate submission derives identity and publishes no raw content",
     id: "doc:item-a", documentId: "doc", sequence: 7,
     timestamp: "2026-08-26T00:00:00Z", summary,
   }]);
-  assert.deepEqual(valid.highlightsByDocument.get("doc"), [{
+  assert.deepEqual(valid.storyItemsByDocument.get("doc"), [{
     id: "doc:item-a", sequence: 7,
     timestamp: "2026-08-26T00:00:00Z", project: "Synthetic Project", summary,
   }]);
@@ -243,7 +243,7 @@ test("Story candidate submission derives identity and publishes no raw content",
     { id: "doc:item-a", summary }, { id: "doc:item-a", summary },
   ], items).code, "STORY_CANDIDATE_ITEM_DUPLICATED");
   assert.equal(normalizeStoryCandidateSubmission([
-    { id: "doc:item-a", summary: SUCCESSOR_STORY_PREFIX + "x".repeat(2_000_000) },
+    { id: "doc:item-a", summary: STORY_PREFIX + "x".repeat(2_000_000) },
   ], items).code, "STORY_CANDIDATE_SUBMISSION_TOO_LARGE");
 });
 
@@ -317,7 +317,7 @@ test("exclusion reasons require exact upstream authority", async () => {
 function storyCandidate(semantic, coverage, evidenceId = "doc:item-a") {
   const evidence = { documentId: "doc", eventId: evidenceId };
   const source = {
-    schema: "oxygen.story/3",
+    schema: "oxygen.story",
     key: "chapter-a",
     phase: { id: "phase-a", label: "Discovery" },
     title: "A bounded synthetic chapter",
@@ -347,7 +347,7 @@ function storyCandidate(semantic, coverage, evidenceId = "doc:item-a") {
     id: evidenceId,
     documentId: "doc",
     sequence: 1,
-    summary: SUCCESSOR_STORY_PREFIX + JSON.stringify(source),
+    summary: STORY_PREFIX + JSON.stringify(source),
   }];
 }
 
@@ -363,17 +363,17 @@ test("repeat citation remains one coverage owner and excluded Evidence is forbid
     { id: "doc:item-a", documentId: "doc", actorId: "reviewer", actorType: "human" },
     { id: "doc:item-b", documentId: "doc", actorId: "reviewer", actorType: "human" },
   ];
-  assert.equal(validateSuccessorStorySourcePackage(
+  assert.equal(validateStorySourcePackage(
     storyCandidate(semantic, coverageValidation.authority), evidenceRows, authority,
   ).ok, true);
   const mismatchedCarrier = storyCandidate(semantic, coverageValidation.authority);
   mismatchedCarrier[0].id = "doc:item-b";
-  assert.equal(validateSuccessorStorySourcePackage(
+  assert.equal(validateStorySourcePackage(
     mismatchedCarrier, evidenceRows, authority,
-  ).code, "SUCCESSOR_STORY_EVIDENCE_INVALID");
-  assert.equal(validateSuccessorStorySourcePackage(
+  ).code, "STORY_EVIDENCE_INVALID");
+  assert.equal(validateStorySourcePackage(
     storyCandidate(semantic, coverageValidation.authority, "doc:item-b"), evidenceRows, authority,
-  ).code, "SUCCESSOR_STORY_EXCLUDED_EVIDENCE_INVALID");
+  ).code, "STORY_EXCLUDED_EVIDENCE_INVALID");
 
   const activation = await validateStoryActivationAuthority(
     storyCandidate(semantic, coverageValidation.authority),
@@ -385,7 +385,7 @@ test("repeat citation remains one coverage owner and excluded Evidence is forbid
     ]),
   );
   assert.equal(activation.ok, true);
-  assert.equal(activation.source.sourceSchema, "oxygen.story/3");
+  assert.equal(activation.source.chapterCount, 1);
 });
 
 test("Story declarations cannot omit a normalized coverage owner", async () => {
@@ -396,13 +396,13 @@ test("Story declarations cannot omit a normalized coverage owner", async () => {
   ]), semantic);
   assert.equal(coverageValidation.ok, true);
   const candidate = storyCandidate(semantic, coverageValidation.authority);
-  const parsed = JSON.parse(candidate[0].summary.slice(SUCCESSOR_STORY_PREFIX.length));
+  const parsed = JSON.parse(candidate[0].summary.slice(STORY_PREFIX.length));
   parsed.coverage.excludedUnits = [];
-  candidate[0].summary = SUCCESSOR_STORY_PREFIX + JSON.stringify(parsed);
-  const result = validateSuccessorStorySourcePackage(candidate, [
+  candidate[0].summary = STORY_PREFIX + JSON.stringify(parsed);
+  const result = validateStorySourcePackage(candidate, [
     { id: "doc:item-a", documentId: "doc", actorId: "reviewer", actorType: "human" },
   ], { semanticManifest: semantic, coverageManifest: coverageValidation.authority });
-  assert.equal(result.code, "SUCCESSOR_STORY_COVERAGE_INVALID");
+  assert.equal(result.code, "STORY_COVERAGE_INVALID");
 });
 
 test("represented ownership requires narrative use, not an unused supporting inventory row", async () => {
@@ -413,23 +413,23 @@ test("represented ownership requires narrative use, not an unused supporting inv
   ]), semantic);
   assert.equal(coverageValidation.ok, true);
   const candidate = storyCandidate(semantic, coverageValidation.authority);
-  const parsed = JSON.parse(candidate[0].summary.slice(SUCCESSOR_STORY_PREFIX.length));
+  const parsed = JSON.parse(candidate[0].summary.slice(STORY_PREFIX.length));
   parsed.coverage.representedUnitIds = ["unit-a", "unit-b"];
   parsed.coverage.excludedUnits = [];
   parsed.evidence.supporting = [{ documentId: "doc", eventId: "doc:item-b" }];
-  candidate[0].summary = SUCCESSOR_STORY_PREFIX + JSON.stringify(parsed);
+  candidate[0].summary = STORY_PREFIX + JSON.stringify(parsed);
   const evidenceRows = [
     { id: "doc:item-a", documentId: "doc", actorId: "reviewer", actorType: "human" },
     { id: "doc:item-b", documentId: "doc", actorId: "reviewer", actorType: "human" },
   ];
-  const result = validateSuccessorStorySourcePackage(candidate, evidenceRows, {
+  const result = validateStorySourcePackage(candidate, evidenceRows, {
     semanticManifest: semantic,
     coverageManifest: coverageValidation.authority,
   });
-  assert.equal(result.code, "SUCCESSOR_STORY_COVERAGE_INVALID");
+  assert.equal(result.code, "STORY_COVERAGE_INVALID");
   parsed.story.blocks[0].evidence.push({ documentId: "doc", eventId: "doc:item-b" });
-  candidate[0].summary = SUCCESSOR_STORY_PREFIX + JSON.stringify(parsed);
-  assert.equal(validateSuccessorStorySourcePackage(candidate, evidenceRows, {
+  candidate[0].summary = STORY_PREFIX + JSON.stringify(parsed);
+  assert.equal(validateStorySourcePackage(candidate, evidenceRows, {
     semanticManifest: semantic,
     coverageManifest: coverageValidation.authority,
   }).ok, true);

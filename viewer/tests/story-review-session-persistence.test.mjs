@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { createStoryReviewSession, createSuccessorStoryReviewSession } from "../lib/story-review-session.ts";
+import { createStoryReviewSession } from "../lib/story-review-session.ts";
 
 const persistenceModule = await import("../lib/story-review-session-persistence.ts")
   .catch((importError) => ({ importError }));
@@ -17,7 +17,7 @@ const session = (label) => {
   return value;
 };
 
-const successorSession = () => createSuccessorStoryReviewSession("review-run", {}, {});
+const storySession = () => createStoryReviewSession("review-run", {}, {});
 
 class ManualScheduler {
   nextId = 1;
@@ -65,7 +65,7 @@ test("debounce coalesces local changes into one latest POST", async () => {
   assert.deepEqual(calls[0].session.privacyDecisions, session("c").privacyDecisions);
 });
 
-test("schema-2 shares the exact single-flight queue without v1 conversion", async () => {
+test("the canonical session uses the exact single-flight queue", async () => {
   const { StoryReviewSessionPersistenceQueue } = persistenceContract();
   const scheduler = new ManualScheduler();
   const calls = [];
@@ -74,27 +74,12 @@ test("schema-2 shares the exact single-flight queue without v1 conversion", asyn
     scheduler,
   });
   queue.initialize({ workflowRunId: "review-run", serverVersion: 0, sourceRevision: 1, session: null });
-  queue.schedule(successorSession());
+  queue.schedule(storySession());
   scheduler.runAll();
   await queue.flush();
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].session.schema, "oxygen.story-review-session/2");
-  assert.equal(queue.isDurable(successorSession()), true);
-});
-
-test("the queue fails closed before posting an in-place session schema switch", async () => {
-  const { StoryReviewSessionPersistenceQueue } = persistenceContract();
-  const scheduler = new ManualScheduler();
-  let calls = 0;
-  const queue = new StoryReviewSessionPersistenceQueue({
-    save: async () => { calls += 1; return saved(2); },
-    scheduler,
-  });
-  queue.initialize({ workflowRunId: "review-run", serverVersion: 1, sourceRevision: 1, session: session("legacy") });
-  queue.schedule(successorSession());
-  scheduler.runAll();
-  await assert.rejects(queue.flush(), /STORY_SESSION_STATE_INVALID/);
-  assert.equal(calls, 0);
+  assert.equal(calls[0].session.schema, "oxygen.story-review-session");
+  assert.equal(queue.isDurable(storySession()), true);
 });
 
 test("one write is in flight and an edit queues one later write with acknowledged version", async () => {

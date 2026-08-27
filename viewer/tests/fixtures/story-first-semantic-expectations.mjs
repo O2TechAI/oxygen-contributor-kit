@@ -232,7 +232,7 @@ export const storyFirstSemanticExpectations = [
   },
 ];
 
-export const successorLifecycleCases = [
+export const storyLifecycleCases = [
   {
     id: "ai-pending",
     source: "ai",

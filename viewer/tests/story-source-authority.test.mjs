@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { testStoryCoverage } from "./fixtures/successor-story-coverage.mjs";
+import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
 import {
   isReservedStoryOrganizationReason,
   readReservedStoryCandidateRows,
   selectReservedStorySourceItems,
-  selectSuccessorViewerChapters,
-  validateRecognizedStorySourcePackage,
+  selectViewerChapters,
+  validateStorySourcePackage,
 } from "../lib/story-readiness.ts";
 import { releaseOrganizationReason } from "../lib/story-release.ts";
 import { readActiveStoryReviewContract } from "../lib/story-review-session-server.ts";
@@ -19,7 +19,7 @@ import {
   publishActivatedStorySourceMutation,
   publishCompletedStorySourceMutation,
 } from "../lib/story-source-publication.ts";
-import { SUCCESSOR_STORY_PREFIX } from "../lib/timeline.ts";
+import { STORY_PREFIX } from "../lib/timeline.ts";
 
 const RUN_ID = "source-authority-run";
 const ORIGINAL_SENTINEL = "PRIVATE_ORIGINAL_SENTINEL";
@@ -54,7 +54,7 @@ test("Organization and Story activation use one JSON payload per logical row gro
 function sourceFor(identity) {
   const evidence = { documentId: identity.document_id, eventId: identity.id };
   return {
-    schema: "oxygen.story/3",
+    schema: "oxygen.story",
     key: identity.key,
     phase: { id: "phase-discovery", label: "Discovery" },
     kind: "decision",
@@ -83,7 +83,7 @@ function itemFor(identity) {
     event_type: "message",
     actor_id: `actor-${identity.key}`,
     actor_type: "user",
-    organization_reason: `${SUCCESSOR_STORY_PREFIX}${JSON.stringify(sourceFor(identity))}`,
+    organization_reason: `${STORY_PREFIX}${JSON.stringify(sourceFor(identity))}`,
   };
 }
 
@@ -162,7 +162,7 @@ test("reserved Story namespace reaches activation/session classification and str
   const db = new SourceSelectorDb([valid, unknown]);
   const selected = await readReservedStoryCandidateRows(db);
   assert.deepEqual(selected.map((row) => row.id), [unknown.id, valid.id]);
-  assert.equal(validateRecognizedStorySourcePackage(selected, [valid, unknown].map(evidence)).ok, false);
+  assert.equal(validateStorySourcePackage(selected, [valid, unknown].map(evidence)).ok, false);
   assert.deepEqual(await readActiveStoryReviewContract(db, RUN_ID), {
     ready: true,
     sourceRevision: 4,
@@ -179,7 +179,7 @@ test("reserved Story namespace reaches activation/session classification and str
   assert.equal(isReservedStoryOrganizationReason("ordinary story project metadata"), false);
   assert.equal(releaseOrganizationReason("ordinary story project metadata"), "ordinary story project metadata");
   const releasedUnknown = releaseOrganizationReason(unknown.organization_reason);
-  assert.equal(releasedUnknown, "Reviewed project milestone");
+  assert.equal(releasedUnknown, "Reviewed project Story");
   assert.doesNotMatch(releasedUnknown, new RegExp(`${ORIGINAL_SENTINEL}|${EVIDENCE_SENTINEL}`));
 });
 
@@ -266,7 +266,7 @@ class PublicationDb {
 
 async function activationAttempt(db, items) {
   const rows = await readReservedStoryCandidateRows(new SourceSelectorDb(items));
-  const validation = validateRecognizedStorySourcePackage(rows, items.map(evidence));
+  const validation = validateStorySourcePackage(rows, items.map(evidence));
   if (db.status !== "running" || !validation.ok) return false;
   db.status = "ready_for_human_review";
   db.digest = validation.canonicalCandidate;
@@ -292,7 +292,7 @@ test("one complete source document publishes one revision and partial rows canno
   assert.equal(db.digest, null);
 
   written.push(items[0]);
-  const partial = validateRecognizedStorySourcePackage([candidate(items[0])], [evidence(items[0])]);
+  const partial = validateStorySourcePackage([candidate(items[0])], [evidence(items[0])]);
   assert.equal(partial.ok, true, "the interleaved partial package must itself be deceptively valid");
   assert.equal(await activationAttempt(db, written), false);
   assert.equal(db.revision, 11);
@@ -396,9 +396,9 @@ test("activation, Viewer, release selection, and digest share one total source o
   for (const current of cases) await t.test(current.name, async () => {
     const items = current.identities.map(itemFor);
     const activationRows = await readReservedStoryCandidateRows(new SourceSelectorDb(items));
-    const validation = validateRecognizedStorySourcePackage(activationRows, items.map(evidence));
+    const validation = validateStorySourcePackage(activationRows, items.map(evidence));
     assert.equal(validation.ok, true);
-    const viewer = selectSuccessorViewerChapters(items.map((item) => ({
+    const viewer = selectViewerChapters(items.map((item) => ({
       id: item.id,
       documentId: item.document_id,
       sequence: item.sequence,

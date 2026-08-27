@@ -1,176 +1,168 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
 import {
   applyChapterReview,
   chapterReviewCompletionBlockers,
   emptyChapterReview,
   markChapterReady,
-  updateInsightReview,
+  storyBlocks,
+  updateAiInsightDecision,
 } from "../lib/story-review.ts";
 import { groupDownloadReviewBlockers } from "../lib/story-navigation.ts";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
+const evidence = { documentId: "doc", eventId: "doc:event" };
 const insightId = "safe-insight";
-const sourceBlocks = { en:{ scene:"Safe source." }, zh:{} };
+const source = {
+  schema: "oxygen.story",
+  key: "chapter-one",
+  phase: { id: "review", label: "Review" },
+  title: "Synthetic Chapter",
+  overview: "A bounded Story used only for blocker behavior.",
+  people: [],
+  story: { blocks: [{ id: "scene", text: "Safe source.", evidence: [evidence] }] },
+  insights: [{
+    id: insightId,
+    background: "A synthetic review context.",
+    quote: { storyBlockIds: ["scene"] },
+    directlyAcquiredExperience: "The exact bounded review was exercised.",
+    principle: "Block release until every Insight decision is applied.",
+    evidence: [evidence],
+  }],
+  evidence: { primary: evidence, supporting: [] },
+  coverage: testStoryCoverage(),
+};
+const blocks = storyBlocks(source);
 const completionContext = {
-  storyKey:"chapter-one",
-  privacyCandidates:[],
-  privacyDecisions:{},
-  targetCatalog:new Map([
-    ["scene",{ target:"scene",kind:"scalar",field:"scene" }],
-    [`insight:${insightId}`,{ target:`insight:${insightId}`,kind:"insight",id:insightId }],
-  ]),
-  reviewableInsightIds:[insightId],
-  sourceBlocks,
-  reviewedBlocks:sourceBlocks,
-};
-const applyContext = {
-  ...completionContext,
-  chapterEvidence:[{ documentId:"doc",eventId:"event" }],
-  evidenceResolved:true,
-  supportedAddIds:[],
-  supportedEditIds:[],
+  source,
+  privacyCandidates: [],
+  privacyDecisions: {},
+  targetCatalog: new Map(),
+  evidenceResolved: true,
+  supportedAddIds: [],
+  supportedEditIds: [],
+  sourceBlocks: blocks,
+  reviewedBlocks: blocks,
 };
 
-test("download aggregation preserves current completion semantics and adds only the release-stage blocker", () => {
-  const applied=applyChapterReview(emptyChapterReview(),applyContext).state;
-  const confirmed=markChapterReady(applied,completionContext);
-  assert.deepEqual(confirmed.insightReviews,{});
-  assert.deepEqual(chapterReviewCompletionBlockers(confirmed,completionContext),[]);
+test("download aggregation preserves completion semantics and adds only the release-stage blocker", () => {
+  const accepted = updateAiInsightDecision(emptyChapterReview(source), source, insightId, "accepted");
+  const applied = applyChapterReview(accepted, completionContext).state;
+  const confirmed = markChapterReady(applied, completionContext);
+  assert.equal(confirmed.sourceInsightReviews[insightId].resolution, "applied");
+  assert.deepEqual(chapterReviewCompletionBlockers(confirmed, completionContext), []);
   assert.deepEqual(groupDownloadReviewBlockers([{
-    project:"Project",chapterKey:"chapter-one",stage:confirmed.stage,completionBlockers:[],
-  }]),[]);
+    project: "Project", chapterKey: source.key, stage: confirmed.stage, completionBlockers: [],
+  }]), []);
 
-  const revisionReady=groupDownloadReviewBlockers([{
-    project:"Project",chapterKey:"chapter-one",stage:"revision_ready",completionBlockers:[],
+  const revisionReady = groupDownloadReviewBlockers([{
+    project: "Project", chapterKey: source.key, stage: "revision_ready", completionBlockers: [],
   }]);
-  assert.deepEqual(revisionReady[0].blockers,[{code:"chapter_not_confirmed",targetKind:"chapter"}]);
+  assert.deepEqual(revisionReady[0].blockers, [{ code: "chapter_not_confirmed", targetKind: "chapter" }]);
 
-  const pending=updateInsightReview(applied,insightId,"en",{status:"accepted",text:"Safe Insight"});
-  const completionBlockers=chapterReviewCompletionBlockers(pending,completionContext);
-  assert.deepEqual(completionBlockers,[{
-    code:"insight_pending",chapterKey:"chapter-one",targetKind:"insight",targetId:insightId,
+  const pending = emptyChapterReview(source);
+  const completionBlockers = chapterReviewCompletionBlockers(pending, completionContext);
+  assert.deepEqual(completionBlockers, [{
+    code: "evidence_unverified", chapterKey: source.key, targetKind: "chapter",
+  }, {
+    code: "revision_provenance_mismatch", chapterKey: source.key, targetKind: "chapter",
+  }, {
+    code: "ai_insight_decision_pending", chapterKey: source.key, targetKind: "insight", targetId: insightId,
   }]);
   assert.deepEqual(groupDownloadReviewBlockers([{
-    project:"Project",chapterKey:"chapter-one",stage:pending.stage,completionBlockers,
-  }])[0].blockers,[
-    {code:"insight_pending",targetKind:"insight",targetId:insightId},
-    {code:"chapter_not_confirmed",targetKind:"chapter"},
+    project: "Project", chapterKey: source.key, stage: pending.stage, completionBlockers,
+  }])[0].blockers, [
+    { code: "evidence_unverified", targetKind: "chapter" },
+    { code: "revision_provenance_mismatch", targetKind: "chapter" },
+    { code: "ai_insight_decision_pending", targetKind: "insight", targetId: insightId },
+    { code: "chapter_not_confirmed", targetKind: "chapter" },
   ]);
 });
 
 test("malformed review state collapses to safe generic blocker data", () => {
-  const applied=applyChapterReview(emptyChapterReview(),applyContext).state;
-  const malformed={...applied,annotations:[{instruction:"PRIVATE_REJECTED_COPY"}]};
-  const completionBlockers=chapterReviewCompletionBlockers(malformed,completionContext);
-  assert.deepEqual(completionBlockers,[{
-    code:"review_state_invalid",chapterKey:"chapter-one",targetKind:"chapter",
+  const malformed = { ...emptyChapterReview(source), annotations: [{ instruction: "PRIVATE_REJECTED_COPY" }] };
+  const completionBlockers = chapterReviewCompletionBlockers(malformed, completionContext);
+  assert.deepEqual(completionBlockers, [{
+    code: "review_state_invalid", chapterKey: source.key, targetKind: "chapter",
   }]);
-  const serialized=JSON.stringify(groupDownloadReviewBlockers([{
-    project:"Project",chapterKey:"chapter-one",stage:"reviewing",completionBlockers,
+  const serialized = JSON.stringify(groupDownloadReviewBlockers([{
+    project: "Project", chapterKey: source.key, stage: "reviewing", completionBlockers,
   }]));
-  assert.equal(serialized.includes("PRIVATE_REJECTED_COPY"),false);
+  assert.equal(serialized.includes("PRIVATE_REJECTED_COPY"), false);
 });
 
-test("Privacy-redacted Chapter title never enters blocker presentation or rendered copy", async () => {
-  const privateTitle="PRIVATE_CHAPTER_TITLE_SENTINEL";
-  const syntheticChapter={project:"Project",chapterKey:"chapter-one",presentation:{title:privateTitle}};
-  const privateSourceBlocks={en:{title:syntheticChapter.presentation.title,scene:"Safe source."},zh:{}};
-  const privacyCandidate={
-    id:"private-title",title:"Synthetic candidate",explanation:"Synthetic",recommendation:"redact",
-    releaseTargets:["title"],original:{availability:"unavailable"},whyFlagged:"Synthetic",
-  };
-  const privateContext={
-    ...completionContext,
-    privacyCandidates:[privacyCandidate],
-    privacyDecisions:{"private-title":"redact"},
-    targetCatalog:new Map([
-      ["title",{target:"title",kind:"scalar",field:"title"}],
-      ["scene",{target:"scene",kind:"scalar",field:"scene"}],
-      [`insight:${insightId}`,{target:`insight:${insightId}`,kind:"insight",id:insightId}],
-    ]),
-    sourceBlocks:privateSourceBlocks,
-    reviewedBlocks:privateSourceBlocks,
-  };
-  const applied=applyChapterReview(emptyChapterReview(),{
-    ...privateContext,chapterEvidence:[{documentId:"doc",eventId:"event"}],evidenceResolved:true,
-    supportedAddIds:[],supportedEditIds:[],
-  }).state;
-  assert.deepEqual(applied.redactedBlocks,["title"]);
-  const completionBlockers=chapterReviewCompletionBlockers(applied,{
-    ...privateContext,reviewedBlocks:{en:{title:"",scene:"Safe source."},zh:{}},
-  });
-  const groups=groupDownloadReviewBlockers([{
-    project:syntheticChapter.project,chapterKey:syntheticChapter.chapterKey,stage:applied.stage,completionBlockers,
+test("blocker projection excludes private source copy and keeps only safe identities", () => {
+  const privateTitle = "PRIVATE_CHAPTER_TITLE_SENTINEL";
+  const groups = groupDownloadReviewBlockers([{
+    project: "Project",
+    chapterKey: source.key,
+    stage: "reviewing",
+    completionBlockers: [{
+      code: "ai_insight_decision_pending",
+      chapterKey: source.key,
+      targetKind: "insight",
+      targetId: insightId,
+    }],
+    title: privateTitle,
   }]);
-  assert.equal(groups[0].chapterKey,syntheticChapter.chapterKey);
-  assert.deepEqual(groups[0].blockers,[{code:"chapter_not_confirmed",targetKind:"chapter"}]);
-  assert.equal(JSON.stringify(groups).includes(privateTitle),false);
-  assert.equal(Object.hasOwn(groups[0],"title"),false);
-
-  const workspace=await read("../app/workspace.tsx");
-  const aggregation=workspace.slice(workspace.indexOf("const currentDownloadReviewBlockerGroups"),workspace.indexOf("const openDownloadReviewBlocker"));
-  const surface=workspace.slice(workspace.indexOf("downloadBlockerGroups.length > 0"),workspace.indexOf("workflowOpen &&"));
-  const navigation=workspace.slice(workspace.indexOf("const openDownloadReviewBlocker"),workspace.indexOf("const downloadReviewed"));
-  assert.doesNotMatch(aggregation,/title:presentation|milestone\.story\.title/);
-  assert.match(surface,/downloadBlockerGroups\.map\(\(group,groupIndex\)/);
-  assert.match(surface,/<h2>\{labels\.chapter\} \{groupIndex\+1\}<\/h2>/);
-  assert.doesNotMatch(surface,/group\.title|presentation\.title|story\.title/);
-  assert.match(surface,/labels\.downloadBlockers\[blocker\.code\]/);
-  assert.match(workspace,/chapter:"Chapter"/);
-  assert.match(workspace,/chapter:"章节"/);
-  assert.match(navigation,/setStoryNavigation\(\{project:group\.project,storyKey:group\.chapterKey\}\)/);
-  assert.equal(surface.includes(privateTitle),false);
+  assert.deepEqual(groups, [{
+    project: "Project",
+    chapterKey: source.key,
+    blockers: [
+      { code: "ai_insight_decision_pending", targetKind: "insight", targetId: insightId },
+      { code: "chapter_not_confirmed", targetKind: "chapter" },
+    ],
+  }]);
+  assert.equal(JSON.stringify(groups).includes(privateTitle), false);
 });
 
-test("HTML and ZIP share one blocker preflight before the unchanged durable handoff", async () => {
-  const workspace=await read("../app/workspace.tsx");
-  const aggregation=workspace.slice(workspace.indexOf("const currentDownloadReviewBlockerGroups"),workspace.indexOf("const openDownloadReviewBlocker"));
-  const download=workspace.slice(workspace.indexOf("const downloadReviewed"),workspace.indexOf("const ready ="));
-  assert.match(aggregation,/activatedStoryHighlights\.map/);
-  assert.match(aggregation,/chapterReviewCompletionBlockers\(state/);
-  assert.match(aggregation,/groupDownloadReviewBlockers/);
+test("HTML and ZIP share one blocker preflight before the durable handoff", async () => {
+  const workspace = await read("../app/workspace.tsx");
+  const aggregation = workspace.slice(workspace.indexOf("const currentDownloadReviewBlockerGroups"), workspace.indexOf("const openDownloadReviewBlocker"));
+  const download = workspace.slice(workspace.indexOf("const downloadReviewed"), workspace.indexOf("const ready ="));
+  assert.match(aggregation, /storySelection\.chapters\.map/);
+  assert.match(aggregation, /chapterReviewCompletionBlockers\(state,completionContext\(chapter\.source\)\)/);
+  assert.match(aggregation, /groupDownloadReviewBlockers/);
   assert.ok(download.indexOf("currentDownloadReviewBlockerGroups") < download.indexOf("storyPersistenceRef.current"));
   assert.ok(download.indexOf("if(blockerGroups.length)") < download.indexOf("runDurableStoryReviewHandoff"));
-  assert.match(download,/if\(blockerGroups\.length\) \{[\s\S]*setDownloadBlockerGroups\(blockerGroups\);[\s\S]*return;/);
-  assert.match(workspace,/downloadReviewed\("\/api\/organization\/export","oxygen-reviewed-story\.html"\)/);
-  assert.match(workspace,/downloadReviewed\("\/api\/package","oxygen-contribution\.zip"\)/);
-  assert.match(download,/JSON\.stringify\(\{workflowRunId,serverVersion,sourceRevision\}\)/);
-  assert.doesNotMatch(download,/blockerGroups[^\n]*JSON\.stringify|reviewedStory|chapterReviews[^\n]*JSON\.stringify/);
+  assert.match(download, /if\(blockerGroups\.length\) \{[\s\S]*setDownloadBlockerGroups\(blockerGroups\);[\s\S]*return;/);
+  assert.match(workspace, /downloadReviewed\("\/api\/organization\/export","oxygen-reviewed-story\.html"\)/);
+  assert.match(workspace, /downloadReviewed\("\/api\/package","oxygen-contribution\.zip"\)/);
+  assert.match(download, /JSON\.stringify\(\{workflowRunId,serverVersion,sourceRevision\}\)/);
+  assert.doesNotMatch(download, /blockerGroups[^\n]*JSON\.stringify|reviewedStory|chapterReviews[^\n]*JSON\.stringify/);
 });
 
-test("blocker surface groups safe ordinal labels by Chapter and exposes only buttons", async () => {
-  const workspace=await read("../app/workspace.tsx");
-  const surface=workspace.slice(workspace.indexOf("downloadBlockerGroups.length > 0"),workspace.indexOf("workflowOpen &&"));
-  assert.match(surface,/role="dialog" aria-modal="true" aria-labelledby="download-review-title"/);
-  assert.match(surface,/downloadBlockerGroups\.map\(\(group,groupIndex\) => <section/);
-  assert.match(surface,/<h2>\{labels\.chapter\} \{groupIndex\+1\}<\/h2>/);
-  assert.match(surface,/group\.blockers\.map[\s\S]*<button className="docCard"/);
-  assert.match(surface,/labels\.downloadBlockers\[blocker\.code\]/);
-  assert.doesNotMatch(surface,/instruction|beforeText|afterText|original|excerpt|localized|serverVersion|sourceRevision/);
+test("blocker surface groups safe ordinal labels and exposes only focused actions", async () => {
+  const workspace = await read("../app/workspace.tsx");
+  const surface = workspace.slice(workspace.indexOf("downloadBlockerGroups.length > 0"), workspace.indexOf("workflowOpen &&"));
+  assert.match(surface, /role="dialog" aria-modal="true" aria-labelledby="download-review-title"/);
+  assert.match(surface, /downloadBlockerGroups\.map\(\(group,groupIndex\) => <section/);
+  assert.match(surface, /<h2>\{labels\.chapter\} \{groupIndex\+1\}<\/h2>/);
+  assert.match(surface, /group\.blockers\.map[\s\S]*<button className="docCard"/);
+  assert.match(surface, /labels\.downloadBlockers\[blocker\.code\]/);
+  assert.doesNotMatch(surface, /instruction|beforeText|afterText|original|excerpt|localized|serverVersion|sourceRevision|group\.title/);
+  assert.match(workspace, /chapter:"Chapter"/);
+  assert.match(workspace, /chapter:"章节"/);
 });
 
-test("blocker navigation stays activated-only and carries one presentation-only focus intent", async () => {
-  const workspace=await read("../app/workspace.tsx");
-  const navigation=workspace.slice(workspace.indexOf("const openDownloadReviewBlocker"),workspace.indexOf("const downloadReviewed"));
-  assert.match(navigation,/navigationCandidates\.some/);
-  assert.match(navigation,/chapter\.project===group\.project && chapter\.story\.key===group\.chapterKey/);
-  assert.match(navigation,/setDownloadReviewFocus\(\{/);
-  assert.match(navigation,/setStoryNavigation\(\{project:group\.project,storyKey:group\.chapterKey\}\)/);
-  assert.doesNotMatch(navigation,/setChapterReviews|setPrivacyDecisions|storyPersistence|serverVersion|sourceRevision/);
+test("blocker navigation is activated-only and carries one safe focus identity", async () => {
+  const workspace = await read("../app/workspace.tsx");
+  const navigation = workspace.slice(workspace.indexOf("const openDownloadReviewBlocker"), workspace.indexOf("const downloadReviewed"));
+  assert.match(navigation, /navigationCandidates\.some/);
+  assert.match(navigation, /chapter\.project===group\.project && chapter\.story\.key===group\.chapterKey/);
+  assert.match(navigation, /setDownloadReviewFocus\(\{/);
+  assert.match(navigation, /setStoryNavigation\(\{project:group\.project,storyKey:group\.chapterKey\}\)/);
+  assert.doesNotMatch(navigation, /setChapterReviews|setPrivacyDecisions|storyPersistence|serverVersion|sourceRevision/);
 });
 
-test("editor focuses exact safe targets once and falls back to Chapter completion without review mutation", async () => {
-  const editor=await read("../app/story-chapter-editor.tsx");
-  const focus=editor.slice(editor.indexOf("if (!reviewFocus ||"),editor.indexOf("const candidates ="));
-  assert.match(focus,/\[data-annotation-note\],\[data-edit-note\]/);
-  assert.match(focus,/\[data-story-block\]/);
-  assert.match(focus,/\[data-canonical-insight\]/);
-  assert.match(focus,/disclosure\.open = true/);
-  assert.match(focus,/\[data-chapter-completion\]/);
-  assert.match(focus,/onReviewFocusHandled\?\.\(\)/);
-  assert.doesNotMatch(focus,/onChapterReview|onPrivacyDecision|updateInsightReview|storyPersistence|fetch\(/);
-  assert.match(editor,/const insightSuppressed = chapterReview\.redactedBlocks\.includes\(`insight:\$\{visibleHighlight\.id\}`\);/);
-  assert.match(editor,/const canonicalInsightDisclosure = !insightSuppressed \?/);
+test("editor focuses an exact Insight or Chapter completion without review mutation", async () => {
+  const editor = await read("../app/story-chapter-editor.tsx");
+  const focus = editor.slice(editor.indexOf("if (!reviewFocus) return;"), editor.indexOf("const captureSelection"));
+  assert.match(focus, /reviewFocus\.targetKind === "insight" && reviewFocus\.targetId/);
+  assert.match(focus, /insightRefs\.current\[reviewFocus\.targetId\]/);
+  assert.match(focus, /target \|\| completionRef\.current/);
+  assert.match(focus, /onReviewFocusHandled\?\.\(\)/);
+  assert.doesNotMatch(focus, /onChapterReview|onPrivacyDecision|storyPersistence|fetch\(/);
 });
