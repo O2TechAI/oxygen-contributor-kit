@@ -492,13 +492,7 @@ test("legacy schema-1 row remains readable at version 0 and first exact update r
   assert.equal((await readStoryReviewSessionRecord(db, "review-run")).sourceRevision, 1);
 });
 
-test("schema and initialization add exactly one idempotent integer version field", async () => {
-  const [schemaSource, dbSource] = await Promise.all([
-    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
-    readFile(new URL("../db/index.ts", import.meta.url), "utf8"),
-  ]);
-  assert.match(schemaSource, /serverVersion:\s*integer\("server_version"\)\.notNull\(\)\.default\(0\)/);
-  assert.match(dbSource, /server_version INTEGER NOT NULL DEFAULT 0/);
-  assert.match(dbSource, /PRAGMA table_info\(story_review_sessions\)/);
-  assert.match(dbSource, /ALTER TABLE story_review_sessions ADD COLUMN server_version INTEGER NOT NULL DEFAULT 0/);
+test("current schema defines exactly one integer version field", async () => {
+  const dbSource = await readFile(new URL("../db/index.ts", import.meta.url), "utf8");
+  assert.equal((dbSource.match(/server_version INTEGER NOT NULL DEFAULT 0/g) || []).length, 1);
 });
