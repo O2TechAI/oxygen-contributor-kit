@@ -513,8 +513,8 @@ function sanitizeSuccessorLocale(value: unknown): SuccessorReleaseLocale | null 
   }
   insights.sort((left, right) => left.id.localeCompare(right.id));
   return {
-    title: input.title,
-    overview: input.overview,
+    title: input.title!,
+    overview: input.overview!,
     people: input.people.map((person) => ({
       releaseLabel: person.releaseLabel,
       role: person.role,
