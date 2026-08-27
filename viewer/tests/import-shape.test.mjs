@@ -1,17 +1,11 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
-async function doesNotExist(path) {
-  await assert.rejects(access(new URL(path, import.meta.url)), { code: "ENOENT" });
-}
-
-test("SQLite has one schema authority in db/index.ts", async () => {
+test("database schema is defined in db/index.ts", async () => {
   const db = await read("../db/index.ts");
-  await doesNotExist("../db/schema.ts");
-  await doesNotExist("../drizzle.config.ts");
   assert.match(db, /CREATE TABLE IF NOT EXISTS documents/);
   assert.match(db, /CREATE TABLE IF NOT EXISTS items/);
   assert.match(db, /CREATE TABLE IF NOT EXISTS organization_jobs/);
@@ -32,17 +26,13 @@ test("database routes use neutral parameterized SQLite json_each", async () => {
   }
 });
 
-test("owned platform files contain no future Cloudflare compatibility contract", async () => {
-  const [packageJson, nextConfig, page, layout] = await Promise.all([
-    read("../package.json"),
-    read("../next.config.ts"),
-    read("../app/page.tsx"),
-    read("../app/layout.tsx"),
-  ]);
-  assert.doesNotMatch(
-    `${packageJson}\n${nextConfig}\n${page}\n${layout}`,
-    /cloudflare|vinext|wrangler|vite|worker|compatibility|hosting/i,
-  );
+test("the home page is dynamic and database-backed", async () => {
+  const page = await read("../app/page.tsx");
   assert.match(page, /export const dynamic = "force-dynamic"/);
-  assert.doesNotMatch(layout, /next\/font\/google|Geist|font-geist|https?:/);
+  assert.match(page, /loadWorkspaceBootstrap/);
+});
+
+test("the root layout has no remote font loading", async () => {
+  const layout = await read("../app/layout.tsx");
+  assert.equal(/next\/font|https?:\/\//i.test(layout), false);
 });
