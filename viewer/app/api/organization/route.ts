@@ -378,6 +378,7 @@ export async function POST(request: Request) {
           && originalTrajectoryId === row.document_id
         ) || (
           originalEventId === undefined
+          && (originalTrajectoryId === undefined || originalTrajectoryId === row.document_id)
           && row.id.startsWith(`${row.document_id}:`)
         );
         if (!identityMatches) throw new Error("Contribution source identity mismatch");

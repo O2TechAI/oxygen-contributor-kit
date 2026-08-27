@@ -39,6 +39,17 @@ function loadOrganizationHarness() {
 
 const organization = loadOrganizationHarness();
 
+function loadOrganizationIdentityHarness() {
+  const start = organizationSource.indexOf("const originalEventId = original?.event_id;");
+  const end = organizationSource.indexOf("if (!identityMatches)", start);
+  assert.ok(start >= 0 && end > start, "Organization exposes one source identity predicate");
+  return Function("original", "row", `${organizationSource.slice(start, end)}
+    return identityMatches;
+  `);
+}
+
+const organizationIdentityMatches = loadOrganizationIdentityHarness();
+
 function trajectoryEntry(documentId, itemId, overrides = {}) {
   return {
     document: {
@@ -194,6 +205,31 @@ test("document and item IDs preserve canonical and exact ownership grammars", ()
     corpus.normalizeFinalizedCorpus({ documents: [eventBacked] }).documents[0].items[0].id,
     "evt:safe",
   );
+});
+
+test("qualified records bind supplied trajectory identity to the owning document", () => {
+  for (const scenario of [
+    { documentId: "meeting-absent", accepted: true },
+    { documentId: "meeting-matching", trajectoryId: "meeting-matching", accepted: true },
+    { documentId: "meeting-owned", trajectoryId: "meeting-foreign", accepted: false },
+    { documentId: "meeting-typed", trajectoryId: 7, accepted: false },
+  ]) {
+    const entry = meetingEntry(scenario.documentId);
+    if ("trajectoryId" in scenario) entry.items[0].original.trajectory_id = scenario.trajectoryId;
+    assert.equal(organizationIdentityMatches(entry.items[0].original, {
+      id: entry.items[0].id,
+      document_id: entry.document.id,
+    }), scenario.accepted);
+    if (scenario.accepted) {
+      assert.equal(
+        corpus.normalizeFinalizedCorpus({ documents: [entry] }).documents[0].items[0].id,
+        entry.items[0].id,
+      );
+    } else {
+      assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({ documents: [entry] })),
+        "CORPUS_ITEM_OWNERSHIP_INVALID");
+    }
+  }
 });
 
 test("duplicate, ambiguous, foreign, malformed, and non-JSON corpora fail before mutation", () => {

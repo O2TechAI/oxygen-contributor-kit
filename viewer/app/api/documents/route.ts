@@ -170,7 +170,9 @@ function normalizeItem(
     && originalEventId === id
     && typeof originalTrajectoryId === "string"
     && originalTrajectoryId === documentId;
-  const qualifiedRecordOwned = originalEventId === undefined && id.startsWith(`${documentId}:`);
+  const qualifiedRecordOwned = originalEventId === undefined
+    && (originalTrajectoryId === undefined || originalTrajectoryId === documentId)
+    && id.startsWith(`${documentId}:`);
   if (!eventOwned && !qualifiedRecordOwned) {
     throw new CorpusValidationError("CORPUS_ITEM_OWNERSHIP_INVALID");
   }
