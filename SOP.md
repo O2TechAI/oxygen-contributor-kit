@@ -330,6 +330,10 @@ origin and workflow run ID:
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
   work/<run>-review --attach-url <viewer-url> --workflow-run-id <run-id>
+
+# Import only the validated spans produced by merge_and_apply.py.
+python3 tools/llm_redact/push_redactions.py \
+  --redacted work/<run>-redaction/redacted --base-url <viewer-url>
 ```
 
 The initial launcher validates Node/npm, resolves the platform-native npm command, repairs missing
@@ -385,6 +389,11 @@ python .\tools\llm_redact\merge_and_apply.py `
 # Reattach the reviewed boundary to the Viewer already running from §1.
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
+
+# Push only the validated spans produced by merge_and_apply.py.
+python .\tools\llm_redact\push_redactions.py `
+  --redacted "$Redaction\redacted" `
+  --base-url "$Viewer"
 
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --story-event started

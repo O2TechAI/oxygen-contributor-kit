@@ -1018,7 +1018,7 @@ _AUTO_REMOVED_FIELDS = {"total", "reversible", "categories"}
 _AUTO_REMOVED_CATEGORY_FIELDS = {"kind", "count"}
 _AUTO_REMOVED_KINDS = {
     "credential", "private-personal", "sensitive", "internal-metric",
-    "internal-timeline", "mosaic-reidentification", "user_path", "third_party_contact",
+    "internal-timeline", "mosaic-reidentification",
 }
 _PREPARATION_FIELDS = {
     "schema", "workflowRunId", "sourceRevision", "receipts", "storyPrivacyCandidates",
@@ -1044,7 +1044,7 @@ def _valid_auto_removed(value: object) -> bool:
     categories = value.get("categories")
     if (
         not _nonnegative_integer(total)
-        or not isinstance(value.get("reversible"), bool)
+        or value.get("reversible") is not True
         or not isinstance(categories, list)
     ):
         return False
@@ -1064,7 +1064,8 @@ def _valid_auto_removed(value: object) -> bool:
             return False
         seen.add(kind)
         counted += count
-    return counted == total
+    kinds = [category["kind"] for category in categories]
+    return counted == total and kinds == sorted(kinds, key=lambda item: item.encode("utf-8"))
 
 
 def validate_ready_authority(

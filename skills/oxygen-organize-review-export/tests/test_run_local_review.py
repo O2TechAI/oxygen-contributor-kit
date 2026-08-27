@@ -477,7 +477,10 @@ class LauncherUnitTest(unittest.TestCase):
                 if probes and bulk_decisions:
                     preference_bundle["autoRemoved"] = {
                         "total": 2, "reversible": True,
-                        "categories": [{"kind": "credential", "count": 2}],
+                        "categories": [
+                            {"kind": "credential", "count": 1},
+                            {"kind": "sensitive", "count": 1},
+                        ],
                     }
                 with (
                     mock.patch.object(MODULE, "request_json", side_effect=[
@@ -527,9 +530,15 @@ class LauncherUnitTest(unittest.TestCase):
             [],
             {"total": 0, "reversible": True},
             {"total": 0, "reversible": True, "categories": [], "unexpected": True},
+            {"total": 0, "reversible": False, "categories": []},
             {"total": 1, "reversible": True, "categories": []},
             {"total": 1, "reversible": True, "categories": [{"kind": "unknown", "count": 1}]},
+            {"total": 1, "reversible": True, "categories": [{"kind": "user_path", "count": 1}]},
+            {"total": 1, "reversible": True, "categories": [{"kind": "third_party_contact", "count": 1}]},
             {"total": 1, "reversible": True, "categories": [{"kind": [], "count": 1}]},
+            {"total": 2, "reversible": True, "categories": [
+                {"kind": "sensitive", "count": 1}, {"kind": "credential", "count": 1},
+            ]},
             {"total": 2, "reversible": True, "categories": [
                 {"kind": "credential", "count": 1}, {"kind": "credential", "count": 1},
             ]},
