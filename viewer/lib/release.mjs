@@ -151,7 +151,7 @@ export function redactionSummary(redactions, job) {
     categories[category] = (categories[category] || 0) + 1;
   }
   return {
-    schema_version: "oxygen.ai-redaction-summary/1",
+    schema: "oxygen.ai-redaction-summary",
     backend: "ai",
     model: job?.model || null,
     status: job?.status || "missing",

@@ -180,7 +180,7 @@ export async function buildPackageFromDatabase(
     },
   ]));
   const projectMap = {
-    schema_version: "1",
+    schema: "1",
     primary_project: primaryProject,
     summary: projectSummary,
     projects,
@@ -227,7 +227,7 @@ export async function buildPackageFromDatabase(
     };
   });
   const preferenceProbes = {
-    schema_version: "1",
+    schema: "1",
     primary_project: primaryProject,
     generated_from: "project-map.json",
     auto_removed: autoRemoved,

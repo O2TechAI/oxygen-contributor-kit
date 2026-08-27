@@ -11,7 +11,7 @@ export type ReleaseSnapshotTestOptions = {
 
 const redactionJobSql = `SELECT id,status,stage,model,completed,total,rejected,source_digest,
   started_at,updated_at,completed_at
-  FROM redaction_jobs ORDER BY started_at DESC LIMIT 1`;
+  FROM redaction_jobs ORDER BY started_at DESC,id DESC LIMIT 1`;
 
 const reviewRedactionsSql = `SELECT id,item_id,document_id,start_offset,end_offset,category,
   confidence,reason,review_state,uncertainty_reason,status,created_by,created_at,updated_at
@@ -22,24 +22,24 @@ const activeRedactionsSql = `SELECT id,item_id,document_id,start_offset,end_offs
   AND review_state IN ('deterministic','confirmed_redact') ORDER BY item_id,start_offset,id`;
 
 const storyItemsSql = `SELECT id,document_id,sequence,event_type,actor_id,actor_type,timestamp,
-  content,organization_reason FROM items ORDER BY document_id,sequence`;
+  content,organization_reason FROM items ORDER BY document_id,sequence,id`;
 
 const packageDocumentsSql = `SELECT id,kind,title,source_system,source_timestamp,item_count,
-  metadata_json,formatted_summary_json FROM documents ORDER BY source_timestamp,title`;
+  metadata_json,formatted_summary_json FROM documents ORDER BY source_timestamp,title,id`;
 
 const packageItemsSql = `SELECT id,document_id,sequence,event_type,actor_type,timestamp,content,
   organization_category,organization_confidence,organization_reason
-  FROM items ORDER BY document_id,sequence`;
+  FROM items ORDER BY document_id,sequence,id`;
 
 const packageProbesSql = `SELECT id,document_id,document_kind,event_ids_json,timestamp,signal,
   score,turns,recap,question,options_json,allow_other,allow_skip,answer_choice,answer_text,
-  answered_at,created_at FROM probes ORDER BY score DESC,created_at`;
+  answered_at,created_at FROM probes ORDER BY score DESC,created_at,id`;
 
 const packageBulkSql = `SELECT id,kind,count,question,default_answer,answer,answered_at,
-  evidence_sample_json,created_at FROM probe_bulk_decisions ORDER BY count DESC`;
+  evidence_sample_json,created_at FROM probe_bulk_decisions ORDER BY count DESC,id`;
 
 const packageProbeRunSql = `SELECT id,status,stage,model,generated,set_aside,auto_removed_json,
-  started_at,updated_at,completed_at FROM probe_runs ORDER BY started_at DESC LIMIT 1`;
+  started_at,updated_at,completed_at FROM probe_runs ORDER BY started_at DESC,id DESC LIMIT 1`;
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -52,7 +52,7 @@ function canonicalize(value: unknown): unknown {
 
 async function snapshotDigest(kind: "story" | "package", value: unknown) {
   const serialized = JSON.stringify(canonicalize({
-    schema: "oxygen.release-privacy-snapshot/1",
+    schema: "oxygen.release-privacy-snapshot",
     kind,
     value,
   }));

@@ -211,20 +211,6 @@ class LocalDatabase {
 
 type LocalSqliteGlobal = typeof globalThis & { __oxygenLocalSqlite?: LocalDatabase };
 
-function migrateRedactionReviewState(database: DatabaseSync) {
-  const columns = database.prepare("PRAGMA table_info(redactions)").all() as Array<{ name: string }>;
-  const names = new Set(columns.map((column) => column.name));
-  const migrations: string[] = [];
-  if (!names.has("review_state")) {
-    migrations.push(`ALTER TABLE redactions ADD COLUMN review_state TEXT
-      CHECK(review_state IN ('deterministic','needs_confirmation','confirmed_keep','confirmed_redact'))`);
-  }
-  if (!names.has("uncertainty_reason")) {
-    migrations.push("ALTER TABLE redactions ADD COLUMN uncertainty_reason TEXT");
-  }
-  if (migrations.length) database.exec(migrations.join(";\n"));
-}
-
 export async function getLocalDatabase() {
   const runtime = globalThis as LocalSqliteGlobal;
   if (runtime.__oxygenLocalSqlite) return runtime.__oxygenLocalSqlite;
@@ -235,7 +221,6 @@ export async function getLocalDatabase() {
 
   const database = new DatabaseSync(databasePath);
   database.exec(statements.join(";\n"));
-  migrateRedactionReviewState(database);
   runtime.__oxygenLocalSqlite = new LocalDatabase(database);
   return runtime.__oxygenLocalSqlite;
 }

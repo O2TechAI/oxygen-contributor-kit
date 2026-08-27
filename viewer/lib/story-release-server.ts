@@ -3,28 +3,21 @@ import { computeSourceDigest, redactionReleaseError } from "./redaction-pass.mjs
 import { activeRedactionFragments, redactKnownFragments } from "./release.mjs";
 import {
   buildReviewedStoryRelease,
-  buildSuccessorReviewedStoryRelease,
   sanitizeReviewedStoryRelease,
-  sanitizeSuccessorReviewedStoryRelease,
   serializeReviewedStoryRelease,
-  serializeSuccessorReviewedStoryRelease,
 } from "./story-release.ts";
 import {
   STORY_REVIEW_SESSION_SCHEMA,
-  SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA,
   hydrateStoryReviewSession,
-  hydrateSuccessorStoryReviewSession,
   parseStoryReviewSession,
-  type AnyStoryReviewSession,
 } from "./story-review-session.ts";
 import {
   selectReservedStorySourceItems,
-  selectReviewableStoryTimeline,
-  validateRecognizedStorySourcePackage,
+  validateStorySourcePackage,
   type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
-import { parseSuccessorStorySource } from "./timeline.ts";
+import { parseStorySource } from "./timeline.ts";
 import { isWorkflowRunId } from "./workflow-progress.ts";
 import {
   captureStoryReleasePrivacySnapshot,
@@ -67,7 +60,7 @@ type ReleaseSessionRow = {
 };
 
 type ReleaseSessionRecord = {
-  session: AnyStoryReviewSession | null;
+  session: ReturnType<typeof parseStoryReviewSession>;
   serverVersion: number;
   sourceRevision: number | null;
   persistedAt: string | null;
@@ -102,8 +95,7 @@ type ReleaseFailure = {
 
 type ReleaseSuccess = {
   ok: true;
-  story: NonNullable<ReturnType<typeof sanitizeReviewedStoryRelease>>
-    | NonNullable<ReturnType<typeof sanitizeSuccessorReviewedStoryRelease>>;
+  story: NonNullable<ReturnType<typeof sanitizeReviewedStoryRelease>>;
   serializedStory: string;
 };
 
@@ -149,7 +141,7 @@ async function sha256(value: string) {
 
 function readReleaseSessionRecord(row: ReleaseSessionRow | null): ReleaseSessionRecord {
   if (!row) return { session: null, serverVersion: 0, sourceRevision: null, persistedAt: null };
-  let session: AnyStoryReviewSession | null = null;
+  let session: ReturnType<typeof parseStoryReviewSession> = null;
   let sourceRevision: number | null = null;
   try {
     const stored = JSON.parse(String(row.state_json || ""));
@@ -205,7 +197,9 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     return failure(RELEASE_ERROR.sourceConflict, boundedMetadata);
   }
   if (!record.persistedAt) return failure(RELEASE_ERROR.sessionMissing, boundedMetadata);
-  if (!record.session) return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  if (!record.session || record.session.schema !== STORY_REVIEW_SESSION_SCHEMA) {
+    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  }
   if (request.serverVersion !== record.serverVersion) {
     return failure(RELEASE_ERROR.versionConflict, boundedMetadata);
   }
@@ -238,91 +232,48 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     actorId: item.actor_id,
     actorType: item.actor_type,
   }));
-  const validation = validateRecognizedStorySourcePackage(candidateRows, evidenceRows);
+  const validation = validateStorySourcePackage(candidateRows, evidenceRows);
   if (!validation.ok || !run.active_story_digest
     || await sha256(validation.canonicalCandidate) !== run.active_story_digest) {
     return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
   }
-  if (record.session.schema !== validation.sessionSchema) {
-    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
-  }
 
-  if (validation.sourceSchema === "oxygen.story/3") {
-    if (record.session.schema !== SUCCESSOR_STORY_REVIEW_SESSION_SCHEMA) {
-      return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
-    }
-    const sources = candidateRows.map((row) => parseSuccessorStorySource(row.summary));
-    if (sources.some((source) => !source)) return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
-    const exactSources = sources.flatMap((source) => source ? [source] : []);
-    const expectedKeys = exactSources.map((source) => source.key);
-    if (expectedKeys.length !== validation.chapterCount
-      || !sameKeys(expectedKeys, Object.keys(record.session.chapterReviews))) {
-      return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
-    }
-    const hydrated = hydrateSuccessorStoryReviewSession(
-      record.session,
-      request.workflowRunId,
-      exactSources,
-    );
-    if (!sameKeys(expectedKeys, Object.keys(hydrated.chapterReviews))
-      || expectedKeys.some((key) => hydrated.chapterReviews[key]?.stage !== "human_confirmed")) {
-      return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
-    }
-
-    const redactionsByItem = new Map<string, ReleaseRedactionRow[]>();
-    for (const span of initialSnapshot.redactionRows as ReleaseRedactionRow[]) {
-      const itemId = String(span.item_id || "");
-      redactionsByItem.set(itemId, [...(redactionsByItem.get(itemId) || []), span]);
-    }
-    let fragments: Array<{ text: string; category: string }> = [];
-    try {
-      fragments = items.flatMap((item) => activeRedactionFragments(
-        String(item.content || ""),
-        redactionsByItem.get(item.id) || [],
-      ));
-    } catch {
-      return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
-    }
-    const built = buildSuccessorReviewedStoryRelease(exactSources, hydrated.chapterReviews, {
-      redact: (copy) => redactKnownFragments(copy, fragments),
-    });
-    const story = sanitizeSuccessorReviewedStoryRelease(built);
-    const serializedStory = serializeSuccessorReviewedStoryRelease(story);
-    if (!story || !serializedStory
-      || !sameKeys(expectedKeys, story.chapters.map((chapter) => chapter.key))) {
-      return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
-    }
-    await options.beforeFinalPrivacyCheck?.();
-    const finalSnapshot = await captureStoryReleasePrivacySnapshot(db, request.workflowRunId);
-    if (finalSnapshot.digest !== initialSnapshot.digest) {
-      return failure(RELEASE_ERROR.privacyConflict, boundedMetadata);
-    }
-    return { ok: true, story, serializedStory };
-  }
-
-  if (record.session.schema !== STORY_REVIEW_SESSION_SCHEMA) {
-    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
-  }
-  const milestones = selectReviewableStoryTimeline(candidateItems.map((item) => ({
-    id: item.id,
-    documentId: item.document_id,
-    sequence: item.sequence,
-    timestamp: item.timestamp || undefined,
-    summary: String(item.organization_reason || ""),
-  })));
-  const expectedKeys = milestones.map((milestone) => milestone.story.key);
-  if (!expectedKeys.length || expectedKeys.length !== validation.chapterCount
+  const sources = candidateRows.map((row) => parseStorySource(row.summary));
+  if (sources.some((source) => !source)) return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  const exactSources = sources.flatMap((source) => source ? [source] : []);
+  const expectedKeys = exactSources.map((source) => source.key);
+  if (expectedKeys.length !== validation.chapterCount
     || !sameKeys(expectedKeys, Object.keys(record.session.chapterReviews))) {
     return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
   }
 
-  const hydrated = hydrateStoryReviewSession(record.session, request.workflowRunId, milestones);
+  const hydrated = hydrateStoryReviewSession(
+    record.session,
+    request.workflowRunId,
+    exactSources,
+  );
   if (!sameKeys(expectedKeys, Object.keys(hydrated.chapterReviews))
     || expectedKeys.some((key) => hydrated.chapterReviews[key]?.stage !== "human_confirmed")) {
     return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
   }
 
-  const built = buildReviewedStoryRelease(milestones, hydrated.chapterReviews);
+  const redactionsByItem = new Map<string, ReleaseRedactionRow[]>();
+  for (const span of initialSnapshot.redactionRows as ReleaseRedactionRow[]) {
+    const itemId = String(span.item_id || "");
+    redactionsByItem.set(itemId, [...(redactionsByItem.get(itemId) || []), span]);
+  }
+  let fragments: Array<{ text: string; category: string }> = [];
+  try {
+    fragments = items.flatMap((item) => activeRedactionFragments(
+      String(item.content || ""),
+      redactionsByItem.get(item.id) || [],
+    ));
+  } catch {
+    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  }
+  const built = buildReviewedStoryRelease(exactSources, hydrated.chapterReviews, {
+    redact: (copy) => redactKnownFragments(copy, fragments),
+  });
   const story = sanitizeReviewedStoryRelease(built);
   const serializedStory = serializeReviewedStoryRelease(story);
   if (!story || !serializedStory
