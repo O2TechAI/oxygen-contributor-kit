@@ -20,10 +20,10 @@ The workflow is complete only when all of the following are true:
 4. `publication_approved` remains `false` unless the contributor separately and explicitly
    approves publication.
 
-Current runtime status: clean-room product completion is **NOT YET ACHIEVED** on this base. It is
-blocked by absent activation-time receipt authority for Insight, Story/Release Privacy, and
-Preference generation; absent Preference readiness binding; absent Story/Release Privacy candidate
-authority; and absent final decision-only Chapter Privacy/Release Preview UI.
+Current runtime status: clean-room product completion is **NOT YET ACHIEVED** on this base.
+Activation-time preparation receipts, Preference readiness binding, and the server-owned Story
+Privacy decision authority are implemented. Final decision-only Chapter Privacy and Release Preview
+UI/session hydration, All set gating, and reviewed-release transformation remain unimplemented.
 
 ## Final public order
 
@@ -164,10 +164,12 @@ finally {
 
 Do not pass `--publish` and do not stage, upload, or submit the result.
 
-Check `work/<run>/index.json` and, when present, `work/<run>/meeting.json`. Report exact source,
-trajectory, meeting-record, warning, and failure counts. A newly cloned repository may correctly
-have zero matching historical sessions. Confirm that credentials, caches, databases, unrelated
-users, and unrelated repositories were excluded.
+Check `work/<run>/index.json` for repository/Claude imports or
+`work/<run>/meetings/<meeting-id>/meeting.json` for every meeting import. A single meeting uses the
+same plural topology as a multi-meeting run; root `meeting.json` is not a supported input. Report
+exact source, trajectory, meeting-record, warning, and failure counts. A newly cloned repository may
+correctly have zero matching historical sessions. Confirm that credentials, caches, databases,
+unrelated users, and unrelated repositories were excluded.
 
 ## 3. Organize by project
 
