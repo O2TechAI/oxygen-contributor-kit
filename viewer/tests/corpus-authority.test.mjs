@@ -11,7 +11,6 @@ const organizationSource = readFileSync(
   new URL("../app/api/organization/route.ts", import.meta.url),
   "utf8",
 );
-const schemaSource = readFileSync(new URL("../db/schema.ts", import.meta.url), "utf8");
 const dbSource = readFileSync(new URL("../db/index.ts", import.meta.url), "utf8");
 
 function loadCorpusHarness() {
@@ -510,7 +509,6 @@ test("documents route has one whole-corpus atomic single-payload POST contract",
     routeSource,
     /organizationCategory|organizationConfidence|organizationReason|organization_category|organization_confidence|organization_reason/,
   );
-  assert.match(schemaSource, /finalizedCorpusManifests/);
   assert.match(dbSource, /CREATE TABLE IF NOT EXISTS finalized_corpus_manifests/);
 });
 
@@ -556,9 +554,10 @@ test("Organization refuses absent or mismatched corpus authority and binds its s
     organizationSource,
     /UPDATE items SET\s*organization_category=\?,organization_confidence=100,\s*organization_reason=/,
   );
-  assert.match(schemaSource, /organizationCategory: text\("organization_category"\)/);
-  assert.match(schemaSource, /organizationConfidence: integer\("organization_confidence"\)/);
-  assert.match(schemaSource, /organizationReason: text\("organization_reason"\)/);
+  assert.match(
+    dbSource,
+    /organization_category TEXT, organization_confidence INTEGER,\s*organization_reason TEXT/,
+  );
 });
 
 test("24796-item corpus preserves exact counts and digest in one item payload", async (context) => {
