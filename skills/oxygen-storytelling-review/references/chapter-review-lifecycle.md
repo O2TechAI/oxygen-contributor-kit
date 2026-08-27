@@ -1,87 +1,77 @@
-# Chapter review lifecycle
+# Chapter Review Lifecycle
 
-## State machine
+## Review State Machine
 
-The review loop is iterative, never one-shot:
+The Chapter review loop is iterative:
 
 ```text
-initial AI draft (revision 1, reviewing)
-  → human direct edits and/or compatible legacy review records
-  → Apply review
-  → revision 2 (revision_ready)
-  → human reviews and may edit again
-  → reviewing
-  → Apply review
-  → revision 3 (revision_ready)
-  → ...
-  → All set
-  → human_confirmed Final Release Memory
-  → optional Reopen review
-  → reviewing
+initial AI draft, revision 1, reviewing
+-> direct human edits and/or imported exact-range review records
+-> Apply review
+-> revised draft, revision 2, revision_ready
+-> human reviews and may edit again
+-> Apply review again
+-> ...
+-> All set
+-> human_confirmed Final Release Memory
+-> optional Reopen review
+-> reviewing
 ```
 
-Use three conceptual stages:
+The implemented stages are:
 
 ```ts
 type ChapterReviewStage = "reviewing" | "revision_ready" | "human_confirmed";
 ```
 
-The initial draft is revision 1. Each successful Apply review increments the revision. All set does not increment it; it confirms the currently presented clean revision.
+Apply review is never finalization. All set confirms the current clean revision locally and does not increment the revision or approve publication.
 
-The canonical live contract is `oxygen.story/3` → `oxygen.story-review-session/2` →
-`oxygen.reviewed-story/2`. Atomic source activation enters this lifecycle but does not complete it:
-human Insight decisions, edits, Privacy, Apply review, and All set remain separate gates. The
-compatibility contract remains `oxygen.story-highlight/2` → session `/1` → reviewed-story `/1`;
-historical `oxygen.story-milestone/1` is non-reviewable compatibility only.
+## Implemented Session Shape
 
-Direct editing is the primary current lifecycle. Imported Delete/Revise/Add annotations are
-compatibility records only; they may be validated and resolved without becoming a creation toolbar.
-All set remains unavailable while any direct transaction is pending or needs evidence, any
-compatible legacy work is unresolved, Privacy is incomplete, the compatibility `/2` canonical
-Highlight is pending, or
-evidence/ledger provenance fails validation. A stale paired locale remains visible as informational
-localization debt and never blocks canonical English review.
-
-For `oxygen.story/3`, the central successor completion evaluator replaces the exact-one Insight
-obligation: every source AI Insight must have an explicit applied Accept or Do-not-preserve decision
-for its current version, every saved human Insight must be human-approved for its current version,
-and zero source Insights create zero Insight obligations.
-
-## Annotation model
-
-Store at least:
+The current Story review session stores exactly:
 
 ```ts
-type StoryAnnotation = {
-  id: string;
-  blockId: string;
-  type: "delete" | "revise" | "add";
-  sourceLanguage: "en" | "zh";
-  selection: { start: number; end: number; text: string };
-  instruction?: string;
-  resolution: "pending" | "applied" | "needs_evidence" | "cancelled";
-  baseRevision: number;
-  appliedRevision?: number;
+type StoryReviewSession = {
+  schema: "oxygen.story-review-session";
+  workflowRunId: string;
+  chapterReviews: Record<string, ChapterReviewState>;
+  privacyDecisions: Record<string, "keep" | "redact">;
+  updatedAt: string;
 };
+```
 
+It does not store Preference answers, source redaction spans, Story source candidates, coverage manifests, release originals, evidence payloads, hidden prompts, or private notes.
+
+Current source-bound hydration accepts only sessions matching the active workflow run and exact `oxygen.story` Chapter set. On this base, nonempty top-level `privacyDecisions` are not restored during hydration; do not claim Story/Release Privacy is complete unless an implemented candidate authority provides and applies those decisions.
+
+## Chapter Review State
+
+Each Chapter review state contains:
+
+```ts
 type ChapterReviewState = {
   stage: ChapterReviewStage;
   revision: number;
-  annotations: StoryAnnotation[];
+  annotations: StoryReviewAnnotation[];
   editTransactions: StoryEditTransaction[];
   redoTransactionIds: string[];
+  sourceInsightReviews: Record<string, SourceInsightReview>;
+  humanInsights: Record<string, HumanInsightReview>;
+  insightRevisionHistory: InsightRevisionRecord[];
+  appliedPrivacyDecisions: Record<string, "keep" | "redact">;
+  redactedBlocks: string[];
+  staleTranslations: TranslationStaleness[];
+  revisionHistory: ChapterRevisionRecord[];
   evidenceVerified: boolean;
   publicationApproved: false;
 };
 ```
 
-The annotation identity is semantic block + exact source-language selection + revision context, not English text alone.
-Annotation IDs are nonempty primitive strings and globally unique within the Chapter across every resolution, including pending, applied, needs-evidence, and cancelled. Pending ranges in the same block, language, and base revision must not overlap; reject a conflicting annotation instead of allowing one revision record to claim that both were applied.
+Unknown fields fail closed. `publicationApproved` must remain false.
 
-## Direct-edit transaction model
+## Direct Editing
 
-Direct typing is the primary Story interaction. Store every meaningful mutation in an app-controlled
-ledger equivalent to:
+Direct Story editing is the primary current behavior. Every mutation is an app-controlled plain-text transaction anchored to one Chapter, one Story block, one language, and one base revision:
 
 ```ts
 type StoryEditTransaction = {
@@ -96,254 +86,105 @@ type StoryEditTransaction = {
   beforeRange: { start: number; end: number };
   afterRange: { start: number; end: number };
   resolution: "pending" | "applied" | "reverted" | "needs_evidence";
+  requiresEvidence: boolean;
   supportingEvidence?: EvidenceReference[];
   appliedRevision?: number;
   revertsTransactionId?: string;
+  createdAt: number;
+  updatedAt: number;
 };
 ```
 
-Ranges are block-local and anchored to the applied `baseRevision`. Apply non-overlapping patches
-deterministically from immutable source/revision snapshots. A continuous contiguous typing burst in
-one block becomes one human-readable transaction, not one record per character. An incompatible or
-overlapping mutation fails visibly. Cross-block mutation must be atomic or rejected without changing
-any text; never truncate it into separate accidental edits.
+Caret insertion, selection replacement, deletion, and safe paste create controlled transactions. A continuous typing burst may coalesce. Cross-block or overlapping edits must be atomic or rejected visibly without changing text.
 
-Deleting existing draft text is a safe delete transaction. Replacing or inserting wording inside an
-existing semantic passage is a controlled revision when it does not introduce a new unsupported
-claim. A materially new sentence, number, path/link, paragraph, or standalone factual assertion must
-pass reviewed-Evidence support; otherwise mark it `needs_evidence` without pretending it was applied.
+New standalone facts, numbers, links, paths, or paragraphs require exact reviewed Evidence support. Unsupported additions become `needs_evidence` and block All set.
 
-Undo marks the most recently changed active-locale pending transaction reverted and restores its
-draft effect and note together, including when an older transaction was just coalesced. Redo
-reactivates the same transaction ID; it never creates a duplicate. A new
-incompatible edit clears that locale's redo path. Pending Discard removes only that effect while
-preserving independent transactions. Applied revision history is immutable: `Revert in a new
-revision` creates a distinct exact-inverse pending transaction and records the prior transaction
-identity. Reject the Revert when it overlaps other pending work; never coalesce it into another
-transaction or clear that transaction's reviewed-Evidence requirement.
+Undo/Redo changes pending transaction state and working draft together. Pending Discard removes only that pending effect. Applied history is immutable; reversal creates a new exact-inverse pending transaction and must pass another Apply review.
 
-Direct-edit transaction and redo state are local review metadata. They never enter Final Release
-Memory, HTML, ZIP, exact Evidence, passage assistance, or publication state.
+## Imported Exact-Range Records
 
-## Legacy exact-range annotation compatibility (no new selection UI)
+If an already-existing Delete, Revise, or Add record is imported, render it only after exact validation:
 
-Do not expose a Delete/Revise/Add creation window. The rules below apply only when safely importing
-or rendering an already-valid legacy exact-range annotation record.
-
-### Exact-range invariant
-
-Render pending styling only when every condition holds:
-
-- annotation block equals rendered block;
-- annotation language equals rendered language;
-- annotation base revision equals current revision;
-- resolution is pending;
-- start/end are integers;
+- same block;
+- same source language;
+- same base revision;
+- pending or needs-evidence state;
+- integer bounds;
 - `0 <= start < end <= source.length`;
-- `source.slice(start, end) === selection.text`.
+- `source.slice(start, end) === selection.text`;
+- no overlapping same-revision pending range;
+- unique annotation ID.
 
-If validation fails, render the Story normally and show no broadened styling. Never underline the parent paragraph merely because it contains an annotation.
+Do not expose a new Delete/Revise/Add creation window. Exact Evidence is never editable or annotatable.
 
-Build inline segments from all unique valid boundaries. This permits multiple non-overlapping annotations in one paragraph to render independently and permits cancellation of one without changing another.
+## Apply Review
 
-Reject a selection when both endpoints do not belong to the same reviewable semantic copy element. Do not expand a cross-paragraph selection to whole blocks.
-
-### Delete
-
-Delete means: remove the selected generated Story text from the next release draft.
-
-- Store the exact selection as pending.
-- Keep the underlying current draft recoverable until Apply review.
-- Do not delete or alter source evidence.
-- On Apply, remove the exact source-language span. For a paired language without safe literal alignment, conservatively suppress or regenerate the equivalent semantic block; do not invent an offset.
-
-### Revise
-
-A compatible legacy Revise record contains a contextual instruction such as `What should be corrected here?`.
-
-- Require a nonempty trimmed instruction.
-- Store it with the exact span.
-- On Apply, treat the human correction as authoritative.
-- Preserve uncertainty and surrounding useful detail.
-- In a deterministic local prototype, the human instruction may appear directly as the corrected wording if no safe model integration exists. Do not pretend an external AI ran when it did not.
-
-### Add
-
-A compatible legacy Add record contains a contextual instruction such as `What is missing here?`.
-
-- Anchor the instruction to the selected semantic Story position.
-- Incorporate it only when support exists in permitted reviewed evidence/context.
-- Resolve the cited evidence against actual reviewed items and verify the proposed factual wording/content; a checkbox or matching ID alone is insufficient.
-- When support cannot be proven, set `needs_evidence`; do not add the factual claim.
-- `needs_evidence` remains visible and blocks All set until resolved or cancelled.
-
-### Pending visibility and cancellation
-
-Unresolved work should be visible but restrained:
-
-- exact inline range styling;
-- type and resolution;
-- exact selected quote;
-- human instruction when present;
-- Cancel annotation.
-
-Present the same ledger entry as a Word/Docs-like note beside its stable Story block on wide screens
-and as a compact block-associated inline note on narrow screens. Selecting a note focuses its exact
-validated range. The note is presentation metadata only: it does not duplicate, replace, or bypass
-the annotation ledger, and it never enters release output.
-
-Cancellation is available only for `pending` or `needs_evidence` annotation work and changes only that unresolved annotation to cancelled. Direct transactions use Discard with the same independent-effect guarantee. Cancelling/Discarding still returns or stays in reviewing until another Apply presents the resulting revision. Never expose Cancel/Discard for applied history: reversal must be a new pending operation and pass through another Apply.
-
-Story Read/Edit mode is also presentation state only. Leaving Edit clears transient editor state
-but never deletes pending/applied annotations or revision provenance. Precomputed
-passage context does not create annotations, insight-review state, or lifecycle transitions.
-
-## Apply review contract
-
-Apply review means only: apply currently pending human edits/annotations and present another draft.
+Apply review may run only when required Privacy decisions are complete for the implemented candidate authority and Evidence can be verified.
 
 It must:
 
-- require complete required Privacy decisions;
-- require every unique Chapter evidence reference to resolve to exactly one actual reviewed item;
-- replay the complete stored annotation/direct-edit ledgers from immutable revision-1 Story blocks and validate every record, ID, base/applied revision, range, before/after text, and revision-history link before any mutation;
-- validate every pending annotation against the current block, language, revision, offsets, and exact selected quote before applying any annotation;
-- validate every pending direct patch against the current applied block and reject mixed annotation/direct ownership of the same block/revision;
-- reject an overlapping, stale, mismatched, duplicated-ID, malformed non-pending record, or otherwise invalid collection atomically without incrementing the revision or marking any work applied;
-- increment the revision;
-- apply any already-persisted compatible Delete, Revise, and evidence-supported Add annotations in revision order, without recreating the retired selection-action window;
-- apply safe direct insert/delete/replace transactions and evidence-supported factual additions in revision order;
-- preserve unaffected useful detail, failures, disagreement, uncertainty, and causal relationships;
-- preserve evidence semantics and Privacy decisions;
-- keep the resulting Story fully annotatable;
-- record `appliedRevision` for applied work;
-- surface unsupported Add/direct factual additions as `needs_evidence` without incrementing a falsely successful revision.
+- resolve every unique Chapter Evidence reference to exactly one actual reviewed item;
+- replay annotations and direct edits from immutable revision-1 Story blocks;
+- reject stale, overlapping, duplicated, malformed, cross-Chapter, or unsupported work atomically;
+- mark unsupported Add/direct factual work as `needs_evidence`;
+- increment the Chapter revision on success;
+- record applied annotation/edit IDs and applied Privacy decisions in revision history;
+- preserve useful detail, failure, uncertainty, Evidence semantics, and human intent;
+- keep publication false.
 
-It must not:
+It must not finalize the Chapter, invent facts, restore Privacy-removed material, silently drop unresolved work, or claim release readiness.
 
-- finalize the Chapter;
-- invent facts or evidence;
-- restore privacy-removed material;
-- override explicit human intent;
-- silently drop unresolved work;
-- change publication approval.
+## Insight Review
 
-Apply annotation groups in ascending revision order; within one revision, process spans from later offsets to earlier offsets so earlier edits do not invalidate later positions.
+Every source AI Insight in the current `oxygen.story` source must receive an explicit applied Accept or Do-not-preserve decision for its current version. Editing an AI Insight creates a new version that requires a later Accept and Apply review.
 
-Final release projection must run the same full-ledger replay validation. It must omit/fail closed on malformed applied provenance rather than silently skipping an invalid range while claiming the instruction was applied.
+A human-created Insight must use a `human:` ID, one same-Chapter Story anchor, safe selection provenance, and exact Evidence. Human Save approves the saved human-authored version and records its own revision. Zero source Insights create zero AI Insight obligations.
 
-The same fail-closed rule applies to non-annotation final state. Before All set and again before
-release projection, validate that:
+Completion checks must validate exact source Insight IDs, stable human IDs, current versions, same-Chapter anchors, grounding Evidence, and Insight revision history. Never infer approval from a missing entry, pending decision, older accepted version, or browser-supplied stage.
 
-- for legacy `/2`, every stored insight review belongs to the Chapter's single declared insight;
-- no insight review is pending;
-- the current applied insight state points to the latest revision record that names it;
-- revision history does not name an unknown insight;
-- applied Privacy decisions contain exactly the current candidate IDs and typed Keep/Redact values;
-- the latest revision record contains exactly those applied Privacy decisions;
-- the stored redacted-block set exactly equals the union of release targets for candidates whose
-  latest applied decision is Redact.
+## All Set And Reopen
 
-For successor `/3`, validate the exact source Insight ID set, stable `human:` IDs, current versions,
-source/human provenance, same-Chapter Story anchors, safe grounding Evidence, and successor revision
-history through the central successor ledger/completion evaluator. Never infer approval from a
-missing entry, pending decision, an older accepted version, or a v1 empty ledger.
+All set is available only when:
 
-Never trust a browser-supplied `human_confirmed` stage, rejected insight flag, Privacy map, or
-redacted-block array without this provenance check. A mismatch blocks confirmation/release rather
-than exporting an approximation.
+- stage is `revision_ready`;
+- the latest revision has been presented for human inspection;
+- no pending, reverted-active, or `needs_evidence` annotation/direct edit remains;
+- every required implemented Privacy candidate has a Keep/Redact decision applied in the current revision;
+- no Insight blocker remains;
+- actual Evidence references were verified by the latest successful Apply.
 
-When an insight edit creates paired-language review debt, a later status-only action such as Accept
-must preserve that pending-language provenance. Status changes cannot erase localization debt
-without reviewing/applying the paired representation. The debt is informational and never blocks
-the canonical English review; omit a stale localized sidecar from release.
-
-## Review summary
-
-Derive compact counts from non-cancelled annotations and non-reverted direct transactions:
-
-- revisions;
-- additions;
-- removals;
-- unresolved work;
-- completed / total required Privacy decisions.
-
-Show one Apply action while reviewing. Disable it until required Privacy is complete. Do not create competing completion CTAs.
-
-## All set
-
-All set / `确认完成` is the only final human-confirmation action.
-
-Enable it only when:
-
-- stage is revision_ready;
-- latest AI/local revision has been presented for human inspection;
-- no pending annotation remains;
-- no `needs_evidence` annotation remains;
-- no pending or `needs_evidence` direct transaction remains;
-- every required Privacy candidate has a Keep/Redact decision.
-- paired-locale debt, when present, remains visible and non-blocking;
-- no legacy inline-Insight operation remains pending, or for `/3` the central successor evaluator reports no Insight blocker;
-- the current Privacy decisions are the same typed decisions applied in the presented revision.
-- the latest successful Apply verified the Chapter's actual evidence references.
-
-Clicking it sets stage to human_confirmed without changing the revision or publication state. Show `Final Release Memory` plus a note that confirmation is local and not publication approval.
-
-Creating another direct edit, annotation, AI Insight edit, or human Insight edit after a revision returns the Chapter to reviewing and removes All set until the new work is applied or saved under its owning semantics.
-
-## Reopen review
-
-Provide a quiet Reopen review action on a human-confirmed Chapter. Reopen changes:
+Clicking All set changes only:
 
 ```text
-human_confirmed → reviewing
+revision_ready -> human_confirmed
 ```
 
-Preserve revision provenance, Story content, Privacy decisions, and one shared bilingual history. Another Apply/All set cycle can create a newer confirmed version.
+Reopen review changes only:
 
-If the confirmed revision applied `Do not preserve` to a legacy or successor source AI Insight, Reopen must make that
-same stable Insight available for review again. A human can create a new pending Accept/override operation,
-Apply it as another revision, inspect the restored insight, and then use All set. Do not erase the
-prior rejection record or restore it merely by changing the stage.
+```text
+human_confirmed -> reviewing
+```
 
-## Publication boundary
+Reopen preserves revision provenance, Story content, Privacy decisions, Insights, and publication separation. Another Apply/All set cycle remains possible.
 
-No lifecycle action may:
+## Release Boundary
 
-- upload;
-- publish;
-- submit;
-- automatically create a package;
-- set `publication_approved=true`.
+No lifecycle action may upload, publish, submit, auto-create a package, or set `publication_approved=true`. Release projection reruns validation and strips local review state before producing `oxygen.reviewed-story`.
 
-Final Release Memory means only that this Chapter's release representation completed iterative human review.
-
-## Required lifecycle tests
+## Required Lifecycle Tests
 
 Test at minimum:
 
-1. initial revision and false publication state;
-2. annotation returns stage to reviewing;
-3. Privacy blocks Apply and All set;
-4. first Apply produces revision 2;
-5. revision 2 can receive a new annotation;
-6. second Apply produces revision 3;
-7. All set unavailable with pending or needs-evidence work;
-8. All set available on clean revision 3 with complete Privacy;
-9. All set creates human_confirmed without publication change;
-10. Reopen returns to reviewing and supports another cycle;
-11. English and Chinese expose the same stage/revision/history.
-12. unresolved/missing/ambiguous evidence blocks Apply and confirmation;
-13. a real evidence ID with unsupported Add wording remains `needs_evidence`;
-14. overlapping or stale annotation batches fail atomically without a new revision;
-15. duplicate IDs across cancelled/pending states and malformed pre-applied records fail atomically and cannot enable All set or release projection;
-16. localized insight edit followed by Accept still creates paired-language review debt;
-17. forged pending/applied insight state, Privacy history disagreement, or redacted-target mismatch blocks All set and release;
-18. Reject → Apply → All set → Reopen → Accept/override → Apply restores the insight through a new revision while preserving provenance.
-19. caret insertion, selection replacement, keyboard deletion, and safe plain-text paste create exact controlled transactions;
-20. a contiguous typing burst coalesces while independent block/ranges stay independently discardable;
-21. toolbar and keyboard Undo/Redo restore the same transaction/note identity, and disabled states are exposed;
-22. an applied edit cannot be silently undone; Revert creates a new pending transaction and revision provenance;
-23. cross-block/overlapping mutations fail visibly and preserve every block;
-24. one-locale direct edit creates paired-locale debt and shares revision/confirmation history;
-25. pending/applied/reverted/needs-evidence transaction metadata and redo state are absent from actual release serialization.
+1. initial revision 1 and false publication state;
+2. direct edit returns stage to reviewing;
+3. Privacy blocks Apply and All set when implemented required candidates are unresolved;
+4. first Apply creates revision 2;
+5. revision 2 can be edited again;
+6. second Apply creates revision 3;
+7. All set is unavailable with pending or needs-evidence work;
+8. All set creates `human_confirmed` without publication change;
+9. Reopen supports another cycle;
+10. unresolved/missing/ambiguous Evidence blocks Apply and confirmation;
+11. unsupported Add wording remains `needs_evidence`;
+12. malformed or forged browser state blocks All set and release;
+13. pending/applied/reverted transaction metadata is absent from release serialization.

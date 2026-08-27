@@ -2,10 +2,10 @@
 
 ## Goal
 
-Collect only the contributor's in-scope project history, separate mixed-project content, prepare a
-best-effort privacy-reviewed candidate, build and human-review Project Story, then review
-Preferences and Release Preview before finishing with one downloadable ZIP. Nothing is uploaded
-automatically.
+Collect only the contributor's in-scope project history, separate mixed-project content, prepare the
+upstream source Privacy boundary, build and human-review Project Story, prepare Story/Release
+Privacy candidates and Preferences, then finish with one local reviewed release ZIP. Nothing is
+uploaded automatically.
 
 ## Completion criteria
 
@@ -13,11 +13,31 @@ The workflow is complete only when all of the following are true:
 
 1. The contributor has been shown the local Viewer whenever a browser-visible frontend is
    available. The exact localhost URL is also provided, and no password is required.
-2. The contributor has completed the human Project Story review, then seen the redaction summary,
-   preference questions, Release Preview, exclusions, and unresolved warnings.
+2. The contributor has completed human Story, Privacy, and Preference review, then seen the
+   redaction summary, Release Preview, exclusions, and unresolved warnings.
 3. The contributor can download one verified `oxygen-contribution.zip`.
 4. `publication_approved` remains `false` unless the contributor separately and explicitly
    approves publication.
+
+## Final public order
+
+Execute the workflow in this order:
+
+```text
+Collect
+Organize
+upstream source Privacy preparation producing the reviewed input boundary
+Build Project Story and independent global Insight pass
+Story/Release Privacy candidate preparation
+Preference-question generation
+human Story, Privacy, and Preference review
+All set
+local reviewed release
+```
+
+Upstream source Privacy prepares the reviewed input boundary before Story generation. Story/Release
+Privacy reviews release-safe Chapter/Release targets after the Story exists. Do not call both steps
+only "Privacy"; report which boundary is active.
 
 ## Stable six-stage index
 
@@ -32,19 +52,19 @@ Continue at [§2 Collect](#2-collect).
 
 Continue at [§3 Organize by project](#3-organize-by-project).
 
-### Stage 3: Check privacy
+### Stage 3: Prepare upstream source Privacy
 
-Continue at [§4 Prepare privacy review](#4-prepare-privacy-review).
+Continue at [§4 Prepare upstream source Privacy review](#4-prepare-upstream-source-privacy-review).
 
-### Stage 4: Build Project Story
-
-Continue at [§5 Build Project Story and Review Story](#5-build-project-story-and-review-story).
-
-### Stage 5: Review Story
+### Stage 4: Build Project Story and candidate review artifacts
 
 Continue at [§5 Build Project Story and Review Story](#5-build-project-story-and-review-story).
 
-### Stage 6: Release handoff
+### Stage 5: Human Story, Privacy, and Preference review
+
+Continue at [§5 Build Project Story and Review Story](#5-build-project-story-and-review-story).
+
+### Stage 6: All set and release handoff
 
 Continue at [§7 Prepare Preferences and Release Preview](#7-prepare-preferences-and-release-preview),
 then complete §§8–9.
@@ -168,12 +188,16 @@ python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/re
 Do not start a second Viewer. When the prepared reviewed boundary or validated Story metadata
 changes later, reattach that updated run to the same origin/run ID.
 
-## 4. Prepare privacy review
+## 4. Prepare upstream source Privacy review
 
 Use the contributor's configured AI model for redaction. The mandatory notice is:
 
 > Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review is
 > required before release.
+
+This is the upstream source Privacy boundary. Its output is the reviewed input boundary used by
+Story generation. It is distinct from later Story/Release Privacy candidates shown beside Chapter
+or Release Preview content.
 
 Use the canonical worker contract at `tools/llm_redact/REDACTION_PROMPT.md`; do not search for a
 prompt by basename.
@@ -240,16 +264,23 @@ Important boundaries:
 Once `work/<run>-review` is organized and has passed the required privacy preparation, read and
 follow `skills/oxygen-storytelling-review/SKILL.md`. Derive project-specific Story data only from
 that reviewed boundary and bind the validated result to the canonical Storytelling capability in
-the existing Viewer (`InlineWorkspace`, `StoryChapterEditor`, and their `viewer/lib/story-*`
-contracts). Do not build a separate Storytelling application or copy project prose into reusable
-source.
+the existing Viewer and `viewer/lib/story-*` contracts. Do not build a separate Storytelling
+application or copy project prose into reusable source.
 
-The contributor reviews the Project Story, Chapters, inline insight, Privacy candidates, and exact
-evidence through the iterative direct edit → Apply review loop. Compatible imported
-Delete/Revise/Add records remain reviewable legacy provenance, not the primary current UI. `All set` creates a human-confirmed
-Final Release Memory; it does not publish, package automatically, or set
-`publication_approved=true`. The Agent pauses as soon as Stage 5 Review Story activates and waits
-for the contributor before continuing to Preferences, Release Preview, or ZIP handoff.
+Build the complete Project Story first, then run an independent global Insight pass. Prepare
+Story/Release Privacy candidates only through implemented candidate authority; do not claim
+`oxygen.story` contains them. If candidates are required but no current authority exists, stop at a
+readiness gate. Generate Preference questions from reusable lessons and Insights before or while
+opening human review when possible; answers remain unanswered until explicit contributor action.
+
+The contributor reviews the Project Story, Chapters, Insights, Story/Release Privacy candidates
+when present, Preference questions, and exact evidence through the iterative direct edit -> Apply
+review loop. Direct editing is the current canonical edit path. Already-existing Delete/Revise/Add
+records may be rendered only after exact validation and resolve through the same review ledger.
+`All set` creates a human-confirmed Final Release Memory; it does not publish, package
+automatically, or set `publication_approved=true`. The Agent pauses as soon as Stage 5 Review Story
+activates, again for unresolved Privacy decisions and Preference answers, again for All set, and
+again for release handoff.
 
 Use the Viewer workflow-progress surface for user-facing execution status. Update it only at safe
 workflow boundaries with sanitized stage/state, real counts where a denominator exists, blocker
@@ -336,8 +367,8 @@ validation the correct terminal state is `WAITING_FOR_HUMAN_STORY_REVIEW`, not a
 handoff. Resume release/package work only after the contributor says the review is complete.
 
 The Viewer must show organization progress, project groups, the primary project, one combined
-timeline per project, evidence-derived primary-project milestones, source-event evidence, and
-visible HTML/ZIP download actions. Do not describe unsupported annotation controls as available.
+timeline per project, evidence-derived primary-project Chapters, source-event evidence, and visible
+HTML/ZIP download actions. Do not describe unsupported annotation controls as available.
 
 Two further tabs are available once their passes have run:
 
@@ -356,9 +387,10 @@ localhost without an authenticating proxy in front.
 
 ## 7. Prepare Preferences and Release Preview
 
-After the contributor completes Story review, read and follow
+After reusable lessons and Insights are available, read and follow
 `skills/oxygen-elicit-contributor-preferences/SKILL.md` on the same privacy-prepared reviewed input.
-Do not reopen raw project history or independently run another redaction workflow.
+This question-generation step may run before human review opens. Do not reopen raw project history
+or independently run another redaction workflow.
 
 1. Work on the primary-project events unless the contributor asks to include other projects.
 2. Reuse the validated privacy summary and reviewed exclusions already attached to the input.
@@ -378,8 +410,9 @@ python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py 
 ```
 
 Only explicit answers become checklist preferences. Unanswered and skipped probes produce no
-preference. Every confirmed preference retains its source evidence IDs. A preference answer is
-not publication approval.
+preference. Questions and answers are Preference authority, not Story review-session state. Every
+confirmed preference retains its source evidence IDs. A preference answer is not publication
+approval.
 
 The Viewer implements probe-answer controls in its `Preferences` tab. Generate the batch, push it
 with `tools/llm_redact/push_probes.py`, and let the contributor answer in the browser:
@@ -401,8 +434,8 @@ no answer produces no preference. Answers live in the `probes` table and are exp
 Ask the contributor to inspect:
 
 - included sources and project assignments;
-- primary-project milestones against source evidence;
-- Project Story Chapters, inline insight, required Privacy decisions, exact evidence, and any
+- primary-project Chapters against source evidence;
+- Project Story Chapters, Insights, required Privacy decisions, exact evidence, and any
   unresolved Story annotations;
 - AI-redaction counts, rejected-span count, and semantic review decisions;
 - bulk judgement-call decisions;
@@ -445,7 +478,7 @@ Requirements:
 Tell the contributor:
 
 - the exact Viewer URL and that it has no password;
-- included inputs, project groups, primary project, and milestone count;
+- included inputs, project groups, primary project, and Chapter count;
 - exact privacy-removal counts and any unresolved privacy review;
 - probe count, confirmed preference count, and set-aside count;
 - exclusions and uncertainties;

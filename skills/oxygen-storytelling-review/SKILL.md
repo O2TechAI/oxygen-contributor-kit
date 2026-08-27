@@ -1,413 +1,173 @@
 ---
 name: oxygen-storytelling-review
-description: Continue an already-reviewed project history through Oxygen's canonical evidence-grounded Project Story and iterative Chapter review, with optional non-blocking localization. Use after organization and privacy preparation; reuse the repository Viewer/runtime rather than creating an independent frontend. Do not collect raw history, rerun redaction, or approve publication.
+description: Build and human-review Oxygen's final Project Story from a privacy-prepared reviewed contribution boundary. Use after Collect, Organize, and upstream source Privacy preparation; reuse the existing local Viewer and never approve publication.
 ---
 
 # Oxygen Storytelling Review
 
-Use Oxygen's canonical local Storytelling Review capability to turn a reviewed project history into:
+Use this Skill to turn the reviewed input boundary into the final unversioned Oxygen Story products:
 
 ```text
-Project Story
-→ evidence-linked Chapters
-→ iterative human-AI review
-→ human-confirmed Final Release Memory
+oxygen.story:
+oxygen.story
+oxygen.story-review-session
+oxygen.reviewed-story
 ```
 
-The input is reviewed history, never unrestricted raw history. The output is a human-confirmed release representation, never publication approval.
+The Skill is executable documentation, not a second workflow engine. The launcher starts or attaches the local Viewer and posts safe workflow events. Story writing, Insight selection, Privacy review, Preferences, and release handoff remain explicit workflow work with human pauses.
 
-## Progressive reference loading
+## Routed References
 
-Read each routed reference completely before the corresponding work. Do not treat all eight as an
-ordinary Build Project Story prerequisite.
+Read the referenced file completely before doing that work.
 
-| Stage or condition | Load | Critical boundary |
+| Work | Load | Gate |
 |---|---|---|
-| **Build Project Story — always** | [product-contract.md](references/product-contract.md), [story-data-contract.md](references/story-data-contract.md), [privacy-evidence-boundary.md](references/privacy-evidence-boundary.md), and [narrative-writing-contract.md](references/narrative-writing-contract.md) | Input is privacy-prepared reviewed history; output is one complete validated `oxygen.story/3` source candidate. Missing product, schema, Privacy/Evidence, or context-complete writing support keeps Build active. Deterministic source readiness permits atomic workflow activation; it is not human review completion or release authority. |
-| **Human Review begins** | [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md) | Load when `ready_for_human_review` is reached and the human begins review/editing or asks for Story review assistance. Runtime review state and editor safety remain authoritative. |
-| **Human Review or review-UI work** | [ui-interaction-contract.md](references/ui-interaction-contract.md) | Load when Human Review begins or when diagnosing, auditing, or implementing review UI. The canonical Viewer remains the only review interface. |
-| **Localization requested or present** | [bilingual-contract.md](references/bilingual-contract.md) | Load before creating, validating, refreshing, omitting, inspecting, or releasing localized Story or review state when the user requests localization or a sidecar exists. English remains canonical; missing Chinese is nonblocking. |
-| **QA, clean-room, or submission/release gate** | [validation-checklist.md](references/validation-checklist.md) | Load for final Story conformance, clean-room reproduction, submission/release gating, Storytelling implementation audit, or failed completion-gate diagnosis. The clean-room completion requirement remains mandatory. |
+| Build Story | [product-contract.md](references/product-contract.md), [story-data-contract.md](references/story-data-contract.md), [privacy-evidence-boundary.md](references/privacy-evidence-boundary.md), [narrative-writing-contract.md](references/narrative-writing-contract.md) | The candidate uses `oxygen.story:` and `schema: "oxygen.story"` and is validated against reviewed evidence and coverage authority. |
+| Human review | [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md), [ui-interaction-contract.md](references/ui-interaction-contract.md) | The Viewer is the only review surface. Apply review, All set, and release are separate human gates. |
+| Localization present | [bilingual-contract.md](references/bilingual-contract.md) | English Story/release authority is canonical. Any localized presentation is optional and non-blocking unless the product code implements it safely. |
+| Final acceptance | [validation-checklist.md](references/validation-checklist.md) | Run the listed deterministic, build, browser, clean-room, and residual-scan gates before handoff. |
 
-## Non-negotiable boundaries
+## Final Public Flow
 
-- Work only from a reviewed contribution artifact and explicitly permitted local Story data.
-- Keep `publication_approved=false` unless a separate user instruction explicitly approves publication. Apply review, All set, Final Release Memory, ZIP creation, and download are not publication.
-- Never inspect or reopen raw private histories, removed redaction findings, private review ledgers, credential material, source envelopes, or original secrets to improve the Story.
-- Never reconstruct removed content, fabricate evidence, fabricate identities, invent quotes, or rewrite uncertainty into hindsight certainty.
-- Preserve exact source event IDs, chronology, original evidence language, and the existing Release preview/Preferences/package behavior.
-- Keep project-specific Story copy and private/local presentation data outside reusable Skill and generic frontend source.
-
-If the reviewed artifact lacks information needed for a richer Story, remain conservative and disclose the limit.
-
-## Canonical Toolkit boundary
-
-Inside this repository, reuse the canonical live versioned workflow:
+Use this order exactly:
 
 ```text
-reviewed project data
-→ generated `oxygen.story/3` metadata (`viewer/lib/timeline.ts`)
-→ deterministic source readiness (`viewer/lib/story-readiness.ts`)
-→ atomic workflow activation
-→ `oxygen.story-review-session/2`
-→ successor Viewer review (`SuccessorStoryChapterEditor`)
-→ server-owned `oxygen.reviewed-story/2` release
+Collect
+Organize
+upstream source Privacy preparation -> reviewed input boundary
+Build Project Story and independent global Insight pass
+Story/Release Privacy candidate preparation
+Preference-question generation
+human Story, Privacy, and Preference review
+All set
+local reviewed release
 ```
 
-Generate project-specific Story data against those existing entrypoints. Do not add a second app,
-generation framework, compatibility adapter, project-bound page, or direct import of local Story
-copy. The canonical `/3` path uses session `/2`, the successor Viewer, and reviewed-story `/2`.
-The compatibility path remains `oxygen.story-highlight/2` → session `/1` → reviewed-story `/1`;
-historical `oxygen.story-milestone/1` remains non-reviewable compatibility only.
+Keep the two Privacy boundaries distinct:
 
-Workflow callers should delegate here automatically after organization and privacy preparation;
-the contributor should not need to know this Skill's name. A candidate remains inactive while
-generation or deterministic source readiness is incomplete. Once the complete candidate passes the
-existing atomic activation gate, the workflow enters human review; generation alone never confirms
-the Story or authorizes release.
+- Upstream source Privacy prepares the reviewed input boundary before Story generation. It removes or replaces source material and blocks release while required source redaction decisions remain unresolved.
+- Story/Release Privacy reviews release-safe Story targets after the Story candidate exists. On this base, `oxygen.story` does not contain Privacy candidates and the hydrated Story session does not restore top-level candidate decisions; if Story/Release Privacy candidates are required for a run but no implemented candidate authority exists, stop before claiming review or release readiness.
 
-## End-to-end workflow
+## Human Pauses
 
-### 1. Establish the reviewed boundary
+Pause and wait for explicit contributor action at each of these points:
 
-Read repository instructions and existing Viewer contracts. Inspect the reviewed archive without opening disallowed sources. Fail closed on unsafe member paths, count/manifest mismatches, non-false publication state, or evidence that cannot be resolved.
+- unresolved Privacy Keep/Redact decisions;
+- contributor Preference answers;
+- Story review;
+- All set;
+- release handoff.
 
-Do not rerun collection or privacy redaction unless separately requested and authorized.
+Do not fabricate a decision, infer an answer from silence, click through review on behalf of the contributor, or treat a generated candidate as approval.
 
-### 2. Distill the Project Story
+## Viewer And Workflow Identity
 
-Before generating any Story candidate, persist the Build Project Story state in the already-running
-Viewer:
+The canonical Viewer is local only. It must be the same origin and workflow run throughout the run.
+
+Start the progress-first Viewer before collection if it is not already running:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --target /path/to/repo
+```
+
+Attach the organized reviewed run to that same Viewer/run:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run>-review \
+  --attach-url <viewer-url> --workflow-run-id <run-id>
+```
+
+`<viewer-url>` must be the exact local origin printed by the launcher, for example `http://127.0.0.1:<port>`. `<run-id>` must be the exact stable workflow run ID. Do not start a second Viewer for Story work.
+
+## Build Project Story
+
+Before generating the Story candidate, mark the existing workflow as building Story:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
   --attach-url <viewer-url> --workflow-run-id <run-id> --story-event started
 ```
 
-Keep the full-screen Workflow Progress surface active. Generate into project-local staged data;
-never treat partially written Phases, milestones, or Chapters as the active Project Story. Optional
-real subprogress may use `--story-event progress --story-completed <n> --story-total <n>` only when
-the denominator is known.
+Optional real progress may be reported only with known counts:
 
-Use this Story-first semantic order inside the existing Build Project Story stage:
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --attach-url <viewer-url> --workflow-run-id <run-id> --story-event progress \
+  --story-completed <n> --story-total <n>
+```
 
-1. understand the complete approved project history;
-2. determine coherent Chapter narrative arcs;
-3. write the complete ordered Chapter and Project Story narrative;
-4. verify continuity, chronology, attribution, Evidence, causal restraint, Privacy, and uncertainty;
-5. group adjacent Chapters into precise one- or two-word Phases;
-6. only after the complete Story is understood, identify independently warranted learning moments;
-7. produce zero or more Insights.
+Use bounded subagents only for drafts and checks:
 
-These are conceptual passes, not new top-level workflow stages. Story inclusion is independent of
-Insight worthiness.
+- Story writer: reads only the reviewed input boundary, writes candidate Chapters, People, Story blocks, and Evidence references, and reports uncertainty.
+- Independent Insight pass: reads the completed candidate Story after Chapter coverage is complete, proposes zero or more warranted Insights, and may return none.
 
-Determine Chapters across the full set of meaningful project developments. A complete coherent
-narrative arc owns each boundary. Decisions and direction changes are two eligible categories among
-several. Eligible arcs include the supported beginning, problem discovery, a baseline, durable
-progress or capability, a substantive iteration that changed quality, coverage, or understanding,
-a surprising result, failure or diagnostic case that affected later work, root cause, decision,
-direction or architecture change, quantitative result, validation, recovery, freeze, handoff, and
-current state. Keep separate Chapters when each establishes a distinct durable state that a future
-reader needs. Combine events only when they form one connected causal arc. Deduplicate
-repeated discussion and omit execution/status noise that adds no new result, constraint, or
-understanding. Keep Chapters chronological and never select to satisfy a fixed count.
+The owning Agent remains responsible for deterministic validation, final artifact shape, coverage finalization, activation, and human-pause enforcement.
 
-A transcript, meeting, file, source document, event count, fixed time slice, Insight count,
-importance score, Highlight worthiness, or reusable lesson does not define a Chapter. A Chapter does
-not universally require drama, tension, a breakthrough, a universal problem/final-action/result
-template, or a separate final `current_state` Chapter.
+Generate these local artifacts from `work/<run>-review`:
 
-Build one coherent, evidence-grounded Story of why the project began, what changed, what surprised
-people, where work failed, what decision followed, and where the project now stands. Within a
-Chapter, brevity is never a selection, generation, revision, or validation objective. Retain every
-reviewed-Evidence-supported unit that materially explains the arc's background, causal or temporal
-relationship, participant interaction, judgment, failed attempt, progress or iteration, result, or
-open state. Do not omit supported Story merely because it yields no Insight.
+```text
+project-map.json
+story-coverage-draft.json
+story-coverage-manifest.json
+story-candidates.json
+preference-probes.json
+```
 
-Apply the canonical semantic-coverage and voice rules in
-[product-contract.md](references/product-contract.md) and the evidence-driven roles in
-[narrative-writing-contract.md](references/narrative-writing-contract.md): consider the complete reviewed history at
-the approved boundary, then write a concise 2–3 sentence project arc and context-complete causal
-Chapter prose. Determine Chapter length from the reviewed
-Evidence needed to reconstruct the meaningful change. Do not apply a global word, paragraph, or
-sentence maximum. A Chapter may use several substantial paragraphs when needed to preserve the
-participants, starting position, alternatives, objections, corrections, failures, directional
-Evidence, decision, action, outcome, and uncertainty. Omit only duplicated or routine material that
-contributes none of those meanings, material outside the current Chapter arc, and content
-withheld by Privacy. Readability may reorganize retained context but may not delete it. Never add
-hidden model reasoning or unsupported causality.
+`story-candidates.json` is a bounded JSON array of rows shaped only as:
 
-Write a distinct, localized Chapter overview beneath each title. It is a short summary of that
-Chapter's supported background, consequential participant turn or judgment, and result or open
-boundary. It is never a navigation instruction such as `Open the Chapter…`, and two Chapters may
-not reuse the same boilerplate. Bind its factual claims to Chapter Evidence. Use concrete nouns,
-active verbs, specific constraints, and varied sentence rhythm so the preview and full Chapter feel
-lively and engaging. Engagement never authorizes jokes, invented color, dialogue, emotion, motive,
-metaphor, anthropomorphism, or unsupported causality.
+```json
+[
+  { "id": "existing-imported-item-id", "summary": "oxygen.story:{...}" }
+]
+```
 
-Integrate People into the Decision process with evidence-supported actions. Show which safe role
-raised or framed the issue, which role acted, and which role questioned, corrected, approved, or
-responded when the reviewed record contains those turns. Preserve the action → response → revision
-or result sequence across paragraphs without converting the Chapter into a transcript. Do not
-manufacture an objection, reply, consensus, or second actor when Evidence contains none. Every
-Chapter requires at least one supported Person or actor. Avoid
-generic `the team` wording when a supported functional role is available.
+The ID must already exist in the reviewed input. The summary payload must satisfy [story-data-contract.md](references/story-data-contract.md). The launcher and server derive source identity; they are not provider clients and do not write Story prose.
 
-Determine the actual supported relationship before choosing its wording. Express that relationship
-with the most natural sentence construction; a connective adverb is optional. Sequence, cause,
-response, contrast, correction, evidence, uncertainty, and continuation require different
-Evidence. The examples in [narrative-writing-contract.md](references/narrative-writing-contract.md)
-are an open vocabulary, not an allowlist. Do not require a transition word in every sentence or
-paragraph, force lexical novelty, or substitute one stock connector for another. Prefer clear
-syntax, explicit roles, and direct verbs. Never claim a stronger relationship than Evidence supports.
+## Coverage Finalizer
 
-Before accepting the Chapter set, perform a narrative-coverage audit. Confirm that the selected
-Chapters retain supported progress, substantive iterations, and failures as well as judgment
-moments. When reviewed evidence contains the initiating problem, goal, or baseline assumptions,
-the opening Chapter/overview must establish that supported beginning. A midstream command,
-import-path, test-collection, or other routine setup failure cannot replace that orientation. Keep an
-operational incident when it produced a durable diagnostic result, recovery rule, contract,
-capability, architecture, evaluation boundary, or direction change.
+Write the unit-level coverage draft with `rows` only. Then run the provider-free finalizer:
 
-### 3. Generate project-local `oxygen.story/3` data
+```bash
+node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \
+  work/<run>-review/project-map.json \
+  work/<run>-review/story-coverage-draft.json \
+  work/<run>-review/story-coverage-manifest.json
+```
 
-Create stable Chapter, Phase, Person, Story-block, Insight, and Evidence identities using
-[story-data-contract.md](references/story-data-contract.md). Generate English as the canonical Story
-and source-readiness surface. Chinese is an optional localized sidecar, never an activation
-requirement. When generated, keep it natural and preserve shared safe identities; discard an unsafe
-sidecar without rejecting English. Keep Evidence IDs and source text language-independent.
+For regeneration, pass `--previous` only with the last server-accepted normalized coverage authority:
 
-Attach Story metadata to reviewed Evidence without replacing source content. Validate source hash,
-chronology, unique keys, canonical English structure, any present localized sidecar's safe identity
-boundary, and exact Evidence resolution. Do not require a separately typed final current-state
-Chapter.
+```bash
+node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \
+  work/<run>-review/project-map.json \
+  work/<run>-review/story-coverage-draft.json \
+  work/<run>-review/story-coverage-manifest.json \
+  --previous work/<run>-review/server-accepted-story-coverage.json
+```
 
-Establish the project context and functional role table before writing Chapters. For every selected
-human, user, Agent, reviewer, speaker, owner, or operator action, generate a neutral release-safe
-Person with reviewed Evidence references. Preserve role uncertainty and never infer a name,
-employer, title, identity, or relationship. If no participant can be supported, keep the unit in
-Exact Evidence and do not generate a Chapter. Mechanical execution traces are removed before this
-stage. Recorded Agent reasoning, coordination, subagent findings, and meaningful progress are
-contribution material and may support a Chapter when their actual semantic content belongs in the
-narrative.
+Never invent coverage revisions or digests in model output. A rejected activation output is not prior authority.
 
-At generation time, write every primary, supporting, and Person Evidence `eventId` as the exact
-fully qualified imported item ID. A bare event suffix is ineligible even when it currently resolves
-once. Reject that candidate before staging. Regeneration after ambiguity wastes completed work.
+## Activation
 
-The candidate is source-ready only when its English Project Summary is complete; every Chapter
-is one complete coherent arc with nonempty supported People and Story blocks; adjacent Chapters are
-grouped into precise one- or two-word Phases; Evidence and Privacy structures resolve; and every
-Organization semantic unit is represented by exactly one coverage owner or explicitly excluded
-with an authorized bounded reason. Story carries only manifest identities and bounded unit
-references—never exact memberships or per-event negative ledgers. Missing, incomplete, or stale
-Chinese never blocks the English candidate. Do not require a fixed number of Phases, Chapters, or
-Insights.
-
-Only after the complete Story is understood, generate zero or more independently warranted
-Insights. Every existing Insight contains exactly Background, Quote, Directly Acquired Experience,
-and Principle. Quote uses safe reviewed Story-block anchors with internal Evidence support and never
-copies raw/private Evidence. Directly Acquired Experience remains bounded to the actual project
-moment. Principle may abstract only for a genuinely similar future condition and may not introduce
-unsupported industry prior. Insight title is optional presentation metadata.
-
-Before declaring source readiness, write a local unit-level coverage draft and run
-`scripts/finalize_story_coverage.mjs` against the finalized project map. Use its normalized output
-for activation and copy only its semantic/coverage revision and digest plus bounded unit references
-into each Chapter. The draft contains rows only; do not invent a revision or digest in model output.
-On regeneration, supply `--previous` only with the last server-accepted normalized coverage file;
-an output from a rejected activation is not prior authority.
-
-Then validate that every Chapter remains complete without an Insight,
-every Person and Story block is Evidence-supported, Phase grouping follows already-determined
-adjacent Chapters, Insight cardinality is `0..n` without a quota, and chronology, attribution,
-failure retention, causal restraint, uncertainty, Privacy, and non-fabrication remain intact. If any
-check fails, keep Build Project Story active and improve the staged candidate or disclose the
-Evidence limitation.
-
-Passage assistance is not a `/3` generation or readiness requirement. If present, it is optional,
-local, human-facing, non-authoritative, does not create an Insight, does not require a per-block
-lesson, and remains excluded from reviewed release.
-
-After the complete `/3` candidate passes deterministic source readiness, request the existing atomic
-workflow activation:
+After Story data, Evidence references, and normalized coverage all validate, request atomic activation:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
   --attach-url <viewer-url> --workflow-run-id <run-id> --story-event ready \
-  --coverage-manifest <normalized-coverage-manifest.json> \
-  --story-candidates <story-candidates.json>
+  --coverage-manifest work/<run>-review/story-coverage-manifest.json \
+  --story-candidates work/<run>-review/story-candidates.json
 ```
 
-`story-candidates.json` is a bounded JSON array containing only `{ "id", "summary" }` rows.
-Each ID is an existing fully qualified contribution item; the server derives document, sequence,
-timestamp, and project, rebuilds every document's bounded highlights, and publishes candidates,
-coverage, semantic source revision, and active digest through the same generation lease.
+Activation revalidates the exact source package, semantic manifest, coverage manifest, source revision, and active digest. Success moves the workflow to Review Story with `storySourceSchema: "oxygen.story"` and `storySessionSchema: "oxygen.story-review-session"`. Failure keeps Story building or blocked; retry only after fixing the validated cause.
 
-Activation must revalidate the exact homogeneous source package, semantic manifest, normalized
-coverage manifest, source revision, and digest before
-entering Review Story. The live `/3` path creates or hydrates `oxygen.story-review-session/2`, opens
-the successor Viewer, and later reconstructs `oxygen.reviewed-story/2` server-side only after human
-review completion. Source readiness is not Accept/Reject resolution, All set, Final Release Memory,
-download authority, or publication approval.
+## Review, Preferences, And Release
 
-### 4. Enter the live Project Story boundary
+The contributor reviews the Story in the Viewer. The review session contains only the implemented fields documented in [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md). It does not store Preference answers. Preference questions are generated from reusable lessons and Insights, may be prepared before the human review opens, and remain unanswered until the contributor explicitly answers in the Preferences authority.
 
-Retain the existing application shell. The live Timeline remains the
-narrative table of contents with project/source navigation, Phase presentation, direct Chapter
-actions, Release preview, and Preferences. An incomplete or invalid `/3` source must not appear
-there; an atomically activated ready `/3` source is the canonical Story workflow.
+Release Preview shows only the release-safe projection. When source Privacy has `needs_confirmation`, it may show the minimum permitted local original beside the current safe projection, a safe uncertainty reason, and Keep/Redact. Unavailable originals are never reconstructed. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
 
-Reuse the existing centered loading treatment as the workflow-progress surface. Derive its stages
-from the contributor workflow and show completed/current/next, waiting/blocked state, real
-denominator-based progress when available, and human-action state. Persist operational progress in
-existing workflow data so refresh can hydrate it; do not invent percentages or expose reasoning,
-prompts, raw tool arguments, private messages, Story/Evidence payloads, or removed content. Keep a
-quiet shell action for reopening the status.
+All set confirms the current reviewed Story locally. It does not publish, upload, merge, push, or set `publication_approved=true`.
 
-The homepage-facing successor content preserves this conceptual hierarchy without a UI redesign:
+## Completion Standard
 
-```text
-project identity + concise overview
-→ Chapter / Phase / source orientation
-→ narrative Phase
-→ dated Chapter
-→ short Before → After transition
-→ high-signal keyword / metric chips
-→ Read Chapter
-```
-
-Phases continue to group adjacent Chapters for homepage and Timeline navigation. Generation supplies
-precise Phase membership and labels after Chapter boundaries are complete; it does not use Phase,
-Insight presence, or ranking to dictate Chapter boundaries. Keep Timeline copy concise when a later
-activation lane consumes it, while complete narrative prose remains in the Chapter.
-
-When a Chapter opens, retain the left rail. Use an independently scrollable bounded Chapter selector with the active Chapter visible and Source records below. Preserve:
-
-```text
-Project Story → Chapter → Local Evidence
-```
-
-Each level has its own conventional Back route and useful context restoration.
-
-### 5. Use the canonical Chapter document editor
-
-Use unnumbered headings and this primary order:
-
-```text
-People
-Story
-Privacy
-Review status / completion
-```
-
-Insights, when present, remain restrained Story-grounded interpretations. Do not create a standalone
-Insights section, a wizard, numbered section markers, a Release/Original card pair, or a dashboard
-of schema fields.
-
-Default to a clean read mode. A compact accessible pencil/Edit control enters a visually contained
-Story Edit Mode. Direct typing, caret insertion, selection replacement/deletion, and safe plain-text
-paste are the primary interaction, but every mutation must become a controlled block-local review
-transaction; never let uncontrolled `contenteditable` or browser-native history bypass the review
-state. Expose synchronized Undo/Redo and readable margin notes with pending Discard and applied
-Revert-in-a-new-revision. Do not add a second text-selection action toolbar: native selection is
-used directly for replacement or deletion inside Story Edit Mode.
-Treat `beforeinput` as optional metadata: type-check unknown event fields, derive one minimal
-previous/next-text mutation when metadata is incomplete, deduplicate `beforeinput` + `change`, and
-commit IME composition only after its stable result.
-On narrow screens, fold notes into compact block-associated surfaces without reducing Story width.
-
-For `/3`, passage assistance, if present, is optional, local, human-facing, non-authoritative, and
-never Story readiness or Review Session completion. It does not require why-it-mattered,
-what-was-learned, or reusable-lesson copy for every block, never creates an Insight, and never enters
-reviewed release.
-
-In the live `/3` Viewer, zero, one, or multiple independently warranted Insights are handled by the
-successor review contract. Each Insight contains
-Background, Quote, Directly Acquired Experience, and Principle; title is optional presentation
-metadata. Do not route `/3` through the compatibility single-Insight fallback.
-
-Follow the rule:
-
-> Typography for reading. Boxes for interaction.
-
-### 6. Preserve direct edits and compatible Story annotations
-
-Direct edits store Chapter/story key, stable block, language, base revision, operation, before/after
-text and ranges, pending/applied/reverted/needs-evidence state, evidence references when required,
-and applied revision. Bind every transaction to the primitive owning Chapter key and reject a
-cross-Chapter ledger at Apply, confirmation, and release. Coalesce a contiguous typing burst rather
-than recording each character. Undo targets the most recently changed pending transaction, not
-merely the last-created array entry. Undo/Redo changes the pending transaction state and working
-draft together; it never rewrites an applied revision. Discard removes one pending effect while
-keeping unrelated edits. Reversing an applied edit creates a distinct exact-inverse pending
-transaction; never coalesce it with other work or let its evidence exemption clear an unrelated
-addition. New standalone factual claims retain the reviewed-evidence gate. If safe cross-block
-mutation is unavailable, reject it visibly and preserve all text.
-
-Do not open Delete / Revise / Add windows when Story text is selected. The controlled editor already
-supports those mutations directly and records them as transactions. If an existing imported review
-contains legacy exact-range annotations, validate and render them without broadening their range;
-pending legacy entries may retain their safe cancellation path. Exact evidence is never editable,
-annotatable, or mutated.
-
-### 7. Preserve iterative review
-
-The lifecycle is repeatable:
-
-```text
-initial AI draft
-→ human direct edits and/or compatible legacy review records
-→ Apply review
-→ revised draft
-→ human directly reviews and may edit again
-→ Apply review again
-→ ...
-→ All set
-```
-
-Apply review is never finalization. Revised text remains directly editable. Legacy Delete/Revise/Add
-annotations are compatibility records, not the primary current interaction. Human instructions are
-authoritative, but unsupported factual additions must be flagged rather than fabricated. Preserve
-revision provenance.
-
-Only All set creates human-confirmed Final Release Memory in an activated compatible runtime. For
-the live `/3` path, every existing AI Insight must resolve independently through explicit
-review of the currently presented version; zero Insights creates zero Insight-review obligations.
-Privacy, Evidence, pending edits, provenance, localization debt, Reopen, and publication separation
-remain governed by the review lifecycle and are not changed here.
-
-### 8. Preserve contextual Privacy
-
-Show one candidate at a time:
-
-```text
-Local original
-Why AI flagged it
-Keep | Redact
-```
-
-There is no Suggested Release field or AI-prescribed decision. When permitted reviewed context exists, show only the minimum necessary original-language excerpt and explain the specific concern. When it does not exist, state that the original is unavailable and explain only the safe surviving information class, risk, uncertainty, and need for human confirmation. Never reconstruct the value.
-
-### 9. Validate behavior, safety, and visual language
-
-Run the generation contract/source-shape checks from
-[validation-checklist.md](references/validation-checklist.md). Prove `/3`, Story-first order,
-required supported People, Chapter-first Phase grouping, sparse `0..n` Insights, exact four Insight
-meanings, optional title metadata, optional passage assistance, preserved safety, atomic activation,
-session `/2`, successor review, and server-owned reviewed-story `/2` release. Keep generation
-readiness, human review completion, release download, and publication approval distinct.
-
-Do not require browser-independent pixel identity. Require bounded Golden-v1 fidelity: the retained three-region desktop composition, editorial hierarchy, restrained palette/card usage, responsive article width, Chapter reading order, and mandatory interactions remain recognizable. Project content, counts, wrapping, and minor spacing may vary. Reject a new visual system or information hierarchy when the canonical components can render the validated data.
-
-## Completion standard
-
-The result is complete only when a fresh reviewer can understand what to read and what to do without learning Oxygen's internal schema, every Story claim remains traceable to reviewed evidence, the Chapter is useful reusable project memory for humans and future Agents, the canonical English review loop works, any available localization remains non-blocking, and Final Release Memory remains explicitly separate from publication. Reusable memory may preserve evidence-backed user-visible rationale, mistakes, decisions, corrections, rejected approaches, and outcomes; it never records private latent reasoning.
-
-Completion also requires a new clean clone and a completely fresh, contextless Agent to receive only
-the normal public Oxygen workflow request and independently reach the same integrated canonical
-Viewer capability. Do not provide the Storytelling Skill name, prior task/chat context, expected UI,
-golden counts, hidden conversion steps, or generated project-local data. Unit tests and a hand-built
-candidate are necessary evidence but are not substitutes for this clean-room gate. Any material fix
-requires a new exact snapshot, new clone, and new Agent run.
+This work is complete only when a fresh contributor Agent can execute the public workflow from the reviewed boundary without prior chat context, hidden prompts, JSON surgery, database repair, code edits, or maintainer rescue. The final package remains local, provider-free after approved generation steps, and carries `publication_approved=false`.

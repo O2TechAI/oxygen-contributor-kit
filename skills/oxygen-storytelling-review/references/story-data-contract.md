@@ -1,53 +1,27 @@
-# Story data contract
+# Story Data Contract
 
-## Active generation boundary
+This file mirrors the final production parser in `viewer/lib/timeline.ts`, review-session parser in `viewer/lib/story-review-session.ts`, and release serializer in `viewer/lib/story-release.ts`.
 
-Generate new Story candidates as:
+## Source Prefix And Schema
 
-```text
-prefix: oxygen.story/3:
-schema: oxygen.story/3
-```
-
-The reviewed contribution artifact remains the Evidence source. Generated Story data is separate
-local metadata that references reviewed Evidence IDs. It must not overwrite source content, copy
-raw/private Evidence into Story fields, or embed project-specific copy in generic Skill/frontend
-source.
-
-`oxygen.story/3` is the canonical live generation source. A complete homogeneous package must pass
-deterministic source readiness before the workflow atomically activates it. The active mapping is:
+Generated Story candidates are stored in reviewed item summaries as:
 
 ```text
-oxygen.story/3
-→ oxygen.story-review-session/2
-→ oxygen.reviewed-story/2
+prefix: oxygen.story:
+schema: oxygen.story
 ```
 
-Source readiness permits atomic activation into human review; it is not explicit Insight review,
-All set, release authority, or publication approval. Compatibility remains exact and isolated:
-`oxygen.story-highlight/2` maps to `oxygen.story-review-session/1` and
-`oxygen.reviewed-story/1`. Historical `oxygen.story-milestone/1` is non-reviewable compatibility
-only. No legacy artifact is rewritten or shape-guessed into `/3`.
+The serialized form is the literal prefix followed by JSON:
 
-## Stable identities
+```text
+oxygen.story:{"schema":"oxygen.story",...}
+```
 
-Use stable bounded primitive-string identities for:
+Rows with a different prefix or schema are not current Story candidates. Unknown fields, duplicate semantic IDs, malformed references, stale coverage, or invalid ordering fail closed.
 
-- Chapter;
-- Phase;
-- Person;
-- Story block;
-- Insight;
-- primary/supporting Evidence.
+## Source Type
 
-Do not use rendered prose, array position, numeric coercion, or a display title as identity. Reject
-duplicate IDs within their semantic collection. New Evidence references use the exact fully
-qualified imported item ID in `eventId`; a bare suffix is not eligible even when it currently
-resolves once.
-
-## Canonical successor source
-
-Generate the existing production `/3` shape:
+The canonical Story source shape is:
 
 ```ts
 type EvidenceReference = {
@@ -55,6 +29,22 @@ type EvidenceReference = {
   eventId: string;
   label?: string;
 };
+
+type StoryKind =
+  | "foundation"
+  | "discovery"
+  | "baseline"
+  | "problem"
+  | "failure"
+  | "root_cause"
+  | "decision"
+  | "direction_change"
+  | "breakthrough"
+  | "quantitative_change"
+  | "validation"
+  | "freeze"
+  | "handoff"
+  | "current_state";
 
 type StoryPerson = {
   id: string;
@@ -81,11 +71,21 @@ type StoryInsight = {
   evidence: EvidenceReference[];
 };
 
+type StoryCoverage = {
+  semanticManifest: { revision: number; digest: string };
+  coverageManifest: { revision: number; digest: string };
+  representedUnitIds: string[];
+  excludedUnits: Array<{
+    unitId: string;
+    reason: "duplicate" | "privacy_withheld" | "routine_non_narrative" | "outside_story_scope";
+  }>;
+};
+
 type StorySource = {
-  schema: "oxygen.story/3";
+  schema: "oxygen.story";
   key: string;
   phase: { id: string; label: string };
-  kind?: string;
+  kind?: StoryKind;
   title: string;
   overview: string;
   transition?: { before: string; after: string };
@@ -100,202 +100,133 @@ type StorySource = {
     primary: EvidenceReference;
     supporting: EvidenceReference[];
   };
-  coverage: {
-    semanticManifest: { revision: number; digest: string };
-    coverageManifest: { revision: number; digest: string };
-    representedUnitIds: string[];
-    excludedUnits: Array<{
-      unitId: string;
-      reason: "duplicate" | "privacy_withheld" | "routine_non_narrative" | "outside_story_scope";
-    }>;
-  };
+  coverage: StoryCoverage;
 };
 ```
 
-Use the repository parser as the exact source-shape authority. Do not add compatibility fields,
-review state, UI state, raw Evidence, free-form reasoning, or a second generation schema.
+`key` is the stable Chapter identity. `phase.id`, `people[].id`, `story.blocks[].id`, and `insights[].id` are stable primitive-string identities. Display titles, rendered prose, array position, numeric coercion, and localized text are not identities.
 
-`transition` and `chips` are optional presentation metadata. Emit `transition` only when exact
-Evidence supports a real Before → After change. Emit at most 12 unique, Evidence-supported chips,
-each at most 200 characters; empty or absent is valid. Never fabricate a transition or fill a chip
-quota.
+## Evidence Rules
 
-## Chapter and Story blocks
+Each Evidence reference has `documentId`, `eventId`, and optional `label`. For activation, `eventId` must be the exact fully qualified imported item ID, and `documentId` must match that item. A bare suffix is rejected by package validation even if it would be easy to guess.
 
-A Chapter is one complete coherent narrative arc. Stable Story blocks divide that arc for
-traceability and review navigation; a block count, Evidence item count, time slice, Insight count,
-importance score, Highlight worthiness, or lesson does not define Chapter boundaries.
+`evidence.primary` must identify the candidate row that carries the Chapter. `evidence.supporting` contains additional Chapter evidence and must not duplicate the primary reference.
 
-Story blocks may carry background, ordinary setup or progress, transitions, relationships and
-handoffs, attempts, failures, disagreements, corrections, decisions, validation, consequences,
-and unresolved/current state when supported. Each block contains safe Story text and one or more
-exact Chapter-contained Evidence references. Do not copy raw/private Evidence into public Story
-text merely because the block records internal support.
+Person, Story-block, and Insight evidence must all belong to the Chapter evidence set. Evidence belonging to an excluded semantic unit cannot support Story copy.
 
-Chapter `title` and `overview` orient the reader. They must be supported, specific, and useful, but
-the title is not required to prove tension, drama, a decisive outcome, or a reusable lesson.
-`kind` is optional presentation metadata. Do not require a special final `current_state` Chapter;
-represent current state as its own Chapter only when it forms a coherent arc, or as the supported
-ending of the final Chapter otherwise.
+## Chapter, Phase, And Ordering
 
-## People
-
-`people` is required and nonempty for every Chapter. Generate at least one supported Person or
-actor entry and attach exact reviewed Evidence references. Humans, users, Agents, reviewers,
-speakers, owners, and operators may be actors when supported.
-
-Preserve role uncertainty and release-safe identity. Never infer a name, employer, title,
-relationship, response, consensus, or identity merge. Each description states that actor's
-Evidence-supported involvement in this Chapter—what the actor asked, reasoned, delegated, found,
-corrected, decided, reviewed, or reported—rather than generic boilerplate. Mechanical execution
-traces cannot become a standalone Chapter merely because they occurred.
-
-## Chapter-first Phase grouping
-
-Determine the complete ordered Chapter sequence before assigning Phases. Then group adjacent
-Chapters that share a coherent project period or state. Phase is presentation and Timeline
-navigation; it must not dictate, split, or merge Chapter boundaries.
-
-Every Chapter has one stable Phase ID and a precise one- or two-word label. Each Phase ID occupies
-one contiguous Chapter range and uses one consistent label. Reject generic labels such as
-`Project Evolution`, `General Work`, `Other`, and `Later Stage`. Do not force a Phase count or
-redesign the existing homepage-facing Phase concept.
-
-## Sparse Insights
-
-Each Chapter contains zero or more Insights (`0..n`). There is no minimum, maximum, per-Chapter or
-per-block quota, density target, or preferred count. Generate an Insight only when it is an
-independently warranted learning or judgment moment found after the complete Story is understood.
-Zero Insights is a valid first-class source state, distinct from a generated Insight later rejected
-during review.
-
-Every generated Insight has exactly these four semantic meanings:
-
-1. **Background** — minimum Story-grounded context needed to understand the judgment moment;
-2. **Quote** — one or more safe reviewed Story-block anchors, not copied raw/private Evidence;
-3. **Directly Acquired Experience** — what was learned from that actual project moment, bounded by
-   what was known then;
-4. **Principle** — a reusable rule, question, or guardrail for a genuinely similar future
-   condition, without unsupported industry prior or generic slogans.
-
-`title` is optional presentation metadata. It is not a fifth semantic meaning and its absence or
-weakness alone does not decide semantic validity.
-
-Ground every Insight through the existing chain:
+Candidate rows are ordered by the production comparator:
 
 ```text
-Insight -> safe reviewed Story block anchor(s) -> internal Evidence support
+timestamp -> documentId -> sequence -> row id
 ```
 
-Each Quote anchor resolves within the same Chapter. Each Insight Evidence reference belongs to the
-exact Chapter Evidence set and supports at least one anchored Story block. Never copy raw/private
-Evidence into Background, Quote, Directly Acquired Experience, Principle, or title.
+Every Chapter key must be unique. Phases are assigned only after Chapters are complete and ordered. A Phase ID must occupy one contiguous Chapter range, use one consistent one- or two-word label, and avoid generic labels such as `Project Evolution`, `General Work`, `Other`, or `Later Stage`.
 
-## Complete-history and Evidence accounting
+`kind`, `transition`, and `chips` are optional presentation metadata. Emit `transition` only for an Evidence-supported before/after change. Emit at most 12 unique supported chips, each at most 200 characters. Absence is valid.
 
-Consider the complete approved reviewed history before deriving Chapters. Retain supported
-background, chronology, relationships, participant actions, ordinary progress needed for later
-understanding, failures, corrections, decisions, validation, consequences, uncertainty, and
-current state. Do not omit a passage because it lacks an Insight.
+## People And Story Blocks
 
-The completeness denominator is the filtered human-semantic contribution universe, after
-Organization has grouped it into bounded semantic units. The server/tool owns exact unit
-membership and proves that every contribution record belongs to exactly one current unit. Story
-receives only the bounded unit projection and progressively requests exact local Evidence.
+Every activated Chapter must have nonempty `people` and nonempty `story.blocks`. Each Person needs exact Evidence and a release-safe label/role/description. Preserve role uncertainty and never infer names, employers, titles, relationships, replies, consensus, or identity merges.
 
-Every approved semantic unit has exactly one normalized server-owned coverage disposition:
-represented by one Chapter owner, or explicitly excluded with an authorized bounded reason. Story
-declares the represented unit IDs owned by each Chapter and every explicit exclusion; omission is
-never interpreted as exclusion. The same exact Evidence may be cited repeatedly without creating
-another coverage owner. Evidence belonging to an excluded unit cannot support Story copy.
+Each Story block is safe release-draft prose with exact Evidence support. Do not copy raw/private Evidence merely because the block cites it.
 
-Do not put exact unit member lists or a per-event negative ledger in Story JSON or browser state.
-The bounded candidate item carrying a Chapter must be that Chapter's exact primary Evidence item;
-the server derives its document, sequence, timestamp, and project for deterministic Story order.
-Carrier identity is not a separate coverage owner and cannot be chosen from unrelated Evidence.
-Duplicate exclusion requires an exact upstream duplicate relation; routine exclusion requires the
-unit's bounded `routine` category; `privacy_withheld` requires current Privacy authority; outside
-scope is explicit rather than inferred. Duplicates, unresolved or ambiguous Evidence, document
-mismatch, foreign references, stale manifest identity, and incomplete accounting fail closed.
+`story.uncertainty` is optional. Use it only for supported uncertainty. Do not fabricate a cleaner ending.
 
-Write the unit-level ownership rows as a local coverage draft containing only `rows`, then run
-`scripts/finalize_story_coverage.mjs` against the finalized project map. On regeneration, pass the
-last server-accepted normalized authority with `--previous`; never treat an unaccepted local output
-as prior authority. Omit `--previous` for the first attempt and for a retry when no coverage was
-accepted. The provider-free finalizer validates the explicit prior authority and deterministically
-retains or increments its revision while normalizing rows and computing the coverage digest; the
-server independently revalidates the transition at activation. Use the returned semantic/coverage
-revision and digest in every Chapter's bounded `coverage` reference. Do not ask the model to invent
-a revision or digest.
+## Insights
 
-This accounting is validation metadata, not permission to retain source copy or private reasoning.
-Chronology, attribution, causal restraint, uncertainty, Privacy, and non-fabrication remain
-mandatory even when structural validation passes.
+`insights` is an array and may be empty. Each existing Insight has exactly these four meanings:
 
-## Passage assistance
+- `background`: minimum Story-grounded context for the judgment moment.
+- `quote`: one or more safe Story-block anchors in the same Chapter.
+- `directlyAcquiredExperience`: what was learned from that actual project moment.
+- `principle`: a reusable rule, question, or guardrail for a genuinely similar future condition.
 
-Passage assistance is not part of `oxygen.story/3` and is never a generation or readiness
-requirement. If a later consumer retains assistance, it is optional, local, human-facing,
-non-authoritative, does not create an Insight, does not require a lesson, and remains excluded from
-release unless a separate explicit decision changes that boundary.
+`title` is optional presentation metadata, not a fifth required meaning. Insight Evidence must be same-Chapter Evidence and must support at least one anchored Story block. Raw/private Evidence does not enter Insight text.
 
-## Optional localization
+## Coverage Authority
 
-English is the canonical generation and source-readiness surface. Chinese is an optional localized
-presentation sidecar governed by [bilingual-contract.md](bilingual-contract.md). It shares stable
-semantic identities and facts but is not embedded as an alternate `/3` source schema. Missing,
-incomplete, stale, or unsafe localization never blocks the valid English candidate.
+Story carries only bounded coverage references:
 
-## Generation order
+- `coverage.semanticManifest.revision`;
+- `coverage.semanticManifest.digest`;
+- `coverage.coverageManifest.revision`;
+- `coverage.coverageManifest.digest`;
+- `coverage.representedUnitIds`;
+- `coverage.excludedUnits`.
 
-Use this semantic order inside the existing Build Project Story stage:
+The semantic manifest and normalized coverage manifest are server/tool-owned authority. Story JSON must not contain exact unit member lists or per-event negative ledgers. Every semantic unit is represented exactly once by one Chapter owner or excluded exactly once with one authorized reason.
 
-1. read the complete bounded semantic-unit projection and progressively inspect exact Evidence;
-2. explicitly disposition every semantic unit and determine coherent Chapter narrative arcs;
-3. write the complete ordered Chapter and Project Story narrative;
-4. verify continuity, chronology, attribution, Evidence, causal restraint, Privacy, and
-   uncertainty;
-5. group adjacent Chapters into precise one- or two-word Phases;
-6. only after the complete Story is understood, identify independently warranted learning moments;
-7. produce zero or more Insights.
+The local coverage draft contains `rows` only. Run the finalizer before activation:
 
-These are conceptual passes, not new top-level workflow stages.
+```bash
+node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \
+  work/<run>-review/project-map.json \
+  work/<run>-review/story-coverage-draft.json \
+  work/<run>-review/story-coverage-manifest.json
+```
 
-## Import and source-readiness gates
+## Activation Submission
 
-Fail closed when any of these conditions is false:
-
-- archive CRC/member paths, manifest counts, source hash, and `publication_approved=false` are safe;
-- every row uses the exact `oxygen.story/3:` prefix and `oxygen.story/3` schema;
-- Chapter keys and all nested stable IDs are bounded and unique;
-- Chapters are chronological and each is a complete coherent arc;
-- every Chapter has nonempty supported People with exact Evidence;
-- every Chapter has nonempty safe Story blocks with exact Evidence;
-- semantic-manifest revision/digest and normalized coverage-manifest revision/digest are current;
-- every semantic unit is represented once or explicitly excluded once, with no inferred complement;
-- Story JSON contains no exact member list or per-event negative ledger;
-- Phases group adjacent already-determined Chapters and use precise one- or two-word labels;
-- Insight cardinality is `0..n` without a quota;
-- every existing Insight has Background, Quote, Directly Acquired Experience, and Principle;
-- every Insight Quote and Evidence reference resolves through same-Chapter Story support;
-- uncertainty, failures, attribution, chronology, causal restraint, Privacy, and non-fabrication are
-  preserved;
-- no placeholder, fallback Chapter, partial job, or validation debt remains.
-
-Malformed `/3` metadata must not fall back to an older parser or confident invented copy. Keep the
-candidate staged and disclose the bounded validation failure.
-
-## Review-state separation
-
-AI-generated Insights require explicit human review of the currently presented version under
-`oxygen.story-review-session/2`; silence is not approval and each existing Insight resolves
-independently. Editing an AI Insight creates a new version that requires a new Accept. Zero source
-Insights creates zero Insight-review obligations. A saved human-created Insight is human-authored
-and approved for that saved version. Only the server-owned validated `/3` + session `/2` path may
-construct `oxygen.reviewed-story/2` after review completion.
-
-Every review state retains the immutable publication boundary equivalent to:
+`story-candidates.json` is a bounded array containing only:
 
 ```ts
-publicationApproved: false
+type StoryCandidateSubmissionRow = {
+  id: string;
+  summary: string;
+};
 ```
+
+The server derives document, sequence, timestamp, and project identity from the current reviewed items. It validates candidate size, IDs, source schema, evidence, People, Phase contiguity, Insight grounding, coverage authority, revision transitions, and active digest before activation.
+
+## Story Review Session
+
+The implemented session shape is exactly:
+
+```ts
+type StoryReviewSession = {
+  schema: "oxygen.story-review-session";
+  workflowRunId: string;
+  chapterReviews: Record<string, ChapterReviewState>;
+  privacyDecisions: Record<string, "keep" | "redact">;
+  updatedAt: string;
+};
+```
+
+Do not claim this session stores Preference answers, source Privacy spans, Story source candidates, coverage manifests, release originals, private review notes, prompts, or hidden metadata.
+
+On this base, restored final Story sessions reject nonempty top-level `privacyDecisions` during source-bound hydration. Story/Release Privacy candidates must come from an implemented authority outside `oxygen.story` before they can be treated as review obligations.
+
+## Reviewed Release
+
+The server-owned release schema is:
+
+```ts
+type ReviewedStoryRelease = {
+  schema: "oxygen.reviewed-story";
+  publication_approved: false;
+  chapters: Array<{
+    key: string;
+    phase: { id: string; label: string };
+    kind?: string;
+    revision: number;
+    en: {
+      title: string;
+      overview: string;
+      people: Array<{ releaseLabel: string; role: string; description: string }>;
+      story: { blocks: string[]; uncertainty?: string };
+      insights: Array<{
+        id: string;
+        title?: string;
+        background: string;
+        quote: string;
+        directlyAcquiredExperience: string;
+        principle: string;
+      }>;
+    };
+  }>;
+};
+```
+
+Release serialization strips source IDs, Evidence references, Story-block IDs, Insight anchors, coverage metadata, review ledgers, originals, Privacy metadata, CAS metadata, and local editor state. HTML and ZIP use the same safe serialized Story bytes.

@@ -309,7 +309,7 @@ class LauncherUnitTest(unittest.TestCase):
 
     def test_story_ready_event_sends_only_bounded_coverage_authority(self):
         coverage_manifest = {"revision": 1, "coverageDigest": "a" * 64}
-        story_candidates = [{"id": "doc:item-1", "summary": "oxygen.story/3:{}"}]
+        story_candidates = [{"id": "doc:item-1", "summary": "oxygen.story:{}"}]
         with (
             mock.patch.object(MODULE, "request_json", return_value={
                 "currentStageId": "review",
@@ -355,7 +355,7 @@ class LauncherUnitTest(unittest.TestCase):
                 MODULE.update_story_workflow(
                     "http://127.0.0.1:3298", "run-1", "ready",
                     coverage_manifest={"revision": 1},
-                    story_candidates=[{"id": "doc:item-1", "summary": "oxygen.story/3:{}"}],
+                    story_candidates=[{"id": "doc:item-1", "summary": "oxygen.story:{}"}],
                 )
         printed.assert_not_called()
 
