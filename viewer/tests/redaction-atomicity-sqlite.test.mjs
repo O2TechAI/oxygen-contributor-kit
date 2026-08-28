@@ -80,6 +80,11 @@ async function privacySnapshot(db) {
   return { jobs: jobs.results, redactions: redactions.results };
 }
 
+async function storyAuthoritySnapshot(db) {
+  return db.prepare(`SELECT story_generation_status,story_source_revision,
+    active_story_digest FROM workflow_runs WHERE id='workflow-redaction-atomicity'`).first();
+}
+
 test("redaction replacement validates completely and commits once with real SQLite", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "oxygen-redaction-atomicity-"));
   const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
@@ -156,8 +161,16 @@ test("redaction replacement validates completely and commits once with real SQLi
         oldTime, oldTime, oldTime,
       ),
     ]);
+    const sourceRevision = 3;
+    const activeStoryDigest = "a".repeat(64);
+    const activateStory = () => db.prepare(`UPDATE workflow_runs
+      SET story_generation_status='ready_for_human_review',story_source_revision=?,
+          active_story_digest=? WHERE id='workflow-redaction-atomicity'`)
+      .bind(sourceRevision, activeStoryDigest).run();
+    await activateStory();
 
     const oldSnapshot = await privacySnapshot(db);
+    const oldStoryAuthority = await storyAuthoritySnapshot(db);
     const originalBatch = db.batch.bind(db);
     let routeBatchCalls = 0;
     db.batch = async (statements) => {
@@ -166,7 +179,10 @@ test("redaction replacement validates completely and commits once with real SQLi
     };
 
     const invalidCases = [
-      ["unknown-only", payload([span({ itemId: "missing-item" })])],
+      ["unknown-only", payload([span({
+        itemId: "https://private.invalid/RAW_PRIVACY_URL",
+        reason: "RAW_PRIVACY_REASON",
+      })])],
       ["mixed valid and invalid", payload([
         span({ id: "valid-span" }),
         span({ id: "invalid-span", category: "invented-category" }),
@@ -206,21 +222,44 @@ test("redaction replacement validates completely and commits once with real SQLi
     for (const [name, invalidPayload] of invalidCases) {
       const response = await post(route, invalidPayload);
       assert.equal(response.status, 400, name);
-      assert.equal((await response.json()).imported ?? 0, 0, name);
+      const failure = await response.json();
+      assert.equal(failure.imported ?? 0, 0, name);
+      assert.match(failure.code, /^SOURCE_PRIVACY_(REQUEST|REPLACEMENT)_INVALID$/u, name);
+      assert.doesNotMatch(JSON.stringify(failure),
+        /RAW_PRIVACY_URL|RAW_PRIVACY_REASON|private\.invalid|sqlite|trace/iu, name);
       assert.deepEqual(await privacySnapshot(db), oldSnapshot, name);
+      assert.deepEqual(await storyAuthoritySnapshot(db), oldStoryAuthority, name);
       assert.equal(routeBatchCalls, 0, `${name} must not start a write batch`);
     }
+
+    const malformed = await route.POST(new Request("http://localhost/api/redactions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: '{"private":"RAW_PRIVACY_BODY"',
+    }));
+    assert.equal(malformed.status, 400);
+    assert.deepEqual(await malformed.json(), {
+      error: "A valid source Privacy replacement is required",
+      code: "SOURCE_PRIVACY_REQUEST_INVALID",
+    });
+    assert.deepEqual(await privacySnapshot(db), oldSnapshot);
+    assert.deepEqual(await storyAuthoritySnapshot(db), oldStoryAuthority);
 
     await originalBatch([
       db.prepare(`CREATE TRIGGER fail_atomic_redaction BEFORE INSERT ON redactions
         WHEN NEW.id='force-sql-failure'
         BEGIN SELECT RAISE(ABORT, 'forced redaction failure'); END`),
     ]);
-    await assert.rejects(
-      post(route, payload([span({ id: "force-sql-failure" })])),
-      /forced redaction failure/,
-    );
+    const failedSql = await post(route, payload([span({ id: "force-sql-failure" })]));
+    assert.equal(failedSql.status, 409);
+    const failedSqlBody = await failedSql.json();
+    assert.deepEqual(failedSqlBody, {
+      error: "Source Privacy replacement conflicted",
+      code: "SOURCE_PRIVACY_MUTATION_CONFLICT",
+      imported: 0,
+    });
+    assert.doesNotMatch(JSON.stringify(failedSqlBody), /forced|sqlite|trigger|trace/iu);
     assert.deepEqual(await privacySnapshot(db), oldSnapshot);
+    assert.deepEqual(await storyAuthoritySnapshot(db), oldStoryAuthority);
     assert.equal(routeBatchCalls, 1, "failed replacement uses one rolled-back batch");
 
     const validRedactions = [
@@ -236,6 +275,22 @@ test("redaction replacement validates completely and commits once with real SQLi
         uncertaintyReason: LOCAL_UNCERTAINTY_SENTINEL,
       }),
     ];
+    await originalBatch([
+      db.prepare(`CREATE TRIGGER fail_story_privacy_invalidation
+        BEFORE UPDATE OF story_generation_status ON workflow_runs
+        WHEN OLD.story_generation_status='ready_for_human_review'
+        BEGIN SELECT RAISE(ABORT, 'RAW_SQLITE_PATH_D:/private/oxygen.sqlite'); END`),
+    ]);
+    const failedInvalidation = await post(route, payload(validRedactions));
+    assert.equal(failedInvalidation.status, 409);
+    const failedInvalidationBody = await failedInvalidation.json();
+    assert.equal(failedInvalidationBody.code, "SOURCE_PRIVACY_MUTATION_CONFLICT");
+    assert.doesNotMatch(JSON.stringify(failedInvalidationBody),
+      /RAW_SQLITE_PATH|private|oxygen\.sqlite|trace/iu);
+    assert.deepEqual(await privacySnapshot(db), oldSnapshot,
+      "failed Story invalidation rolls back the complete valid Privacy replacement");
+    assert.deepEqual(await storyAuthoritySnapshot(db), oldStoryAuthority);
+    await originalBatch([db.prepare("DROP TRIGGER fail_story_privacy_invalidation")]);
     const response = await post(route, payload(validRedactions));
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
@@ -243,7 +298,12 @@ test("redaction replacement validates completely and commits once with real SQLi
       rejected: [],
       status: "complete",
     });
-    assert.equal(routeBatchCalls, 2, "successful replacement adds exactly one batch");
+    assert.equal(routeBatchCalls, 3, "each replacement attempt uses exactly one batch");
+    assert.deepEqual(await storyAuthoritySnapshot(db), {
+      story_generation_status: "blocked",
+      story_source_revision: sourceRevision,
+      active_story_digest: null,
+    });
 
     const replacement = await privacySnapshot(db);
     assert.equal(replacement.jobs.length, 1);
@@ -308,6 +368,8 @@ test("redaction replacement validates completely and commits once with real SQLi
     assert.equal(rejectedDelete.status, 405);
     assert.deepEqual(await privacySnapshot(db), beforeDelete, "obsolete DELETE cannot mutate review state");
     const beforeRejectedDecisions = await privacySnapshot(db);
+    await activateStory();
+    const beforeRejectedAuthority = await storyAuthoritySnapshot(db);
     for (const body of [
       { status: "removed" },
       { review_state: "confirmed_keep" },
@@ -318,13 +380,41 @@ test("redaction replacement validates completely and commits once with real SQLi
     ]) {
       const rejectedDecision = await decide(decisionRoute, "replacement-keep", body);
       assert.equal(rejectedDecision.status, 400, JSON.stringify(body));
+      assert.equal((await rejectedDecision.json()).code, "SOURCE_PRIVACY_DECISION_INVALID");
       assert.deepEqual(await privacySnapshot(db), beforeRejectedDecisions);
+      assert.deepEqual(await storyAuthoritySnapshot(db), beforeRejectedAuthority);
     }
+    const malformedDecision = await decisionRoute.PATCH(new Request(
+      "http://localhost/api/redactions/replacement-keep",
+      { method: "PATCH", body: '{"decision":"RAW_PRIVACY_DECISION"' },
+    ), { params: Promise.resolve({ id: "replacement-keep" }) });
+    assert.equal(malformedDecision.status, 400);
+    assert.equal((await malformedDecision.json()).code, "SOURCE_PRIVACY_DECISION_INVALID");
+    assert.deepEqual(await storyAuthoritySnapshot(db), beforeRejectedAuthority);
     const deterministicDecision = await decide(decisionRoute, "replacement-alpha", {
       decision: "keep",
     });
     assert.equal(deterministicDecision.status, 409);
+    assert.equal((await deterministicDecision.json()).code,
+      "SOURCE_PRIVACY_DECISION_NOT_ACTIONABLE");
     assert.deepEqual(await privacySnapshot(db), beforeRejectedDecisions);
+    assert.deepEqual(await storyAuthoritySnapshot(db), beforeRejectedAuthority);
+
+    await originalBatch([
+      db.prepare(`CREATE TRIGGER fail_story_privacy_decision_invalidation
+        BEFORE UPDATE OF story_generation_status ON workflow_runs
+        WHEN OLD.story_generation_status='ready_for_human_review'
+        BEGIN SELECT RAISE(ABORT, 'RAW_PRIVACY_TRACE_SQLITE_PATH'); END`),
+    ]);
+    const failedDecision = await decide(decisionRoute, "replacement-keep", { decision: "keep" });
+    assert.equal(failedDecision.status, 409);
+    const failedDecisionBody = await failedDecision.json();
+    assert.equal(failedDecisionBody.code, "SOURCE_PRIVACY_MUTATION_CONFLICT");
+    assert.doesNotMatch(JSON.stringify(failedDecisionBody), /RAW_PRIVACY_TRACE|sqlite|path/iu);
+    assert.deepEqual(await privacySnapshot(db), beforeRejectedDecisions,
+      "failed Story invalidation rolls back the contributor Privacy decision");
+    assert.deepEqual(await storyAuthoritySnapshot(db), beforeRejectedAuthority);
+    await originalBatch([db.prepare("DROP TRIGGER fail_story_privacy_decision_invalidation")]);
 
     const beforeKeepDigest = (await capturePackageReleasePrivacySnapshot(db)).digest;
     const keepResponse = await decide(decisionRoute, "replacement-keep", { decision: "keep" });
@@ -336,9 +426,15 @@ test("redaction replacement validates completely and commits once with real SQLi
       status: "removed",
       created_by: "contributor",
     });
+    assert.deepEqual(await storyAuthoritySnapshot(db), {
+      story_generation_status: "blocked",
+      story_source_revision: sourceRevision,
+      active_story_digest: null,
+    });
     const afterKeepDigest = (await capturePackageReleasePrivacySnapshot(db)).digest;
     assert.notEqual(afterKeepDigest, beforeKeepDigest, "a review decision changes the snapshot digest");
 
+    await activateStory();
     const redactResponse = await decide(decisionRoute, "replacement-redact", {
       decision: "redact",
     });
@@ -349,6 +445,11 @@ test("redaction replacement validates completely and commits once with real SQLi
       review_state: "confirmed_redact",
       status: "active",
       created_by: "contributor",
+    });
+    assert.deepEqual(await storyAuthoritySnapshot(db), {
+      story_generation_status: "blocked",
+      story_source_revision: sourceRevision,
+      active_story_digest: null,
     });
 
     const readResponse = await route.GET();
@@ -365,6 +466,25 @@ test("redaction replacement validates completely and commits once with real SQLi
     });
     assert.equal(releasedPackage.status, 400,
       "resolved source redactions cannot bypass the final Story and All set authority");
+
+    await activateStory();
+    const zeroResponse = await post(route, payload([]));
+    assert.equal(zeroResponse.status, 200);
+    assert.deepEqual(await zeroResponse.json(), { imported: 0, rejected: [], status: "complete" });
+    const completedZero = await privacySnapshot(db);
+    assert.equal(completedZero.jobs.length, 1);
+    assert.deepEqual({
+      status: completedZero.jobs[0].status,
+      completed: completedZero.jobs[0].completed,
+      total: completedZero.jobs[0].total,
+      rejected: completedZero.jobs[0].rejected,
+    }, { status: "complete", completed: 0, total: 0, rejected: 0 });
+    assert.deepEqual(completedZero.redactions, []);
+    assert.deepEqual(await storyAuthoritySnapshot(db), {
+      story_generation_status: "blocked",
+      story_source_revision: sourceRevision,
+      active_story_digest: null,
+    });
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
     delete globalThis.__oxygenLocalSqlite;

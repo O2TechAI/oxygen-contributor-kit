@@ -15,6 +15,30 @@ export function isStorySourceWriteInProgress(value: unknown) {
     || value === STORY_SOURCE_WRITE_STATUS.resumeGeneration;
 }
 
+/** Retire every durable binding derived from the active Story token. Source
+ * Privacy producers append these statements to the same transaction as their
+ * mutation, so consumers can observe either the old Privacy/active Story or the
+ * new Privacy/blocked Story, never a mixed authority. Source revision remains
+ * unchanged until the canonical activation path publishes a validated source. */
+export function activeStoryPrivacyInvalidationStatements(
+  db: SourcePublicationDatabase,
+  workflowRunId: string,
+  now: string,
+): SourcePublicationStatement[] {
+  const activeGuard = `EXISTS (SELECT 1 FROM workflow_runs
+    WHERE id=? AND story_generation_status='ready_for_human_review')`;
+  return [
+    db.prepare(`DELETE FROM project_all_set WHERE workflow_run_id=? AND ${activeGuard}`)
+      .bind(workflowRunId, workflowRunId),
+    db.prepare(`DELETE FROM story_privacy_authorities
+      WHERE workflow_run_id=? AND ${activeGuard}`).bind(workflowRunId, workflowRunId),
+    db.prepare(`UPDATE workflow_runs
+      SET story_generation_status='blocked',active_story_digest=NULL,updated_at=?
+      WHERE id=? AND story_generation_status='ready_for_human_review'`)
+      .bind(now, workflowRunId),
+  ];
+}
+
 /** Claim the existing Story generation status as a non-activatable source-write
  * boundary. A second mutation cannot overlap the first one. */
 export async function beginStorySourceMutation(

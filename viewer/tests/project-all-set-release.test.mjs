@@ -63,8 +63,13 @@ registerHooks({
   },
 });
 
-const { readStoryPrivacyAuthority } = await import("../lib/story-privacy-authority.ts");
+const {
+  decideStoryPrivacyCandidate,
+  readStoryPrivacyAuthority,
+} = await import("../lib/story-privacy-authority.ts");
 const { loadWorkspaceBootstrap } = await import("../lib/workflow-progress-server.ts");
+const sourcePrivacyDecisionRoute = await import("../app/api/redactions/[id]/route.ts");
+const workflowRoute = await import("../app/api/workflow/route.ts");
 
 const RUN = "release-all-set-run";
 const REVISION = 7;
@@ -284,6 +289,34 @@ async function setup() {
   return { db, stories, reviews, request: {
     workflowRunId: RUN, serverVersion: VERSION, sourceRevision: REVISION,
   } };
+}
+
+async function preparePendingSourcePrivacy(db) {
+  await db.prepare(`UPDATE redactions SET review_state='needs_confirmation',status='active',
+    uncertainty_reason='Contributor confirmation required',created_by='llm',updated_at=?
+    WHERE id='source-privacy-release'`).bind("2026-08-27T08:00:01.000Z").run();
+  const semantic = await readSemanticManifestAuthority(db, RUN);
+  assert.ok(semantic);
+  const authority = await readCoveragePrivacyAuthority(db, RUN, semantic);
+  assert.equal(authority.ok, true, JSON.stringify(authority));
+  await db.prepare(`UPDATE story_coverage_manifests SET privacy_authority_digest=?
+    WHERE workflow_run_id=?`).bind(authority.authority.snapshotDigest, RUN).run();
+}
+
+function decideSourcePrivacy() {
+  return sourcePrivacyDecisionRoute.PATCH(new Request(
+    "http://localhost/api/redactions/source-privacy-release",
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "keep" }),
+    },
+  ), { params: Promise.resolve({ id: "source-privacy-release" }) });
+}
+
+function rawSessionRow(db) {
+  return db.prepare(`SELECT state_json,updated_at,server_version FROM story_review_sessions
+    WHERE workflow_run_id=?`).bind(RUN).first();
 }
 
 test("real SQLite All set is fail-closed, concurrent-idempotent, and globally suppresses Privacy", async () => {
@@ -618,4 +651,187 @@ test("current Coverage Privacy authority gates hydration, CAS, Privacy, confirma
     assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request)).ok,
       true, mutation.label);
   }
+});
+
+test("source Privacy commits first and every active-Story writer loses the same token", async () => {
+  {
+    const { db } = await setup();
+    await preparePendingSourcePrivacy(db);
+    const prior = await readStoryReviewSessionRecord(db, RUN);
+    assert.ok(prior.session);
+    await db.prepare("DELETE FROM story_review_sessions WHERE workflow_run_id=?").bind(RUN).run();
+    const privacy = await decideSourcePrivacy();
+    assert.equal(privacy.status, 200, await privacy.text());
+    const create = await persistStoryReviewSessionCas(db, {
+      workflowRunId: RUN,
+      expectedVersion: 0,
+      sourceRevision: REVISION,
+      storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
+      session: prior.session,
+    }, "2026-08-27T08:00:02.000Z");
+    assert.equal(create.ok, false);
+    assert.equal(create.code, STORY_SESSION_ERROR.notReady);
+    assert.equal(await rawSessionRow(db), null);
+  }
+
+  {
+    const { db } = await setup();
+    await preparePendingSourcePrivacy(db);
+    const prior = await readStoryReviewSessionRecord(db, RUN);
+    const durableBefore = await rawSessionRow(db);
+    const privacyAuthority = await readStoryPrivacyAuthority(db, RUN);
+    assert.equal(privacyAuthority.ok, true);
+    const privacy = await decideSourcePrivacy();
+    assert.equal(privacy.status, 200, await privacy.text());
+
+    const noOp = await persistStoryReviewSessionCas(db, {
+      workflowRunId: RUN,
+      expectedVersion: VERSION,
+      sourceRevision: REVISION,
+      storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
+      session: { ...prior.session, updatedAt: "2099-01-01T00:00:00.000Z" },
+    }, "2026-08-27T08:00:03.000Z");
+    assert.equal(noOp.ok, false);
+    assert.equal(noOp.code, STORY_SESSION_ERROR.notReady);
+
+    const changed = structuredClone(prior.session);
+    changed.chapterReviews["chapter-one"] = returnChapterToReview(
+      changed.chapterReviews["chapter-one"],
+    );
+    const update = await persistStoryReviewSessionCas(db, {
+      workflowRunId: RUN,
+      expectedVersion: VERSION,
+      sourceRevision: REVISION,
+      storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
+      session: changed,
+    }, "2026-08-27T08:00:04.000Z");
+    assert.equal(update.ok, false);
+    assert.equal(update.code, STORY_SESSION_ERROR.notReady);
+    assert.deepEqual(await rawSessionRow(db), durableBefore,
+      "failed semantic and no-op CAS paths preserve exact durable bytes/version");
+
+    const pendingCandidate = privacyAuthority.authority.candidates.find(
+      (candidate) => candidate.id === "candidate-human",
+    );
+    assert.ok(pendingCandidate);
+    const storyPrivacy = await decideStoryPrivacyCandidate(db, {
+      workflowRunId: RUN,
+      sourceRevision: REVISION,
+      activeStoryDigest: privacyAuthority.authority.activeStoryDigest,
+      candidateDigest: privacyAuthority.authority.candidateDigest,
+      expectedVersion: 0,
+      decision: "keep",
+    }, pendingCandidate.id, "2026-08-27T08:00:05.000Z");
+    assert.equal(storyPrivacy.ok, false);
+    const candidateRow = await db.prepare(`SELECT decision,decision_version,decided_at
+      FROM story_privacy_candidates WHERE candidate_id='candidate-human'`).first();
+    assert.deepEqual(candidateRow, { decision: null, decision_version: 0, decided_at: null });
+  }
+});
+
+test("dependent write first then source Privacy invalidates hydration, Privacy, All set, HTML, and ZIP", async () => {
+  const { db, request } = await setup();
+  await db.prepare(`UPDATE story_privacy_candidates
+    SET decision='keep',decision_version=1,decided_at=? WHERE candidate_id='candidate-human'`)
+    .bind(NOW).run();
+  assert.equal((await confirmProjectAllSet(db, request, NOW)).ok, true);
+  await preparePendingSourcePrivacy(db);
+
+  const record = await readStoryReviewSessionRecord(db, RUN);
+  const dependent = await persistStoryReviewSessionCas(db, {
+    workflowRunId: RUN,
+    expectedVersion: VERSION,
+    sourceRevision: REVISION,
+    storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
+    session: { ...record.session, updatedAt: "2099-01-01T00:00:00.000Z" },
+  }, "2026-08-27T08:00:06.000Z");
+  assert.equal(dependent.ok, true);
+  assert.equal(dependent.noChange, true);
+
+  const privacy = await decideSourcePrivacy();
+  assert.equal(privacy.status, 200, await privacy.text());
+  assert.deepEqual(await db.prepare(`SELECT story_generation_status,story_source_revision,
+    active_story_digest FROM workflow_runs WHERE id=?`).bind(RUN).first(), {
+    story_generation_status: "blocked",
+    story_source_revision: REVISION,
+    active_story_digest: null,
+  });
+  assert.equal((await db.prepare("SELECT COUNT(*) AS total FROM project_all_set").first()).total, 0);
+  assert.equal((await db.prepare(
+    "SELECT COUNT(*) AS total FROM story_privacy_authorities",
+  ).first()).total, 0);
+  assert.equal((await readActiveStoryReviewContract(db, RUN)).storySourceSchema, null);
+  assert.equal((await loadWorkspaceBootstrap()).storySessionReadyRunId, "");
+  assert.equal((await readStoryPrivacyAuthority(db, RUN)).ok, false);
+  assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request)).ok, false);
+  assert.equal((await confirmProjectAllSet(db, request, NOW)).ok, false);
+
+  const html = await htmlPost(new Request("http://localhost/api/organization/export", {
+    method: "POST", body: JSON.stringify(request),
+  }));
+  const zip = await packagePost(new Request("http://localhost/api/package", {
+    method: "POST", body: JSON.stringify(request),
+  }));
+  assert.equal(html.status, 409);
+  assert.equal(zip.status, 409);
+  const failures = `${await html.text()}${await zip.text()}`;
+  assert.doesNotMatch(failures,
+    /source-privacy-release|Contributor confirmation|required|localhost|sqlite|trace|\.sqlite/iu);
+
+  const restart = await workflowRoute.POST(new Request("http://localhost/api/workflow", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ workflowRunId: RUN, event: "story_generation_started" }),
+  }));
+  assert.equal(restart.status, 200, await restart.text());
+  assert.equal((await db.prepare(
+    "SELECT story_generation_status FROM workflow_runs WHERE id=?",
+  ).bind(RUN).first()).story_generation_status, "running");
+});
+
+test("real SQLite concurrent source Privacy and session CAS has exactly one legal ordering", async () => {
+  const { db } = await setup();
+  await preparePendingSourcePrivacy(db);
+  const prior = await readStoryReviewSessionRecord(db, RUN);
+  await db.prepare("DELETE FROM story_review_sessions WHERE workflow_run_id=?").bind(RUN).run();
+  const [privacy, session] = await Promise.all([
+    decideSourcePrivacy(),
+    persistStoryReviewSessionCas(db, {
+      workflowRunId: RUN,
+      expectedVersion: 0,
+      sourceRevision: REVISION,
+      storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
+      session: prior.session,
+    }, "2026-08-27T08:00:07.000Z"),
+  ]);
+  assert.equal(privacy.status, 200, await privacy.text());
+  const durableCount = Number((await db.prepare(
+    "SELECT COUNT(*) AS total FROM story_review_sessions WHERE workflow_run_id=?",
+  ).bind(RUN).first()).total);
+  const sessionCommitted = session.ok && session.saved;
+  assert.equal(durableCount, sessionCommitted ? 1 : 0);
+  assert.equal(sessionCommitted, false);
+  assert.equal(session.code, STORY_SESSION_ERROR.stateInvalid,
+    "the scheduled privacy-first ordering is detected during canonical authority validation");
+  assert.equal((await db.prepare(
+    "SELECT story_generation_status FROM workflow_runs WHERE id=?",
+  ).bind(RUN).first()).story_generation_status, "blocked");
+
+  await setup();
+  await preparePendingSourcePrivacy(db);
+  const [unrelatedOrganization, unrelatedProbe, secondPrivacy] = await Promise.all([
+    db.prepare(`INSERT INTO organization_jobs
+      (id,status,stage,completed,total,warnings_json,started_at,updated_at,completed_at)
+      VALUES ('unrelated-organization','complete','done',0,0,'[]',?,?,?)`)
+      .bind(NOW, NOW, NOW).run(),
+    db.prepare(`INSERT INTO probes
+      (id,document_id,document_kind,event_ids_json,signal,recap,question,options_json,
+       presentations_json,created_at) VALUES
+      ('unrelated-probe','release-doc','trajectory','[]','preference','recap',
+       'Question?','[]','{}',?)`).bind(NOW).run(),
+    decideSourcePrivacy(),
+  ]);
+  assert.equal(Number(unrelatedOrganization.meta.changes), 1);
+  assert.equal(Number(unrelatedProbe.meta.changes), 1);
+  assert.equal(secondPrivacy.status, 200, await secondPrivacy.text());
 });

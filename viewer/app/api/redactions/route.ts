@@ -9,6 +9,7 @@ import {
   requireEstablishedWorkflowRun,
   workflowRunErrorResponse,
 } from "../../../lib/workflow-run-server";
+import { activeStoryPrivacyInvalidationStatements } from "../../../lib/story-source-publication";
 
 type IncomingRedaction = {
   id?: string;
@@ -35,6 +36,15 @@ const ALLOWED_CATEGORIES = new Set([
   "mosaic-reidentification",
 ]);
 const ALLOWED_IMPORT_REVIEW_STATES = new Set(["deterministic", "needs_confirmation"]);
+const SOURCE_PRIVACY_ERROR = {
+  requestInvalid: "SOURCE_PRIVACY_REQUEST_INVALID",
+  replacementInvalid: "SOURCE_PRIVACY_REPLACEMENT_INVALID",
+  mutationConflict: "SOURCE_PRIVACY_MUTATION_CONFLICT",
+} as const;
+
+function invalidRequest(error: string) {
+  return Response.json({ error, code: SOURCE_PRIVACY_ERROR.requestInvalid }, { status: 400 });
+}
 
 export async function GET() {
   const db = await getLocalDatabase();
@@ -61,30 +71,39 @@ export async function POST(request: Request) {
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
   }
-  const body = await request.json() as {
+  let body: {
     job?: { status: string; stage: string; model?: string; total?: number; rejected?: number };
     redactions?: IncomingRedaction[];
     replaceAll?: boolean;
   };
+  try {
+    const parsed = await request.json() as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return invalidRequest("A valid source Privacy replacement is required");
+    }
+    body = parsed as typeof body;
+  } catch {
+    return invalidRequest("A valid source Privacy replacement is required");
+  }
   const incoming = body.redactions ?? [];
   if (!body.job || typeof body.job !== "object") {
-    return Response.json({ error: "A redaction pass job is required" }, { status: 400 });
+    return invalidRequest("A redaction pass job is required");
   }
   if (!Array.isArray(incoming)) {
-    return Response.json({ error: "Redactions must be an array" }, { status: 400 });
+    return invalidRequest("Redactions must be an array");
   }
   if (body.replaceAll !== true) {
-    return Response.json({ error: "Bulk redaction imports must replace all spans" }, { status: 400 });
+    return invalidRequest("Bulk redaction imports must replace all spans");
   }
   const total = Number(body.job.total ?? incoming.length);
   const reportedRejected = Number(body.job.rejected ?? 0);
   if (!Number.isInteger(total) || total < 0
       || !Number.isInteger(reportedRejected) || reportedRejected < 0) {
-    return Response.json({ error: "Redaction totals must be non-negative integers" }, { status: 400 });
+    return invalidRequest("Redaction totals must be non-negative integers");
   }
   if (body.job.status !== "complete"
       || typeof body.job.stage !== "string" || body.job.stage.length === 0) {
-    return Response.json({ error: "Redaction pass must be complete" }, { status: 400 });
+    return invalidRequest("Redaction pass must be complete");
   }
 
   const rejected: Array<{ itemId: string; reason: string }> = [];
@@ -191,7 +210,8 @@ export async function POST(request: Request) {
         ? "Redaction total does not match the submitted span count"
         : "Redaction pass must be wholly valid and complete",
       imported: 0,
-      rejected,
+      code: SOURCE_PRIVACY_ERROR.replacementInvalid,
+      rejectedCount,
       reportedRejected,
       status: "incomplete",
     }, { status: 400 });
@@ -237,8 +257,17 @@ export async function POST(request: Request) {
       status, body.job.stage, persistable.length, total, rejectedCount,
       sourceDigest, now, now, jobId,
     ),
+    ...activeStoryPrivacyInvalidationStatements(db, authority.workflowRunId, now),
   ];
-  await db.batch(statements);
+  try {
+    await db.batch(statements);
+  } catch {
+    return Response.json({
+      error: "Source Privacy replacement conflicted",
+      code: SOURCE_PRIVACY_ERROR.mutationConflict,
+      imported: 0,
+    }, { status: 409 });
+  }
 
   return Response.json({ imported: persistable.length, rejected, status });
 }

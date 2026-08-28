@@ -43,6 +43,7 @@ const {
 } = await import("../lib/story-privacy-authority.ts");
 const { reconstructReviewedStoryPrivacyRevision } = await import("../lib/story-privacy-revision.ts");
 const importRoute = await import("../app/api/story-privacy/import/route.ts");
+const sourcePrivacyRoute = await import("../app/api/redactions/route.ts");
 const execFile = promisify(execFileCallback);
 
 const RUN_ID = "reviewed-story-privacy-run";
@@ -460,6 +461,53 @@ test("reviewed Story changes use one atomic current Privacy authority", async ()
     assert.equal(reverted.authority.status, "preparation_required");
     assert.deepEqual(reverted.authority.candidates.map((item) => item.id), [unchanged.id]);
     assert.doesNotMatch(JSON.stringify(current.authority), /PRIVATE_SOURCE_SENTINEL|PRIVATE_REVIEWED_TEXT_SENTINEL|Evidence|provider|candidate_json/iu);
+
+    const stalePreparation = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN_ID);
+    assert.equal(stalePreparation.ok, true);
+    assert.ok(stalePreparation.snapshot.changedTargets.length > 0);
+    const staleImport = await bundle(stalePreparation.snapshot, [{
+      id: "post-source-privacy-stale-import",
+      reviewState: "needs_confirmation",
+      title: "Current reviewed change",
+      whyFlagged: "The current reviewed target requires confirmation.",
+      uncertaintyReason: "Contributor confirmation is required.",
+      releaseTargets: [stalePreparation.snapshot.changedTargets[0].id],
+    }]);
+    const authorityRowsBefore = await db.prepare(`SELECT candidate_id,candidate_json,decision,
+      decision_version,decided_at FROM story_privacy_candidates ORDER BY candidate_id`).all();
+    assert.equal((await db.prepare(
+      "SELECT COUNT(*) AS total FROM story_privacy_authorities",
+    ).first()).total, 1);
+
+    const sourcePrivacy = await sourcePrivacyRoute.POST(new Request(
+      "http://localhost/api/redactions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          replaceAll: true,
+          job: { status: "complete", stage: "done", total: 0, rejected: 0 },
+          redactions: [],
+        }),
+      },
+    ));
+    assert.equal(sourcePrivacy.status, 200, await sourcePrivacy.text());
+    assert.deepEqual(await db.prepare(`SELECT story_generation_status,story_source_revision,
+      active_story_digest FROM workflow_runs WHERE id=?`).bind(RUN_ID).first(), {
+      story_generation_status: "blocked",
+      story_source_revision: SOURCE_REVISION,
+      active_story_digest: null,
+    });
+    assert.equal((await db.prepare(
+      "SELECT COUNT(*) AS total FROM story_privacy_authorities",
+    ).first()).total, 0);
+    const lostImport = await importReviewedStoryPrivacyAuthority(db, staleImport, NOW);
+    assert.equal(lostImport.ok, false);
+    assert.deepEqual((await db.prepare(`SELECT candidate_id,candidate_json,decision,
+      decision_version,decided_at FROM story_privacy_candidates ORDER BY candidate_id`).all()).results,
+    authorityRowsBefore.results);
+    assert.doesNotMatch(JSON.stringify(lostImport),
+      /PRIVATE_SOURCE_SENTINEL|PRIVATE_REVIEWED_TEXT_SENTINEL|localhost|sqlite|trace/iu);
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
     delete globalThis.__oxygenLocalSqlite;
