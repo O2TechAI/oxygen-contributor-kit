@@ -26,6 +26,13 @@ the exact contribution universe, and the semantic source digest. The skeleton is
 Organization input. An older reviewed package remains immutable evidence and is not an input to
 this command.
 
+The UTF-8 project summary is bounded by the existing 325,000-byte Story semantic-projection
+budget. Every producer-valid `project-map.json` is bounded to 6,600,000 serialized UTF-8 bytes:
+two unchanged 2,200,000-byte semantic-manifest budgets cover the intentional `semantic_units` and
+`semantic_manifest` representations, and a third covers deterministic JSON framing plus the
+remaining bounded project metadata. The builder checks the exact bytes its atomic writer emits.
+This transport envelope is independent of source domain and historical unit or Chapter counts.
+
 ## 2. Prepare immutable bounded worker inputs
 
 POSIX:

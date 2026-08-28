@@ -179,6 +179,18 @@ node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \
   --source-privacy work/<run>-review/current-public-source-privacy.json
 ```
 
+The first input may be either the canonical Organization project map or the bare semantic
+manifest. A canonical project map has a finite 6,600,000-byte transport envelope: it carries the
+bounded semantic membership twice (`semantic_units` and `semantic_manifest`), with one additional
+2,200,000-byte manifest budget for deterministic JSON framing and bounded project metadata. The
+finalizer checks that outer file bound on one opened file identity before decoding and rechecks the
+bytes read. It then extracts only a real `semantic_manifest`, deterministically serializes that
+inner authority, and applies the unchanged 2,200,000-byte semantic-manifest limit. A bare manifest
+keeps the same 2,200,000-byte transport and authority limit.
+
+Wrapper fields such as `semantic_units`, `summary`, source authority, and arbitrary metadata are
+not forwarded to Source Privacy or Coverage validation and never enter the coverage output.
+
 `--source-privacy` is required and accepts only the current public Source Privacy JSON
 response/projection from the same reviewed run. The complete job must have zero rejected rows and
 equal completed/total counts. Exact current semantic membership maps active final-redaction

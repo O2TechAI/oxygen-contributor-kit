@@ -21,6 +21,8 @@ import { STORY_PREFIX } from "../lib/timeline.ts";
 
 const hash = (value) => createHash("sha256").update(canonicalAuthorityJson(value)).digest("hex");
 const contributionRecords = (ids) => ids.map((id) => ({ id, sourceDigest: hash({ id }) }));
+const MAX_SEMANTIC_MANIFEST_BYTES = 2_200_000;
+const MAX_PROJECT_MAP_BYTES = 3 * MAX_SEMANTIC_MANIFEST_BYTES;
 
 function privacyRow(id, itemId, reviewState = "deterministic", overrides = {}) {
   return {
@@ -86,6 +88,35 @@ async function semanticAuthority(unitBOverrides = {}) {
     contributionRecords(contributionIds),
   );
   assert.equal(validation.ok, true);
+  return validation.authority;
+}
+
+async function semanticAuthorityForIdentities(contributionIds, unitCount) {
+  const records = contributionRecords(contributionIds);
+  const recordsById = new Map(records.map((record) => [record.id, record]));
+  const buckets = Array.from({ length: unitCount }, () => []);
+  contributionIds.forEach((id, index) => buckets[index % unitCount].push(id));
+  const units = buckets.map((members, index) => ({
+    id: `unit-${String(index).padStart(3, "0")}`,
+    revision: 1,
+    projectId: "Synthetic General Domain",
+    kind: index % 7 === 0 ? "routine" : "discussion",
+    members: members.sort(),
+    memberCount: members.length,
+    membershipDigest: hash(members.map((id) => recordsById.get(id))),
+  }));
+  const core = {
+    projectId: "Synthetic General Domain",
+    revision: 1,
+    sourceDigest: hash(records),
+    universeDigest: hash(contributionIds),
+    units,
+  };
+  const validation = await validateSemanticManifestAuthority(
+    { ...core, manifestDigest: hash(core) },
+    records,
+  );
+  assert.equal(validation.ok, true, validation.code);
   return validation.authority;
 }
 
@@ -280,6 +311,149 @@ test("coverage CLI advances only from explicitly server-accepted prior authority
   }
 });
 
+test("coverage CLI accepts a generic large project map and matches the bare manifest", async (context) => {
+  const root = mkdtempSync(join(tmpdir(), "oxygen-coverage-large-project-map-"));
+  try {
+    const repository = fileURLToPath(new URL("../..", import.meta.url));
+    const script = join(
+      repository, "skills", "oxygen-storytelling-review", "scripts", "finalize_story_coverage.mjs",
+    );
+    const contributionIds = Array.from({ length: 24_796 }, (_, index) => (
+      `synthetic-source-${String(index % 37).padStart(2, "0")}:contribution-`
+      + `${String(index).padStart(5, "0")}-${"x".repeat(24)}`
+    )).sort();
+    const semantic = await semanticAuthorityForIdentities(contributionIds, 64);
+    const semanticUnits = semantic.units.map((unit) => ({
+      id: unit.id,
+      kind: unit.kind,
+      members: unit.members,
+    }));
+    const projectMap = {
+      schema_version: "1",
+      primary_project: semantic.projectId,
+      summary: "A safe synthetic multi-source project used only for byte-bound validation.",
+      projects: [{
+        name: semantic.projectId,
+        event_count: contributionIds.length,
+        reason: "One repo-scoped projected contribution universe.",
+      }],
+      source_authority: {
+        sourceDigest: semantic.sourceDigest,
+        sourceCount: 37,
+        contributionCount: contributionIds.length,
+      },
+      semantic_units: semanticUnits,
+      semantic_manifest: semantic,
+    };
+    const projectMapText = `${JSON.stringify(projectMap, null, 2)}\n`;
+    const manifestText = JSON.stringify(semantic);
+    assert.ok(Buffer.byteLength(projectMapText) > MAX_SEMANTIC_MANIFEST_BYTES);
+    assert.ok(Buffer.byteLength(projectMapText) <= MAX_PROJECT_MAP_BYTES);
+    assert.ok(Buffer.byteLength(manifestText) < MAX_SEMANTIC_MANIFEST_BYTES);
+
+    const projectMapPath = join(root, "project-map.json");
+    const semanticPath = join(root, "semantic-manifest.json");
+    const draftPath = join(root, "draft.json");
+    const sourcePrivacyPath = join(root, "source-privacy.json");
+    const wrappedOutputPath = join(root, "wrapped-coverage.json");
+    const bareOutputPath = join(root, "bare-coverage.json");
+    writeFileSync(projectMapPath, projectMapText, "utf8");
+    writeFileSync(semanticPath, manifestText, "utf8");
+    writeFileSync(draftPath, JSON.stringify({ rows: semantic.units.map((unit, index) => ({
+      unitId: unit.id,
+      disposition: "represented",
+      ownerId: `chapter-${index % 12}`,
+    })) }), "utf8");
+    writeFileSync(sourcePrivacyPath, JSON.stringify(sourcePrivacy([])), "utf8");
+    const run = (input, output) => spawnSync(process.execPath, [
+      script, input, draftPath, output,
+      "--source-privacy", sourcePrivacyPath,
+    ], { cwd: repository, encoding: "utf8" });
+    const wrapped = run(projectMapPath, wrappedOutputPath);
+    const bare = run(semanticPath, bareOutputPath);
+    assert.equal(wrapped.status, 0, wrapped.stderr);
+    assert.equal(bare.status, 0, bare.stderr);
+    assert.deepEqual(readFileSync(wrappedOutputPath), readFileSync(bareOutputPath));
+    const outputText = readFileSync(wrappedOutputPath, "utf8");
+    assert.doesNotMatch(outputText, /synthetic-source|projected contribution universe|source_authority/);
+    context.diagnostic(JSON.stringify({
+      contributionIdentities: contributionIds.length,
+      semanticUnits: semantic.units.length,
+      projectMapBytes: Buffer.byteLength(projectMapText),
+      semanticManifestBytes: Buffer.byteLength(manifestText),
+    }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("coverage CLI byte and parse failures are fixed, closed, and output-atomic", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oxygen-coverage-fail-closed-"));
+  try {
+    const repository = fileURLToPath(new URL("../..", import.meta.url));
+    const script = join(
+      repository, "skills", "oxygen-storytelling-review", "scripts", "finalize_story_coverage.mjs",
+    );
+    const semantic = await semanticAuthority();
+    const semanticPath = join(root, "semantic.json");
+    const draftPath = join(root, "draft.json");
+    const sourcePrivacyPath = join(root, "source-privacy.json");
+    const outputPath = join(root, "coverage.json");
+    const rows = [
+      { unitId: "unit-a", disposition: "represented", ownerId: "chapter-a" },
+      { unitId: "unit-b", disposition: "excluded", exclusionReason: "routine_non_narrative" },
+    ];
+    writeFileSync(draftPath, JSON.stringify({ rows }), "utf8");
+    writeFileSync(sourcePrivacyPath, JSON.stringify(sourcePrivacy([])), "utf8");
+    const run = () => spawnSync(process.execPath, [
+      script, semanticPath, draftPath, outputPath,
+      "--source-privacy", sourcePrivacyPath,
+    ], { cwd: repository, encoding: "utf8" });
+    const sentinel = Buffer.from("PREEXISTING_OUTPUT_SENTINEL\n", "utf8");
+    const reject = (input, code, existing = true) => {
+      writeFileSync(semanticPath, input);
+      if (existing) writeFileSync(outputPath, sentinel);
+      else rmSync(outputPath, { force: true });
+      const result = run();
+      assert.equal(result.status, 1);
+      assert.equal(result.stderr.trim(), code);
+      if (existing) assert.deepEqual(readFileSync(outputPath), sentinel);
+      else assert.throws(() => readFileSync(outputPath));
+    };
+
+    reject(JSON.stringify({
+      semantic_manifest: semantic,
+      padding: "x".repeat(MAX_PROJECT_MAP_BYTES),
+    }), "PROJECT_MAP_TRANSPORT_TOO_LARGE", false);
+    reject(JSON.stringify({
+      semantic_manifest: { ...semantic, padding: "x".repeat(MAX_SEMANTIC_MANIFEST_BYTES) },
+    }), "SEMANTIC_MANIFEST_TOO_LARGE");
+    reject(Uint8Array.from([0xc3, 0x28]), "STORY_COVERAGE_JSON_INVALID");
+    reject("{\"semantic_manifest\":", "STORY_COVERAGE_JSON_INVALID");
+    reject(JSON.stringify({ schema_version: "1", semantic_units: [] }),
+      "PROJECT_MAP_SEMANTIC_MANIFEST_INVALID");
+    reject(JSON.stringify({ schema_version: "1", semantic_units: [], semantic_manifest: null }),
+      "PROJECT_MAP_SEMANTIC_MANIFEST_INVALID");
+
+    writeFileSync(semanticPath, JSON.stringify(semantic), "utf8");
+    writeFileSync(draftPath, JSON.stringify({ rows: [] }), "utf8");
+    writeFileSync(outputPath, sentinel);
+    const invalidCoverage = run();
+    assert.equal(invalidCoverage.status, 1);
+    assert.equal(invalidCoverage.stderr.trim(), "COVERAGE_UNIT_MISSING");
+    assert.deepEqual(readFileSync(outputPath), sentinel);
+
+    writeFileSync(draftPath, JSON.stringify({ rows }), "utf8");
+    writeFileSync(sourcePrivacyPath, JSON.stringify(sourcePrivacy([], { status: "stale" })), "utf8");
+    const invalidPrivacy = run();
+    assert.equal(invalidPrivacy.status, 1);
+    assert.equal(invalidPrivacy.stderr.trim(), "COVERAGE_PRIVACY_AUTHORITY_MISSING");
+    assert.deepEqual(readFileSync(outputPath), sentinel);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("coverage CLI requires current Source Privacy for privacy_withheld rows and explicit zero", async () => {
   const root = mkdtempSync(join(tmpdir(), "oxygen-coverage-privacy-finalizer-"));
   try {
@@ -357,7 +531,7 @@ test("coverage CLI requires current Source Privacy for privacy_withheld rows and
     writeFileSync(sourcePrivacyPath, Uint8Array.from([0xc3, 0x28]));
     const invalidUtf8 = run();
     assert.equal(invalidUtf8.status, 1);
-    assert.match(invalidUtf8.stderr, /encoded data was not valid|UTF-8/i);
+    assert.equal(invalidUtf8.stderr.trim(), "STORY_COVERAGE_JSON_INVALID");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
