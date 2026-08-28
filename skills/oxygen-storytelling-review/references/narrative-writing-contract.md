@@ -12,6 +12,10 @@ Retain every reviewed-Evidence-supported unit that materially explains backgroun
 
 Never invent dialogue, people, emotion, motivation, Evidence, causal certainty, consensus, or a cleaner ending.
 
+## Evidence-Backed Engagement
+
+Write for a technically curious reader. Make the supported arc engaging by quickly establishing the real purpose, constraint, or starting state; using concrete actors and actions; and preserving supported attempts, failures, corrections, decisions, consequences, or unresolved boundaries when present. Let interest come from what actually changed, became understood, or was established. Do not invent stakes, drama, emotion, dialogue, motive, conflict, causality, or closure. When the evidence is ordinary, make it clear and specific rather than theatrical.
+
 ## Story Generation Order
 
 Use these conceptual passes inside Build Project Story:

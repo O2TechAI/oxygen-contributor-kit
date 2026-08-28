@@ -32,6 +32,18 @@ authority are not copied into every shard. A worker reads exactly one Privacy-sa
 writes only its proposal; it never writes a digest, receipt, final manifest, SQLite, Viewer API,
 revision, activation state, release state, or publication state.
 
+Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
+
+1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
+2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
+3. Then read exactly the assignment's one generated Privacy-safe `inputPath`.
+4. Write only that assignment's proposal.
+
+The parent must not dispatch a Story worker unless the assignment names both required contract
+paths, the one actual generated `inputPath` copied from the Story shard manifest, and the
+proposal-only write boundary. The Story worker reads no other data input and never writes a
+receipt, final artifact, or authority file.
+
 When host subagents are available, the parent dispatches every nonempty shard automatically in
 waves of at most three live subagents. Silently doing all semantic reasoning in the parent is
 invalid. Internal host subagents are not product provider/API calls, require no separate API key,
@@ -109,6 +121,10 @@ waves of at most three, waits, and runs the shown recorder once per shard using 
 returned to the same assignment for bounded proposal-only correction against the unchanged input.
 The parent requires one terminal receipt per shard before compose/finalize and continues without a
 contributor pause.
+
+For each Story shard, the dispatch message itself must include the four ordered assignment steps
+above with the generated shard's literal `inputPath` and assigned proposal destination. A reference
+to this document alone does not convey the writing contracts to the Story worker.
 
 Prepare, record, and compose the base Story:
 

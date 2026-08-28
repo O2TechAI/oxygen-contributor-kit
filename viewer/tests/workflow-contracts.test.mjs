@@ -135,6 +135,53 @@ test("reviewed Story has no numeric quota and Preferences stays inside the revie
   assert.match(agents, /Never[\s\S]{0,180}upload automatically[\s\S]{0,80}publish automatically/);
 });
 
+test("fresh parent Story-worker assignments convey both writing contracts before bounded input", async () => {
+  const assignmentMarker = "Every `story`-lane subagent assignment must convey this ordered contract before dispatch:";
+  const narrativePath = "skills/oxygen-storytelling-review/references/narrative-writing-contract.md";
+  const dataPath = "skills/oxygen-storytelling-review/references/story-data-contract.md";
+  const documents = await Promise.all([
+    read("AGENTS.md"),
+    read("SOP.md"),
+    read("skills/oxygen-storytelling-review/SKILL.md"),
+    read("skills/oxygen-storytelling-review/references/story-preparation-transport.md"),
+  ]);
+
+  for (const document of documents) {
+    const start = document.indexOf(assignmentMarker);
+    assert.ok(start >= 0, "parent-facing Story dispatch instructions must carry the assignment gate");
+    const assignment = document.slice(start, start + 1_600);
+    assertOrdered(assignment, [
+      assignmentMarker,
+      `\`${narrativePath}\` completely`,
+      `\`${dataPath}\` completely`,
+      "Then read exactly",
+      "`inputPath`",
+      "Write only",
+      "proposal",
+    ]);
+    assert.match(assignment, /(?:Do not|must not) dispatch a Story worker (?:unless|until)/);
+    assert.match(assignment, /actual generated[\s\S]{0,80}`inputPath`/);
+    assert.match(assignment, /proposal-only write boundary/);
+  }
+
+  await Promise.all([access(repositoryFile(narrativePath)), access(repositoryFile(dataPath))]);
+});
+
+test("Narrative contract asks for evidence-backed engagement without fabrication", async () => {
+  const [narrativeContract, storyDataContract] = await Promise.all([
+    read("skills/oxygen-storytelling-review/references/narrative-writing-contract.md"),
+    read("skills/oxygen-storytelling-review/references/story-data-contract.md"),
+  ]);
+
+  assert.match(narrativeContract, /Write for a technically curious reader\./);
+  assert.match(narrativeContract, /quickly establishing the real purpose, constraint, or starting state/);
+  assert.match(narrativeContract, /using concrete actors and actions/);
+  assert.match(narrativeContract, /Let interest come from what actually changed, became understood, or was established\./);
+  assert.match(narrativeContract, /Do not invent stakes, drama, emotion, dialogue, motive, conflict, causality, or closure\./);
+  assert.match(narrativeContract, /ordinary[\s\S]{0,80}clear and specific rather than theatrical/);
+  assert.doesNotMatch(storyDataContract, /engagement/i);
+});
+
 test("Story public contracts preserve coverage, Insight, and Privacy release semantics", async () => {
   const [
     storySkill,

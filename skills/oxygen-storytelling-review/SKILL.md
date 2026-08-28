@@ -166,6 +166,17 @@ exact union/no overlap, finalizes authority, performs Viewer mutations, and wait
 receipts. No worker may silently expand scope, reopen raw history, repair another lane, or treat
 another lane's failure as success.
 
+Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
+
+1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
+2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
+3. Then read exactly the assignment's one generated Privacy-safe `inputPath`.
+4. Write only that assignment's proposal.
+
+Do not dispatch a Story worker unless its assignment names both required contract paths, its one
+actual generated `inputPath`, and its proposal-only write boundary. The worker must not read any
+other data input or write a receipt, final artifact, or authority file.
+
 A fixed safe pre-receipt validation failure enters a bounded automatic authoring-correction loop
 against the byte-identical shard input. Only the non-authoritative proposal may change; this is not
 a contributor pause and may never rewrite durable output. If host subagents are genuinely

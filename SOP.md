@@ -304,6 +304,16 @@ Workers never write receipts, final manifests, SQLite, Viewer APIs, revisions, a
 release state, or publication state. Internal host subagents are not product provider/API calls,
 require no separate API key, and receive no raw/private source beyond the prepared input.
 
+Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
+
+1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
+2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
+3. Then read exactly the assignment's one generated Privacy-safe `inputPath`.
+4. Write only that assignment's proposal.
+
+Do not dispatch a Story worker until the assignment names both contract paths, the actual generated
+`inputPath`, and the proposal-only write boundary. No other data input is part of that assignment.
+
 The parent waits for proposals, invokes the public recorder for each shard, installs output plus
 receipt as one atomic immutable pair, verifies the terminal receipt count, composes, proves exact
 union/no overlap, and finalizes authority before continuing. A fixed safe pre-receipt validation
@@ -430,6 +440,10 @@ performs this lifecycle without contributor intervention:
 2. Dispatch available host subagents in waves of at most three. Each receives exactly one
    `inputPath` and may write only its proposal. If subagents are unavailable, process those same
    inputs serially and set `executionMode=serial_capability_limited`.
+   For every `story`-lane assignment, first convey the complete-read requirements for
+   `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` and
+   `skills/oxygen-storytelling-review/references/story-data-contract.md`; only after both reads may
+   the worker read its named generated `inputPath` and write its proposal.
 3. Wait for each proposal, then run the recorder with that manifest shard ID and proposal path.
 4. If the recorder returns a fixed safe validation code before output and receipt exist, return it
    automatically to the same assignment through a bounded correction loop. Preserve the input

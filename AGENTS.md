@@ -45,6 +45,17 @@ continues through the identical recorder/finalizer authority without asking the 
 create workers. Internal host subagents are not product provider/API calls, require no separate API
 key, and receive no raw/private source beyond the prepared Privacy-safe input.
 
+Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
+
+1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
+2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
+3. Then read exactly the assignment's one generated Privacy-safe `inputPath`.
+4. Write only that assignment's proposal.
+
+Do not dispatch a Story worker unless its assignment names both required contract paths, its one
+actual generated `inputPath`, and its proposal-only write boundary. The worker must not read any
+other data input or write a receipt, final artifact, or authority file.
+
 Pause for the contributor at Project Story human review, Privacy Keep/Redact decisions, Preference
 answers, `All set`, and release handoff. These explicit review and decision boundaries are the only
 contributor pauses. Do not fabricate Story edits, Privacy decisions,
