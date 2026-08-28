@@ -148,10 +148,40 @@ Preference bundle, and emits the existing `oxygen.story-preparation` manifest.
 Set paths once:
 
 ```powershell
+$Organization = $null
+try {
+  $Organization = Invoke-RestMethod -Method Get -Uri "$Viewer/api/organization"
+  if ($Organization.status -cne "complete" -or $null -eq $Organization.semanticManifest) {
+    throw "current Organization authority is unavailable"
+  }
+  $SourceRevision = $Organization.semanticManifest.sourceRevision
+  if ($SourceRevision -isnot [ValueType] -or $SourceRevision -is [bool]) {
+    throw "current Organization source revision is invalid"
+  }
+  $SourceRevisionDecimal = [decimal]$SourceRevision
+  if ($SourceRevisionDecimal -ne [decimal]::Truncate($SourceRevisionDecimal) -or
+      $SourceRevisionDecimal -lt 1 -or
+      $SourceRevisionDecimal -gt 9007199254740991) {
+    throw "current Organization source revision is invalid"
+  }
+}
+catch {
+  [Console]::Error.WriteLine("CURRENT_SOURCE_REVISION_UNAVAILABLE")
+  return
+}
+
 $Transport = "$Review\story-preparation"
 $StoryProposals = "$Review\story-proposals"
 $StoryPhases = "$Review\story-phases.json"
 ```
+
+This is the only source-revision lookup. The current Organization projection exposes the field only
+while semantic, source, finalized-corpus, and current document/item authority remain consistent.
+Do not read source revision from `/api/workflow`, semantic manifest `revision`, project-map
+revision, an old run, saved state, SQLite, a default, a sentinel, literal zero, or inferred counts.
+The bound `$SourceRevision` is reused unchanged for Preference validation and final preparation.
+If the projection or positive JavaScript-safe revision is unavailable, the fixed category above
+stops the parent before any worker output or receipt exists.
 
 After each Story, Insight, or Story Privacy `prepare` command, the parent reads that lane's
 `shards.json`, dispatches all nonempty shards in waves of at most three, and waits. For Story it
@@ -221,13 +251,13 @@ python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py
   --context "$Review\preference-context.json" `
   --candidates "<proposal-path>" `
   --workflow-run-id "$WorkflowRun" `
-  --source-revision 0 `
+  --source-revision $SourceRevision `
   --output "$Review\preference-bundle.json"
 node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
   "$Transport" preference "<manifest-shard-id>" "$Review\preference-bundle.json"
 ```
 
-Use the actual current Viewer source revision in place of `0`, then finalize:
+Finalize with that same bound current Viewer source revision:
 
 ```powershell
 node .\skills\oxygen-storytelling-review\scripts\finalize_story_preparation.mjs `
@@ -237,7 +267,7 @@ node .\skills\oxygen-storytelling-review\scripts\finalize_story_preparation.mjs 
   "$Review\preference-bundle.json" `
   "$Review\story-preparation-manifest.json" `
   --workflow-run-id "$WorkflowRun" `
-  --source-revision 0
+  --source-revision $SourceRevision
 ```
 
 Only after this succeeds may the existing launcher receive coverage, Story candidates, the exact

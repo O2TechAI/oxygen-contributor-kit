@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -70,6 +70,45 @@ test("Python preference producer emits the exact Core digest batch accepted by P
     else process.env.OXYGEN_VIEWER_STATE_DIR = previous;
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("Python preference producer rejects zero source authority without creating or replacing output", async (t) => {
+  for (const [name, candidateValue] of [
+    ["completed-zero", { probes: [], bulkDecisions: [], setAside: 0 }],
+    ["completed-nonzero", candidates],
+  ]) await t.test(name, async () => {
+    const dir = await mkdtemp(join(tmpdir(), "oxygen-preference-zero-authority-"));
+    try {
+      const contextPath = join(dir, "preference-context.json");
+      const candidatesPath = join(dir, "preference-candidates.json");
+      const outputPath = join(dir, "preference-bundle.json");
+      await writeFile(contextPath, JSON.stringify(context));
+      await writeFile(candidatesPath, JSON.stringify(candidateValue));
+      const invoke = () => spawnSync("python", [FINALIZER,
+        "--context", contextPath,
+        "--candidates", candidatesPath,
+        "--workflow-run-id", RUN_ID,
+        "--source-revision", "0",
+        "--output", outputPath,
+      ], { encoding: "utf8" });
+
+      const absent = invoke();
+      assert.notEqual(absent.status, 0);
+      assert.equal(absent.stdout, "");
+      assert.match(absent.stderr, /^error: workflow authority is invalid\r?\n$/u);
+      assert.equal(existsSync(outputPath), false);
+
+      const sentinel = Buffer.from("preserve-existing-preference-output-byte-for-byte\n");
+      await writeFile(outputPath, sentinel);
+      const existing = invoke();
+      assert.notEqual(existing.status, 0);
+      assert.equal(existing.stdout, "");
+      assert.match(existing.stderr, /^error: workflow authority is invalid\r?\n$/u);
+      assert.deepEqual(await readFile(outputPath), sentinel);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 test("producer sources have no HTTP, SQLite, or provider execution surface", async () => {

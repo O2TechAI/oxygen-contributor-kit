@@ -466,7 +466,8 @@ function validatePreference(value, input) {
   const context = input.payload?.preferenceContext;
   if (!isObject(context) || !Array.isArray(context.reviewedEvidence)
     || !exactKeys(value, preferenceKeys) || !boundedId(value.workflowRunId, 1_000)
-    || !nonnegative(value.sourceRevision) || value.inputDigest !== input.inputDigest
+    || !nonnegative(value.sourceRevision) || value.sourceRevision < 1
+    || value.inputDigest !== input.inputDigest
     || !/^[0-9a-f]{64}$/u.test(value.outputDigest) || !nonnegative(value.outputCount)
     || !nonnegative(value.setAside) || !Array.isArray(value.probes) || !Array.isArray(value.bulkDecisions)) {
     fail("PREFERENCE_BUNDLE_INVALID");

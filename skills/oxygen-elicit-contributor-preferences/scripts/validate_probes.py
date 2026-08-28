@@ -158,7 +158,8 @@ def bulk(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
 
 def finalize(context: Any, candidates: Any, workflow_run_id: str, source_revision: int) -> dict[str, Any]:
     evidence = context_evidence(context)
-    if not stable_id(workflow_run_id, 1_000) or not PREPARE.nonnegative_integer(source_revision):
+    if (not stable_id(workflow_run_id, 1_000)
+            or not PREPARE.nonnegative_integer(source_revision) or source_revision < 1):
         raise ValueError("workflow authority is invalid")
     if (not exact(candidates, {"probes", "bulkDecisions", "setAside"})
             or not isinstance(candidates["probes"], list)

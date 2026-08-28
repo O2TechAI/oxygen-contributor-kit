@@ -226,11 +226,15 @@ async function fixture({
   return { directory, shards, output: join(directory, "output.json"), rows, cleanup: () => rm(directory, { recursive: true, force: true }) };
 }
 
-function run(fixtureValue, trailing = []) {
+function runWithRevision(fixtureValue, sourceRevision, trailing = []) {
   return spawnSync(process.execPath, [script, join(fixtureValue.directory, "semantic.json"),
     join(fixtureValue.directory, "candidates.json"), fixtureValue.shards,
     join(fixtureValue.directory, "preference.json"), fixtureValue.output,
-    "--workflow-run-id", "run-11", "--source-revision", "4", ...trailing], { encoding: "utf8" });
+    "--workflow-run-id", "run-11", "--source-revision", sourceRevision, ...trailing], { encoding: "utf8" });
+}
+
+function run(fixtureValue, trailing = []) {
+  return runWithRevision(fixtureValue, "4", trailing);
 }
 
 async function mutatePreferenceAuthority(fixtureValue, mutate) {
@@ -294,6 +298,33 @@ test("the exact CLI rejects trailing arguments without writing output", async ()
     assert.notEqual(result.status, 0);
     await assert.rejects(readFile(value.output, "utf8"), { code: "ENOENT" });
   } finally { await value.cleanup(); }
+});
+
+test("zero CLI source revision cannot create or replace completed-zero or nonzero terminal output", async (t) => {
+  for (const [name, questions] of [["completed-zero", false], ["completed-nonzero", true]]) {
+    await t.test(name, async () => {
+      const value = await fixture({ questions });
+      try {
+        const sentinel = Buffer.from("preserve-existing-terminal-output-byte-for-byte\n");
+        await writeFile(value.output, sentinel);
+        const rejected = runWithRevision(value, "0");
+        assert.notEqual(rejected.status, 0);
+        assert.equal(rejected.stdout, "");
+        assert.match(rejected.stderr, /^CLI_USAGE\r?\n$/u);
+        assert.deepEqual(await readFile(value.output), sentinel);
+
+        await rm(value.output);
+        const accepted = runWithRevision(value, "4");
+        assert.equal(accepted.status, 0, accepted.stderr);
+        const manifest = await readJson(value.output);
+        assert.equal(manifest.sourceRevision, 4);
+        assert.equal(manifest.receipts.find((receipt) => receipt.lane === "preference").outputCount,
+          questions ? 2 : 0);
+      } finally {
+        await value.cleanup();
+      }
+    });
+  }
 });
 
 test("the sole public Story candidate input rejects every enriched or extra field", async (t) => {

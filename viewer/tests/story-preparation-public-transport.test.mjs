@@ -297,6 +297,7 @@ async function createFlow({
   narrativeBytes = 0,
   insightSuffixes = suffixes,
   reverseManifests = false,
+  deferPreferenceRecord = false,
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "story-public-transport-"));
   const semantic = semanticAuthority({ suffixes, projectId, kinds });
@@ -415,16 +416,19 @@ async function createFlow({
   ]);
   const preferenceManifest = await readJson(join(transport, "preference", "shards.json"));
   assert.equal(preferenceManifest.shards.length, 1);
-  runOk(process.execPath, [record, transport, "preference", preferenceManifest.shards[0].id, preferenceBundle]);
 
   const preparationManifest = join(root, "story-preparation-manifest.json");
-  runOk(process.execPath, [finalize,
-    projectMapPath, candidates, transport, preferenceBundle, preparationManifest,
-    "--workflow-run-id", "public-canary-run", "--source-revision", "4",
-  ]);
+  if (!deferPreferenceRecord) {
+    runOk(process.execPath, [record, transport, "preference", preferenceManifest.shards[0].id, preferenceBundle]);
+    runOk(process.execPath, [finalize,
+      projectMapPath, candidates, transport, preferenceBundle, preparationManifest,
+      "--workflow-run-id", "public-canary-run", "--source-revision", "4",
+    ]);
+  }
   return {
     root, semanticPath, projectMapPath, transport, candidates,
-    preferenceBundle, preparationManifest,
+    preferenceContext, preferenceCandidates, preferenceBundle, preferenceManifest,
+    preparationManifest,
     cleanup: () => rm(root, { recursive: true, force: true }),
   };
 }
@@ -759,6 +763,62 @@ test("public commands bind completed-zero Insight, Story Privacy, and Preference
       assert.equal(receipt.outputCount, 0);
       assert.equal(receipt.outputDigest, "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945");
     }
+  } finally {
+    await flow.cleanup();
+  }
+});
+
+test("Preference recorder rejects zero before receipt, accepts corrected authority, and stays immutable", async () => {
+  const flow = await createFlow({ deferPreferenceRecord: true });
+  try {
+    const shard = flow.preferenceManifest.shards[0];
+    const inputPath = join(flow.transport, ...shard.inputPath.split("/"));
+    const recordRoot = join(flow.transport, "preference", "records", shard.id);
+    const outputPath = join(recordRoot, "output.json");
+    const receiptPath = join(recordRoot, "receipt.json");
+    const inputBefore = await readFile(inputPath);
+    const validBundle = await readJson(flow.preferenceBundle);
+    await json(flow.preferenceBundle, { ...validBundle, sourceRevision: 0 });
+
+    const rejected = run(process.execPath, [record, flow.transport, "preference", shard.id,
+      flow.preferenceBundle]);
+    assert.notEqual(rejected.status, 0);
+    assert.equal(rejected.stdout, "");
+    assert.match(rejected.stderr, /^PREFERENCE_BUNDLE_INVALID\r?\n$/u);
+    assert.equal(existsSync(outputPath), false);
+    assert.equal(existsSync(receiptPath), false);
+    assert.deepEqual(await readFile(inputPath), inputBefore);
+
+    runOk("python", [validateProbes,
+      "--context", flow.preferenceContext,
+      "--candidates", flow.preferenceCandidates,
+      "--workflow-run-id", "public-canary-run",
+      "--source-revision", "4",
+      "--output", flow.preferenceBundle,
+    ]);
+    runOk(process.execPath, [record, flow.transport, "preference", shard.id,
+      flow.preferenceBundle]);
+    assert.deepEqual(await readFile(inputPath), inputBefore);
+    const outputBefore = await readFile(outputPath);
+    const receiptBefore = await readFile(receiptPath);
+
+    const differingCandidates = await readJson(flow.preferenceCandidates);
+    differingCandidates.probes[0].question = "Which reviewed boundary should the agent retain?";
+    await json(flow.preferenceCandidates, differingCandidates);
+    runOk("python", [validateProbes,
+      "--context", flow.preferenceContext,
+      "--candidates", flow.preferenceCandidates,
+      "--workflow-run-id", "public-canary-run",
+      "--source-revision", "4",
+      "--output", flow.preferenceBundle,
+    ]);
+    const immutable = run(process.execPath, [record, flow.transport, "preference", shard.id,
+      flow.preferenceBundle]);
+    assert.notEqual(immutable.status, 0);
+    assert.match(immutable.stderr, /^AUTHORITY_IMMUTABLE\r?\n$/u);
+    assert.deepEqual(await readFile(outputPath), outputBefore);
+    assert.deepEqual(await readFile(receiptPath), receiptBefore);
+    assert.deepEqual(await readFile(inputPath), inputBefore);
   } finally {
     await flow.cleanup();
   }

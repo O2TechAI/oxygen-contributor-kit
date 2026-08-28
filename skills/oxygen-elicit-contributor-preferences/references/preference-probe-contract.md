@@ -64,18 +64,19 @@ reviewed bundle that supplied each cited identity; Core POST independently reche
 the item owner against its SQLite document snapshot.
 
 Stable IDs reject all ASCII controls. Safe display text rejects ASCII controls except tab, LF, and
-CR, matching Core's safe-text boundary. Every integer that crosses into JavaScript is a
-nonnegative safe integer no larger than `9007199254740991`. Canonical-option comparison performs
-ECMAScript whitespace trimming, removes trailing ASCII `.` characters, and folds only ASCII
-`A`–`Z`; non-ASCII characters remain verbatim so Python and JavaScript cannot diverge by Unicode
-runtime tables.
+CR, matching Core's safe-text boundary. `sourceRevision` is a positive safe integer in
+`1..9007199254740991`; every other integer that crosses into JavaScript is a nonnegative safe
+integer no larger than `9007199254740991`. Canonical-option comparison performs ECMAScript
+whitespace trimming, removes trailing ASCII `.` characters, and folds only ASCII `A`–`Z`;
+non-ASCII characters remain verbatim so Python and JavaScript cannot diverge by Unicode runtime
+tables.
 
 The finalizer emits exactly nine API fields:
 
-```json
+```text
 {
   "workflowRunId": "run",
-  "sourceRevision": 0,
+  "sourceRevision": <positive current Viewer source revision>,
   "inputDigest": "sha256",
   "outputDigest": "sha256",
   "outputCount": 0,
@@ -93,3 +94,5 @@ arrays deterministically. Completed-zero requires empty arrays, `setAside: 0`, a
 `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`.
 
 Invalid finalization never creates or changes its output file.
+Completed-zero describes the empty `probes` and `bulkDecisions` arrays; it never permits a zero
+`sourceRevision`.

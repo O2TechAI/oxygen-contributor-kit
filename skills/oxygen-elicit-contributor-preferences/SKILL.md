@@ -166,6 +166,14 @@ Write `preference-candidates.json` per
 [references/preference-probe-contract.md](references/preference-probe-contract.md), then finalize
 the only API-shaped output before handing off:
 
+The workflow-owning parent must already have bound `$SourceRevision` exactly once from the current
+complete local `GET $Viewer/api/organization` projection's non-null
+`semanticManifest.sourceRevision`, before any Story-preparation worker receipt exists. That value
+must be a positive JavaScript-safe integer and is reused unchanged here and by final Story
+preparation. It never comes from `/api/workflow`, a manifest `revision`, saved state, SQLite, a
+default, a sentinel, or an inferred count. If it is unavailable, stop with
+`CURRENT_SOURCE_REVISION_UNAVAILABLE` before worker output or receipt creation.
+
 ```powershell
 python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
   --context "$Review\preference-context.json" `

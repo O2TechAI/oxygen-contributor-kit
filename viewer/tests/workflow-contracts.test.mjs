@@ -228,6 +228,39 @@ test("Story preparation bounds proposal correction and keeps Preference global",
   }
 });
 
+test("public Story preparation binds current source revision from Organization before receipts", async () => {
+  const [sop, storyTransport, preferenceSkill, preferenceContract] = await Promise.all([
+    read("SOP.md"),
+    read("skills/oxygen-storytelling-review/references/story-preparation-transport.md"),
+    read("skills/oxygen-elicit-contributor-preferences/SKILL.md"),
+    read("skills/oxygen-elicit-contributor-preferences/references/preference-probe-contract.md"),
+  ]);
+  for (const document of [sop, storyTransport]) {
+    assert.match(document, /Invoke-RestMethod -Method Get -Uri "\$Viewer\/api\/organization"/u);
+    assert.match(document, /\$Organization\.status -cne "complete"/u);
+    assert.match(document, /\$null -eq \$Organization\.semanticManifest/u);
+    assert.match(document,
+      /\$SourceRevision = \$Organization\.semanticManifest\.sourceRevision/u);
+    assert.match(document, /\$SourceRevisionDecimal -lt 1/u);
+    assert.match(document, /\$SourceRevisionDecimal -gt 9007199254740991/u);
+    assert.match(document, /CURRENT_SOURCE_REVISION_UNAVAILABLE/u);
+    assert.ok(document.indexOf("$Viewer/api/organization")
+      < document.indexOf("record_story_preparation.mjs"));
+    assert.match(document,
+      /validate_probes\.py[\s\S]{0,500}--source-revision \$SourceRevision/u);
+    assert.match(document,
+      /finalize_story_preparation\.mjs[\s\S]{0,500}--source-revision \$SourceRevision/u);
+  }
+  const publicAuthorityContracts = [sop, storyTransport, preferenceSkill, preferenceContract].join("\n");
+  assert.doesNotMatch(publicAuthorityContracts,
+    /\$SourceRevision\s*=\s*0\b|--source-revision\s+0\b/u);
+  assert.doesNotMatch(publicAuthorityContracts,
+    /Invoke-RestMethod[^\n]+\/api\/workflow|\$SourceRevision\s*=[^\n]*\/api\/workflow/u);
+  assert.match(preferenceSkill, /positive JavaScript-safe integer/u);
+  assert.match(preferenceSkill, /never comes from `\/api\/workflow`/u);
+  assert.match(preferenceContract, /Completed-zero[\s\S]{0,120}never permits a zero/u);
+});
+
 test("Story public contracts preserve coverage, Insight, and Privacy release semantics", async () => {
   const [
     storySkill,

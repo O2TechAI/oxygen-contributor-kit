@@ -515,10 +515,31 @@ The non-Story commands containing `<manifest-shard-id>` and `<proposal-path>` be
 once for each enumerated shard, not typed or scheduled by the contributor.
 
 ```powershell
+$Organization = $null
+try {
+  $Organization = Invoke-RestMethod -Method Get -Uri "$Viewer/api/organization"
+  if ($Organization.status -cne "complete" -or $null -eq $Organization.semanticManifest) {
+    throw "current Organization authority is unavailable"
+  }
+  $SourceRevision = $Organization.semanticManifest.sourceRevision
+  if ($SourceRevision -isnot [ValueType] -or $SourceRevision -is [bool]) {
+    throw "current Organization source revision is invalid"
+  }
+  $SourceRevisionDecimal = [decimal]$SourceRevision
+  if ($SourceRevisionDecimal -ne [decimal]::Truncate($SourceRevisionDecimal) -or
+      $SourceRevisionDecimal -lt 1 -or
+      $SourceRevisionDecimal -gt 9007199254740991) {
+    throw "current Organization source revision is invalid"
+  }
+}
+catch {
+  [Console]::Error.WriteLine("CURRENT_SOURCE_REVISION_UNAVAILABLE")
+  return
+}
+
 $Transport = "$Review\story-preparation"
 $StoryProposals = "$Review\story-proposals"
 $StoryPhases = "$Review\story-phases.json"
-$SourceRevision = 0 # Replace with the current source revision reported by this Viewer run.
 
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   prepare story "$Review\project-map.json" `

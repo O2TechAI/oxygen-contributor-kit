@@ -316,9 +316,9 @@ async function finalize(args) {
   const [semanticPath, candidatesPath, shardRootInput, preferencePath, outputPath, marker, workflowRunId, revisionMarker, revision] = args;
   if (args.length !== 9 || !semanticPath || !candidatesPath || !shardRootInput || !preferencePath || !outputPath
     || marker !== "--workflow-run-id" || !stableId(workflowRunId) || revisionMarker !== "--source-revision"
-    || !/^(0|[1-9][0-9]*)$/u.test(revision || "")) fail("CLI_USAGE");
+    || !/^[1-9][0-9]*$/u.test(revision || "")) fail("CLI_USAGE");
   const sourceRevision = Number(revision);
-  if (!Number.isSafeInteger(sourceRevision)) fail("CLI_USAGE");
+  if (!Number.isSafeInteger(sourceRevision) || sourceRevision < 1) fail("CLI_USAGE");
   const semantic = await readSemanticTransport(semanticPath, {
     invalid: "FILE_UNREADABLE", changed: "FILE_CHANGED", jsonInvalid: "JSON_INVALID",
   });
