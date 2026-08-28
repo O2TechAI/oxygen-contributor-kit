@@ -8,8 +8,9 @@ description: Turn a privacy-prepared reviewed Oxygen run into a small set of ans
 The goal is a **cheap** annotation pass. A contributor will not read 400 events and write
 freeform notes. They will answer roughly ten well-posed multiple-choice questions.
 
-Everything here runs on the contributor's own machine and their own model key. Nothing is
-uploaded. `publication_approved` stays `false`.
+Everything here runs on the contributor's own machine. Internal host subagents are not product
+provider/API calls and require no separate API key. Nothing is uploaded. `publication_approved`
+stays `false`.
 
 ## Vocabulary warning
 
@@ -39,9 +40,14 @@ python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference
   --output "$Review\preference-context.json"
 ```
 
-The bounded Agent reads only that context and writes `preference-candidates.json` with exactly
-`probes`, `bulkDecisions`, and `setAside`. It never writes answers, Privacy aggregates, digests,
-provider metadata, release state, or publication state.
+The workflow-owning parent automatically assigns the immutable Preference `inputPath` to a bounded
+host subagent when that capability exists; the subagent reads only that one Privacy-safe context
+and writes `preference-candidates.json` with exactly `probes`, `bulkDecisions`, and `setAside`.
+It never writes answers, receipts, final manifests, SQLite, Viewer APIs, Privacy aggregates,
+digests, provider metadata, revisions, activation state, release state, or publication state. The
+parent runs validation and recording, owns the immutable output/receipt pair, and continues without
+asking the contributor to create a worker. If subagents are unavailable, the parent uses the same
+input and authority serially with `executionMode=serial_capability_limited`.
 
 Work only on events whose project label is the primary project unless the contributor asks
 otherwise. Off-project events are noise and spending the contributor's attention on them is the

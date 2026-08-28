@@ -294,14 +294,26 @@ It imports the exact bundle before it requests Review Story activation, and fail
 foreign, stale, malformed, or digest/count-mismatched authority. The tracked Story preparer,
 recorder, existing Preference producer, and preparation finalizer create and bind those files.
 
-Master-owned semantic work starts with the public deterministic preparer. It accepts the canonical
+Parent-owned semantic work starts with the public deterministic preparer. It accepts the canonical
 Organization project map or bare semantic manifest through one bounded parser, freezes the exact
 assigned identities and input digest, and installs immutable provider-safe worker input before a
-proposal exists. Separate dependent workers write only Story, Insight, Story Privacy, or Preference
-proposals. The public recorder validates the lane-specific contract and installs output plus receipt
-as one atomic immutable pair. Final composition proves exact union, no overlap, no foreign or stale
-identity, deterministic ordering, and explicit completed-zero. Revision authority remains with the
-owning Agent/server lane; no worker may silently expand scope or repair another lane.
+proposal exists. The workflow-owning parent enumerates every nonempty manifest shard and, when host
+subagents are available, dispatches them automatically in waves with at most three live at once.
+Each assignment reads exactly one Privacy-safe immutable `inputPath` and writes only its proposal.
+Workers never write receipts, final manifests, SQLite, Viewer APIs, revisions, activation state,
+release state, or publication state. Internal host subagents are not product provider/API calls,
+require no separate API key, and receive no raw/private source beyond the prepared input.
+
+The parent waits for proposals, invokes the public recorder for each shard, installs output plus
+receipt as one atomic immutable pair, verifies the terminal receipt count, composes, proves exact
+union/no overlap, and finalizes authority before continuing. A fixed safe pre-receipt validation
+code is automatically returned through a bounded proposal-only correction loop against the
+byte-identical input; it is not a contributor pause and may never rewrite durable output. If host
+subagents are genuinely unavailable, the parent processes the same inputs serially, reports
+`executionMode=serial_capability_limited`, and uses the identical recorder/finalizer authority.
+`PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal orchestration boundary. Revision authority and
+all Viewer mutations remain with the parent/server lane; no worker may silently expand scope or
+repair another lane.
 
 Coverage draft rows use only `{unitId, disposition, ownerId}` for represented units or
 `{unitId, disposition, exclusionReason}` for excluded units. After successful activation, the exact
@@ -411,7 +423,26 @@ node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
 
 ## Composition sequence (implemented transport)
 
-Use one transport root and the current Viewer source revision:
+Use one transport root and the current Viewer source revision. For each prepared lane, the parent
+performs this lifecycle without contributor intervention:
+
+1. Read the lane's `shards.json` and enumerate every deterministic shard.
+2. Dispatch available host subagents in waves of at most three. Each receives exactly one
+   `inputPath` and may write only its proposal. If subagents are unavailable, process those same
+   inputs serially and set `executionMode=serial_capability_limited`.
+3. Wait for each proposal, then run the recorder with that manifest shard ID and proposal path.
+4. If the recorder returns a fixed safe validation code before output and receipt exist, return it
+   automatically to the same assignment through a bounded correction loop. Preserve the input
+   bytes and allow only the proposal to change.
+5. Require one terminal subordinate receipt per shard, verify the receipt count, exact union, and
+   no overlap, then compose/finalize with the public commands below.
+6. Continue automatically to the next dependent lane or to the next genuine human-review boundary.
+
+For each reached lane, retain E2E evidence for `executionMode`, `lane`, `shardCount`,
+`spawnedSubagentCount`, `maxConcurrentSubagents`, `correctionAttemptCount`, and
+`terminalReceiptCount`. The parent owns all recorder/finalizer commands and every Viewer mutation.
+The commands containing `<manifest-shard-id>` and `<proposal-path>` below are executed once for
+each enumerated shard, not typed or scheduled by the contributor.
 
 ```powershell
 $Transport = "$Review\story-preparation"
@@ -422,25 +453,25 @@ node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   "$Review\story-coverage-manifest.json" `
   "$Review\current-public-source-privacy.json" `
   "$Review" "$Transport"
-# Bounded Story worker: generated input -> $Review\story-proposal.json
+# Parent dispatches every Story manifest shard (maximum three live), waits, then records each proposal.
 node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
-  "$Transport" story story-0001 "$Review\story-proposal.json"
+  "$Transport" story "<manifest-shard-id>" "<proposal-path>"
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   compose story "$Transport" "$Review\story-base-candidates.json"
 
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   prepare insight "$Review\story-base-candidates.json" "$Transport"
-# Bounded Insight worker: generated input -> $Review\insight-proposal.json
+# Parent dispatches every Insight manifest shard (maximum three live), waits, then records each proposal.
 node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
-  "$Transport" insight insight-0001 "$Review\insight-proposal.json"
+  "$Transport" insight "<manifest-shard-id>" "<proposal-path>"
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   compose final "$Transport" "$Review\story-candidates.json"
 
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   prepare story_privacy "$Review\story-candidates.json" "$Transport"
-# Bounded Story Privacy worker: generated input -> $Review\story-privacy-proposal.json
+# Parent dispatches every Story Privacy manifest shard (maximum three live), waits, then records each proposal.
 node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
-  "$Transport" story_privacy story-privacy-0001 "$Review\story-privacy-proposal.json"
+  "$Transport" story_privacy "<manifest-shard-id>" "<proposal-path>"
 
 python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference_context.py `
   --story-candidates "$Review\story-candidates.json" `
@@ -449,14 +480,14 @@ python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   prepare preference "$Review\story-candidates.json" `
   "$Review\preference-context.json" "$Transport"
-# Bounded Preference worker: generated input -> $Review\preference-candidates.json
+# Parent dispatches every Preference manifest shard (maximum three live), waits, then validates and records each proposal.
 python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
   --context "$Review\preference-context.json" `
-  --candidates "$Review\preference-candidates.json" `
+  --candidates "<proposal-path>" `
   --workflow-run-id "$WorkflowRun" --source-revision $SourceRevision `
   --output "$Review\preference-bundle.json"
 node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
-  "$Transport" preference preference-0001 "$Review\preference-bundle.json"
+  "$Transport" preference "<manifest-shard-id>" "$Review\preference-bundle.json"
 
 node .\skills\oxygen-storytelling-review\scripts\finalize_story_preparation.mjs `
   "$Review\project-map.json" "$Review\story-candidates.json" "$Transport" `

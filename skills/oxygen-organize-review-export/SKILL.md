@@ -35,7 +35,8 @@ python .\skills\oxygen-organize-review-export\scripts\prepare_semantic_units.py 
 Preparation validates only current ingest projections and the exact current skeleton. If a
 projection is absent or an old project map is present, stop and re-collect through current ingest;
 never read or upgrade a historical map. The command ends with the exact internal handoff marker
-`PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS`. This is a bounded worker pause, not a human-review pause.
+`PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS`. This is an internal orchestration boundary, not a human-review
+pause and not a request for the contributor to create workers.
 
 1. Find topic changes both within a conversation and across conversations.
 2. Group events by the actual product, repository, or workstream being discussed.
@@ -61,11 +62,21 @@ never read or upgrade a historical map. The command ends with the exact internal
 - Do not create one unit per raw record, one unit per session, or a second coverage ledger.
 - Use progressive exact Evidence access by unit when Story needs member bodies.
 
-Parallelize the immutable shard inputs when needed. Each external worker reads only its
-`inputs/<shard-id>.json`, uses the user's configured model/key, and returns only a strict proposal
-array at `handoffs/<shard-id>.proposals.json`. The Kit does not call a provider and does not retain
-prompts or responses. Semantic reasoning itself is performed by those external workers and is not
-provider-free.
+The workflow-owning parent automatically enumerates every manifest shard. When host subagents are
+available, it must dispatch them in waves of at most three live subagents. Each assignment reads
+exactly one Privacy-safe immutable `inputs/<shard-id>.json` and writes only its strict proposal
+array at `handoffs/<shard-id>.proposals.json`. Workers never write receipts, final manifests,
+SQLite, Viewer APIs, revisions, activation state, release state, or publication state. Internal
+host subagents are not product provider/API calls, need no separate API key, and receive no
+raw/private source beyond that bounded input. Silently performing all semantic reasoning in the
+parent while subagents are available is invalid.
+
+If the host genuinely lacks subagent capability, the parent processes the same immutable shards
+serially, reports `executionMode=serial_capability_limited`, and continues without asking the
+contributor to create workers. This uses the identical recorder and finalizer authority and is not
+a fallback contract. In either execution mode, the parent exclusively invokes recorders, installs
+immutable output/receipt pairs, checks exact union and no overlap, waits for every terminal receipt,
+finalizes authority, and performs later Viewer mutations.
 
 Each proposal requires `unitId`, `kind`, and the shard's UTF-8-ordered `contributionIds`.
 `kind` is an open machine label matching exactly `^[a-z][a-z0-9_]{0,63}$`; labels such as
@@ -89,11 +100,13 @@ python .\skills\oxygen-organize-review-export\scripts\record_semantic_worker.py 
 ```
 
 A recorder validation failure is pre-receipt authoring feedback only when both
-`outputs/<shard-id>.json` and `receipts/<shard-id>.json` are absent. The external worker may then
-explicitly replace only its non-authoritative handoff proposal and resubmit it against the same
-immutable shard input. The recorder never retries, rewrites, maps, or repairs a proposal. Once an
-output or receipt exists, that durable authority is immutable; a differing resubmission fails
-closed and must not replace or repair either artifact.
+`outputs/<shard-id>.json` and `receipts/<shard-id>.json` are absent. The parent automatically
+returns only the fixed safe validation code as authoring feedback through a bounded correction loop;
+the assigned worker may replace only its non-authoritative handoff proposal against the byte-identical
+immutable shard input. This is not a contributor pause. The recorder never rewrites, maps, or
+repairs a proposal, and the loop may never replace durable output. Once an output or receipt exists,
+that durable authority is immutable; a differing resubmission fails closed and must not replace or
+repair either artifact.
 
 Workers may use the same stable `unitId` across shards. The deterministic composition stage merges
 those proposals, rejects conflicting metadata, and proves the exact global union. After every
@@ -113,6 +126,10 @@ The finalizer rejects missing, foreign, duplicate, stale, overlapping, or tamper
 authority before replacing `project-map.json`. The existing project-map builder remains the sole
 digest and revision authority. The optional Story-facing unit projection is one privacy-safe label
 and summary, not a substitute for exact local membership.
+
+For later E2E evidence, report `executionMode`, `lane`, `shardCount`, `spawnedSubagentCount`,
+`maxConcurrentSubagents`, `correctionAttemptCount`, and `terminalReceiptCount` from observed parent
+execution. Do not infer these values from manifest size alone.
 
 ## Delegate Storytelling after the reviewed boundary
 

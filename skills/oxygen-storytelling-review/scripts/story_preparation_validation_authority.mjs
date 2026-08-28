@@ -250,6 +250,26 @@ export function storyCompletenessAuthority(authority) {
   };
 }
 
+export function storyValidationScope(authority, unitIds) {
+  const complete = storyCompletenessAuthority(authority);
+  if (!Array.isArray(unitIds) || unitIds.some((id) => !stableId(id))
+    || new Set(unitIds).size !== unitIds.length) fail("STORY_VALIDATION_SCOPE_INVALID");
+  const wanted = new Set(unitIds);
+  const units = complete.semanticManifest.units.filter((unit) => wanted.has(unit.id));
+  const rows = complete.coverageManifest.rows.filter((row) => wanted.has(row.unitId));
+  if (units.length !== wanted.size || rows.length !== wanted.size) fail("STORY_VALIDATION_SCOPE_INVALID");
+  const evidenceIds = new Set(units.flatMap((unit) => unit.members));
+  const evidenceRows = storyEvidenceRows(authority).filter((row) => evidenceIds.has(row.id));
+  if (evidenceRows.length !== evidenceIds.size) fail("STORY_VALIDATION_SCOPE_INVALID");
+  return {
+    evidenceRows,
+    completenessAuthority: {
+      semanticManifest: { ...complete.semanticManifest, units },
+      coverageManifest: { ...complete.coverageManifest, rows },
+    },
+  };
+}
+
 export async function buildStoryValidationAuthority(
   semanticPath, coveragePath, sourcePrivacyPath, reviewRoot,
 ) {
@@ -309,6 +329,10 @@ export async function readStoryValidationAuthority(prepared) {
   if (path !== "story/validation-authority.json" || !/^[0-9a-f]{64}$/u.test(digest || "")) {
     fail("STORY_VALIDATION_AUTHORITY_INVALID");
   }
+  if (Array.isArray(prepared.inputs) && prepared.inputs.some((input) => (
+    input.payload?.validationAuthorityPath !== path
+    || input.payload?.validationAuthorityDigest !== digest
+  ))) fail("STORY_VALIDATION_AUTHORITY_INVALID");
   const { containedJson } = await import("./story_preparation_protocol.mjs");
   const authority = await containedJson(prepared.root, path, MAX_STORY_VALIDATION_AUTHORITY_BYTES);
   if (canonicalDigest(authority) !== digest) fail("STORY_VALIDATION_AUTHORITY_TAMPERED");

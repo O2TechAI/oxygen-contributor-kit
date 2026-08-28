@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -37,12 +37,37 @@ function runOk(command, args) {
   return result;
 }
 
-function semanticAuthority() {
-  const units = ["a", "b"].map((suffix) => ({
+const laneDirectory = {
+  story: "story", insight: "insight", story_privacy: "story-privacy", preference: "preference",
+};
+
+async function recordLane(transport, lane, root, proposalForInput) {
+  const directory = laneDirectory[lane];
+  const manifest = await readJson(join(transport, directory, "shards.json"));
+  for (const shard of manifest.shards) {
+    const input = await readJson(join(transport, ...shard.inputPath.split("/")));
+    const proposal = join(root, `${shard.id}-proposal.json`);
+    await json(proposal, proposalForInput(input));
+    runOk(process.execPath, [record, transport, lane, shard.id, proposal]);
+  }
+  return manifest;
+}
+
+async function reverseLaneManifest(transport, lane) {
+  const path = join(transport, laneDirectory[lane], "shards.json");
+  const manifest = await readJson(path);
+  manifest.shards.reverse();
+  await json(path, manifest);
+}
+
+function semanticAuthority({
+  suffixes = ["a", "b"], projectId = "Synthetic Canary", kinds = ["decision_episode"],
+} = {}) {
+  const units = suffixes.map((suffix, index) => ({
     id: `unit-${suffix}`,
     revision: 1,
-    projectId: "Synthetic Canary",
-    kind: "decision_episode",
+    projectId,
+    kind: kinds[index % kinds.length],
     members: [`event-${suffix}`],
     memberCount: 1,
     membershipDigest: digest([{ id: `event-${suffix}`, sourceDigest: digest({ suffix }) }]),
@@ -50,9 +75,9 @@ function semanticAuthority() {
       label: `Canary ${suffix.toUpperCase()}`,
       summary: `A reviewed synthetic event records canary ${suffix.toUpperCase()}.`,
     },
-  }));
+  })).sort((left, right) => Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)));
   const core = {
-    projectId: "Synthetic Canary",
+    projectId,
     revision: 1,
     sourceDigest: digest(units.map((unit) => unit.members[0])),
     universeDigest: digest(units.flatMap((unit) => unit.members)),
@@ -61,24 +86,43 @@ function semanticAuthority() {
   return { ...core, manifestDigest: digest(core) };
 }
 
-function storySource(suffix, semantic, coverage, insights = []) {
-  const evidence = { documentId: "doc-canary", eventId: `event-${suffix}` };
+function storySource(suffix, semantic, coverage, insights = [], {
+  documentId = "doc-canary", language = "en",
+} = {}) {
+  const evidence = { documentId, eventId: `event-${suffix}` };
+  const localized = language === "es" ? {
+    phase: "Ensayo revisado",
+    title: `Ensayo ${suffix.toUpperCase()}`,
+    overview: `Una nota de laboratorio revisada ${suffix.toUpperCase()}.`,
+    person: `Investigador ${suffix.toUpperCase()}`,
+    role: "investigador",
+    description: `El investigador documentó el ensayo ${suffix.toUpperCase()}.`,
+    block: `Observación revisada ${suffix.toUpperCase()}.`,
+  } : {
+    phase: "Reviewed phase",
+    title: `Canary ${suffix.toUpperCase()}`,
+    overview: `A domain-neutral reviewed canary ${suffix.toUpperCase()}.`,
+    person: `Canary participant ${suffix.toUpperCase()}`,
+    role: "reviewed participant",
+    description: `The participant contributed canary ${suffix.toUpperCase()}.`,
+    block: `Reviewed canary text ${suffix.toUpperCase()}.`,
+  };
   return {
     schema: "oxygen.story",
     key: `story-${suffix}`,
-    phase: { id: `phase-${suffix}`, label: "Reviewed phase" },
-    title: `Canary ${suffix.toUpperCase()}`,
-    overview: `A domain-neutral reviewed canary ${suffix.toUpperCase()}.`,
+    phase: { id: `phase-${suffix}`, label: localized.phase },
+    title: localized.title,
+    overview: localized.overview,
     people: [{
       id: `person-${suffix}`,
-      releaseLabel: `Canary participant ${suffix.toUpperCase()}`,
-      role: "reviewed participant",
-      description: `The participant contributed canary ${suffix.toUpperCase()}.`,
+      releaseLabel: localized.person,
+      role: localized.role,
+      description: localized.description,
       localIdentityState: "not_identified",
       evidence: [evidence],
     }],
     story: {
-      blocks: [{ id: `block-${suffix}`, text: `Reviewed canary text ${suffix.toUpperCase()}.`, evidence: [evidence] }],
+      blocks: [{ id: `block-${suffix}`, text: localized.block, evidence: [evidence] }],
     },
     insights,
     evidence: { primary: evidence, supporting: [] },
@@ -91,29 +135,29 @@ function storySource(suffix, semantic, coverage, insights = []) {
   };
 }
 
-async function reviewedBoundary(root, projectMap, semantic, coverageRows = [
-  { unitId: "unit-a", disposition: "represented", ownerId: "story-a" },
-  { unitId: "unit-b", disposition: "represented", ownerId: "story-b" },
-]) {
+async function reviewedBoundary(root, projectMap, semantic, coverageRows = null, {
+  documentId = "doc-canary", language = "en",
+} = {}) {
   const review = join(root, "review");
-  const trajectory = join(review, "trajectories", "doc-canary");
+  const trajectory = join(review, "trajectories", documentId);
   await mkdir(trajectory, { recursive: true });
   await json(join(review, "project-map.json"), projectMap);
-  const events = [
-    { suffix: "a", actorType: "user" },
-    { suffix: "b", actorType: "assistant" },
-  ].map(({ suffix, actorType }, index) => ({
-    schema_version: "ai-review.event/1",
+  const events = semantic.units.map((unit, index) => {
+    const suffix = unit.id.slice("unit-".length);
+    const actorType = index % 2 === 0 ? "user" : "assistant";
+    return {
     event_id: `event-${suffix}`,
-    trajectory_id: "doc-canary",
+    trajectory_id: documentId,
     turn_id: `turn-${suffix}`,
     sequence: index + 1,
     event_type: "message",
     actor: { type: actorType },
     timestamp: null,
-    payload: { role: actorType, text: `safe reviewed canary ${suffix}` },
+    payload: { role: actorType, text: language === "es"
+      ? `observación segura revisada ${suffix}` : `safe reviewed canary ${suffix}` },
     relations: [],
-  }));
+    };
+  });
   await writeFile(join(trajectory, "events.jsonl"), `${events.map(JSON.stringify).join("\n")}\n`, "utf8");
   const sourceRows = events.map((event) => ({
     id: event.event_id,
@@ -135,7 +179,10 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = [
       completed_at: "2026-01-01T00:00:01Z",
     },
   });
-  const coverageResult = await finalizeCoverageManifestAuthority({ rows: coverageRows }, semantic);
+  const requestedCoverage = coverageRows ?? semantic.units.map((unit) => ({
+    unitId: unit.id, disposition: "represented", ownerId: `story-${unit.id.slice("unit-".length)}`,
+  }));
+  const coverageResult = await finalizeCoverageManifestAuthority({ rows: requestedCoverage }, semantic);
   assert.equal(coverageResult.ok, true);
   const coverage = join(root, "coverage.json");
   const authority = coverageResult.authority;
@@ -149,25 +196,27 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = [
   return { review, sourcePrivacy, coverage, coverageAuthority: authority };
 }
 
-function insight(suffix) {
+function insight(suffix, documentId = "doc-canary", language = "en") {
   return {
     id: `insight-${suffix}`,
-    title: `Canary lesson ${suffix.toUpperCase()}`,
-    background: `Reviewed background ${suffix.toUpperCase()}.`,
+    title: language === "es" ? `Lección ${suffix.toUpperCase()}` : `Canary lesson ${suffix.toUpperCase()}`,
+    background: language === "es" ? `Contexto revisado ${suffix.toUpperCase()}.` : `Reviewed background ${suffix.toUpperCase()}.`,
     quote: { storyBlockIds: [`block-${suffix}`] },
-    directlyAcquiredExperience: `Reviewed experience ${suffix.toUpperCase()}.`,
-    principle: `Bounded principle ${suffix.toUpperCase()}.`,
-    evidence: [{ documentId: "doc-canary", eventId: `event-${suffix}` }],
+    directlyAcquiredExperience: language === "es"
+      ? `Experiencia revisada ${suffix.toUpperCase()}.` : `Reviewed experience ${suffix.toUpperCase()}.`,
+    principle: language === "es"
+      ? `Principio acotado ${suffix.toUpperCase()}.` : `Bounded principle ${suffix.toUpperCase()}.`,
+    evidence: [{ documentId, eventId: `event-${suffix}` }],
   };
 }
 
-async function privacyAuthority(root) {
+async function privacyAuthority(root, suffixes = ["a", "b"], documentId = "doc-canary") {
   const redacted = join(root, "redacted");
   await mkdir(redacted);
   const text = "safe reviewed canary";
-  const turns = ["a", "b"].map((suffix) => ({
+  const turns = suffixes.map((suffix) => ({
     event_id: `event-${suffix}`,
-    document_id: "doc-canary",
+    document_id: documentId,
     item_id: `event-${suffix}`,
     role: "user",
     timestamp: null,
@@ -175,8 +224,8 @@ async function privacyAuthority(root) {
     redactions: [],
     redacted_text: text,
   }));
-  await json(join(redacted, "doc-canary.json"), {
-    trajectory: "doc-canary",
+  await json(join(redacted, `${documentId}.json`), {
+    trajectory: documentId,
     document_kind: "trajectory",
     turns,
     chars: text.length * turns.length,
@@ -184,54 +233,71 @@ async function privacyAuthority(root) {
   const report = join(root, "privacy-report.json");
   await json(report, {
     categories: {}, total_applied: 0, rejected: 0, rejects: [], missing_worker_output: [],
-    per_trajectory: [{ trajectory: "doc-canary", turns: turns.length, applied: 0 }],
+    per_trajectory: [{ trajectory: documentId, turns: turns.length, applied: 0 }],
   });
   return { redacted, report };
 }
 
-async function createFlow({ reverse = false, completedZero = false } = {}) {
+async function createFlow({
+  reverse = false,
+  completedZero = false,
+  suffixes = ["a", "b"],
+  projectId = "Synthetic Canary",
+  kinds = ["decision_episode"],
+  documentId = "doc-canary",
+  language = "en",
+  insightSuffixes = suffixes,
+  reverseManifests = false,
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), "story-public-transport-"));
-  const semantic = semanticAuthority();
+  const semantic = semanticAuthority({ suffixes, projectId, kinds });
   const semanticPath = join(root, "semantic.json");
   const projectMapPath = join(root, "project-map.json");
   const transport = join(root, "transport");
   await json(semanticPath, semantic);
   await json(projectMapPath, {
-    schema_version: "1",
     primary_project: semantic.projectId,
     summary: "Domain-neutral synthetic canary.",
-    projects: [{ name: semantic.projectId, event_count: 2, reason: "One repo-scoped projected contribution universe." }],
-    source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: 2 },
+    projects: [{ name: semantic.projectId, event_count: suffixes.length, reason: "One reviewed contribution universe." }],
+    source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: suffixes.length },
     semantic_units: semantic.units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
     semantic_manifest: semantic,
   });
   const projectMap = await readJson(projectMapPath);
-  const boundary = await reviewedBoundary(root, projectMap, semantic);
+  const boundary = await reviewedBoundary(root, projectMap, semantic, null, { documentId, language });
 
   runOk(process.execPath, [prepare, "prepare", "story", projectMapPath,
     boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+  if (reverseManifests) await reverseLaneManifest(transport, "story");
   const storyProposal = join(root, "story-proposal.json");
-  const storyRecords = ["a", "b"].map((suffix) => ({
+  const storyRecords = suffixes.map((suffix) => ({
     id: `event-${suffix}`,
-    story: storySource(suffix, semantic, boundary.coverageAuthority),
+    story: storySource(suffix, semantic, boundary.coverageAuthority, [], { documentId, language }),
   }));
-  await json(storyProposal, reverse ? [...storyRecords].reverse() : storyRecords);
-  runOk(process.execPath, [record, transport, "story", "story-0001", storyProposal]);
+  const submittedStoryRecords = reverse ? [...storyRecords].reverse() : storyRecords;
+  await json(storyProposal, submittedStoryRecords);
+  await recordLane(transport, "story", root, (input) => submittedStoryRecords.filter((record) => (
+    input.unitIds.includes(record.story.coverage.representedUnitIds[0])
+  )));
   const baseCandidates = join(root, "story-base-candidates.json");
   runOk(process.execPath, [prepare, "compose", "story", transport, baseCandidates]);
 
   runOk(process.execPath, [prepare, "prepare", "insight", baseCandidates, transport]);
+  if (reverseManifests) await reverseLaneManifest(transport, "insight");
   const insightProposal = join(root, "insight-proposal.json");
-  const insightRecords = ["a", "b"].map((suffix) => ({
+  const insightRecords = suffixes.map((suffix) => ({
     storyKey: `story-${suffix}`,
-    insights: completedZero ? [] : [insight(suffix)],
+    insights: completedZero || !insightSuffixes.includes(suffix) ? [] : [insight(suffix, documentId, language)],
   }));
-  await json(insightProposal, reverse ? [...insightRecords].reverse() : insightRecords);
-  runOk(process.execPath, [record, transport, "insight", "insight-0001", insightProposal]);
+  const submittedInsightRecords = reverse ? [...insightRecords].reverse() : insightRecords;
+  await json(insightProposal, submittedInsightRecords);
+  await recordLane(transport, "insight", root, (input) => submittedInsightRecords.filter((item) => (
+    input.unitIds.includes(item.storyKey)
+  )));
   const candidates = join(root, "story-candidates.json");
   runOk(process.execPath, [prepare, "compose", "final", transport, candidates]);
 
-  const privacy = await privacyAuthority(root);
+  const privacy = await privacyAuthority(root, suffixes, documentId);
   const preferenceContext = join(root, "preference-context.json");
   runOk("python", [preparePreferenceContext,
     "--story-candidates", candidates,
@@ -243,6 +309,10 @@ async function createFlow({ reverse = false, completedZero = false } = {}) {
   // These siblings are ready after final Story composition and may be prepared in either order.
   runOk(process.execPath, [prepare, "prepare", "preference", candidates, preferenceContext, transport]);
   runOk(process.execPath, [prepare, "prepare", "story_privacy", candidates, transport]);
+  if (reverseManifests) {
+    await reverseLaneManifest(transport, "preference");
+    await reverseLaneManifest(transport, "story_privacy");
+  }
 
   const privacyProposal = join(root, "story-privacy-proposal.json");
   await json(privacyProposal, completedZero ? [] : [{
@@ -251,9 +321,12 @@ async function createFlow({ reverse = false, completedZero = false } = {}) {
     title: "Review synthetic title",
     whyFlagged: "The reviewed canary requests a release decision.",
     uncertaintyReason: "Confirm the synthetic title.",
-    releaseTargets: ["story-a::title"],
+    releaseTargets: [`story-${suffixes[0]}::title`],
   }]);
-  runOk(process.execPath, [record, transport, "story_privacy", "story-privacy-0001", privacyProposal]);
+  const privacyCandidates = await readJson(privacyProposal);
+  await recordLane(transport, "story_privacy", root, (input) => privacyCandidates.filter((candidate) => (
+    candidate.releaseTargets.every((target) => input.unitIds.includes(target))
+  )));
 
   const preferenceCandidates = join(root, "preference-candidates.json");
   await json(preferenceCandidates, completedZero ? {
@@ -261,9 +334,9 @@ async function createFlow({ reverse = false, completedZero = false } = {}) {
   } : {
     probes: [{
       id: "probe-canary",
-      documentId: "doc-canary",
+      documentId,
       documentKind: "trajectory",
-      eventIds: ["event-a"],
+      eventIds: [`event-${suffixes[0]}`],
       timestamp: null,
       signal: "explicit_rule",
       score: 80,
@@ -289,7 +362,9 @@ async function createFlow({ reverse = false, completedZero = false } = {}) {
     "--source-revision", "4",
     "--output", preferenceBundle,
   ]);
-  runOk(process.execPath, [record, transport, "preference", "preference-0001", preferenceBundle]);
+  const preferenceManifest = await readJson(join(transport, "preference", "shards.json"));
+  assert.equal(preferenceManifest.shards.length, 1);
+  runOk(process.execPath, [record, transport, "preference", preferenceManifest.shards[0].id, preferenceBundle]);
 
   const preparationManifest = join(root, "story-preparation-manifest.json");
   runOk(process.execPath, [finalize,
@@ -346,6 +421,75 @@ test("public commands execute the nonempty four-lane dependency chain determinis
   }
 });
 
+test("laboratory notes cross real Story and Insight shard waves without domain special cases", async () => {
+  const options = {
+    suffixes: ["uno", "dos", "tres", "cuatro", "cinco"],
+    projectId: "Cuaderno de Laboratorio",
+    kinds: ["experiment_observation", "instrument_calibration", "hypothesis_revision"],
+    documentId: "notas-laboratorio",
+    language: "es",
+    insightSuffixes: ["uno", "tres"],
+  };
+  const first = await createFlow(options);
+  const reordered = await createFlow({ ...options, reverse: true, reverseManifests: true });
+  try {
+    const storyManifest = await readJson(join(first.transport, "story", "shards.json"));
+    const insightManifest = await readJson(join(first.transport, "insight", "shards.json"));
+    assert.ok(storyManifest.shards.length >= 2);
+    assert.ok(insightManifest.shards.length >= 2);
+    assert.equal(await readFile(first.candidates, "utf8"), await readFile(reordered.candidates, "utf8"));
+    assert.equal(await readFile(first.preparationManifest, "utf8"),
+      await readFile(reordered.preparationManifest, "utf8"));
+    const candidates = await readJson(first.candidates);
+    assert.equal(candidates.length, 5);
+    assert.equal(candidates.reduce((total, row) => (
+      total + parseStorySource(row.summary).insights.length
+    ), 0), 2);
+    assert.match(candidates[0].summary, /laboratorio|Ensayo|Observación/u);
+    console.log("THIRD_DOMAIN_CANARY", JSON.stringify({
+      domain: "laboratory-notes", language: "es", records: options.suffixes.length,
+      semanticKinds: new Set(options.kinds).size, chapters: candidates.length, insights: 2,
+      storyShards: storyManifest.shards.length, insightShards: insightManifest.shards.length,
+      reorderedCandidatesByteIdentical: true, reorderedAuthorityByteIdentical: true,
+    }));
+  } finally {
+    await first.cleanup();
+    await reordered.cleanup();
+  }
+});
+
+test("real multi-shard manifests reject missing, duplicate, overlap, and foreign assignments", async () => {
+  const flow = await createFlow({ suffixes: ["a", "b", "c", "d", "e"] });
+  try {
+    const mutations = {
+      missing: (manifest) => { manifest.shards.pop(); },
+      duplicate: (manifest) => { manifest.shards.push({ ...manifest.shards[0] }); },
+      overlap: (manifest) => { manifest.shards[1].unitIds.push(manifest.shards[0].unitIds[0]); },
+      foreign: (manifest) => { manifest.shards[1].unitIds[0] = "unit-foreign"; },
+    };
+    for (const [name, mutate] of Object.entries(mutations)) {
+      const variant = join(flow.root, `transport-${name}`);
+      await cp(flow.transport, variant, { recursive: true });
+      const manifestPath = join(variant, "story", "shards.json");
+      const manifest = await readJson(manifestPath);
+      assert.ok(manifest.shards.length >= 2);
+      mutate(manifest);
+      await json(manifestPath, manifest);
+      const destination = join(flow.root, `terminal-${name}.json`);
+      await writeFile(destination, "sentinel\n", "utf8");
+      const rejected = run(process.execPath, [finalize,
+        flow.projectMapPath, flow.candidates, variant, flow.preferenceBundle, destination,
+        "--workflow-run-id", "public-canary-run", "--source-revision", "4",
+      ]);
+      assert.notEqual(rejected.status, 0, name);
+      assert.match(rejected.stderr, /^(SHARD_INVALID|SHARD_MANIFEST_UNIVERSE_INVALID)\r?\n$/u);
+      assert.equal(await readFile(destination, "utf8"), "sentinel\n");
+    }
+  } finally {
+    await flow.cleanup();
+  }
+});
+
 test("public commands bind completed-zero Insight, Story Privacy, and Preference results", async () => {
   const flow = await createFlow({ completedZero: true });
   try {
@@ -369,7 +513,7 @@ test("recorder permits pre-receipt correction and makes the installed pair immut
     await json(semanticPath, semantic);
     const projectMapPath = join(root, "project-map.json");
     await json(projectMapPath, {
-      schema_version: "1", primary_project: semantic.projectId, summary: "Synthetic.",
+      primary_project: semantic.projectId, summary: "Synthetic.",
       projects: [{ name: semantic.projectId, event_count: 2, reason: "One repo-scoped projected contribution universe." }],
       source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: 2 },
       semantic_units: semantic.units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
@@ -459,7 +603,7 @@ test("shared Story validation rejects collapsed People before receipt and accept
     const transport = join(root, "transport");
     await json(semanticPath, semantic);
     await json(projectMapPath, {
-      schema_version: "1", primary_project: semantic.projectId, summary: "Synthetic.",
+      primary_project: semantic.projectId, summary: "Synthetic.",
       projects: [{ name: semantic.projectId, event_count: 2, reason: "One repo-scoped projected contribution universe." }],
       source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: 2 },
       semantic_units: semantic.units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
@@ -504,6 +648,82 @@ test("shared Story validation rejects collapsed People before receipt and accept
     const inputBytes = inputBefore.toString("utf8");
     assert.doesNotMatch(authorityBytes, /safe reviewed canary/u);
     assert.match(inputBytes, /safe reviewed canary a/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Insight grounding fails before receipt, permits proposal-only correction, then becomes immutable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "story-insight-validation-"));
+  try {
+    const semantic = semanticAuthority();
+    const projectMap = {
+      primary_project: semantic.projectId, summary: "Synthetic.",
+      projects: [{ name: semantic.projectId, event_count: 2, reason: "Reviewed boundary." }],
+      source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: 2 },
+      semantic_units: semantic.units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
+      semantic_manifest: semantic,
+    };
+    const projectMapPath = join(root, "project-map.json");
+    await json(projectMapPath, projectMap);
+    const boundary = await reviewedBoundary(root, projectMap, semantic);
+    const transport = join(root, "transport");
+    runOk(process.execPath, [prepare, "prepare", "story", projectMapPath,
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+    const stories = ["a", "b"].map((suffix) => ({
+      id: `event-${suffix}`, story: storySource(suffix, semantic, boundary.coverageAuthority),
+    }));
+    await recordLane(transport, "story", root, (input) => stories.filter((item) => (
+      input.unitIds.includes(item.story.coverage.representedUnitIds[0])
+    )));
+    const baseCandidates = join(root, "story-base.json");
+    runOk(process.execPath, [prepare, "compose", "story", transport, baseCandidates]);
+    runOk(process.execPath, [prepare, "prepare", "insight", baseCandidates, transport]);
+    const manifest = await readJson(join(transport, "insight", "shards.json"));
+    assert.equal(manifest.shards.length, 1);
+    const shard = manifest.shards[0];
+    const inputPath = join(transport, ...shard.inputPath.split("/"));
+    const inputBefore = await readFile(inputPath);
+    const recordRoot = join(transport, "insight", "records", shard.id);
+    const valid = [
+      { storyKey: "story-a", insights: [insight("a")] },
+      { storyKey: "story-b", insights: [] },
+    ];
+    const invalid = [
+      { ...insight("a"), evidence: [{ documentId: "doc-canary", eventId: "event-foreign" }] },
+      { ...insight("a"), evidence: [{ documentId: "doc-canary", eventId: "event-b" }] },
+      { ...insight("a"), quote: { storyBlockIds: ["block-foreign"] } },
+    ];
+    for (const [index, badInsight] of invalid.entries()) {
+      const proposal = join(root, `invalid-insight-${index}.json`);
+      await json(proposal, [
+        { storyKey: "story-a", insights: [badInsight] },
+        { storyKey: "story-b", insights: [] },
+      ]);
+      const rejected = run(process.execPath, [record, transport, "insight", shard.id, proposal]);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /^STORY_INSIGHT_GROUNDING_INVALID\r?\n$/u);
+      assert.equal(existsSync(recordRoot), false);
+      assert.deepEqual(await readFile(inputPath), inputBefore);
+    }
+    const corrected = join(root, "corrected-insight.json");
+    await json(corrected, valid);
+    runOk(process.execPath, [record, transport, "insight", shard.id, corrected]);
+    assert.deepEqual(await readFile(inputPath), inputBefore);
+    const outputPath = join(recordRoot, "output.json");
+    const receiptPath = join(recordRoot, "receipt.json");
+    const outputBefore = await readFile(outputPath);
+    const receiptBefore = await readFile(receiptPath);
+    const differing = join(root, "differing-insight.json");
+    await json(differing, [
+      { storyKey: "story-a", insights: [{ ...insight("a"), title: "Different valid title" }] },
+      { storyKey: "story-b", insights: [] },
+    ]);
+    const immutable = run(process.execPath, [record, transport, "insight", shard.id, differing]);
+    assert.notEqual(immutable.status, 0);
+    assert.match(immutable.stderr, /^AUTHORITY_IMMUTABLE\r?\n$/u);
+    assert.deepEqual(await readFile(outputPath), outputBefore);
+    assert.deepEqual(await readFile(receiptPath), receiptBefore);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -581,7 +801,7 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
     };
     const semantic = { ...core, manifestDigest: digest(core) };
     const projectMap = {
-      schema_version: "1", primary_project: semantic.projectId, summary: "Bounded scale canary.",
+      primary_project: semantic.projectId, summary: "Bounded scale canary.",
       projects: [{ name: semantic.projectId, event_count: count, reason: "One repo-scoped projected contribution universe." }],
       source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: count },
       semantic_units: units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
@@ -594,7 +814,7 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
     await json(semanticPath, projectMap);
     await json(join(review, "project-map.json"), projectMap);
     const events = ids.map((id, index) => ({
-      schema_version: "ai-review.event/1", event_id: id, trajectory_id: "doc-scale",
+      event_id: id, trajectory_id: "doc-scale",
       turn_id: `turn-${String(index).padStart(5, "0")}`, sequence: index + 1,
       event_type: "message", actor: { type: "user" }, timestamp: null,
       payload: { role: "user", text: index === 0
@@ -639,16 +859,177 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
       coverage, sourcePrivacy, review, transport]);
     const authorityBytes = await readFile(join(transport, "story", "validation-authority.json"));
-    const inputBytes = await readFile(join(transport, "story", "inputs", "story-0001.json"));
+    const manifest = await readJson(join(transport, "story", "shards.json"));
+    const inputBytes = await Promise.all(manifest.shards.map((shard) => (
+      readFile(join(transport, ...shard.inputPath.split("/")))
+    )));
     const authority = JSON.parse(authorityBytes);
-    const input = JSON.parse(inputBytes);
+    const inputs = inputBytes.map((bytes) => JSON.parse(bytes));
     assert.equal(authority.evidence.length, count);
-    assert.equal(input.payload.reviewedNarrative.length, count);
+    assert.ok(manifest.shards.length > 1);
+    const narrative = inputs.flatMap((input) => input.payload.reviewedNarrative);
+    assert.equal(narrative.length, count);
+    assert.equal(new Set(narrative.map((row) => row.id)).size, count);
     assert.ok(authorityBytes.byteLength <= 12_000_000);
-    assert.ok(inputBytes.byteLength <= 25_000_000);
+    assert.ok(inputBytes.every((bytes) => bytes.byteLength <= 25_000_000));
     assert.doesNotMatch(authorityBytes.toString("utf8"), /PRIVATE-SENTINEL|reviewed item 00001/u);
-    assert.doesNotMatch(inputBytes.toString("utf8"), /PRIVATE-SENTINEL/u);
-    assert.match(inputBytes.toString("utf8"), /<redacted category=\\"private-personal\\"\/>/u);
+    const allInputs = Buffer.concat(inputBytes).toString("utf8");
+    assert.doesNotMatch(allInputs, /PRIVATE-SENTINEL/u);
+    assert.match(allInputs, /<redacted category=\\"private-personal\\"\/>/u);
+
+    const inputSizes = inputBytes.map((bytes) => bytes.byteLength);
+    assert.ok(Math.max(...inputSizes) - Math.min(...inputSizes) <= 50_000);
+    const stories = units.map((unit) => {
+      const evidence = { documentId: "doc-scale", eventId: unit.members[0] };
+      return {
+        id: unit.members[0],
+        story: {
+          schema: "oxygen.story",
+          key: `story-${unit.id}`,
+          phase: { id: "phase-scale", label: "Scale study" },
+          title: `Scale ${unit.id}`,
+          overview: `A bounded reviewed scale chapter for ${unit.id}.`,
+          people: [{
+            id: `person-${unit.id}`,
+            releaseLabel: `Scale contributor ${unit.id}`,
+            role: "reviewed contributor",
+            description: `The contributor supplied reviewed evidence for ${unit.id}.`,
+            localIdentityState: "not_identified",
+            evidence: [evidence],
+          }],
+          story: {
+            blocks: [{
+              id: `block-${unit.id}`,
+              text: `Reviewed scale observation for ${unit.id}.`,
+              evidence: [evidence],
+            }],
+          },
+          insights: [],
+          evidence: { primary: evidence, supporting: [] },
+          coverage: {
+            semanticManifest: { revision: semantic.revision, digest: semantic.manifestDigest },
+            coverageManifest: {
+              revision: coverageResult.authority.revision,
+              digest: coverageResult.authority.coverageDigest,
+            },
+            representedUnitIds: [unit.id],
+            excludedUnits: [],
+          },
+        },
+      };
+    });
+    const storyManifest = await recordLane(transport, "story", root, (input) => stories.filter((record) => (
+      input.unitIds.includes(record.story.coverage.representedUnitIds[0])
+    )));
+    assert.equal(storyManifest.shards.length, manifest.shards.length);
+    const baseCandidates = join(root, "story-base-candidates.json");
+    runOk(process.execPath, [prepare, "compose", "story", transport, baseCandidates]);
+
+    runOk(process.execPath, [prepare, "prepare", "insight", baseCandidates, transport]);
+    const insightManifest = await recordLane(transport, "insight", root, (input) => (
+      input.unitIds.map((storyKey) => ({ storyKey, insights: [] }))
+    ));
+    assert.ok(insightManifest.shards.length > 1);
+    const candidates = join(root, "story-candidates.json");
+    runOk(process.execPath, [prepare, "compose", "final", transport, candidates]);
+
+    const redacted = join(root, "redacted");
+    await mkdir(redacted);
+    const reviewedTurns = events.map((event, index) => ({
+      event_id: event.event_id,
+      document_id: "doc-scale",
+      item_id: event.event_id,
+      role: "user",
+      timestamp: null,
+      text: event.payload.text,
+      redactions: index === 0 ? [{
+        start: 0, end: 16, category: "private-personal", confidence: "high",
+        reason: "Synthetic scale canary.", review_state: "deterministic", uncertainty_reason: null,
+      }] : [],
+      redacted_text: index === 0
+        ? '<redacted category="private-personal"/> reviewed item 00000'
+        : event.payload.text,
+    }));
+    await json(join(redacted, "doc-scale.json"), {
+      trajectory: "doc-scale",
+      document_kind: "trajectory",
+      turns: reviewedTurns,
+      chars: events.reduce((total, event) => total + event.payload.text.length, 0),
+    });
+    const privacyReport = join(root, "privacy-report.json");
+    await json(privacyReport, {
+      categories: { "private-personal": 1 },
+      total_applied: 1,
+      rejected: 0,
+      rejects: [],
+      missing_worker_output: [],
+      per_trajectory: [{ trajectory: "doc-scale", turns: count, applied: 1 }],
+    });
+    const preferenceContext = join(root, "preference-context.json");
+    runOk("python", [preparePreferenceContext,
+      "--story-candidates", candidates,
+      "--redacted", redacted,
+      "--privacy-report", privacyReport,
+      "--output", preferenceContext,
+    ]);
+
+    runOk(process.execPath, [prepare, "prepare", "story_privacy", candidates, transport]);
+    const privacyManifest = await recordLane(transport, "story_privacy", root, () => []);
+    runOk(process.execPath, [prepare, "prepare", "preference", candidates, preferenceContext, transport]);
+    const preferenceCandidates = join(root, "preference-candidates.json");
+    await json(preferenceCandidates, { probes: [], bulkDecisions: [], setAside: 0 });
+    const preferenceBundle = join(root, "preference-bundle.json");
+    runOk("python", [validateProbes,
+      "--context", preferenceContext,
+      "--candidates", preferenceCandidates,
+      "--workflow-run-id", "scale-run",
+      "--source-revision", "4",
+      "--output", preferenceBundle,
+    ]);
+    const completedPreference = await readJson(preferenceBundle);
+    const preferenceManifest = await recordLane(transport, "preference", root, () => completedPreference);
+    const preparationManifest = join(root, "story-preparation-manifest.json");
+    runOk(process.execPath, [finalize,
+      semanticPath, candidates, transport, preferenceBundle, preparationManifest,
+      "--workflow-run-id", "scale-run", "--source-revision", "4",
+    ]);
+    const terminal = await readJson(preparationManifest);
+    assert.deepEqual(terminal.receipts.map((receipt) => receipt.lane), [
+      "story", "insight", "story_privacy", "preference",
+    ]);
+    assert.equal(storyManifest.shards.length,
+      (await readJson(join(transport, "story", "shards.json"))).shards.length);
+    assert.equal(insightManifest.shards.length,
+      (await readJson(join(transport, "insight", "shards.json"))).shards.length);
+    assert.equal(privacyManifest.shards.length,
+      (await readJson(join(transport, "story-privacy", "shards.json"))).shards.length);
+    assert.equal(preferenceManifest.shards.length, 1);
+    for (const [lane, laneManifest] of [
+      ["story", storyManifest], ["insight", insightManifest],
+      ["story_privacy", privacyManifest], ["preference", preferenceManifest],
+    ]) {
+      const recordDirectory = join(transport, laneDirectory[lane], "records");
+      assert.ok((await Promise.all(laneManifest.shards.map((shard) => (
+        readJson(join(recordDirectory, shard.id, "receipt.json"))
+      )))).every((receipt) => receipt.status === "complete"));
+    }
+    console.log("STORY_PREPARATION_SCALE", JSON.stringify({
+      itemCount: count,
+      semanticUnitCount: unitCount,
+      validationAuthorityBytes: authorityBytes.byteLength,
+      storyShardCount: storyManifest.shards.length,
+      insightShardCount: insightManifest.shards.length,
+      storyPrivacyShardCount: privacyManifest.shards.length,
+      preferenceShardCount: preferenceManifest.shards.length,
+      storyInputBytesMinimum: Math.min(...inputSizes),
+      storyInputBytesMaximum: Math.max(...inputSizes),
+      storyInputBytesTotal: inputSizes.reduce((total, size) => total + size, 0),
+      reviewedNarrativeCount: narrative.length,
+      reviewedNarrativeUniqueCount: new Set(narrative.map((row) => row.id)).size,
+      terminalReceiptCount: storyManifest.shards.length + insightManifest.shards.length
+        + privacyManifest.shards.length + preferenceManifest.shards.length,
+      aggregateCoreReceiptCount: terminal.receipts.length,
+    }));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

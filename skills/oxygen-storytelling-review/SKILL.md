@@ -144,20 +144,40 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --story-completed 4 --story-total 4
 ```
 
-Use Master-owned bounded semantic workers only for drafts and checks. The tracked public transport
+Use parent-owned bounded semantic workers only for drafts and checks. The tracked public transport
 requires the owning Agent to prepare deterministic inputs first:
 
 - create an immutable input digest;
 - assign explicit semantic unit IDs;
 - write byte/content-balanced shard manifests;
-- run separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning;
+- automatically enumerate every nonempty shard and run separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning;
 - require a receipt from every worker with input digest, shard ID, unit IDs covered, output path, and terminal status;
 - validate exact union coverage and no overlap across shard manifests and receipts;
 - deterministically deduplicate and compose outputs;
 - keep revision authority, activation, and release decisions in the owning Agent/server lane;
 - fail closed on any missing, foreign, stale, overlapping, or scope-expanded receipt.
 
-No worker may silently expand scope, reopen raw history, repair another lane, or treat another lane's failure as success.
+When host subagents are available, the parent must dispatch them in waves of no more than three
+live at once; silently performing all semantic reasoning in the parent is invalid. Each assignment
+reads exactly one Privacy-safe immutable `inputPath` and writes only its proposal. Workers never
+write receipts, final manifests, SQLite, Viewer APIs, revisions, activation state, release state,
+or publication state. The parent exclusively runs recorders, installs output/receipt pairs, verifies
+exact union/no overlap, finalizes authority, performs Viewer mutations, and waits for all terminal
+receipts. No worker may silently expand scope, reopen raw history, repair another lane, or treat
+another lane's failure as success.
+
+A fixed safe pre-receipt validation failure enters a bounded automatic authoring-correction loop
+against the byte-identical shard input. Only the non-authoritative proposal may change; this is not
+a contributor pause and may never rewrite durable output. If host subagents are genuinely
+unavailable, the parent runs the same shards serially, reports
+`executionMode=serial_capability_limited`, and continues through the identical recorder/finalizer
+authority without asking the contributor to create workers. Internal host subagents are not product
+provider/API calls, require no separate API key, and receive no raw/private source beyond the
+prepared bounded input. `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal boundary only.
+
+Later E2E evidence records `executionMode`, `lane`, `shardCount`, `spawnedSubagentCount`,
+`maxConcurrentSubagents`, `correctionAttemptCount`, and `terminalReceiptCount` for every reached
+lane. Contributor pauses remain only at explicit human review and decision boundaries.
 
 Execute the exact public commands and proposal shapes in
 [story-preparation-transport.md](references/story-preparation-transport.md). Preparation installs

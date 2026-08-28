@@ -318,7 +318,7 @@ async function finalize(args) {
   }
   sameIds(storyAuthority.manifest.unitIds, semanticUnitIds, "STORY_SCOPE_STALE");
   composeStory([storyAuthority.output], base, "STORY");
-  if (storyAuthority.receipt.outputCount !== base.length) fail("STORY_RECEIPT_STALE");
+  if (storyAuthority.outputCount !== base.length) fail("STORY_RECEIPT_STALE");
   const storyValidation = validateStorySourcePackage(
     validationRows,
     storyEvidenceRows(validationAuthority),
@@ -330,7 +330,7 @@ async function finalize(args) {
   if (insightAuthority.manifest.inputDigest !== baseDigest) fail("INSIGHT_INPUT_STALE");
   sameIds(insightAuthority.manifest.unitIds, storyKeys, "INSIGHT_SCOPE_STALE");
   const recordedInsightCount = composeInsight(insightAuthority.output, base, complete, storyKeys);
-  if (recordedInsightCount !== insightCount || insightAuthority.receipt.outputCount !== insightCount) {
+  if (recordedInsightCount !== insightCount || insightAuthority.outputCount !== insightCount) {
     fail("INSIGHT_RECEIPT_STALE");
   }
   const completeDigest = await storyPreparationDigest(complete);
@@ -338,7 +338,7 @@ async function finalize(args) {
   if (privacyAuthority.manifest.inputDigest !== completeDigest) fail("PRIVACY_INPUT_STALE");
   sameIds(privacyAuthority.manifest.unitIds, catalog.map((target) => target.id), "PRIVACY_SCOPE_STALE");
   const privacy = normalizedPrivacy(privacyAuthority.output, catalog);
-  if (privacyAuthority.receipt.outputCount !== privacy.length) fail("PRIVACY_RECEIPT_STALE");
+  if (privacyAuthority.outputCount !== privacy.length) fail("PRIVACY_RECEIPT_STALE");
   const preferenceUniverse = rows.flatMap((row) => row.story.insights.map((insight) => ({
     storyKey: row.story.key, insightId: insight.id,
   }))).sort((a, b) => utf8(a.storyKey, b.storyKey) || utf8(a.insightId, b.insightId));

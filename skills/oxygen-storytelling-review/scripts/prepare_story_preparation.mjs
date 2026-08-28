@@ -30,6 +30,9 @@ import {
   buildStoryValidationAuthority,
 } from "./story_preparation_validation_authority.mjs";
 
+export const TARGET_STORY_PREPARATION_SHARD_BYTES = 1_000_000;
+export const MAX_STORY_PREPARATION_SHARD_IDENTITIES = 4;
+
 function orderedIds(values) {
   const result = [...values].sort(compareUtf8);
   if (result.some((id) => !stableId(id)) || new Set(result).size !== result.length) {
@@ -110,45 +113,84 @@ async function writeDestination(path, value) {
   }
 }
 
-async function installLane(rootInput, lane, inputDigest, unitIds, payload, files = []) {
+function balancedGroups(entries, {
+  maximumIdentities = MAX_STORY_PREPARATION_SHARD_IDENTITIES,
+  targetBytes = TARGET_STORY_PREPARATION_SHARD_BYTES,
+} = {}) {
+  if (!entries.length) return [[]];
+  const weighted = entries.map((entry) => ({ ...entry, weight: serializedBytes(entry.value) }))
+    .sort((left, right) => right.weight - left.weight || compareUtf8(left.id, right.id));
+  const totalBytes = weighted.reduce((total, entry) => total + entry.weight, 0);
+  const count = Math.min(weighted.length, Math.max(1,
+    Math.ceil(weighted.length / maximumIdentities),
+    Math.ceil(totalBytes / targetBytes)));
+  const groups = Array.from({ length: count }, () => ({ bytes: 0, entries: [] }));
+  for (const entry of weighted) {
+    const group = [...groups].sort((left, right) => left.bytes - right.bytes
+      || left.entries.length - right.entries.length)[0];
+    group.entries.push(entry);
+    group.bytes += entry.weight;
+  }
+  return groups.map((group) => group.entries.sort((left, right) => compareUtf8(left.id, right.id)));
+}
+
+async function installLane(rootInput, lane, inputDigest, partitions, files = []) {
   if (!LANES.includes(lane) || !/^[0-9a-f]{64}$/u.test(inputDigest)) fail("LANE_INPUT_INVALID");
-  if (serializedBytes(payload) > MAX_STORY_PREPARATION_FILE_BYTES) fail("WORKER_INPUT_TOO_LARGE");
+  if (!Array.isArray(partitions) || partitions.length === 0) fail("LANE_INPUT_INVALID");
   const rootPath = resolve(rootInput);
   await mkdir(rootPath, { recursive: true });
   const root = await import("node:fs/promises").then(({ realpath }) => realpath(rootPath));
   const directory = laneDirectory[lane];
   const destination = resolve(root, directory);
   const temporary = resolve(root, `.${directory}.${process.pid}.${randomUUID()}.tmp`);
-  const shardId = `${directory}-0001`;
-  const canonicalUnitIds = orderedIds(unitIds);
-  const workerInput = {
-    schema: "oxygen.story-preparation-worker-input",
-    lane,
-    shardId,
-    inputDigest,
-    unitIds: canonicalUnitIds,
-    payload,
-  };
-  const shard = {
-    id: shardId,
-    unitIds: canonicalUnitIds,
-    inputPath: relativeLanePath(lane, `inputs/${shardId}.json`),
-    workerInputDigest: canonicalDigest(workerInput),
-    receiptPath: relativeLanePath(lane, `records/${shardId}/receipt.json`),
-  };
+  const shards = [];
+  const workerInputs = [];
+  const assigned = new Set();
+  for (const [index, partition] of partitions.entries()) {
+    if (!isObject(partition) || !Array.isArray(partition.unitIds) || !isObject(partition.payload)) {
+      fail("LANE_INPUT_INVALID");
+    }
+    const shardId = `${directory}-${String(index + 1).padStart(4, "0")}`;
+    const canonicalUnitIds = orderedIds(partition.unitIds);
+    for (const unitId of canonicalUnitIds) {
+      if (assigned.has(unitId)) fail("IDENTITY_SET_INVALID");
+      assigned.add(unitId);
+    }
+    const workerInput = {
+      schema: "oxygen.story-preparation-worker-input",
+      lane,
+      shardId,
+      inputDigest,
+      unitIds: canonicalUnitIds,
+      payload: partition.payload,
+    };
+    if (serializedBytes(workerInput) > MAX_STORY_PREPARATION_FILE_BYTES) fail("WORKER_INPUT_TOO_LARGE");
+    const shard = {
+      id: shardId,
+      unitIds: canonicalUnitIds,
+      inputPath: relativeLanePath(lane, `inputs/${shardId}.json`),
+      workerInputDigest: canonicalDigest(workerInput),
+      receiptPath: relativeLanePath(lane, `records/${shardId}/receipt.json`),
+    };
+    shards.push(shard);
+    workerInputs.push(workerInput);
+  }
+  const canonicalUnitIds = orderedIds([...assigned]);
   const manifest = {
     schema: "oxygen.story-preparation-shards",
     lane,
     inputDigest,
     unitIds: canonicalUnitIds,
-    shards: [shard],
+    shards,
   };
   try {
     await mkdir(resolve(temporary, "inputs"), { recursive: true });
     for (const file of files) {
       await writeSynced(resolve(temporary, file.name), file.value);
     }
-    await writeSynced(resolve(temporary, "inputs", `${shardId}.json`), workerInput);
+    for (const workerInput of workerInputs) {
+      await writeSynced(resolve(temporary, "inputs", `${workerInput.shardId}.json`), workerInput);
+    }
     await writeSynced(resolve(temporary, "shards.json"), manifest);
     try {
       await rename(temporary, destination);
@@ -159,7 +201,11 @@ async function installLane(rootInput, lane, inputDigest, unitIds, payload, files
   } finally {
     await rm(temporary, { recursive: true, force: true }).catch(() => {});
   }
-  return { lane, shardId, inputPath: shard.inputPath };
+  return {
+    lane,
+    shardCount: shards.length,
+    shards: shards.map((shard) => ({ id: shard.id, inputPath: shard.inputPath })),
+  };
 }
 
 function semanticMembers(semantic) {
@@ -182,20 +228,40 @@ async function prepareStory(semanticPath, coveragePath, sourcePrivacyPath, revie
   semanticMembers(semantic);
   const validationAuthorityDigest = canonicalDigest(authority);
   const narrativeDigest = canonicalDigest(reviewedNarrative);
-  return installLane(root, "story", canonicalDigest({ validationAuthorityDigest, narrativeDigest }),
-    semantic.units.map((unit) => unit.id), {
+  const narrativeById = new Map(reviewedNarrative.map((row) => [row.id, row]));
+  const groups = balancedGroups(semantic.units.map((unit) => {
+    const narrative = unit.members.map((id) => narrativeById.get(id));
+    if (narrative.some((row) => !row)) fail("REVIEWED_SOURCE_AUTHORITY_STALE");
+    return { id: unit.id, value: { unit, narrative } };
+  }));
+  const partitions = groups.map((group) => ({
+    unitIds: group.map((entry) => entry.id),
+    payload: {
       validationAuthorityPath: "story/validation-authority.json",
       validationAuthorityDigest,
       narrativeDigest,
-      reviewedNarrative,
-    }, [{ name: "validation-authority.json", value: authority }]);
+      reviewedNarrative: group.flatMap((entry) => entry.value.narrative)
+        .sort((left, right) => compareUtf8(left.documentId, right.documentId) || compareUtf8(left.id, right.id)),
+    },
+  }));
+  return installLane(root, "story", canonicalDigest({ validationAuthorityDigest, narrativeDigest }),
+    partitions, [{ name: "validation-authority.json", value: authority }]);
 }
 
 async function prepareInsight(candidatesPath, root) {
   const rows = candidateRows(await readBounded(candidatesPath));
   const records = rows.map(({ id, story }) => ({ id, story }));
-  return installLane(root, "insight", canonicalDigest(records),
-    rows.map((row) => row.story.key), { storyCandidates: rows.map(({ id, summary }) => ({ id, summary })) });
+  const storyAuthority = await readLaneAuthority(root, "story");
+  const { validationAuthorityPath, validationAuthorityDigest } = storyAuthority.input.payload;
+  const groups = balancedGroups(rows.map((row) => ({ id: row.story.key, value: row })));
+  return installLane(root, "insight", canonicalDigest(records), groups.map((group) => ({
+    unitIds: group.map((entry) => entry.id),
+    payload: {
+      validationAuthorityPath,
+      validationAuthorityDigest,
+      storyCandidates: group.map(({ value: { id, summary } }) => ({ id, summary })),
+    },
+  })));
 }
 
 async function preparePrivacy(candidatesPath, root) {
@@ -203,11 +269,30 @@ async function preparePrivacy(candidatesPath, root) {
   const records = rows.map(({ id, story }) => ({ id, story }));
   const catalog = deriveStoryReleaseTargetCatalog(rows.map((row) => row.story));
   if (!catalog) fail("PRIVACY_CATALOG_INVALID");
-  return installLane(root, "story_privacy", canonicalDigest(records),
-    catalog.map((target) => target.id), {
-      storyCandidates: rows.map(({ id, summary }) => ({ id, summary })),
-      releaseTargetCatalog: catalog,
-    });
+  const storyByTarget = new Map();
+  for (const row of rows) {
+    const targets = deriveStoryReleaseTargetCatalog([row.story]);
+    if (!targets) fail("PRIVACY_CATALOG_INVALID");
+    targets.forEach((target) => storyByTarget.set(target.id, row));
+  }
+  const groups = balancedGroups(catalog.map((target) => ({ id: target.id, value: target })), {
+    maximumIdentities: 64,
+  });
+  return installLane(root, "story_privacy", canonicalDigest(records), groups.map((group) => {
+    const targetIds = new Set(group.map((entry) => entry.id));
+    const shardRows = [...new Map(group.map((entry) => {
+      const row = storyByTarget.get(entry.id);
+      if (!row) fail("PRIVACY_CATALOG_INVALID");
+      return [row.id, row];
+    })).values()].sort((left, right) => compareUtf8(left.id, right.id));
+    return {
+      unitIds: [...targetIds],
+      payload: {
+        storyCandidates: shardRows.map(({ id, summary }) => ({ id, summary })),
+        releaseTargetCatalog: catalog.filter((target) => targetIds.has(target.id)),
+      },
+    };
+  }));
 }
 
 function lessonProjection(rows) {
@@ -236,8 +321,10 @@ async function preparePreference(candidatesPath, contextPath, root) {
     || canonicalAuthorityJson(context.insightIdentities) !== canonicalAuthorityJson(identities)) {
     fail("PREFERENCE_CONTEXT_STALE");
   }
-  return installLane(root, "preference", canonicalDigest(lessons),
-    identities.map((identity) => canonicalAuthorityJson(identity)), { preferenceContext: context });
+  return installLane(root, "preference", canonicalDigest(lessons), [{
+    unitIds: identities.map((identity) => canonicalAuthorityJson(identity)),
+    payload: { preferenceContext: context },
+  }]);
 }
 
 async function composeStory(root, outputPath) {

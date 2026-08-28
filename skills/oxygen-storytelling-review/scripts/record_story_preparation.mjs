@@ -30,14 +30,13 @@ import {
 import {
   LANES,
   laneDirectory,
-  readLaneAuthority,
   readPreparedShard,
+  readShardAuthority,
   relativeLanePath,
 } from "./story_preparation_protocol.mjs";
 import {
   readStoryValidationAuthority,
-  storyCompletenessAuthority,
-  storyEvidenceRows,
+  storyValidationScope,
 } from "./story_preparation_validation_authority.mjs";
 
 const metadataKeys = new Set([
@@ -93,8 +92,8 @@ function parseStory(value) {
 async function validateStory(value, input, prepared) {
   if (!Array.isArray(value) || value.length === 0) fail("STORY_OUTPUT_INVALID");
   const authority = await readStoryValidationAuthority(prepared);
-  const units = authority.semanticManifest?.units;
-  if (!Array.isArray(units)) fail("WORKER_INPUT_TAMPERED");
+  const scope = storyValidationScope(authority, input.unitIds);
+  const units = scope.completenessAuthority.semanticManifest.units;
   const memberIds = new Set(units.flatMap((unit) => Array.isArray(unit?.members) ? unit.members : []));
   const output = value.map((record) => {
     if (!exactKeys(record, ["id", "story"]) || !stableId(record.id) || !memberIds.has(record.id)) {
@@ -110,12 +109,12 @@ async function validateStory(value, input, prepared) {
     id: record.id,
     documentId: record.story.evidence.primary.documentId,
     summary: `${STORY_PREFIX}${canonicalAuthorityJson(record.story)}`,
-  })), storyEvidenceRows(authority), storyCompletenessAuthority(authority));
+  })), scope.evidenceRows, scope.completenessAuthority);
   if (!validation.ok) fail(validation.code);
   return { output, count: output.length };
 }
 
-function validateInsight(value, input) {
+async function validateInsight(value, input, prepared) {
   if (!Array.isArray(value) || !Array.isArray(input.payload?.storyCandidates)) fail("INSIGHT_OUTPUT_INVALID");
   const baseByKey = new Map();
   for (const row of input.payload.storyCandidates) {
@@ -133,6 +132,30 @@ function validateInsight(value, input) {
   if (canonicalAuthorityJson(output.map((record) => record.storyKey)) !== canonicalAuthorityJson(expected)) {
     fail("INSIGHT_OUTPUT_IDENTITY_INVALID");
   }
+  const completeRows = output.map((record) => {
+    const story = parseStory({ ...baseByKey.get(record.storyKey), insights: record.insights });
+    const candidate = input.payload.storyCandidates.find((row) => parseStorySource(row.summary)?.key === record.storyKey);
+    if (!candidate) fail("WORKER_INPUT_TAMPERED");
+    return {
+      id: candidate.id,
+      documentId: story.evidence.primary.documentId,
+      summary: `${STORY_PREFIX}${canonicalAuthorityJson(story)}`,
+      story,
+    };
+  });
+  const unitIds = completeRows.flatMap(({ story }) => [
+    ...story.coverage.representedUnitIds,
+    ...story.coverage.excludedUnits.map((excluded) => excluded.unitId),
+  ]);
+  if (new Set(unitIds).size !== unitIds.length) fail("STORY_COVERAGE_INVALID");
+  const authority = await readStoryValidationAuthority(prepared);
+  const scope = storyValidationScope(authority, unitIds);
+  const validation = validateStorySourcePackage(
+    completeRows.map(({ story, ...row }) => row),
+    scope.evidenceRows,
+    scope.completenessAuthority,
+  );
+  if (!validation.ok) fail(validation.code);
   return { output, count: output.reduce((total, record) => total + record.insights.length, 0) };
 }
 
@@ -141,11 +164,13 @@ function validatePrivacy(value, input) {
     || !Array.isArray(input.payload?.releaseTargetCatalog)) fail("PRIVACY_OUTPUT_INVALID");
   const stories = input.payload.storyCandidates.map((row) => parseStorySource(row?.summary));
   if (stories.some((story) => !story)) fail("WORKER_INPUT_TAMPERED");
-  const catalog = deriveStoryReleaseTargetCatalog(stories);
-  if (!catalog || canonicalAuthorityJson(catalog) !== canonicalAuthorityJson(input.payload.releaseTargetCatalog)) {
+  const fullCatalog = deriveStoryReleaseTargetCatalog(stories);
+  const valid = new Set(input.unitIds);
+  const catalog = fullCatalog?.filter((target) => valid.has(target.id));
+  if (!catalog || catalog.length !== valid.size
+    || canonicalAuthorityJson(catalog) !== canonicalAuthorityJson(input.payload.releaseTargetCatalog)) {
     fail("WORKER_INPUT_TAMPERED");
   }
-  const valid = new Set(input.unitIds);
   const order = new Map(catalog.map((target, index) => [target.id, index]));
   const found = new Map();
   for (const candidate of value) {
@@ -249,7 +274,7 @@ function validatePreference(value, input) {
 
 async function validateProposal(lane, value, input, prepared) {
   if (lane === "story") return validateStory(value, input, prepared);
-  if (lane === "insight") return validateInsight(value, input);
+  if (lane === "insight") return validateInsight(value, input, prepared);
   if (lane === "story_privacy") return validatePrivacy(value, input);
   if (lane === "preference") return validatePreference(value, input);
   fail("LANE_INVALID");
@@ -276,8 +301,7 @@ async function writeSynced(path, value) {
 
 async function record(rootInput, lane, shardId, proposalPath) {
   if (!LANES.includes(lane) || !stableId(shardId)) fail("CLI_USAGE");
-  const prepared = await readPreparedShard(rootInput, lane);
-  if (prepared.shard.id !== shardId) fail("SHARD_IDENTITY_INVALID");
+  const prepared = await readPreparedShard(rootInput, lane, shardId);
   const proposal = (await readStrictJson(proposalPath, MAX_STORY_PREPARATION_FILE_BYTES, {
     invalid: "PROPOSAL_UNREADABLE", changed: "PROPOSAL_CHANGED",
     oversized: "PROPOSAL_TOO_LARGE", jsonInvalid: "PROPOSAL_JSON_INVALID",
@@ -290,7 +314,7 @@ async function record(rootInput, lane, shardId, proposalPath) {
     if (!state.isDirectory() || state.isSymbolicLink()) fail("PARTIAL_PAIR_REJECTED");
     let authority;
     try {
-      authority = await readLaneAuthority(prepared.root, lane);
+      authority = await readShardAuthority(prepared.root, lane, shardId);
     } catch {
       fail("PARTIAL_PAIR_REJECTED");
     }

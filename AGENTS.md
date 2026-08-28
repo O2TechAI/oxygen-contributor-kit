@@ -31,8 +31,23 @@ Stage ownership:
   review begins.
 - **Release handoff** — the organizer/export Skill plus canonical release validation.
 
+Repository-development Agents are outside the Toolkit runtime contract. During a normal Toolkit
+request, the workflow-owning parent Agent automatically executes every nonempty immutable semantic
+shard. When host subagents are available, it must dispatch them in waves with no more than three
+live at once; each subagent reads exactly one Privacy-safe `inputPath` and writes only that shard's
+proposal. The parent alone runs recorders and finalizers, installs output/receipt pairs, proves
+exact union and no overlap, mutates Viewer state, and waits for all terminal receipts. Fixed safe
+pre-receipt validation failures enter a bounded proposal-only correction loop against the identical
+input and never pause the contributor or rewrite durable output. `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS`
+is therefore an internal orchestration boundary. If host subagents are genuinely unavailable, the
+parent processes the same shards serially, reports `executionMode=serial_capability_limited`, and
+continues through the identical recorder/finalizer authority without asking the contributor to
+create workers. Internal host subagents are not product provider/API calls, require no separate API
+key, and receive no raw/private source beyond the prepared Privacy-safe input.
+
 Pause for the contributor at Project Story human review, Privacy Keep/Redact decisions, Preference
-answers, `All set`, and release handoff. Do not fabricate Story edits, Privacy decisions,
+answers, `All set`, and release handoff. These explicit review and decision boundaries are the only
+contributor pauses. Do not fabricate Story edits, Privacy decisions,
 preference answers, `All set`, or release/publication approval. Never widen the approved input
 boundary, read credential or browser-profile data, upload automatically, or publish automatically.
 `All set`, ZIP creation, download, and publication are separate; keep `publication_approved=false`
