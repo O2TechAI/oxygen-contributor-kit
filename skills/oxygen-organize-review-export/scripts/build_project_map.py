@@ -35,6 +35,10 @@ from oxygen_utf8 import configure_utf8_stdio
 MAX_SEMANTIC_UNITS = 512
 MAX_SEMANTIC_MANIFEST_BYTES = 2_200_000
 MAX_STORY_SEMANTIC_PROJECTION_BYTES = 325_000
+MAX_PROJECT_MAP_SUMMARY_BYTES = MAX_STORY_SEMANTIC_PROJECTION_BYTES
+# The map carries semantic membership twice (proposal plus finalized authority).
+# A third manifest budget bounds JSON framing and the remaining project metadata.
+MAX_PROJECT_MAP_BYTES = 3 * MAX_SEMANTIC_MANIFEST_BYTES
 SEMANTIC_UNIT_KINDS = {
     "discussion", "decision_episode", "failed_attempt", "experiment",
     "correction", "handoff", "review_cycle", "progression", "routine",
@@ -99,6 +103,10 @@ def assert_literal_physical_path(
     return literal
 
 
+def transport_json_bytes(value: Any) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
 def atomic_write_json(destination: Path, value: Any) -> None:
     """Install one canonical JSON file without exposing a partial destination."""
     assert_literal_physical_path(destination.parent)
@@ -107,7 +115,7 @@ def atomic_write_json(destination: Path, value: Any) -> None:
     temporary = destination.parent / f".{destination.name}.{os.getpid()}.tmp"
     if temporary.exists() or temporary.is_symlink():
         raise ValueError(f"temporary output already exists: {temporary}")
-    data = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    data = transport_json_bytes(value)
     try:
         with temporary.open("xb") as handle:
             handle.write(data)
@@ -637,14 +645,17 @@ def canonical_project_map(
     existing_manifest: Any = None,
 ) -> dict[str, Any]:
     """Build the single Organization project map for ``run``."""
-    if not isinstance(summary, str):
+    if (
+        not isinstance(summary, str)
+        or len(summary.encode("utf-8")) > MAX_PROJECT_MAP_SUMMARY_BYTES
+    ):
         raise ValueError("project summary is invalid")
     contribution_ids, sources, contribution_source_digests = source_inventory(run)
     source_digest = digest([{
         "id": contribution_id,
         "sourceDigest": contribution_source_digests[contribution_id],
     } for contribution_id in contribution_ids])
-    return {
+    project_map = {
         "schema_version": "1",
         "primary_project": primary_project,
         "summary": summary,
@@ -668,6 +679,9 @@ def canonical_project_map(
             previous_manifest,
         ) if finalize else existing_manifest,
     }
+    if len(transport_json_bytes(project_map)) > MAX_PROJECT_MAP_BYTES:
+        raise ValueError("project map transport-byte limit exceeded")
+    return project_map
 
 
 def validate_current_project_map_skeleton(

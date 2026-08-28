@@ -3,10 +3,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -193,6 +195,97 @@ def write_worker_results(output: Path, unit_for_id) -> None:
 
 
 class SemanticUnitTransportTests(unittest.TestCase):
+    def test_project_map_envelope_is_producer_owned(self):
+        with mock.patch.object(builder, "source_inventory", return_value=([], [], {})):
+            project_map = builder.canonical_project_map(
+                Path("unused"), "Synthetic Project",
+                "s" * builder.MAX_PROJECT_MAP_SUMMARY_BYTES,
+                [], finalize=False,
+            )
+            self.assertLessEqual(
+                len(builder.transport_json_bytes(project_map)),
+                builder.MAX_PROJECT_MAP_BYTES,
+            )
+            with self.assertRaisesRegex(ValueError, "project summary"):
+                builder.canonical_project_map(
+                    Path("unused"), "Synthetic Project",
+                    "s" * (builder.MAX_PROJECT_MAP_SUMMARY_BYTES + 1),
+                    [], finalize=False,
+                )
+            with self.assertRaisesRegex(ValueError, "transport-byte"):
+                builder.canonical_project_map(
+                    Path("unused"), "Synthetic Project", "Safe summary.",
+                    [{"padding": "x" * builder.MAX_PROJECT_MAP_BYTES}],
+                    finalize=False,
+                )
+
+    def test_python_project_map_and_node_coverage_finalizer_agree(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / "run"
+            ids = write_trajectory(run, "traj-cross-runtime", ["one", "two", "three", "four"])
+            ordered = sorted(ids, key=lambda value: value.encode("utf-8"))
+            raw_units = [
+                {"id": "unit-a", "kind": "discussion", "members": ordered[:2]},
+                {"id": "unit-b", "kind": "routine", "members": ordered[2:]},
+            ]
+            first = builder.canonical_project_map(
+                run, "Synthetic Project", "Safe cross-runtime summary.", raw_units,
+            )
+            second = builder.canonical_project_map(
+                run, "Synthetic Project", "Safe cross-runtime summary.", raw_units,
+            )
+            first_bytes = builder.transport_json_bytes(first)
+            self.assertEqual(first_bytes, builder.transport_json_bytes(second))
+            self.assertLessEqual(len(first_bytes), builder.MAX_PROJECT_MAP_BYTES)
+            project_map_path = run / "project-map.json"
+            builder.atomic_write_json(project_map_path, first)
+            first_written = project_map_path.read_bytes()
+            builder.atomic_write_json(project_map_path, second)
+            self.assertEqual(project_map_path.read_bytes(), first_written)
+
+            manifest_path = root / "semantic-manifest.json"
+            draft_path = root / "coverage-draft.json"
+            privacy_path = root / "source-privacy.json"
+            wrapped_output = root / "wrapped-coverage.json"
+            bare_output = root / "bare-coverage.json"
+            builder.atomic_write_json(manifest_path, first["semantic_manifest"])
+            builder.atomic_write_json(draft_path, {"rows": [
+                {"unitId": "unit-a", "disposition": "represented", "ownerId": "chapter-a"},
+                {"unitId": "unit-b", "disposition": "excluded",
+                 "exclusionReason": "routine_non_narrative"},
+            ]})
+            builder.atomic_write_json(privacy_path, {
+                "redactions": [],
+                "job": {
+                    "id": "source-privacy-current", "status": "complete", "stage": "complete",
+                    "model": None, "completed": 0, "total": 0, "rejected": 0,
+                    "source_digest": "9" * 64,
+                    "started_at": "2042-01-01T00:00:00.000Z",
+                    "updated_at": "2042-01-01T00:00:00.000Z",
+                    "completed_at": "2042-01-01T00:00:00.000Z",
+                },
+            })
+            repository = Path(__file__).resolve().parents[3]
+            script = repository / "skills" / "oxygen-storytelling-review" / "scripts" / (
+                "finalize_story_coverage.mjs"
+            )
+
+            def finalize(source: Path, output: Path) -> subprocess.CompletedProcess[str]:
+                return subprocess.run([
+                    node, str(script), str(source), str(draft_path), str(output),
+                    "--source-privacy", str(privacy_path),
+                ], cwd=repository, capture_output=True, text=True, encoding="utf-8", check=False)
+
+            wrapped = finalize(project_map_path, wrapped_output)
+            bare = finalize(manifest_path, bare_output)
+            self.assertEqual(wrapped.returncode, 0, wrapped.stderr)
+            self.assertEqual(bare.returncode, 0, bare.stderr)
+            self.assertEqual(wrapped_output.read_bytes(), bare_output.read_bytes())
+
     def test_current_ingest_sanitizer_closes_every_worker_secret_rule(self):
         unsafe = (
             list(generated_quoted_assignments())
