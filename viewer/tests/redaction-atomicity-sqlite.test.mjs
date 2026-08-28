@@ -85,6 +85,157 @@ async function storyAuthoritySnapshot(db) {
     active_story_digest FROM workflow_runs WHERE id='workflow-redaction-atomicity'`).first();
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function corpusEntry(documentId, itemId, content) {
+  return {
+    document: {
+      id: documentId,
+      kind: "trajectory",
+      title: `Replacement ${documentId}`,
+      sourceUser: "fixture-user",
+      sourceSystem: "fixture-system",
+      sourceTimestamp: oldTime,
+      metadata: { fixture: documentId },
+      envelope: { source: "redaction-atomicity-sqlite" },
+      itemCount: 1,
+    },
+    items: [{
+      id: itemId,
+      sequence: 1,
+      eventType: "message",
+      actorId: "fixture-actor",
+      actorType: "assistant",
+      timestamp: oldTime,
+      content,
+      original: { event_id: itemId, trajectory_id: documentId },
+    }],
+  };
+}
+
+function postDocuments(route, documents) {
+  return route.POST(new Request("http://localhost/api/documents", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ documents }),
+  }));
+}
+
+async function seedConcurrentPrivacyState(db, establishWorkflowRun, computeSourceDigest) {
+  const workflowRunId = "workflow-redaction-atomicity";
+  const sourceRevision = 7;
+  const activeStoryDigest = "a".repeat(64);
+  await establishWorkflowRun(db, workflowRunId, oldTime);
+  await db.batch([
+    db.prepare(`INSERT INTO documents
+      (id,kind,title,source_system,item_count,metadata_json,original_envelope_json,
+       imported_at,updated_at,formatted_summary_json) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .bind("document-old", "trajectory", "Old source", "fixture", 1,
+        "{}", "{}", oldTime, oldTime, "{}"),
+    db.prepare(`INSERT INTO items
+      (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,original_json)
+      VALUES (?,?,?,?,?,?,?,?,?)`).bind(
+        "item-old", "document-old", 1, "message", "fixture-actor", "assistant",
+        oldTime, "old private source", "{}",
+      ),
+  ]);
+  const sourceRows = await db.prepare(
+    `SELECT document_id,id,sequence,event_type,actor_type,timestamp,content
+       FROM items ORDER BY document_id,sequence,id`,
+  ).all();
+  const sourceDigest = await computeSourceDigest(sourceRows.results);
+  await db.batch([
+    db.prepare(`INSERT INTO redactions
+      (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
+       review_state,uncertainty_reason,status,created_by,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+        "race-candidate", "item-old", "document-old", 4, 11, "sensitive", "high",
+        LOCAL_REASON_SENTINEL, "needs_confirmation", LOCAL_UNCERTAINTY_SENTINEL,
+        "active", "llm", oldTime, oldTime,
+      ),
+    db.prepare(`INSERT INTO redaction_jobs
+      (id,status,stage,model,completed,total,rejected,source_digest,
+       started_at,updated_at,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(
+        "job-old", "complete", "done", "fixture-model", 1, 1, 0, sourceDigest,
+        oldTime, oldTime, oldTime,
+      ),
+    db.prepare(`UPDATE workflow_runs SET story_generation_status='ready_for_human_review',
+      story_source_revision=?,active_story_digest=? WHERE id=?`)
+      .bind(sourceRevision, activeStoryDigest, workflowRunId),
+    db.prepare(`INSERT INTO story_privacy_authorities
+      (workflow_run_id,source_revision,active_story_digest,server_version,
+       reviewed_story_digest,target_catalog_json,target_catalog_digest,changed_target_digest,
+       changed_target_count,receipt_digest,batch_digest,candidate_digest,candidate_count,imported_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+        workflowRunId, sourceRevision, activeStoryDigest, 1, "b".repeat(64), "[]",
+        "c".repeat(64), "d".repeat(64), 0, "e".repeat(64), "f".repeat(64),
+        "1".repeat(64), 1, oldTime,
+      ),
+    db.prepare(`INSERT INTO project_all_set
+      (workflow_run_id,active_story_digest,source_revision,server_version,all_set_at)
+      VALUES (?,?,?,?,?)`).bind(workflowRunId, activeStoryDigest, sourceRevision, 1, oldTime),
+  ]);
+  return { workflowRunId, sourceRevision, sourceDigest, activeStoryDigest };
+}
+
+async function completeAuthoritySnapshot(db) {
+  return db.transaction(async () => {
+    const [documents, items, jobs, redactions, workflow, storyPrivacy, allSet, manifest] =
+      await Promise.all([
+        db.prepare("SELECT * FROM documents ORDER BY id").all(),
+        db.prepare("SELECT * FROM items ORDER BY id").all(),
+        db.prepare("SELECT * FROM redaction_jobs ORDER BY id").all(),
+        db.prepare("SELECT * FROM redactions ORDER BY id").all(),
+        db.prepare("SELECT * FROM workflow_runs ORDER BY id").all(),
+        db.prepare("SELECT * FROM story_privacy_authorities ORDER BY workflow_run_id").all(),
+        db.prepare("SELECT * FROM project_all_set ORDER BY workflow_run_id").all(),
+        db.prepare("SELECT * FROM finalized_corpus_manifests ORDER BY workflow_run_id").all(),
+      ]);
+    return {
+      documents: documents.results,
+      items: items.results,
+      jobs: jobs.results,
+      redactions: redactions.results,
+      workflow: workflow.results,
+      storyPrivacy: storyPrivacy.results,
+      allSet: allSet.results,
+      manifest: manifest.results,
+    };
+  });
+}
+
+async function withFreshDatabase(prefix, operation) {
+  const stateDir = await mkdtemp(join(tmpdir(), prefix));
+  const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
+  process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
+  try {
+    const [{ getLocalDatabase }, { establishWorkflowRun }, { computeSourceDigest },
+      redactionRoute, decisionRoute, documentsRoute] = await Promise.all([
+      import("../db/index.ts"),
+      import("../lib/workflow-run-server.ts"),
+      import("../lib/redaction-pass.mjs"),
+      import("../app/api/redactions/route.ts"),
+      import("../app/api/redactions/[id]/route.ts"),
+      import("../app/api/documents/route.ts"),
+    ]);
+    const db = await getLocalDatabase();
+    return await operation({
+      db, establishWorkflowRun, computeSourceDigest,
+      redactionRoute, decisionRoute, documentsRoute,
+    });
+  } finally {
+    globalThis.__oxygenLocalSqlite?.database.close();
+    delete globalThis.__oxygenLocalSqlite;
+    if (previousStateDir === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
+    else process.env.OXYGEN_VIEWER_STATE_DIR = previousStateDir;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}
+
 test("redaction replacement validates completely and commits once with real SQLite", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "oxygen-redaction-atomicity-"));
   const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
@@ -492,6 +643,243 @@ test("redaction replacement validates completely and commits once with real SQLi
     else process.env.OXYGEN_VIEWER_STATE_DIR = previousStateDir;
     await rm(stateDir, { recursive: true, force: true });
   }
+});
+
+test("source-first publication makes a stale bulk Privacy replacement lose without mutation", async () => {
+  await withFreshDatabase("oxygen-redaction-source-first-", async ({
+    db, establishWorkflowRun, computeSourceDigest, redactionRoute, documentsRoute,
+  }) => {
+    await seedConcurrentPrivacyState(db, establishWorkflowRun, computeSourceDigest);
+    const sourceRead = deferred();
+    const releasePrivacy = deferred();
+    const realPrepare = db.prepare.bind(db);
+    let interceptSourceRead = true;
+    db.prepare = (sql) => {
+      const statement = realPrepare(sql);
+      if (interceptSourceRead && /FROM workflow_runs r LEFT JOIN items i ON 1=1/u.test(sql)) {
+        interceptSourceRead = false;
+        const realAll = statement.all.bind(statement);
+        statement.all = async (...args) => {
+          const result = await realAll(...args);
+          sourceRead.resolve();
+          await releasePrivacy.promise;
+          return result;
+        };
+      }
+      return statement;
+    };
+    const stalePrivacy = post(redactionRoute, payload([span({
+      id: "race-candidate", itemId: "item-old", documentId: "document-old",
+      startOffset: 4, endOffset: 11, reviewState: "needs_confirmation",
+      uncertaintyReason: LOCAL_UNCERTAINTY_SENTINEL,
+    })]));
+    await Promise.race([
+      sourceRead.promise,
+      stalePrivacy.then(() => assert.fail("Privacy replacement completed before source-read barrier")),
+    ]);
+    const sourceResponse = await postDocuments(documentsRoute, [
+      corpusEntry("document-new", "item-new", "new public source"),
+    ]);
+    assert.equal(sourceResponse.status, 200);
+    const afterSource = await completeAuthoritySnapshot(db);
+    releasePrivacy.resolve();
+    const response = await stalePrivacy;
+    db.prepare = realPrepare;
+    assert.equal(response.status, 409);
+    const failure = await response.json();
+    assert.deepEqual(failure, {
+      error: "Source Privacy replacement conflicted",
+      code: "SOURCE_PRIVACY_MUTATION_CONFLICT",
+      imported: 0,
+    });
+    assert.doesNotMatch(JSON.stringify(failure),
+      /LOCAL_REASON|LOCAL_UNCERTAINTY|document|item|sqlite|path|trace/iu);
+    assert.deepEqual(await completeAuthoritySnapshot(db), afterSource,
+      "the rejected replacement must preserve the exact source-first committed state");
+    assert.deepEqual(afterSource.jobs.map(({ status, stage, completed_at }) => ({
+      status, stage, completed_at,
+    })), [{ status: "stale", stage: "source_changed", completed_at: null }]);
+    assert.deepEqual(afterSource.redactions.map((row) => row.id), ["race-candidate"]);
+    assert.equal(afterSource.workflow[0].story_source_revision, 8);
+    assert.equal(afterSource.workflow[0].active_story_digest, null);
+    assert.notEqual(afterSource.workflow[0].story_generation_status, "ready_for_human_review");
+  });
+});
+
+test("Privacy-first replacement linearizes before source publication and unrelated writes do not conflict", async () => {
+  await withFreshDatabase("oxygen-redaction-privacy-first-", async ({
+    db, establishWorkflowRun, computeSourceDigest, redactionRoute, documentsRoute,
+  }) => {
+    const seeded = await seedConcurrentPrivacyState(db, establishWorkflowRun, computeSourceDigest);
+    const sourceRead = deferred();
+    const releasePrivacy = deferred();
+    const realPrepare = db.prepare.bind(db);
+    let interceptSourceRead = true;
+    db.prepare = (sql) => {
+      const statement = realPrepare(sql);
+      if (interceptSourceRead && /FROM workflow_runs r LEFT JOIN items i ON 1=1/u.test(sql)) {
+        interceptSourceRead = false;
+        const realAll = statement.all.bind(statement);
+        statement.all = async (...args) => {
+          const result = await realAll(...args);
+          sourceRead.resolve();
+          await releasePrivacy.promise;
+          return result;
+        };
+      }
+      return statement;
+    };
+    const currentPrivacy = post(redactionRoute, payload([span({
+      id: "privacy-first", itemId: "item-old", documentId: "document-old",
+      startOffset: 4, endOffset: 11,
+    })]));
+    await Promise.race([
+      sourceRead.promise,
+      currentPrivacy.then(() => assert.fail("Privacy replacement completed before barrier")),
+    ]);
+    await realPrepare(`INSERT INTO organization_jobs
+      (id,status,stage,started_at,updated_at) VALUES (?,?,?,?,?)`)
+      .bind("unrelated-write", "complete", "done", oldTime, oldTime).run();
+    releasePrivacy.resolve();
+    const privacyResponse = await currentPrivacy;
+    db.prepare = realPrepare;
+    assert.equal(privacyResponse.status, 200);
+    assert.equal((await privacyResponse.json()).imported, 1);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM organization_jobs").first()).count, 1);
+    const completed = await privacySnapshot(db);
+    assert.equal(completed.jobs[0].status, "complete");
+    assert.equal(completed.jobs[0].source_digest, seeded.sourceDigest);
+
+    const sourceResponse = await postDocuments(documentsRoute, [
+      corpusEntry("document-after-privacy", "item-after-privacy", "later source generation"),
+    ]);
+    assert.equal(sourceResponse.status, 200);
+    const afterSource = await completeAuthoritySnapshot(db);
+    assert.equal(afterSource.jobs[0].status, "stale");
+    assert.equal(afterSource.jobs[0].stage, "source_changed");
+    assert.equal(afterSource.workflow[0].story_source_revision, seeded.sourceRevision + 1);
+    assert.equal(afterSource.workflow[0].active_story_digest, null);
+    assert.notEqual(afterSource.workflow[0].story_generation_status, "ready_for_human_review");
+  });
+});
+
+test("PATCH loses stale-source and same-id replacement races with exact CAS", async () => {
+  for (const race of ["source", "same-id"]) {
+    await withFreshDatabase(`oxygen-redaction-patch-${race}-`, async ({
+      db, establishWorkflowRun, computeSourceDigest,
+      redactionRoute, decisionRoute, documentsRoute,
+    }) => {
+      await seedConcurrentPrivacyState(db, establishWorkflowRun, computeSourceDigest);
+      const snapshotRead = deferred();
+      const releaseDecision = deferred();
+      const realTransaction = db.transaction.bind(db);
+      let interceptSnapshot = true;
+      db.transaction = async (operation) => {
+        const result = await realTransaction(operation);
+        if (interceptSnapshot) {
+          interceptSnapshot = false;
+          snapshotRead.resolve();
+          await releaseDecision.promise;
+        }
+        return result;
+      };
+      const pendingDecision = decide(decisionRoute, "race-candidate", { decision: "keep" });
+      await Promise.race([
+        snapshotRead.promise,
+        pendingDecision.then(() => assert.fail(`PATCH completed before ${race} barrier`)),
+      ]);
+      if (race === "source") {
+        const sourceResponse = await postDocuments(documentsRoute, [
+          corpusEntry("document-patch-new", "item-patch-new", "new PATCH source"),
+        ]);
+        assert.equal(sourceResponse.status, 200);
+      } else {
+        const replacement = await post(redactionRoute, payload([span({
+          id: "race-candidate", itemId: "item-old", documentId: "document-old",
+          startOffset: 0, endOffset: 3, category: "credential",
+          reviewState: "needs_confirmation", uncertaintyReason: "replacement uncertainty",
+        })]));
+        assert.equal(replacement.status, 200);
+      }
+      db.transaction = realTransaction;
+      const afterConcurrentMutation = await completeAuthoritySnapshot(db);
+      releaseDecision.resolve();
+      const decisionResponse = await pendingDecision;
+      assert.equal(decisionResponse.status, 409, race);
+      const failure = await decisionResponse.json();
+      assert.deepEqual(failure, {
+        error: "Source Privacy decision conflicted",
+        code: "SOURCE_PRIVACY_MUTATION_CONFLICT",
+      });
+      assert.doesNotMatch(JSON.stringify(failure),
+        /LOCAL_REASON|LOCAL_UNCERTAINTY|replacement uncertainty|document|item|sqlite|path|trace/iu);
+      assert.deepEqual(await completeAuthoritySnapshot(db), afterConcurrentMutation,
+        `${race} race must leave the winning generation byte-for-byte unchanged`);
+    });
+  }
+});
+
+test("24,796-item explicit replacement stays bounded while passive polling avoids source scans", async (t) => {
+  await withFreshDatabase("oxygen-redaction-scale-", async ({
+    db, establishWorkflowRun, computeSourceDigest, redactionRoute,
+  }) => {
+    const itemCount = 24_796;
+    await establishWorkflowRun(db, "workflow-redaction-atomicity", oldTime);
+    await db.prepare(`INSERT INTO documents
+      (id,kind,title,source_system,item_count,metadata_json,original_envelope_json,
+       imported_at,updated_at,formatted_summary_json) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .bind("document-scale", "trajectory", "Scale source", "fixture", itemCount,
+        "{}", "{}", oldTime, oldTime, "{}").run();
+    const items = Array.from({ length: itemCount }, (_, index) => ({
+      id: `scale-item-${String(index).padStart(5, "0")}`,
+      documentId: "document-scale",
+      sequence: index + 1,
+      eventType: "message",
+      actorId: "fixture-actor",
+      actorType: index % 2 === 0 ? "assistant" : "user",
+      timestamp: oldTime,
+      content: `public scale content ${String(index).padStart(5, "0")}`,
+      originalJson: "{}",
+    }));
+    await db.prepare(`INSERT INTO items
+      (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,original_json)
+      SELECT json_extract(value,'$.id'),json_extract(value,'$.documentId'),
+        json_extract(value,'$.sequence'),json_extract(value,'$.eventType'),
+        json_extract(value,'$.actorId'),json_extract(value,'$.actorType'),
+        json_extract(value,'$.timestamp'),json_extract(value,'$.content'),
+        json_extract(value,'$.originalJson') FROM json_each(?)`)
+      .bind(JSON.stringify(items)).run();
+    const started = performance.now();
+    const response = await post(redactionRoute, payload([span({
+      id: "scale-redaction", itemId: "scale-item-00000", documentId: "document-scale",
+      startOffset: 0, endOffset: 6,
+    })]));
+    const elapsedMs = performance.now() - started;
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { imported: 1, rejected: [], status: "complete" });
+    const stored = await privacySnapshot(db);
+    assert.equal(stored.jobs[0].status, "complete");
+    assert.equal(stored.jobs[0].completed, 1);
+    const sourceRows = await db.prepare(
+      `SELECT document_id,id,sequence,event_type,actor_type,timestamp,content
+         FROM items ORDER BY document_id,sequence,id`,
+    ).all();
+    assert.equal(sourceRows.results.length, itemCount);
+    assert.equal(stored.jobs[0].source_digest, await computeSourceDigest(sourceRows.results));
+
+    const observedSql = [];
+    const realPrepare = db.prepare.bind(db);
+    db.prepare = (sql) => {
+      observedSql.push(sql);
+      return realPrepare(sql);
+    };
+    const polling = await redactionRoute.GET();
+    db.prepare = realPrepare;
+    assert.equal(polling.status, 200);
+    assert.equal(observedSql.some((sql) => /\bFROM items\b/iu.test(sql)), false,
+      "passive source Privacy polling must not scan the source corpus");
+    t.diagnostic(`24,796-item replacement elapsed ${elapsedMs.toFixed(1)} ms`);
+  });
 });
 
 test("fresh SQLite requires an explicit redaction review state with no default", async () => {

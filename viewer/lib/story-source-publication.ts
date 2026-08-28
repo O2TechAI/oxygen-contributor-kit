@@ -39,6 +39,20 @@ export function activeStoryPrivacyInvalidationStatements(
   ];
 }
 
+/** Fail the surrounding batch unless it still owns the exact source generation
+ * observed by the Privacy producer. Keep this first in the producer batch so a
+ * stale source snapshot cannot delete or replace any Privacy state. */
+export function storySourceGenerationGuardStatement(
+  db: SourcePublicationDatabase,
+  workflowRunId: string,
+  expectedRevision: number,
+) {
+  return db.prepare(`SELECT CASE WHEN EXISTS (
+      SELECT 1 FROM workflow_runs WHERE id=? AND story_source_revision=?
+    ) THEN 1 ELSE json_extract('source generation changed','$') END AS source_generation_guard`)
+    .bind(workflowRunId, expectedRevision);
+}
+
 /** Claim the existing Story generation status as a non-activatable source-write
  * boundary. A second mutation cannot overlap the first one. */
 export async function beginStorySourceMutation(

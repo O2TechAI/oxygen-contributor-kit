@@ -9,7 +9,10 @@ import {
   requireEstablishedWorkflowRun,
   workflowRunErrorResponse,
 } from "../../../lib/workflow-run-server";
-import { activeStoryPrivacyInvalidationStatements } from "../../../lib/story-source-publication";
+import {
+  activeStoryPrivacyInvalidationStatements,
+  storySourceGenerationGuardStatement,
+} from "../../../lib/story-source-publication";
 
 type IncomingRedaction = {
   id?: string;
@@ -142,15 +145,25 @@ export async function POST(request: Request) {
     accepted.push(span);
   }
 
-  // Read the complete source identity before any mutation. The same rows both
-  // validate each span and bind a successful job to the exact stored corpus.
-  const sourceResult = await db.prepare(
-    `SELECT document_id,id,sequence,event_type,actor_type,timestamp,content,
-            length(content) AS content_length
-       FROM items ORDER BY document_id,sequence,id`
-  ).all<Record<string, unknown>>();
-  const sourceDigest = await computeSourceDigest(sourceResult.results);
-  const sourceItems = new Map(sourceResult.results.map((row) => [
+  // Read the complete source identity and its canonical generation in one SQL
+  // snapshot. The left join retains the generation witness for an empty source.
+  const sourceSnapshot = await db.prepare(
+    `SELECT i.document_id,i.id,i.sequence,i.event_type,i.actor_type,i.timestamp,i.content,
+            length(i.content) AS content_length,r.story_source_revision
+       FROM workflow_runs r LEFT JOIN items i ON 1=1
+      WHERE r.id=? ORDER BY i.document_id,i.sequence,i.id`
+  ).bind(authority.workflowRunId).all<Record<string, unknown>>();
+  const sourceRevision = Number(sourceSnapshot.results[0]?.story_source_revision);
+  if (!Number.isSafeInteger(sourceRevision) || sourceRevision < 0) {
+    return Response.json({
+      error: "Source Privacy replacement conflicted",
+      code: SOURCE_PRIVACY_ERROR.mutationConflict,
+      imported: 0,
+    }, { status: 409 });
+  }
+  const sourceRows = sourceSnapshot.results.filter((row) => row.id != null);
+  const sourceDigest = await computeSourceDigest(sourceRows);
+  const sourceItems = new Map(sourceRows.map((row) => [
     String(row.id),
     { documentId: String(row.document_id), length: Number(row.content_length) },
   ]));
@@ -220,6 +233,7 @@ export async function POST(request: Request) {
   const now = new Date().toISOString();
   const jobId = crypto.randomUUID();
   const statements = [
+    storySourceGenerationGuardStatement(db, authority.workflowRunId, sourceRevision),
     db.prepare("DELETE FROM redactions"),
     db.prepare("DELETE FROM redaction_jobs"),
     db.prepare(
