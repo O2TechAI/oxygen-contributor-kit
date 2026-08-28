@@ -255,6 +255,8 @@ test("public Story preparation binds current source revision from Organization b
   assert.doesNotMatch(publicAuthorityContracts,
     /\$SourceRevision\s*=\s*0\b|--source-revision\s+0\b/u);
   assert.doesNotMatch(publicAuthorityContracts,
+    /--source-revision\s+<[^>\r\n]*>/u);
+  assert.doesNotMatch(publicAuthorityContracts,
     /Invoke-RestMethod[^\n]+\/api\/workflow|\$SourceRevision\s*=[^\n]*\/api\/workflow/u);
   assert.match(preferenceSkill, /positive JavaScript-safe integer/u);
   assert.match(preferenceSkill, /never comes from `\/api\/workflow`/u);

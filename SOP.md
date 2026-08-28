@@ -684,15 +684,8 @@ completed-zero batch before review.
    producer to create the nine-field bundle. The full copyable commands are in the implemented
    composition sequence above.
 
-```bash
-python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py \
-  --context work/<run>-review/preference-context.json \
-  --candidates work/<run>-review/preference-candidates.json \
-  --workflow-run-id <run-id> --source-revision <current-source-revision> \
-  --output work/<run>-review/preference-bundle.json
-```
-
-Native Windows PowerShell equivalent:
+Reuse the exact `$SourceRevision` bound from the complete `GET $Viewer/api/organization` gate in
+the composition sequence above:
 
 ```powershell
 python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
