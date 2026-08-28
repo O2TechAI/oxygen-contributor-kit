@@ -14,8 +14,10 @@
 [![Redaction](https://img.shields.io/badge/REDACTION-AI_REVIEW-f59e0b?style=for-the-badge)](#ai-redaction)
 
 <p>
-  <strong>Contributors: Estelle Zhang · Zihan Wang · Yuxiang Lin · Andrew Zhou · Henry Sun · Zidi Xiong · Manling Li </strong>
+  <strong>Leading Team: Estelle Zhang · Zihan Wang · Yuxiang Lin · Bruce Tian · Andrew Zhou · Henry Sun · Manling Li </strong>
 </p>
+
+
 
 <p>
   <a href="mailto:estelle.zhang@o2tech.ai">Become a contributor</a>
