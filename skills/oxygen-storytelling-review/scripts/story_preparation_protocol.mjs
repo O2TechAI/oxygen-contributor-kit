@@ -65,7 +65,7 @@ function canonicalIds(value) {
   return JSON.stringify(sorted) === JSON.stringify(value) ? sorted : null;
 }
 
-async function readPreparedManifest(rootInput, lane) {
+export async function readPreparedManifest(rootInput, lane) {
   if (!LANES.includes(lane)) fail("LANE_INVALID");
   const root = await physicalRoot(rootInput);
   const manifestPath = relativeLanePath(lane, "shards.json");

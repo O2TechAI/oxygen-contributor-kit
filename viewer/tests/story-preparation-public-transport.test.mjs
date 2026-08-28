@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import {
   canonicalAuthorityJson,
@@ -41,9 +42,33 @@ const laneDirectory = {
   story: "story", insight: "insight", story_privacy: "story-privacy", preference: "preference",
 };
 
+function phaseFreeProposal(record) {
+  const { schema, key, coverage, ...chapter } = record.story;
+  assert.equal(schema, "oxygen.story");
+  assert.ok(coverage);
+  delete chapter.phase;
+  return { ownerId: key, chapter };
+}
+
 async function recordLane(transport, lane, root, proposalForInput) {
   const directory = laneDirectory[lane];
   const manifest = await readJson(join(transport, directory, "shards.json"));
+  if (lane === "story") {
+    const proposalDirectory = join(root, `story-proposals-${manifest.inputDigest.slice(0, 12)}`);
+    await mkdir(proposalDirectory);
+    const phases = new Map();
+    for (const shard of manifest.shards) {
+      const input = await readJson(join(transport, ...shard.inputPath.split("/")));
+      const records = proposalForInput(input);
+      for (const record of records) phases.set(record.story.key, record.story.phase);
+      await json(join(proposalDirectory, `${shard.id}.json`), records.map(phaseFreeProposal));
+    }
+    const phasePath = join(root, `story-phases-${manifest.inputDigest.slice(0, 12)}.json`);
+    await json(phasePath, [...phases].map(([ownerId, phase]) => ({ ownerId, phase })));
+    runOk(process.execPath, [record, transport, "story", proposalDirectory, phasePath,
+      "--correction-attempt-count", "0"]);
+    return manifest;
+  }
   for (const shard of manifest.shards) {
     const input = await readJson(join(transport, ...shard.inputPath.split("/")));
     const proposal = join(root, `${shard.id}-proposal.json`);
@@ -51,6 +76,24 @@ async function recordLane(transport, lane, root, proposalForInput) {
     runOk(process.execPath, [record, transport, lane, shard.id, proposal]);
   }
   return manifest;
+}
+
+async function storyBatchFiles(transport, root, records, tag = "batch") {
+  const manifest = await readJson(join(transport, "story", "shards.json"));
+  const proposalDirectory = join(root, `${tag}-proposals`);
+  await mkdir(proposalDirectory);
+  const byOwner = new Map(records.map((record) => [record.story.key, record]));
+  for (const shard of manifest.shards) {
+    await json(join(proposalDirectory, `${shard.id}.json`), shard.unitIds.map((ownerId) => (
+      phaseFreeProposal(byOwner.get(ownerId))
+    )));
+  }
+  const phasePath = join(root, `${tag}-phases.json`);
+  await json(phasePath, records.map((record) => ({
+    ownerId: record.story.key,
+    phase: record.story.phase,
+  })));
+  return { manifest, proposalDirectory, phasePath };
 }
 
 async function reverseLaneManifest(transport, lane) {
@@ -136,7 +179,7 @@ function storySource(suffix, semantic, coverage, insights = [], {
 }
 
 async function reviewedBoundary(root, projectMap, semantic, coverageRows = null, {
-  documentId = "doc-canary", language = "en",
+  documentId = "doc-canary", language = "en", narrativeBytes = 0,
 } = {}) {
   const review = join(root, "review");
   const trajectory = join(review, "trajectories", documentId);
@@ -153,8 +196,9 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = null,
     event_type: "message",
     actor: { type: actorType },
     timestamp: null,
-    payload: { role: actorType, text: language === "es"
-      ? `observación segura revisada ${suffix}` : `safe reviewed canary ${suffix}` },
+    payload: { role: actorType, text: `${language === "es"
+      ? `observación segura revisada ${suffix}` : `safe reviewed canary ${suffix}`}${
+      narrativeBytes ? ` ${"x".repeat(narrativeBytes)}` : ""}` },
     relations: [],
     };
   });
@@ -191,7 +235,11 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = null,
     semanticManifestRevision: authority.semanticManifestRevision,
     semanticManifestDigest: authority.semanticManifestDigest,
     coverageDigest: authority.coverageDigest,
-    rows: authority.rows,
+    rows: authority.rows.map((row) => row.disposition === "represented" ? {
+      unitId: row.unitId, disposition: row.disposition, ownerId: row.ownerId,
+    } : {
+      unitId: row.unitId, disposition: row.disposition, exclusionReason: row.exclusionReason,
+    }),
   });
   return { review, sourcePrivacy, coverage, coverageAuthority: authority };
 }
@@ -246,6 +294,7 @@ async function createFlow({
   kinds = ["decision_episode"],
   documentId = "doc-canary",
   language = "en",
+  narrativeBytes = 0,
   insightSuffixes = suffixes,
   reverseManifests = false,
 } = {}) {
@@ -264,7 +313,9 @@ async function createFlow({
     semantic_manifest: semantic,
   });
   const projectMap = await readJson(projectMapPath);
-  const boundary = await reviewedBoundary(root, projectMap, semantic, null, { documentId, language });
+  const boundary = await reviewedBoundary(root, projectMap, semantic, null, {
+    documentId, language, narrativeBytes,
+  });
 
   runOk(process.execPath, [prepare, "prepare", "story", projectMapPath,
     boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
@@ -277,7 +328,7 @@ async function createFlow({
   const submittedStoryRecords = reverse ? [...storyRecords].reverse() : storyRecords;
   await json(storyProposal, submittedStoryRecords);
   await recordLane(transport, "story", root, (input) => submittedStoryRecords.filter((record) => (
-    input.unitIds.includes(record.story.coverage.representedUnitIds[0])
+    input.unitIds.includes(record.story.key)
   )));
   const baseCandidates = join(root, "story-base-candidates.json");
   runOk(process.execPath, [prepare, "compose", "story", transport, baseCandidates]);
@@ -378,6 +429,47 @@ async function createFlow({
   };
 }
 
+async function prepareStoryOnly({
+  suffixes = ["a", "b"], coverageRows = null, narrativeBytes = 0,
+  reverseTransportInputs = false,
+} = {}) {
+  const root = await mkdtemp(join(tmpdir(), "story-owner-batch-"));
+  const semantic = semanticAuthority({ suffixes });
+  const projectMap = {
+    primary_project: semantic.projectId,
+    summary: "Owner-atomic canary.",
+    projects: [{ name: semantic.projectId, event_count: suffixes.length, reason: "Reviewed boundary." }],
+    source_authority: {
+      sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: suffixes.length,
+    },
+    semantic_units: semantic.units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
+    semantic_manifest: semantic,
+  };
+  const projectMapPath = join(root, "project-map.json");
+  await json(projectMapPath, projectMap);
+  const boundary = await reviewedBoundary(root, projectMap, semantic, coverageRows, { narrativeBytes });
+  if (reverseTransportInputs) {
+    const reversedMap = structuredClone(projectMap);
+    reversedMap.semantic_manifest.units.reverse();
+    reversedMap.semantic_units.reverse();
+    await json(projectMapPath, reversedMap);
+    await json(join(boundary.review, "project-map.json"), reversedMap);
+    const coverage = await readJson(boundary.coverage);
+    coverage.rows.reverse();
+    await json(boundary.coverage, coverage);
+    const eventsPath = join(boundary.review, "trajectories", "doc-canary", "events.jsonl");
+    const lines = (await readFile(eventsPath, "utf8")).trimEnd().split("\n").reverse();
+    await writeFile(eventsPath, `${lines.join("\n")}\n`, "utf8");
+  }
+  const transport = join(root, "transport");
+  const prepared = run(process.execPath, [prepare, "prepare", "story", projectMapPath,
+    boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+  return {
+    root, semantic, projectMapPath, boundary, transport, prepared,
+    cleanup: () => rm(root, { recursive: true, force: true }),
+  };
+}
+
 test("public commands execute the nonempty four-lane dependency chain deterministically", async () => {
   const first = await createFlow();
   const reordered = await createFlow({ reverse: true });
@@ -392,6 +484,9 @@ test("public commands execute the nonempty four-lane dependency chain determinis
     ]);
     assert.ok(manifest.receipts.every((receipt) => receipt.outputCount > 0));
     assert.ok((await readJson(first.candidates)).every((row) => parseStorySource(row.summary)));
+    const compactStoryManifest = await readJson(join(first.transport, "story", "shards.json"));
+    assert.equal(compactStoryManifest.shards.length, 1);
+    assert.equal(compactStoryManifest.shards[0].unitIds.length, 2);
     const finalBytes = [
       await readFile(first.candidates, "utf8"),
       await readFile(first.preferenceBundle, "utf8"),
@@ -421,6 +516,122 @@ test("public commands execute the nonempty four-lane dependency chain determinis
   }
 });
 
+test("finalized Coverage owner IDs form indivisible self-contained Story bundles", async () => {
+  const suffixes = ["a", "b", "c", "d", "e"];
+  const value = await prepareStoryOnly({
+    suffixes,
+    coverageRows: suffixes.map((suffix) => ({
+      unitId: `unit-${suffix}`, disposition: "represented", ownerId: "story-complete-owner",
+    })),
+  });
+  try {
+    assert.equal(value.prepared.status, 0, value.prepared.stderr);
+    const manifest = await readJson(join(value.transport, "story", "shards.json"));
+    assert.equal(manifest.shards.length, 1);
+    assert.deepEqual(manifest.unitIds, ["story-complete-owner"]);
+    const input = await readJson(join(value.transport, ...manifest.shards[0].inputPath.split("/")));
+    assert.deepEqual(input.unitIds, ["story-complete-owner"]);
+    assert.equal(input.payload.ownerBundles.length, 1);
+    const bundle = input.payload.ownerBundles[0];
+    assert.equal(bundle.ownerId, "story-complete-owner");
+    assert.deepEqual(bundle.semanticUnits.map((unit) => unit.id), suffixes.map((suffix) => `unit-${suffix}`));
+    assert.deepEqual(bundle.reviewedNarrative.map((row) => row.id), suffixes.map((suffix) => `event-${suffix}`));
+    assert.ok(bundle.reviewedNarrative.every((row) => (
+      row.actorEquivalence.startsWith("actor-") && !Object.hasOwn(row, "actorId")
+    )));
+    const workerBytes = await readFile(join(value.transport, ...manifest.shards[0].inputPath.split("/")), "utf8");
+    assert.doesNotMatch(workerBytes, /sourcePrivacy|redactions|provider|model|PRIVATE-SENTINEL/u);
+  } finally {
+    await value.cleanup();
+  }
+});
+
+test("reordered equivalent semantic, Coverage, and reviewed inputs produce byte-identical Story authority", async () => {
+  const first = await prepareStoryOnly({ suffixes: ["a", "b", "c"] });
+  const reordered = await prepareStoryOnly({
+    suffixes: ["a", "b", "c"], reverseTransportInputs: true,
+  });
+  try {
+    assert.equal(first.prepared.status, 0, first.prepared.stderr);
+    assert.equal(reordered.prepared.status, 0, reordered.prepared.stderr);
+    const firstManifest = await readJson(join(first.transport, "story", "shards.json"));
+    const secondManifest = await readJson(join(reordered.transport, "story", "shards.json"));
+    assert.deepEqual(secondManifest, firstManifest);
+    assert.deepEqual(
+      await readFile(join(reordered.transport, "story", "validation-authority.json")),
+      await readFile(join(first.transport, "story", "validation-authority.json")),
+    );
+    for (const shard of firstManifest.shards) {
+      assert.deepEqual(
+        await readFile(join(reordered.transport, ...shard.inputPath.split("/"))),
+        await readFile(join(first.transport, ...shard.inputPath.split("/"))),
+      );
+    }
+  } finally {
+    await first.cleanup();
+    await reordered.cleanup();
+  }
+});
+
+test("zero represented owners fail before Story lane installation without inventing a carrier", async () => {
+  const value = await prepareStoryOnly({
+    coverageRows: ["a", "b"].map((suffix) => ({
+      unitId: `unit-${suffix}`, disposition: "excluded", exclusionReason: "outside_story_scope",
+    })),
+  });
+  try {
+    assert.notEqual(value.prepared.status, 0);
+    assert.match(value.prepared.stderr, /^STORY_ZERO_REPRESENTED_OWNER_UNSUPPORTED\r?\n$/u);
+    assert.equal(existsSync(join(value.transport, "story")), false);
+  } finally {
+    await value.cleanup();
+  }
+});
+
+test("one oversized owner bundle fails before Story lane installation instead of splitting", async () => {
+  const root = await mkdtemp(join(tmpdir(), "story-oversized-owner-"));
+  try {
+    const suffixes = ["a", "b", "c", "d", "e", "f", "g"];
+    const initial = semanticAuthority({ suffixes });
+    const units = initial.units.map((unit) => ({
+      ...unit,
+      storyProjection: {
+        label: unit.storyProjection.label,
+        summary: "y".repeat(300_000),
+      },
+    }));
+    const core = {
+      projectId: initial.projectId,
+      revision: initial.revision,
+      sourceDigest: initial.sourceDigest,
+      universeDigest: initial.universeDigest,
+      units,
+    };
+    const semantic = { ...core, manifestDigest: digest(core) };
+    const projectMap = {
+      primary_project: semantic.projectId,
+      summary: "Oversized owner canary.",
+      projects: [{ name: semantic.projectId, event_count: suffixes.length, reason: "Reviewed boundary." }],
+      source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: suffixes.length },
+      semantic_units: units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
+      semantic_manifest: semantic,
+    };
+    const projectMapPath = join(root, "project-map.json");
+    await json(projectMapPath, projectMap);
+    const boundary = await reviewedBoundary(root, projectMap, semantic, suffixes.map((suffix) => ({
+      unitId: `unit-${suffix}`, disposition: "represented", ownerId: "story-oversized-owner",
+    })), { narrativeBytes: 3_350_000 });
+    const transport = join(root, "transport");
+    const result = run(process.execPath, [prepare, "prepare", "story", projectMapPath,
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /^STORY_OWNER_BUNDLE_TOO_LARGE\r?\n$/u);
+    assert.equal(existsSync(join(transport, "story")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("laboratory notes cross real Story and Insight shard waves without domain special cases", async () => {
   const options = {
     suffixes: ["uno", "dos", "tres", "cuatro", "cinco"],
@@ -428,6 +639,7 @@ test("laboratory notes cross real Story and Insight shard waves without domain s
     kinds: ["experiment_observation", "instrument_calibration", "hypothesis_revision"],
     documentId: "notas-laboratorio",
     language: "es",
+    narrativeBytes: 300_000,
     insightSuffixes: ["uno", "tres"],
   };
   const first = await createFlow(options);
@@ -458,8 +670,56 @@ test("laboratory notes cross real Story and Insight shard waves without domain s
   }
 });
 
+test("multi-owner multi-shard recording accepts one cross-shard Phase and injects exclusions once", async () => {
+  const value = await prepareStoryOnly({
+    suffixes: ["a", "b", "c"],
+    narrativeBytes: 600_000,
+    coverageRows: [
+      { unitId: "unit-a", disposition: "represented", ownerId: "story-a" },
+      { unitId: "unit-b", disposition: "represented", ownerId: "story-b" },
+      { unitId: "unit-c", disposition: "excluded", exclusionReason: "outside_story_scope" },
+    ],
+  });
+  try {
+    assert.equal(value.prepared.status, 0, value.prepared.stderr);
+    const stories = ["a", "b"].map((suffix) => ({
+      id: `event-${suffix}`,
+      story: {
+        ...storySource(suffix, value.semantic, value.boundary.coverageAuthority),
+        phase: { id: "phase-shared", label: "Shared build" },
+      },
+    }));
+    const batch = await storyBatchFiles(value.transport, value.root, stories, "cross-shard");
+    assert.ok(batch.manifest.shards.length >= 2);
+    assert.ok(batch.manifest.shards.every((shard) => shard.unitIds.length === 1));
+    const workerBytes = (await Promise.all(batch.manifest.shards.map((shard) => (
+      readFile(join(value.transport, ...shard.inputPath.split("/")), "utf8")
+    )))).join("\n");
+    assert.doesNotMatch(workerBytes, /event-c|safe reviewed canary c/u);
+    runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
+      batch.phasePath, "--correction-attempt-count", "0"]);
+    const recordsRoot = join(value.transport, "story", "records");
+    assert.equal((await Promise.all(batch.manifest.shards.map((shard) => (
+      readJson(join(recordsRoot, shard.id, "receipt.json"))
+    )))).length, batch.manifest.shards.length);
+    const baseCandidates = join(value.root, "base.json");
+    runOk(process.execPath, [prepare, "compose", "story", value.transport, baseCandidates]);
+    const chapters = (await readJson(baseCandidates)).map((row) => parseStorySource(row.summary));
+    assert.ok(chapters.every((chapter) => chapter.phase.id === "phase-shared"));
+    assert.deepEqual(chapters[0].coverage.excludedUnits, [{
+      unitId: "unit-c", reason: "outside_story_scope",
+    }]);
+    assert.ok(chapters.slice(1).every((chapter) => chapter.coverage.excludedUnits.length === 0));
+    assert.ok(chapters.every((chapter) => !chapter.story.blocks.some((block) => /canary c/u.test(block.text))));
+  } finally {
+    await value.cleanup();
+  }
+});
+
 test("real multi-shard manifests reject missing, duplicate, overlap, and foreign assignments", async () => {
-  const flow = await createFlow({ suffixes: ["a", "b", "c", "d", "e"] });
+  const flow = await createFlow({
+    suffixes: ["a", "b", "c", "d", "e"], narrativeBytes: 300_000,
+  });
   try {
     const mutations = {
       missing: (manifest) => { manifest.shards.pop(); },
@@ -504,7 +764,7 @@ test("public commands bind completed-zero Insight, Story Privacy, and Preference
   }
 });
 
-test("recorder permits pre-receipt correction and makes the installed pair immutable", async () => {
+test("Story batch recorder permits pre-receipt correction and makes the complete authority immutable", async () => {
   const root = await mkdtemp(join(tmpdir(), "story-recorder-atomic-"));
   try {
     const semantic = semanticAuthority();
@@ -522,40 +782,205 @@ test("recorder permits pre-receipt correction and makes the installed pair immut
     const boundary = await reviewedBoundary(root, await readJson(projectMapPath), semantic);
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
       boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
-    const proposalPath = join(root, "proposal.json");
-    await json(proposalPath, [{ id: "foreign", story: storySource("a", semantic, boundary.coverageAuthority) }]);
-    const invalid = run(process.execPath, [record, transport, "story", "story-0001", proposalPath]);
+    const validRecords = ["a", "b"].map((suffix) => ({
+      id: `event-${suffix}`,
+      story: storySource(suffix, semantic, boundary.coverageAuthority),
+    }));
+    const batch = await storyBatchFiles(transport, root, validRecords, "correction");
+    const firstProposalPath = join(batch.proposalDirectory, `${batch.manifest.shards[0].id}.json`);
+    const invalidProposal = await readJson(firstProposalPath);
+    invalidProposal[0].ownerId = "foreign";
+    await json(firstProposalPath, invalidProposal);
+    const invalid = run(process.execPath, [record, transport, "story",
+      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "0"]);
     assert.notEqual(invalid.status, 0);
-    assert.match(invalid.stderr, /^STORY_OUTPUT_INVALID\r?\n$/u);
-    const recordRoot = join(transport, "story", "records", "story-0001");
-    assert.equal(existsSync(recordRoot), false);
+    assert.match(invalid.stderr, /^STORY_PROPOSAL_OWNER_INVALID\r?\n$/u);
+    assert.equal(existsSync(join(transport, "story", "records")), false);
 
-    const validProposal = [
-      { id: "event-a", story: storySource("a", semantic, boundary.coverageAuthority) },
-      { id: "event-b", story: storySource("b", semantic, boundary.coverageAuthority) },
-    ];
-    await json(proposalPath, validProposal);
-    runOk(process.execPath, [record, transport, "story", "story-0001", proposalPath]);
+    await json(firstProposalPath, batch.manifest.shards[0].unitIds.map((ownerId) => (
+      phaseFreeProposal(validRecords.find((candidate) => candidate.story.key === ownerId))
+    )));
+    runOk(process.execPath, [record, transport, "story", batch.proposalDirectory, batch.phasePath,
+      "--correction-attempt-count", "1"]);
+    const recordRoot = join(transport, "story", "records", batch.manifest.shards[0].id);
     const outputPath = join(recordRoot, "output.json");
     const receiptPath = join(recordRoot, "receipt.json");
     const beforeOutput = await readFile(outputPath);
     const beforeReceipt = await readFile(receiptPath);
 
-    validProposal[0].story.title = "Different but structurally valid";
-    await json(proposalPath, validProposal);
-    const immutable = run(process.execPath, [record, transport, "story", "story-0001", proposalPath]);
+    const differing = await readJson(firstProposalPath);
+    differing[0].chapter.title = "Different but structurally valid";
+    await json(firstProposalPath, differing);
+    const immutable = run(process.execPath, [record, transport, "story",
+      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "1"]);
     assert.notEqual(immutable.status, 0);
     assert.match(immutable.stderr, /^AUTHORITY_IMMUTABLE\r?\n$/u);
     assert.deepEqual(await readFile(outputPath), beforeOutput);
     assert.deepEqual(await readFile(receiptPath), beforeReceipt);
 
     await rm(receiptPath);
-    const partial = run(process.execPath, [record, transport, "story", "story-0001", proposalPath]);
+    const partial = run(process.execPath, [record, transport, "story",
+      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "1"]);
     assert.notEqual(partial.status, 0);
-    assert.match(partial.stderr, /^PARTIAL_PAIR_REJECTED\r?\n$/u);
+    assert.match(partial.stderr, /^PARTIAL_BATCH_REJECTED\r?\n$/u);
     assert.deepEqual(await readFile(outputPath), beforeOutput);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Story batch rejects incomplete or parent-authored proposals and shares one correction budget with Phase", async () => {
+  const value = await prepareStoryOnly({ suffixes: ["a", "b", "c"] });
+  try {
+    assert.equal(value.prepared.status, 0, value.prepared.stderr);
+    const records = ["a", "b", "c"].map((suffix) => ({
+      id: `event-${suffix}`,
+      story: storySource(suffix, value.semantic, value.boundary.coverageAuthority),
+    }));
+    const batch = await storyBatchFiles(value.transport, value.root, records, "rejections");
+    const shard = batch.manifest.shards[0];
+    const proposalPath = join(batch.proposalDirectory, `${shard.id}.json`);
+    const validProposalBytes = await readFile(proposalPath);
+    const validPhaseBytes = await readFile(batch.phasePath);
+    const invoke = (count = 0) => run(process.execPath, [record, value.transport, "story",
+      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", String(count)]);
+    const assertNoAuthority = () => assert.equal(existsSync(join(value.transport, "story", "records")), false);
+
+    const exhausted = invoke(3);
+    assert.notEqual(exhausted.status, 0);
+    assert.match(exhausted.stderr, /^STORY_CORRECTION_EXHAUSTED\r?\n$/u);
+    assertNoAuthority();
+
+    for (const [field, forbiddenValue] of Object.entries({
+      phase: { id: "forbidden", label: "Forbidden phase" },
+      schema: "oxygen.story",
+      key: "story-a",
+      coverage: {},
+      exclusions: [],
+      receipt: {},
+      authority: {},
+    })) {
+      const parentAuthored = JSON.parse(validProposalBytes);
+      parentAuthored[0].chapter[field] = forbiddenValue;
+      await json(proposalPath, parentAuthored);
+      const forbidden = invoke(0);
+      assert.notEqual(forbidden.status, 0, field);
+      assert.match(forbidden.stderr, /^STORY_PROPOSAL_PARENT_FIELD_FORBIDDEN\r?\n$/u, field);
+      assertNoAuthority();
+    }
+
+    const movedEvidence = JSON.parse(validProposalBytes);
+    movedEvidence[0].chapter.evidence.primary = { documentId: "doc-canary", eventId: "event-b" };
+    await json(proposalPath, movedEvidence);
+    const foreignEvidence = invoke(0);
+    assert.notEqual(foreignEvidence.status, 0);
+    assert.match(foreignEvidence.stderr, /^STORY_PROPOSAL_EVIDENCE_INVALID\r?\n$/u);
+    assertNoAuthority();
+
+    const duplicateOwner = JSON.parse(validProposalBytes);
+    duplicateOwner[1].ownerId = duplicateOwner[0].ownerId;
+    await json(proposalPath, duplicateOwner);
+    const duplicate = invoke(0);
+    assert.notEqual(duplicate.status, 0);
+    assert.match(duplicate.stderr, /^STORY_PROPOSAL_OWNER_INVALID\r?\n$/u);
+    assertNoAuthority();
+
+    await writeFile(proposalPath, validProposalBytes);
+    await writeFile(join(batch.proposalDirectory, "extra.json"), "[]", "utf8");
+    const extra = invoke(0);
+    assert.notEqual(extra.status, 0);
+    assert.match(extra.stderr, /^STORY_PROPOSAL_SET_INVALID\r?\n$/u);
+    assertNoAuthority();
+    await rm(join(batch.proposalDirectory, "extra.json"));
+
+    await rm(proposalPath);
+    const missing = invoke(0);
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /^STORY_PROPOSAL_SET_INVALID\r?\n$/u);
+    assertNoAuthority();
+
+    await writeFile(proposalPath, " ".repeat(25_000_001), "utf8");
+    const oversized = invoke(0);
+    assert.notEqual(oversized.status, 0);
+    assert.match(oversized.stderr, /^PROPOSAL_TOO_LARGE\r?\n$/u);
+    assertNoAuthority();
+
+    await writeFile(proposalPath, "{", "utf8");
+    const malformed = invoke(0);
+    assert.notEqual(malformed.status, 0);
+    assert.match(malformed.stderr, /^PROPOSAL_JSON_INVALID\r?\n$/u);
+    assertNoAuthority();
+
+    await writeFile(proposalPath, validProposalBytes);
+    const validPhases = JSON.parse(validPhaseBytes);
+    const phaseCases = [
+      ["missing", validPhases.slice(0, -1), /^STORY_PHASE_ASSIGNMENT_INVALID\r?\n$/u],
+      ["duplicate", [validPhases[0], validPhases[0], validPhases[2]], /^STORY_PHASE_ASSIGNMENT_INVALID\r?\n$/u],
+      ["foreign", [{ ...validPhases[0], ownerId: "foreign" }, validPhases[1], validPhases[2]], /^STORY_PHASE_ASSIGNMENT_INVALID\r?\n$/u],
+      ["invalid", validPhases.map((item) => ({ ...item, phase: { id: "phase-other", label: "Other" } })), /^STORY_PHASE_INVALID\r?\n$/u],
+      ["inconsistent", validPhases.map((item, index) => ({
+        ...item, phase: { id: "phase-one", label: index === 1 ? "Second phase" : "First phase" },
+      })), /^STORY_PHASE_INVALID\r?\n$/u],
+    ];
+    for (const [name, phases, error] of phaseCases) {
+      await json(batch.phasePath, phases);
+      const rejected = invoke(0);
+      assert.notEqual(rejected.status, 0, name);
+      assert.match(rejected.stderr, error, name);
+      assertNoAuthority();
+    }
+    const invalidPhases = [
+      { ownerId: "story-a", phase: { id: "phase-one", label: "First phase" } },
+      { ownerId: "story-b", phase: { id: "phase-two", label: "Second phase" } },
+      { ownerId: "story-c", phase: { id: "phase-one", label: "First phase" } },
+    ];
+    await json(batch.phasePath, invalidPhases);
+    const phaseRejected = invoke(0);
+    assert.notEqual(phaseRejected.status, 0);
+    assert.match(phaseRejected.stderr, /^STORY_PHASE_ORDER_INVALID\r?\n$/u);
+    assertNoAuthority();
+    const phaseRejectedAgain = invoke(1);
+    assert.notEqual(phaseRejectedAgain.status, 0);
+    assert.match(phaseRejectedAgain.stderr, /^STORY_PHASE_ORDER_INVALID\r?\n$/u);
+    assertNoAuthority();
+    assert.deepEqual(await readFile(proposalPath), validProposalBytes);
+
+    await writeFile(batch.phasePath, validPhaseBytes);
+    runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
+      batch.phasePath, "--correction-attempt-count", "2"]);
+    assert.deepEqual(await readFile(proposalPath), validProposalBytes);
+    assert.equal(existsSync(join(value.transport, "story", "records")), true);
+  } finally {
+    await value.cleanup();
+  }
+});
+
+test("injected filesystem failure leaves the complete Story records directory absent", async () => {
+  const value = await prepareStoryOnly({
+    suffixes: ["a", "b", "c"], narrativeBytes: 600_000,
+  });
+  try {
+    assert.equal(value.prepared.status, 0, value.prepared.stderr);
+    const records = ["a", "b", "c"].map((suffix) => ({
+      id: `event-${suffix}`,
+      story: storySource(suffix, value.semantic, value.boundary.coverageAuthority),
+    }));
+    const batch = await storyBatchFiles(value.transport, value.root, records, "filesystem-failure");
+    assert.ok(batch.manifest.shards.length >= 2);
+    const hook = join(value.root, "inject-story-write-failure.mjs");
+    await writeFile(hook, `import fs from "node:fs";\nimport { syncBuiltinESMExports } from "node:module";\nconst original = fs.promises.open.bind(fs.promises);\nlet outputs = 0;\nfs.promises.open = async (path, ...args) => {\n  if (String(path).includes(".records.") && String(path).endsWith("output.json")) {\n    outputs += 1;\n    if (outputs === 2) throw new Error("injected");\n  }\n  return original(path, ...args);\n};\nsyncBuiltinESMExports();\n`, "utf8");
+    const failed = run(process.execPath, ["--import", pathToFileURL(hook).href, record, value.transport, "story",
+      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "0"]);
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stderr, /^STORY_PREPARATION_RECORD_FAILED\r?\n$/u);
+    assert.equal(existsSync(join(value.transport, "story", "records")), false);
+    assert.ok((await readdir(join(value.transport, "story"))).every((name) => !name.startsWith(".records.")));
+
+    runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
+      batch.phasePath, "--correction-attempt-count", "1"]);
+    assert.equal(existsSync(join(value.transport, "story", "records")), true);
+  } finally {
+    await value.cleanup();
   }
 });
 
@@ -616,19 +1041,24 @@ test("shared Story validation rejects collapsed People before receipt and accept
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
       boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
     const inputBefore = await readFile(join(transport, "story", "inputs", "story-0001.json"));
-    const proposal = join(root, "proposal.json");
-    await json(proposal, [{
+    const invalidRecord = {
       id: "event-a", story: combinedStory(semantic, boundary.coverageAuthority, true),
-    }]);
-    const rejected = run(process.execPath, [record, transport, "story", "story-0001", proposal]);
+    };
+    const correctedRecord = {
+      id: "event-a", story: combinedStory(semantic, boundary.coverageAuthority, false),
+    };
+    const batch = await storyBatchFiles(transport, root, [correctedRecord], "people");
+    const proposal = join(batch.proposalDirectory, "story-0001.json");
+    await json(proposal, [phaseFreeProposal(invalidRecord)]);
+    const rejected = run(process.execPath, [record, transport, "story",
+      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "0"]);
     assert.notEqual(rejected.status, 0);
     assert.match(rejected.stderr, /^STORY_PEOPLE_INVALID\r?\n$/u);
-    assert.equal(existsSync(join(transport, "story", "records", "story-0001")), false);
+    assert.equal(existsSync(join(transport, "story", "records")), false);
 
-    await json(proposal, [{
-      id: "event-a", story: combinedStory(semantic, boundary.coverageAuthority, false),
-    }]);
-    runOk(process.execPath, [record, transport, "story", "story-0001", proposal]);
+    await json(proposal, [phaseFreeProposal(correctedRecord)]);
+    runOk(process.execPath, [record, transport, "story", batch.proposalDirectory, batch.phasePath,
+      "--correction-attempt-count", "1"]);
     assert.deepEqual(
       await readFile(join(transport, "story", "inputs", "story-0001.json")), inputBefore,
     );
@@ -637,8 +1067,9 @@ test("shared Story validation rejects collapsed People before receipt and accept
     const receiptBefore = await readFile(join(recordRoot, "receipt.json"));
     const changed = combinedStory(semantic, boundary.coverageAuthority, false);
     changed.title = "A different valid title";
-    await json(proposal, [{ id: "event-a", story: changed }]);
-    const immutable = run(process.execPath, [record, transport, "story", "story-0001", proposal]);
+    await json(proposal, [phaseFreeProposal({ id: "event-a", story: changed })]);
+    const immutable = run(process.execPath, [record, transport, "story",
+      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "1"]);
     assert.notEqual(immutable.status, 0);
     assert.match(immutable.stderr, /^AUTHORITY_IMMUTABLE\r?\n$/u);
     assert.deepEqual(await readFile(join(recordRoot, "output.json")), outputBefore);
@@ -674,7 +1105,7 @@ test("Insight grounding fails before receipt, permits proposal-only correction, 
       id: `event-${suffix}`, story: storySource(suffix, semantic, boundary.coverageAuthority),
     }));
     await recordLane(transport, "story", root, (input) => stories.filter((item) => (
-      input.unitIds.includes(item.story.coverage.representedUnitIds[0])
+      input.unitIds.includes(item.story.key)
     )));
     const baseCandidates = join(root, "story-base.json");
     runOk(process.execPath, [prepare, "compose", "story", transport, baseCandidates]);
@@ -867,7 +1298,11 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
     const inputs = inputBytes.map((bytes) => JSON.parse(bytes));
     assert.equal(authority.evidence.length, count);
     assert.ok(manifest.shards.length > 1);
-    const narrative = inputs.flatMap((input) => input.payload.reviewedNarrative);
+    const ownerBundles = inputs.flatMap((input) => input.payload.ownerBundles);
+    const narrative = ownerBundles.flatMap((bundle) => bundle.reviewedNarrative);
+    assert.equal(ownerBundles.length, unitCount);
+    assert.equal(new Set(ownerBundles.map((bundle) => bundle.ownerId)).size, unitCount);
+    assert.equal(ownerBundles.reduce((total, bundle) => total + bundle.semanticUnits.length, 0), unitCount);
     assert.equal(narrative.length, count);
     assert.equal(new Set(narrative.map((row) => row.id)).size, count);
     assert.ok(authorityBytes.byteLength <= 12_000_000);
@@ -878,7 +1313,8 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
     assert.match(allInputs, /<redacted category=\\"private-personal\\"\/>/u);
 
     const inputSizes = inputBytes.map((bytes) => bytes.byteLength);
-    assert.ok(Math.max(...inputSizes) - Math.min(...inputSizes) <= 50_000);
+    const ownerBundleSizes = ownerBundles.map((bundle) => Buffer.byteLength(canonicalAuthorityJson(bundle)));
+    assert.ok(Math.max(...inputSizes) - Math.min(...inputSizes) <= Math.max(...ownerBundleSizes));
     const stories = units.map((unit) => {
       const evidence = { documentId: "doc-scale", eventId: unit.members[0] };
       return {
@@ -919,7 +1355,7 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
       };
     });
     const storyManifest = await recordLane(transport, "story", root, (input) => stories.filter((record) => (
-      input.unitIds.includes(record.story.coverage.representedUnitIds[0])
+      input.unitIds.includes(record.story.key)
     )));
     assert.equal(storyManifest.shards.length, manifest.shards.length);
     const baseCandidates = join(root, "story-base-candidates.json");
@@ -1016,6 +1452,8 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
     console.log("STORY_PREPARATION_SCALE", JSON.stringify({
       itemCount: count,
       semanticUnitCount: unitCount,
+      ownerCount: ownerBundles.length,
+      maximumOwnerBundleBytes: Math.max(...ownerBundleSizes),
       validationAuthorityBytes: authorityBytes.byteLength,
       storyShardCount: storyManifest.shards.length,
       insightShardCount: insightManifest.shards.length,
@@ -1026,6 +1464,8 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
       storyInputBytesTotal: inputSizes.reduce((total, size) => total + size, 0),
       reviewedNarrativeCount: narrative.length,
       reviewedNarrativeUniqueCount: new Set(narrative.map((row) => row.id)).size,
+      exactOwnerUnion: new Set(ownerBundles.map((bundle) => bundle.ownerId)).size === ownerBundles.length,
+      noOwnerSplitting: ownerBundles.length === new Set(ownerBundles.map((bundle) => bundle.ownerId)).size,
       terminalReceiptCount: storyManifest.shards.length + insightManifest.shards.length
         + privacyManifest.shards.length + preferenceManifest.shards.length,
       aggregateCoreReceiptCount: terminal.receipts.length,

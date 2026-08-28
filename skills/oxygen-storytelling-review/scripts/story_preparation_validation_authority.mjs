@@ -215,6 +215,8 @@ function projectEvidence(rows, sourcePrivacy) {
     evidence.push({
       id: row.id,
       documentId: row.documentId,
+      sequence: row.sequence,
+      timestamp: row.timestamp,
       eventType: row.eventType,
       actorType: row.actorType,
       actorEquivalence: tokens.get(signature),
@@ -222,6 +224,11 @@ function projectEvidence(rows, sourcePrivacy) {
     reviewedNarrative.push({
       id: row.id,
       documentId: row.documentId,
+      sequence: row.sequence,
+      timestamp: row.timestamp,
+      eventType: row.eventType,
+      actorType: row.actorType,
+      actorEquivalence: tokens.get(signature),
       narrative: applyActiveRedactions(row.content, spans.get(row.id) || []),
     });
   }

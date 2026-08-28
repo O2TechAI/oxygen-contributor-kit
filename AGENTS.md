@@ -38,8 +38,12 @@ exactly one global bounded worker because it produces one deduplicated questionn
 capped at 12 probes by default and 20 maximum; never fan Preference out across multiple workers.
 When host subagents are available, the parent dispatches with no more than three live at once; each
 subagent reads exactly one Privacy-safe `inputPath` and writes only its assigned proposal. The
-parent alone runs recorders and finalizers, installs output/receipt pairs, proves exact union and no
-overlap, mutates Viewer state, and waits for all terminal receipts.
+parent alone runs recorders and finalizers, installs authority, proves exact union and no overlap,
+mutates Viewer state, and waits for all terminal receipts. Story is the global boundary: finalized
+Coverage `ownerId` is its sole Chapter-ownership source, complete owner bundles never split across
+workers, every phase-free proposal is collected before any Story receipt exists, and one batch
+recorder installs all Story outputs plus exactly one receipt per shard only after complete global
+validation. Other lanes retain their per-shard atomic output/receipt pairs.
 
 Each shard assignment gets one initial proposal plus at most two automatic proposal-only correction
 attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
@@ -49,6 +53,11 @@ output and receipt absent. Only a fixed safe pre-receipt authoring-validation co
 If the second correction fails, stop the lane safely, report correction exhaustion and the last
 safe validation code, and do not continue downstream. Authority, immutability, containment, path,
 I/O, infrastructure, and corrupt-state failures stop immediately and are never correctable.
+
+Story corrections run as at most two lane-wide waves after the initial complete batch attempt. A
+proposal-only correction or a Phase-only correction consumes the same Story wave; there is no
+separate Phase retry budget. Failed Story waves leave the complete terminal records directory
+absent. After successful batch installation every Story output and receipt is immutable.
 
 `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal orchestration boundary. If host subagents are
 genuinely unavailable, the parent processes the same assignments serially, reports
@@ -67,6 +76,16 @@ Every `story`-lane subagent assignment must convey this ordered contract before 
 Do not dispatch a Story worker unless its assignment names both required contract paths, its one
 actual generated `inputPath`, and its proposal-only write boundary. The worker must not read any
 other data input or write a receipt, final artifact, or authority file.
+
+Each Story input is self-contained for writing: it carries complete owner-atomic represented-unit
+bundles, Privacy-reviewed narrative, canonical semantic/Coverage references, and equality-only actor
+tokens, with no excluded narrative, raw actor identity, Source Privacy rows, pre-redaction content,
+or provider metadata. Workers return phase-free proposals only. On a subagent-capable host the
+parent never writes Story prose, People, Evidence choices, titles, overviews, or blocks. After every
+proposal exists, the parent orders Chapters with the production comparator, assigns only Phase IDs
+and labels, injects canonical Coverage/exclusions, and invokes the complete Story batch recorder.
+Insight remains a separate later pass. Static tests prove contracts and authority behavior, not
+actual host-subagent spawning; that requires later E2E evidence.
 
 Pause for the contributor at Project Story human review, Privacy Keep/Redact decisions, Preference
 answers, `All set`, and release handoff. These explicit review and decision boundaries are the only

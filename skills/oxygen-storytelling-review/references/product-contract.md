@@ -23,8 +23,10 @@ The implemented authority sequence is:
 ```text
 reviewed input boundary
 -> finalized current coverage authority
--> public deterministic Story input preparation
--> recorded bounded Story worker result
+-> public deterministic owner-atomic Story input preparation
+-> complete phase-free Story proposal set
+-> parent production ordering and one global Phase assignment
+-> one globally validated atomic Story batch
 -> public deterministic Insight input preparation
 -> recorded bounded Insight result and composed `oxygen.story:` candidate rows
 -> recorded Story Privacy result and exact Preference producer bundle
@@ -77,15 +79,23 @@ Semantic work is Master-owned. The owning Agent runs the public preparer before 
 it computes immutable input digests, assigns the exact current identities, and installs the bounded
 worker input and shard manifest together.
 
-The public worker contract uses separate dependent passes for Story writing and Insight reasoning,
+Finalized Coverage `ownerId` is the sole Story Chapter-ownership source. Every represented unit for
+one owner stays in one indivisible byte-balanced owner bundle; one owner never spans workers and a
+shard may contain multiple owners. The public worker contract uses separate dependent passes for Story writing and Insight reasoning,
 then sibling Story Privacy and Preference-question passes. Story, Insight, and Story Privacy remain
 multi-shard. Preference intentionally uses exactly one global bounded worker because it produces
 one deduplicated questionnaire authority, capped at 12 probes by default and 20 maximum. Workers
 write only lane proposals. The recorder validates each proposal against the frozen lane, shard, input digest, and assigned
-identities. For Story, the frozen input also digest-binds the current semantic and Coverage
-authorities plus a privacy-safe evidence/actor-equivalence projection, and the recorder directly
-calls the unchanged Viewer `validateStorySourcePackage`. It then creates the output and receipt as
-one atomic immutable pair. Exact union, no
+identities. Each Story input is self-contained with its complete represented units, Privacy-reviewed
+narrative, canonical references, and equality-only actor tokens; it has no excluded narrative, raw
+identity, Source Privacy rows, pre-redaction content, or provider metadata. Story workers return
+phase-free proposals and never author schema, keys, Phase, Coverage, exclusions, receipts, or
+authority. On a subagent-capable host the parent does not write Story prose or choose People or
+Evidence. After every proposal exists, the parent orders Chapters with the production comparator,
+assigns only Phase IDs and labels, injects canonical Coverage/exclusions, and the one Story batch
+recorder directly calls the unchanged Viewer `validateStorySourcePackage` on the complete package.
+It installs every output and exactly one receipt per shard with one atomic records-directory rename.
+Exact union, no
 overlap, no foreign identities, no stale digest, deterministic deduplication, and deterministic
 composition are executable checks.
 
@@ -97,6 +107,12 @@ pre-receipt authoring-validation code is correctable. If the second correction f
 stops safely, reports correction exhaustion and the last safe validation code, and does not
 continue downstream. Authority, immutability, containment, path, I/O, infrastructure, and
 corrupt-state failures stop immediately and are never correctable.
+
+Story uses the same bound as at most two lane-wide correction waves after the initial complete
+batch. Proposal-only and Phase-only corrections consume that one budget. Every failed wave leaves
+all Story outputs and receipts absent. After success, outputs and receipts are immutable. Insight
+remains a separate later pass. Actual subagent spawning is proved only by later E2E evidence, not by
+static tests.
 
 The composed preparation finalizer independently revalidates the frozen inputs, receipts, output
 digests, exact union, lane dependency digests, final Story composition, the same complete shared

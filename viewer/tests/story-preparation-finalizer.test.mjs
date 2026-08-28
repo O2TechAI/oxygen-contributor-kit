@@ -117,7 +117,9 @@ async function fixture({
   ];
   const rows = rowsFor(stories);
   const storyByRowId = new Map(rows.map((row, index) => [row.id, stories[index]]));
-  const canonicalRows = [...rows].sort((left, right) => utf8(left.id, right.id));
+  const canonicalRows = [...rows].sort((left, right) => (
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+  ));
   const canonicalStories = canonicalRows.map((row) => storyByRowId.get(row.id));
   const base = canonicalRows.map((row, index) => ({ id: row.id, story: { ...canonicalStories[index], insights: [] } }));
   const complete = canonicalRows.map((row, index) => ({ id: row.id, story: canonicalStories[index] }));
@@ -152,7 +154,7 @@ async function fixture({
     preference: inputDigest,
   };
   const units = {
-    story: ["unit-é", "unit-z"], insight: ["é", "z"],
+    story: ["é", "z"], insight: ["é", "z"],
     story_privacy: deriveStoryReleaseTargetCatalog(stories).map((target) => target.id),
     preference: insightIds[0] === null && insightIds[1] === null ? [] : [canonical({ storyKey: "é", insightId: insightIds[0] }), canonical({ storyKey: "z", insightId: insightIds[1] })],
   };
@@ -188,7 +190,18 @@ async function fixture({
       inputDigest: inputs[lane], unitIds: laneUnits, payload: lane === "story" ? {
         validationAuthorityPath: "story/validation-authority.json",
         validationAuthorityDigest: digest(validationAuthority),
-        narrativeDigest: digest([]), reviewedNarrative: [],
+        ownerBundles: semanticUnits.map((unit) => ({
+          ownerId: unit.id.slice("unit-".length),
+          semanticManifest: { revision: semantic.revision, digest: semantic.manifestDigest },
+          coverageManifest: { revision: coverage.revision, digest: coverage.coverageDigest },
+          semanticUnits: [unit],
+          reviewedNarrative: [{
+            id: unit.members[0], documentId: "doc", sequence: 1, timestamp: null,
+            eventType: "message", actorType: "human",
+            actorEquivalence: `actor-${unit.id.slice("unit-".length)}`,
+            narrative: `Reviewed ${unit.id}.`,
+          }],
+        })).sort((left, right) => utf8(left.ownerId, right.ownerId)),
       } : {},
     };
     const workerInputDigest = digest(workerInput);
@@ -258,7 +271,7 @@ test("four lanes finalize exact public Story rows with reordered shards and cros
   } finally { await first.cleanup(); await second.cleanup(); }
 });
 
-test("Story candidate order uses UTF-8 bytes for producer-identical lessons and digests", async () => {
+test("Story candidate order uses the production comparator for producer-identical lessons and digests", async () => {
   const candidateIds = ["\u{1f600}", "\ue000"];
   const first = await fixture({ candidateIds, questions: false });
   const second = await fixture({ candidateIds, reverse: true, questions: false });
@@ -270,7 +283,7 @@ test("Story candidate order uses UTF-8 bytes for producer-identical lessons and 
     assert.equal(await readFile(first.output, "utf8"), await readFile(second.output, "utf8"));
     const result = await readJson(first.output);
     const receipt = result.receipts.find((item) => item.lane === "preference");
-    assert.equal(receipt.inputDigest, digest(lessons([source("z", "same"), source("é", "same")])));
+    assert.equal(receipt.inputDigest, digest(lessons([source("é", "same"), source("z", "same")])));
   } finally { await first.cleanup(); await second.cleanup(); }
 });
 

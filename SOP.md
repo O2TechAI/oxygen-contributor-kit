@@ -317,10 +317,16 @@ Every `story`-lane subagent assignment must convey this ordered contract before 
 Do not dispatch a Story worker until the assignment names both contract paths, the actual generated
 `inputPath`, and the proposal-only write boundary. No other data input is part of that assignment.
 
-The parent waits for proposals, invokes the public recorder for each assignment, installs output
-plus receipt as one atomic immutable pair, verifies the terminal receipt count, composes, proves
-exact union/no overlap, and finalizes authority before continuing. Each assignment gets one initial
-proposal plus at most two automatic proposal-only correction attempts. `correctionAttemptCount` is
+Finalized Coverage `ownerId` is the sole Story Chapter-ownership source. The Story preparer keeps
+every owner's represented units in one complete, Privacy-safe, self-contained bundle and balances
+shards only by whole-bundle bytes. Story workers return phase-free proposals. On a subagent-capable
+host the parent does not write Story prose, People, Evidence choices, titles, overviews, or blocks.
+It waits for every proposal, orders complete Chapters with the production comparator, assigns only
+Phase IDs and labels, injects canonical Coverage and exclusions, and invokes one complete Story
+batch recorder. No Story receipt exists before full-package validation; all outputs and exactly one
+receipt per shard install together. Insight remains a separate later pass.
+
+Each assignment gets one initial proposal plus at most two automatic proposal-only correction attempts. `correctionAttemptCount` is
 assignment-local, counts corrections only, excludes the initial proposal, and is always `0..2`;
 never sum it across a multi-shard lane. Every correction uses the byte-identical immutable input,
 and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed
@@ -334,6 +340,11 @@ assignments serially, reports
 `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal orchestration boundary. Revision authority and
 all Viewer mutations remain with the parent/server lane; no worker may silently expand scope or
 repair another lane.
+
+Story uses at most two lane-wide correction waves. Replacing a rejected Story proposal or replacing
+only the transient parent Phase assignment consumes the same wave; there is no separate Phase retry
+budget. Every failed Story wave leaves all Story outputs and receipts absent. Static tests prove the
+contract and batch boundary, while later E2E evidence proves actual host-subagent spawning.
 
 Coverage draft rows use only `{unitId, disposition, ownerId}` for represented units or
 `{unitId, disposition, exclusionReason}` for excluded units. After successful activation, the exact
@@ -456,27 +467,35 @@ performs this lifecycle without contributor intervention:
    `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` and
    `skills/oxygen-storytelling-review/references/story-data-contract.md`; only after both reads may
    the worker read its named generated `inputPath` and write its proposal.
-3. Wait for each proposal, then run the recorder with that manifest shard ID and proposal path.
+3. Wait for every Story proposal, place exactly one `<shard-id>.json` file in the proposal-only
+   directory, order all complete Chapters with the production comparator, create one transient
+   unversioned Phase assignment, and invoke the Story batch recorder once. For other lanes, run the
+   recorder with that manifest shard ID and proposal path.
 4. If the recorder returns a fixed safe pre-receipt authoring-validation code while output and
    receipt are both absent, return it automatically to the same assignment for at most two
    proposal-only corrections. Preserve the byte-identical input and allow only the proposal to
    change. Count only corrections, so assignment-local `correctionAttemptCount` is `0..2` and does
    not include the initial proposal.
+   For Story, replacing only the non-authoritative parent Phase assignment is also allowed and
+   consumes the same lane-wide correction wave.
 5. If the second correction fails, stop the lane safely, report correction exhaustion and the last
    safe validation code, and do not continue downstream. Stop immediately without correction for
    authority, immutability, containment, path, I/O, infrastructure, or corrupt-state failures.
-6. Require one terminal subordinate receipt per assignment, verify the receipt count, exact union, and
-   no overlap, then compose/finalize with the public commands below.
+6. For Story, require the atomically installed complete records directory with exactly one terminal
+   receipt per expected shard. For other lanes, require one terminal subordinate receipt per
+   assignment. Verify exact union and no overlap, then compose/finalize.
 7. Continue automatically to the next dependent lane or to the next genuine human-review boundary.
 
 For each reached lane, retain E2E evidence for `executionMode`, `lane`, `shardCount`,
 `spawnedSubagentCount`, `maxConcurrentSubagents`, `correctionAttemptCount`, and
 `terminalReceiptCount`. The parent owns all recorder/finalizer commands and every Viewer mutation.
-The commands containing `<manifest-shard-id>` and `<proposal-path>` below are executed once for
-each enumerated shard, not typed or scheduled by the contributor.
+The non-Story commands containing `<manifest-shard-id>` and `<proposal-path>` below are executed
+once for each enumerated shard, not typed or scheduled by the contributor.
 
 ```powershell
 $Transport = "$Review\story-preparation"
+$StoryProposals = "$Review\story-proposals"
+$StoryPhases = "$Review\story-phases.json"
 $SourceRevision = 0 # Replace with the current source revision reported by this Viewer run.
 
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
@@ -484,9 +503,11 @@ node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   "$Review\story-coverage-manifest.json" `
   "$Review\current-public-source-privacy.json" `
   "$Review" "$Transport"
-# Parent dispatches every Story manifest shard (maximum three live), waits, then records each proposal.
+# Parent dispatches every Story shard (maximum three live), collects one phase-free
+# <shard-id>.json proposal per shard, orders all Chapters, and writes one transient Phase assignment.
 node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
-  "$Transport" story "<manifest-shard-id>" "<proposal-path>"
+  "$Transport" story "$StoryProposals" "$StoryPhases" `
+  --correction-attempt-count 0
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   compose story "$Transport" "$Review\story-base-candidates.json"
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, open, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rename, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { canonicalizeAutoRemoved } from "../../../viewer/lib/auto-removed.mjs";
 import {
@@ -15,7 +15,11 @@ import {
   canonicalAuthorityJson,
   validateStorySourcePackage,
 } from "../../../viewer/lib/story-readiness.ts";
-import { parseStorySource, STORY_PREFIX } from "../../../viewer/lib/timeline.ts";
+import {
+  compareStorySourceIdentity,
+  parseStorySource,
+  STORY_PREFIX,
+} from "../../../viewer/lib/timeline.ts";
 import {
   StoryPreparationTransportError,
   canonicalDigest,
@@ -30,12 +34,15 @@ import {
 import {
   LANES,
   laneDirectory,
+  readPreparedManifest,
   readPreparedShard,
   readShardAuthority,
   relativeLanePath,
 } from "./story_preparation_protocol.mjs";
 import {
   readStoryValidationAuthority,
+  storyCompletenessAuthority,
+  storyEvidenceRows,
   storyValidationScope,
 } from "./story_preparation_validation_authority.mjs";
 
@@ -89,29 +96,249 @@ function parseStory(value) {
   return story;
 }
 
-async function validateStory(value, input, prepared) {
-  if (!Array.isArray(value) || value.length === 0) fail("STORY_OUTPUT_INVALID");
-  const authority = await readStoryValidationAuthority(prepared);
-  const scope = storyValidationScope(authority, input.unitIds);
-  const units = scope.completenessAuthority.semanticManifest.units;
-  const memberIds = new Set(units.flatMap((unit) => Array.isArray(unit?.members) ? unit.members : []));
-  const output = value.map((record) => {
-    if (!exactKeys(record, ["id", "story"]) || !stableId(record.id) || !memberIds.has(record.id)) {
-      fail("STORY_OUTPUT_INVALID");
+const storyChapterRequiredKeys = ["title", "overview", "people", "story", "insights", "evidence"];
+const storyChapterOptionalKeys = ["kind", "transition", "chips"];
+const storyParentKeys = new Set([
+  "schema", "key", "phase", "coverage", "exclusions", "receipt", "authority",
+]);
+
+function exactAllowedKeys(value, required, optional) {
+  if (!isObject(value) || required.some((key) => !Object.hasOwn(value, key))) return false;
+  const allowed = new Set([...required, ...optional]);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function evidenceReference(value) {
+  if (!isObject(value) || !stableId(value.documentId) || !stableId(value.eventId)) return false;
+  const keys = Object.keys(value);
+  return (keys.length === 2 && keys.every((key) => ["documentId", "eventId"].includes(key)))
+    || (keys.length === 3 && keys.every((key) => ["documentId", "eventId", "label"].includes(key))
+      && typeof value.label === "string");
+}
+
+function storyProposal(value) {
+  if (!exactKeys(value, ["ownerId", "chapter"]) || !stableId(value.ownerId)
+    || !isObject(value.chapter)) fail("STORY_PROPOSAL_INVALID");
+  if (Object.keys(value.chapter).some((key) => storyParentKeys.has(key))) {
+    fail("STORY_PROPOSAL_PARENT_FIELD_FORBIDDEN");
+  }
+  if (!exactAllowedKeys(value.chapter, storyChapterRequiredKeys, storyChapterOptionalKeys)
+    || !Array.isArray(value.chapter.insights) || value.chapter.insights.length !== 0
+    || !isObject(value.chapter.evidence)
+    || !exactKeys(value.chapter.evidence, ["primary", "supporting"])
+    || !evidenceReference(value.chapter.evidence.primary)
+    || !Array.isArray(value.chapter.evidence.supporting)
+    || value.chapter.evidence.supporting.some((reference) => !evidenceReference(reference))) {
+    fail("STORY_PROPOSAL_INVALID");
+  }
+  return value;
+}
+
+async function directProposalDirectory(path, shardIds) {
+  const requested = resolve(path);
+  let state;
+  let physical;
+  try {
+    state = await lstat(requested);
+    physical = await realpath(requested);
+  } catch {
+    fail("STORY_PROPOSAL_SET_INVALID");
+  }
+  if (!state.isDirectory() || state.isSymbolicLink() || physical !== requested) {
+    fail("STORY_PROPOSAL_SET_INVALID");
+  }
+  const expected = shardIds.map((id) => `${id}.json`).sort(compareUtf8);
+  const entries = await readdir(physical, { withFileTypes: true }).catch(() => (
+    fail("STORY_PROPOSAL_SET_INVALID")
+  ));
+  const names = entries.map((entry) => entry.name).sort(compareUtf8);
+  if (canonicalAuthorityJson(names) !== canonicalAuthorityJson(expected)
+    || entries.some((entry) => !entry.isFile() || entry.isSymbolicLink())) {
+    fail("STORY_PROPOSAL_SET_INVALID");
+  }
+  return physical;
+}
+
+function validateStoryOwnerBundles(prepared, authority) {
+  const semanticById = new Map(authority.semanticManifest.units.map((unit) => [unit.id, unit]));
+  const coverageById = new Map(authority.coverageManifest.rows.map((row) => [row.unitId, row]));
+  const expectedOwners = [...new Set(authority.coverageManifest.rows
+    .filter((row) => row.disposition === "represented").map((row) => row.ownerId))].sort(compareUtf8);
+  if (expectedOwners.length === 0) fail("STORY_ZERO_REPRESENTED_OWNER_UNSUPPORTED");
+  const ownerBundles = new Map();
+  for (const shard of prepared.shards) {
+    const input = prepared.inputs.find((candidate) => candidate.shardId === shard.id);
+    if (!input || !exactKeys(input.payload, [
+      "validationAuthorityPath", "validationAuthorityDigest", "ownerBundles",
+    ]) || !Array.isArray(input.payload.ownerBundles) || input.payload.ownerBundles.length === 0) {
+      fail("WORKER_INPUT_TAMPERED");
     }
-    const story = parseStory(record.story);
-    if (story.insights.length !== 0) fail("STORY_OUTPUT_INVALID");
-    return { id: record.id, story };
-  }).sort((left, right) => compareUtf8(left.id, right.id));
-  if (new Set(output.map((record) => record.id)).size !== output.length
-    || new Set(output.map((record) => record.story.key)).size !== output.length) fail("STORY_OUTPUT_IDENTITY_INVALID");
-  const validation = validateStorySourcePackage(output.map((record) => ({
-    id: record.id,
-    documentId: record.story.evidence.primary.documentId,
-    summary: `${STORY_PREFIX}${canonicalAuthorityJson(record.story)}`,
-  })), scope.evidenceRows, scope.completenessAuthority);
+    const shardOwners = [];
+    for (const bundle of input.payload.ownerBundles) {
+      if (!exactKeys(bundle, [
+        "ownerId", "semanticManifest", "coverageManifest", "semanticUnits", "reviewedNarrative",
+      ]) || !stableId(bundle.ownerId) || ownerBundles.has(bundle.ownerId)
+        || !Array.isArray(bundle.semanticUnits) || bundle.semanticUnits.length === 0
+        || !Array.isArray(bundle.reviewedNarrative)) fail("WORKER_INPUT_TAMPERED");
+      if (canonicalAuthorityJson(bundle.semanticManifest) !== canonicalAuthorityJson({
+        revision: authority.semanticManifest.revision,
+        digest: authority.semanticManifest.manifestDigest,
+      }) || canonicalAuthorityJson(bundle.coverageManifest) !== canonicalAuthorityJson({
+        revision: authority.coverageManifest.revision,
+        digest: authority.coverageManifest.coverageDigest,
+      })) fail("WORKER_INPUT_TAMPERED");
+      const unitIds = bundle.semanticUnits.map((unit) => unit?.id).sort(compareUtf8);
+      if (unitIds.some((id) => !stableId(id)) || new Set(unitIds).size !== unitIds.length
+        || bundle.semanticUnits.some((unit) => (
+          canonicalAuthorityJson(unit) !== canonicalAuthorityJson(semanticById.get(unit.id))
+          || coverageById.get(unit.id)?.disposition !== "represented"
+          || coverageById.get(unit.id)?.ownerId !== bundle.ownerId
+        ))) fail("WORKER_INPUT_TAMPERED");
+      const memberIds = bundle.semanticUnits.flatMap((unit) => unit.members).sort(compareUtf8);
+      const narrativeIds = bundle.reviewedNarrative.map((row) => row?.id).sort(compareUtf8);
+      if (new Set(memberIds).size !== memberIds.length
+        || canonicalAuthorityJson(narrativeIds) !== canonicalAuthorityJson(memberIds)) {
+        fail("WORKER_INPUT_TAMPERED");
+      }
+      ownerBundles.set(bundle.ownerId, {
+        ...bundle,
+        shardId: shard.id,
+        unitIds,
+        memberIds: new Set(memberIds),
+      });
+      shardOwners.push(bundle.ownerId);
+    }
+    if (canonicalAuthorityJson(shardOwners.sort(compareUtf8))
+      !== canonicalAuthorityJson(input.unitIds)) fail("WORKER_INPUT_TAMPERED");
+  }
+  if (canonicalAuthorityJson([...ownerBundles.keys()].sort(compareUtf8))
+    !== canonicalAuthorityJson(expectedOwners)
+    || canonicalAuthorityJson(prepared.manifest.unitIds) !== canonicalAuthorityJson(expectedOwners)) {
+    fail("STORY_OWNER_AUTHORITY_INVALID");
+  }
+  return ownerBundles;
+}
+
+function phaseAssignments(value, ownerIds) {
+  if (!Array.isArray(value) || value.length !== ownerIds.length) fail("STORY_PHASE_ASSIGNMENT_INVALID");
+  const phases = new Map();
+  for (const assignment of value) {
+    if (!exactKeys(assignment, ["ownerId", "phase"]) || !stableId(assignment.ownerId)
+      || phases.has(assignment.ownerId) || !exactKeys(assignment.phase, ["id", "label"])
+      || !stableId(assignment.phase.id) || !stableId(assignment.phase.label)) {
+      fail("STORY_PHASE_ASSIGNMENT_INVALID");
+    }
+    phases.set(assignment.ownerId, assignment.phase);
+  }
+  if (canonicalAuthorityJson([...phases.keys()].sort(compareUtf8))
+    !== canonicalAuthorityJson([...ownerIds].sort(compareUtf8))) {
+    fail("STORY_PHASE_ASSIGNMENT_INVALID");
+  }
+  return phases;
+}
+
+async function storyBatchProposal(rootInput, proposalDirectory, phasePath) {
+  const manifest = await readPreparedManifest(rootInput, "story");
+  const inputs = [];
+  for (const shard of manifest.shards) {
+    inputs.push((await readPreparedShard(manifest.root, "story", shard.id)).input);
+  }
+  const prepared = { ...manifest, inputs, input: inputs[0] };
+  const authority = await readStoryValidationAuthority(prepared);
+  const bundles = validateStoryOwnerBundles(prepared, authority);
+  const proposalRoot = await directProposalDirectory(proposalDirectory, manifest.shards.map((shard) => shard.id));
+  const proposals = new Map();
+  for (const shard of manifest.shards) {
+    const value = (await readStrictJson(resolve(proposalRoot, `${shard.id}.json`),
+      MAX_STORY_PREPARATION_FILE_BYTES, {
+        invalid: "PROPOSAL_UNREADABLE", changed: "PROPOSAL_CHANGED",
+        oversized: "PROPOSAL_TOO_LARGE", jsonInvalid: "PROPOSAL_JSON_INVALID",
+      })).value;
+    if (!Array.isArray(value) || value.length === 0) fail("STORY_PROPOSAL_INVALID");
+    const shardProposals = value.map(storyProposal);
+    const proposalOwners = shardProposals.map((proposal) => proposal.ownerId).sort(compareUtf8);
+    if (new Set(proposalOwners).size !== proposalOwners.length
+      || canonicalAuthorityJson(proposalOwners) !== canonicalAuthorityJson(shard.unitIds)) {
+      fail("STORY_PROPOSAL_OWNER_INVALID");
+    }
+    for (const proposal of shardProposals) {
+      if (proposals.has(proposal.ownerId)) fail("STORY_PROPOSAL_OWNER_INVALID");
+      proposals.set(proposal.ownerId, proposal);
+    }
+  }
+  const phaseValue = (await readStrictJson(phasePath, MAX_STORY_PREPARATION_FILE_BYTES, {
+    invalid: "STORY_PHASE_ASSIGNMENT_INVALID", changed: "STORY_PHASE_ASSIGNMENT_CHANGED",
+    oversized: "STORY_PHASE_ASSIGNMENT_TOO_LARGE", jsonInvalid: "STORY_PHASE_ASSIGNMENT_INVALID",
+  })).value;
+  const phases = phaseAssignments(phaseValue, [...bundles.keys()]);
+  const evidenceById = new Map(authority.evidence.map((row) => [row.id, row]));
+  const candidates = [];
+  for (const [ownerId, bundle] of bundles) {
+    const proposal = proposals.get(ownerId);
+    if (!proposal) fail("STORY_PROPOSAL_OWNER_INVALID");
+    const references = [proposal.chapter.evidence.primary, ...proposal.chapter.evidence.supporting];
+    if (references.some((reference) => !bundle.memberIds.has(reference.eventId))) {
+      fail("STORY_PROPOSAL_EVIDENCE_INVALID");
+    }
+    const primary = evidenceById.get(proposal.chapter.evidence.primary.eventId);
+    if (!primary || primary.documentId !== proposal.chapter.evidence.primary.documentId) {
+      fail("STORY_PROPOSAL_EVIDENCE_INVALID");
+    }
+    candidates.push({
+      ownerId,
+      shardId: bundle.shardId,
+      proposal,
+      id: primary.id,
+      documentId: primary.documentId,
+      sequence: primary.sequence,
+      timestamp: primary.timestamp,
+    });
+  }
+  candidates.sort(compareStorySourceIdentity);
+  if (new Set(candidates.map((candidate) => candidate.id)).size !== candidates.length) {
+    fail("STORY_OUTPUT_IDENTITY_INVALID");
+  }
+  const exclusions = authority.coverageManifest.rows.filter((row) => row.disposition === "excluded")
+    .map((row) => ({ unitId: row.unitId, reason: row.exclusionReason }))
+    .sort((left, right) => compareUtf8(left.unitId, right.unitId) || compareUtf8(left.reason, right.reason));
+  const output = candidates.map((candidate, index) => {
+    const bundle = bundles.get(candidate.ownerId);
+    const chapter = candidate.proposal.chapter;
+    const story = parseStory({
+      schema: "oxygen.story",
+      key: candidate.ownerId,
+      phase: phases.get(candidate.ownerId),
+      ...(chapter.kind === undefined ? {} : { kind: chapter.kind }),
+      title: chapter.title,
+      overview: chapter.overview,
+      ...(chapter.transition === undefined ? {} : { transition: chapter.transition }),
+      ...(chapter.chips === undefined ? {} : { chips: chapter.chips }),
+      people: chapter.people,
+      story: chapter.story,
+      insights: [],
+      evidence: chapter.evidence,
+      coverage: {
+        semanticManifest: bundle.semanticManifest,
+        coverageManifest: bundle.coverageManifest,
+        representedUnitIds: bundle.unitIds,
+        excludedUnits: index === 0 ? exclusions : [],
+      },
+    });
+    return { ...candidate, record: { id: candidate.id, story } };
+  });
+  const validation = validateStorySourcePackage(output.map((candidate) => ({
+    id: candidate.id,
+    documentId: candidate.documentId,
+    sequence: candidate.sequence,
+    timestamp: candidate.timestamp,
+    summary: `${STORY_PREFIX}${canonicalAuthorityJson(candidate.record.story)}`,
+  })), storyEvidenceRows(authority), storyCompletenessAuthority(authority));
   if (!validation.ok) fail(validation.code);
-  return { output, count: output.length };
+  const outputs = new Map(manifest.shards.map((shard) => [
+    shard.id,
+    output.filter((candidate) => candidate.shardId === shard.id).map((candidate) => candidate.record),
+  ]));
+  return { prepared, outputs };
 }
 
 async function validateInsight(value, input, prepared) {
@@ -273,7 +500,6 @@ function validatePreference(value, input) {
 }
 
 async function validateProposal(lane, value, input, prepared) {
-  if (lane === "story") return validateStory(value, input, prepared);
   if (lane === "insight") return validateInsight(value, input, prepared);
   if (lane === "story_privacy") return validatePrivacy(value, input);
   if (lane === "preference") return validatePreference(value, input);
@@ -299,8 +525,69 @@ async function writeSynced(path, value) {
   }
 }
 
+async function recordStoryBatch(rootInput, proposalDirectory, phasePath, correctionAttemptCount) {
+  if (!Number.isSafeInteger(correctionAttemptCount) || correctionAttemptCount < 0) fail("CLI_USAGE");
+  if (correctionAttemptCount > 2) fail("STORY_CORRECTION_EXHAUSTED");
+  const { prepared, outputs } = await storyBatchProposal(rootInput, proposalDirectory, phasePath);
+  const recordsPath = resolve(prepared.root, laneDirectory.story, "records");
+  const state = await exists(recordsPath);
+  if (state) {
+    if (!state.isDirectory() || state.isSymbolicLink()) fail("PARTIAL_BATCH_REJECTED");
+    const receipts = [];
+    for (const shard of prepared.shards) {
+      let authority;
+      try {
+        authority = await readShardAuthority(prepared.root, "story", shard.id);
+      } catch {
+        fail("PARTIAL_BATCH_REJECTED");
+      }
+      if (canonicalAuthorityJson(authority.output) !== canonicalAuthorityJson(outputs.get(shard.id))) {
+        fail("AUTHORITY_IMMUTABLE");
+      }
+      receipts.push(authority.receipt);
+    }
+    return receipts;
+  }
+  const storyRoot = resolve(prepared.root, laneDirectory.story);
+  const temporary = resolve(storyRoot, `.records.${process.pid}.${randomUUID()}.tmp`);
+  const receipts = [];
+  try {
+    await mkdir(temporary);
+    for (const shard of prepared.shards) {
+      const output = outputs.get(shard.id);
+      const outputPath = relativeLanePath("story", `records/${shard.id}/output.json`);
+      const receipt = {
+        schema: "oxygen.story-preparation-worker-receipt",
+        lane: "story",
+        shardId: shard.id,
+        status: "complete",
+        inputDigest: prepared.manifest.inputDigest,
+        workerInputDigest: shard.workerInputDigest,
+        unitIds: shard.unitIds,
+        outputPath,
+        outputDigest: canonicalDigest(output),
+        outputCount: output.length,
+      };
+      const recordRoot = resolve(temporary, shard.id);
+      await mkdir(recordRoot);
+      await writeSynced(resolve(recordRoot, "output.json"), output);
+      await writeSynced(resolve(recordRoot, "receipt.json"), receipt);
+      receipts.push(receipt);
+    }
+    try {
+      await rename(temporary, recordsPath);
+    } catch (error) {
+      if (error?.code === "EEXIST" || error?.code === "ENOTEMPTY") fail("AUTHORITY_IMMUTABLE");
+      throw error;
+    }
+  } finally {
+    await rm(temporary, { recursive: true, force: true }).catch(() => {});
+  }
+  return receipts;
+}
+
 async function record(rootInput, lane, shardId, proposalPath) {
-  if (!LANES.includes(lane) || !stableId(shardId)) fail("CLI_USAGE");
+  if (!LANES.includes(lane) || lane === "story" || !stableId(shardId)) fail("CLI_USAGE");
   const prepared = await readPreparedShard(rootInput, lane, shardId);
   const proposal = (await readStrictJson(proposalPath, MAX_STORY_PREPARATION_FILE_BYTES, {
     invalid: "PROPOSAL_UNREADABLE", changed: "PROPOSAL_CHANGED",
@@ -356,13 +643,32 @@ async function record(rootInput, lane, shardId, proposalPath) {
 }
 
 try {
-  const [root, lane, shardId, proposalPath, ...extra] = process.argv.slice(2);
-  if (!root || !lane || !shardId || !proposalPath || extra.length) fail("CLI_USAGE");
-  const receipt = await record(root, lane, shardId, proposalPath);
-  process.stdout.write(`${canonicalAuthorityJson({
-    ok: true, lane: receipt.lane, shardId: receipt.shardId,
-    outputDigest: receipt.outputDigest, outputCount: receipt.outputCount,
-  })}\n`);
+  const args = process.argv.slice(2);
+  const [root, lane] = args;
+  if (lane === "story") {
+    const [storyRoot, storyLane, proposalDirectory, phasePath, marker, count, ...extra] = args;
+    if (!storyRoot || storyLane !== "story" || !proposalDirectory || !phasePath
+      || marker !== "--correction-attempt-count" || !/^(0|[1-9][0-9]*)$/u.test(count || "")
+      || extra.length) fail("CLI_USAGE");
+    const receipts = await recordStoryBatch(
+      storyRoot, proposalDirectory, phasePath, Number(count),
+    );
+    process.stdout.write(`${canonicalAuthorityJson({
+      ok: true,
+      lane: "story",
+      shardCount: receipts.length,
+      outputCount: receipts.reduce((total, receipt) => total + receipt.outputCount, 0),
+      terminalReceiptCount: receipts.length,
+    })}\n`);
+  } else {
+    const [laneRoot, otherLane, shardId, proposalPath, ...extra] = args;
+    if (!laneRoot || !otherLane || !shardId || !proposalPath || extra.length) fail("CLI_USAGE");
+    const receipt = await record(laneRoot, otherLane, shardId, proposalPath);
+    process.stdout.write(`${canonicalAuthorityJson({
+      ok: true, lane: receipt.lane, shardId: receipt.shardId,
+      outputDigest: receipt.outputDigest, outputCount: receipt.outputCount,
+    })}\n`);
+  }
 } catch (error) {
   process.stderr.write(`${error instanceof StoryPreparationTransportError ? error.code : "STORY_PREPARATION_RECORD_FAILED"}\n`);
   process.exitCode = 1;

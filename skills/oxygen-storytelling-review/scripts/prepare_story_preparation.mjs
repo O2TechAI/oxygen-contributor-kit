@@ -5,8 +5,15 @@ import { basename, dirname, resolve } from "node:path";
 import {
   deriveStoryReleaseTargetCatalog,
 } from "../../../viewer/lib/story-preparation.ts";
-import { canonicalAuthorityJson } from "../../../viewer/lib/story-readiness.ts";
-import { parseStorySource, STORY_PREFIX } from "../../../viewer/lib/timeline.ts";
+import {
+  canonicalAuthorityJson,
+  validateStorySourcePackage,
+} from "../../../viewer/lib/story-readiness.ts";
+import {
+  compareStorySourceIdentity,
+  parseStorySource,
+  STORY_PREFIX,
+} from "../../../viewer/lib/timeline.ts";
 import {
   StoryPreparationTransportError,
   canonicalDigest,
@@ -31,7 +38,7 @@ import {
 } from "./story_preparation_validation_authority.mjs";
 
 export const TARGET_STORY_PREPARATION_SHARD_BYTES = 1_000_000;
-export const MAX_STORY_PREPARATION_SHARD_IDENTITIES = 4;
+export const MAX_GENERIC_STORY_PREPARATION_SHARD_IDENTITIES = 4;
 
 function orderedIds(values) {
   const result = [...values].sort(compareUtf8);
@@ -55,7 +62,7 @@ function baseRecords(value) {
     const story = storyFromObject(record.story);
     if (story.insights.length !== 0) fail("STORY_OUTPUT_INVALID");
     return { id: record.id, story };
-  }).sort((left, right) => compareUtf8(left.id, right.id));
+  });
   if (new Set(records.map((record) => record.id)).size !== records.length
     || new Set(records.map((record) => record.story.key)).size !== records.length) {
     fail("STORY_OUTPUT_IDENTITY_INVALID");
@@ -74,7 +81,7 @@ function candidateRows(value, requireInsights = false) {
       fail("STORY_CANDIDATES_INVALID");
     }
     return { id: row.id, summary: row.summary, story };
-  }).sort((left, right) => compareUtf8(left.id, right.id));
+  });
   if (new Set(rows.map((row) => row.id)).size !== rows.length
     || new Set(rows.map((row) => row.story.key)).size !== rows.length) fail("STORY_CANDIDATES_IDENTITY_INVALID");
   return rows;
@@ -85,6 +92,16 @@ function candidateRowsFromBase(records) {
     id,
     summary: `${STORY_PREFIX}${canonicalAuthorityJson(story)}`,
   }));
+}
+
+function orderStoryRecords(records, validationAuthority) {
+  const evidence = new Map(validationAuthority.evidence.map((row) => [row.id, row]));
+  return [...records].sort((left, right) => {
+    const a = evidence.get(left.story.evidence.primary.eventId);
+    const b = evidence.get(right.story.evidence.primary.eventId);
+    if (!a || !b) fail("STORY_OUTPUT_FOREIGN_IDENTITY");
+    return compareStorySourceIdentity(a, b);
+  });
 }
 
 async function readBounded(path) {
@@ -114,7 +131,7 @@ async function writeDestination(path, value) {
 }
 
 function balancedGroups(entries, {
-  maximumIdentities = MAX_STORY_PREPARATION_SHARD_IDENTITIES,
+  maximumIdentities = MAX_GENERIC_STORY_PREPARATION_SHARD_IDENTITIES,
   targetBytes = TARGET_STORY_PREPARATION_SHARD_BYTES,
 } = {}) {
   if (!entries.length) return [[]];
@@ -132,6 +149,13 @@ function balancedGroups(entries, {
     group.bytes += entry.weight;
   }
   return groups.map((group) => group.entries.sort((left, right) => compareUtf8(left.id, right.id)));
+}
+
+function storyOwnerGroups(entries) {
+  return balancedGroups(entries, {
+    maximumIdentities: Number.MAX_SAFE_INTEGER,
+    targetBytes: TARGET_STORY_PREPARATION_SHARD_BYTES,
+  });
 }
 
 async function installLane(rootInput, lane, inputDigest, partitions, files = []) {
@@ -229,22 +253,74 @@ async function prepareStory(semanticPath, coveragePath, sourcePrivacyPath, revie
   const validationAuthorityDigest = canonicalDigest(authority);
   const narrativeDigest = canonicalDigest(reviewedNarrative);
   const narrativeById = new Map(reviewedNarrative.map((row) => [row.id, row]));
-  const groups = balancedGroups(semantic.units.map((unit) => {
-    const narrative = unit.members.map((id) => narrativeById.get(id));
-    if (narrative.some((row) => !row)) fail("REVIEWED_SOURCE_AUTHORITY_STALE");
-    return { id: unit.id, value: { unit, narrative } };
-  }));
+  const unitsById = new Map(semantic.units.map((unit) => [unit.id, unit]));
+  const represented = authority.coverageManifest.rows.filter((row) => row.disposition === "represented");
+  if (represented.length === 0) fail("STORY_ZERO_REPRESENTED_OWNER_UNSUPPORTED");
+  const unitsByOwner = new Map();
+  for (const row of represented) {
+    const unit = unitsById.get(row.unitId);
+    if (!unit || !stableId(row.ownerId)) fail("STORY_OWNER_AUTHORITY_INVALID");
+    const owned = unitsByOwner.get(row.ownerId) || [];
+    owned.push(unit);
+    unitsByOwner.set(row.ownerId, owned);
+  }
+  const ownerBundles = [...unitsByOwner].sort(([left], [right]) => compareUtf8(left, right))
+    .map(([ownerId, ownedUnits]) => {
+      const semanticUnits = [...ownedUnits].sort((left, right) => compareUtf8(left.id, right.id));
+      const memberIds = semanticUnits.flatMap((unit) => unit.members);
+      const narrative = memberIds.map((id) => narrativeById.get(id));
+      if (narrative.some((row) => !row) || new Set(memberIds).size !== memberIds.length) {
+        fail("REVIEWED_SOURCE_AUTHORITY_STALE");
+      }
+      return {
+        ownerId,
+        semanticManifest: {
+          revision: authority.semanticManifest.revision,
+          digest: authority.semanticManifest.manifestDigest,
+        },
+        coverageManifest: {
+          revision: authority.coverageManifest.revision,
+          digest: authority.coverageManifest.coverageDigest,
+        },
+        semanticUnits,
+        reviewedNarrative: narrative.sort((left, right) => (
+          compareUtf8(left.documentId, right.documentId)
+          || left.sequence - right.sequence
+          || compareUtf8(left.id, right.id)
+        )),
+      };
+    });
+  const inputDigest = canonicalDigest({ validationAuthorityDigest, narrativeDigest });
+  for (const bundle of ownerBundles) {
+    const singleOwnerInput = {
+      schema: "oxygen.story-preparation-worker-input",
+      lane: "story",
+      shardId: "story-0001",
+      inputDigest,
+      unitIds: [bundle.ownerId],
+      payload: {
+        validationAuthorityPath: "story/validation-authority.json",
+        validationAuthorityDigest,
+        ownerBundles: [bundle],
+      },
+    };
+    if (serializedBytes(singleOwnerInput) > MAX_STORY_PREPARATION_FILE_BYTES) {
+      fail("STORY_OWNER_BUNDLE_TOO_LARGE");
+    }
+  }
+  const groups = storyOwnerGroups(ownerBundles.map((bundle) => ({
+    id: bundle.ownerId,
+    value: bundle,
+  })));
   const partitions = groups.map((group) => ({
     unitIds: group.map((entry) => entry.id),
     payload: {
       validationAuthorityPath: "story/validation-authority.json",
       validationAuthorityDigest,
-      narrativeDigest,
-      reviewedNarrative: group.flatMap((entry) => entry.value.narrative)
-        .sort((left, right) => compareUtf8(left.documentId, right.documentId) || compareUtf8(left.id, right.id)),
+      ownerBundles: group.map((entry) => entry.value),
     },
   }));
-  return installLane(root, "story", canonicalDigest({ validationAuthorityDigest, narrativeDigest }),
+  return installLane(root, "story", inputDigest,
     partitions, [{ name: "validation-authority.json", value: authority }]);
 }
 
@@ -329,12 +405,21 @@ async function preparePreference(candidatesPath, contextPath, root) {
 
 async function composeStory(root, outputPath) {
   const authority = await readLaneAuthority(root, "story");
-  const records = baseRecords(authority.output);
-  const validation = await import("./story_preparation_validation_authority.mjs")
-    .then(({ readStoryValidationAuthority }) => readStoryValidationAuthority(authority));
+  const validationModule = await import("./story_preparation_validation_authority.mjs");
+  const validation = await validationModule.readStoryValidationAuthority(authority);
+  const records = orderStoryRecords(baseRecords(authority.output), validation);
   const memberIds = semanticMembers(validation.semanticManifest);
   if (records.some((record) => !memberIds.has(record.id))) fail("STORY_OUTPUT_FOREIGN_IDENTITY");
   const rows = candidateRowsFromBase(records);
+  const evidenceById = new Map(validation.evidence.map((row) => [row.id, row]));
+  const storyValidation = validateStorySourcePackage(rows.map((row, index) => ({
+    ...row,
+    documentId: records[index].story.evidence.primary.documentId,
+    sequence: evidenceById.get(row.id)?.sequence,
+    timestamp: evidenceById.get(row.id)?.timestamp,
+  })), validationModule.storyEvidenceRows(validation),
+  validationModule.storyCompletenessAuthority(validation));
+  if (!storyValidation.ok) fail(storyValidation.code);
   await writeDestination(outputPath, rows);
   return { outputCount: rows.length, outputDigest: canonicalDigest(records) };
 }
@@ -355,7 +440,9 @@ function insightRecords(value, storyKeys) {
 async function composeFinal(root, outputPath) {
   const story = await readLaneAuthority(root, "story");
   const insight = await readLaneAuthority(root, "insight");
-  const bases = baseRecords(story.output);
+  const validation = await import("./story_preparation_validation_authority.mjs")
+    .then(({ readStoryValidationAuthority }) => readStoryValidationAuthority(story));
+  const bases = orderStoryRecords(baseRecords(story.output), validation);
   if (insight.manifest.inputDigest !== canonicalDigest(bases)) fail("INSIGHT_INPUT_STALE");
   const keys = bases.map((record) => record.story.key).sort(compareUtf8);
   const records = insightRecords(insight.output, keys);

@@ -148,11 +148,13 @@ Use parent-owned bounded semantic workers only for drafts and checks. The tracke
 requires the owning Agent to prepare deterministic inputs first:
 
 - create an immutable input digest;
-- assign explicit semantic unit IDs;
-- write byte/content-balanced shard manifests;
+- derive canonical Chapter owners only from finalized Coverage `ownerId`;
+- write byte-balanced Story shards containing indivisible complete owner bundles;
 - automatically enumerate every nonempty Story, Insight, and Story Privacy shard and run those as multi-shard lanes;
 - run Preference as exactly one global bounded worker producing one deduplicated questionnaire authority, capped at 12 probes by default and 20 maximum;
-- require a receipt from every worker with input digest, shard ID, unit IDs covered, output path, and terminal status;
+- collect every phase-free Story proposal before creating any Story receipt;
+- assign Phase once across the complete production-ordered Chapter set and run one Story batch recorder;
+- require exactly one terminal receipt per Story shard after global validation;
 - validate exact union coverage and no overlap across shard manifests and receipts;
 - deterministically deduplicate and compose outputs;
 - keep revision authority, activation, and release decisions in the owning Agent/server lane;
@@ -162,7 +164,7 @@ When host subagents are available, the parent must dispatch them in waves of no 
 live at once; silently performing all semantic reasoning in the parent is invalid. Each assignment
 reads exactly one Privacy-safe immutable `inputPath` and writes only its proposal. Workers never
 write receipts, final manifests, SQLite, Viewer APIs, revisions, activation state, release state,
-or publication state. The parent exclusively runs recorders, installs output/receipt pairs, verifies
+or publication state. The parent exclusively runs recorders, installs authority, verifies
 exact union/no overlap, finalizes authority, performs Viewer mutations, and waits for all terminal
 receipts. No worker may silently expand scope, reopen raw history, repair another lane, or treat
 another lane's failure as success.
@@ -177,6 +179,20 @@ Every `story`-lane subagent assignment must convey this ordered contract before 
 Do not dispatch a Story worker unless its assignment names both required contract paths, its one
 actual generated `inputPath`, and its proposal-only write boundary. The worker must not read any
 other data input or write a receipt, final artifact, or authority file.
+
+Each Story input is self-contained for writing and contains complete owner bundles: all represented
+semantic units owned by that exact Coverage owner, the corresponding Privacy-reviewed narrative,
+canonical semantic/Coverage references, and equality-only actor tokens. It contains no excluded
+narrative, raw actor identity, Source Privacy rows, pre-redaction content, private sentinel, or
+provider metadata. One owner never spans workers; a shard may carry multiple complete owners.
+
+Story workers return phase-free Chapter proposals and do not author schema, Chapter keys, Phase,
+Coverage, exclusions, receipts, or authority. On a subagent-capable host the parent does not write
+Story prose, People, Evidence choices, titles, overviews, or blocks. After all proposals exist, the
+parent orders complete Chapters with the production comparator, assigns only Phase IDs and labels,
+injects canonical Coverage and UTF-8-sorted exclusions, and invokes the complete Story batch
+recorder. All Story outputs and exactly one receipt per shard install atomically only after the
+unchanged shared validator accepts the complete package. Insight remains a separate later pass.
 
 A shard assignment gets one initial proposal plus at most two automatic proposal-only correction
 attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
@@ -194,14 +210,21 @@ authority without asking the contributor to create workers. Internal host subage
 provider/API calls, require no separate API key, and receive no raw/private source beyond the
 prepared bounded input. `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal boundary only.
 
+For Story, the initial complete proposal set is non-authoritative and the two allowed corrections
+are lane-wide waves. Replacing a rejected proposal or replacing only the non-authoritative Phase
+assignment consumes the same Story correction wave. Failed waves leave every Story output and
+receipt absent; there is no separate Phase retry budget.
+
 Later E2E evidence records `executionMode`, `lane`, `shardCount`, `spawnedSubagentCount`,
 `maxConcurrentSubagents`, `correctionAttemptCount`, and `terminalReceiptCount` for every reached
 lane. Contributor pauses remain only at explicit human review and decision boundaries.
 
 Execute the exact public commands and proposal shapes in
 [story-preparation-transport.md](references/story-preparation-transport.md). Preparation installs
-immutable bounded input before proposals exist. Recording validates the lane, shard, frozen input,
-exact assigned identities, and lane output, then atomically installs the output/receipt pair.
+immutable bounded input before proposals exist. Story recording validates every shard proposal,
+the exact owner/unit union, one complete parent Phase assignment, canonical exclusions, and the
+complete source package before atomically installing the full terminal records directory. Other
+lanes keep their per-shard output/receipt boundary.
 Composition reconstructs `story-candidates.json` from recorded Story and Insight results. The
 finalizer reopens and validates every artifact before emitting activation authority.
 
@@ -283,10 +306,13 @@ authority, and the Preference recorder binds that exact bundle unchanged.
 Story preparation takes the exact canonical reviewed run, current public Source Privacy projection,
 current semantic authority, and finalized current Coverage authority together. Its immutable input
 binds one minimal validation-authority bundle and Privacy-reviewed narrative context; it excludes
-raw actor identity, pre-redaction source text, redaction details, and provider metadata. Both the
+raw actor identity, pre-redaction source text, redaction details, and provider metadata. Story
+workers do not need to open the parent-only validation authority or any other generated file. Both the
 Story recorder and preparation finalizer directly reuse the unchanged Viewer
 `validateStorySourcePackage`, so complete People, Evidence, Phase, Coverage, and Insight-grounding
-validation occurs before either worker receipt or terminal preparation authority can exist.
+validation occurs before any Story worker receipt or terminal preparation authority can exist.
+
+Later E2E evidence, not static tests, proves actual host-subagent spawning.
 
 Run the copyable commands in
 [story-preparation-transport.md](references/story-preparation-transport.md), then request activation

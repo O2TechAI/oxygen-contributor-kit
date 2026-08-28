@@ -16,7 +16,7 @@ import {
   canonicalAuthorityJson,
   validateStorySourcePackage,
 } from "../../../viewer/lib/story-readiness.ts";
-import { parseStorySource } from "../../../viewer/lib/timeline.ts";
+import { compareStorySourceIdentity, parseStorySource } from "../../../viewer/lib/timeline.ts";
 import {
   StoryPreparationTransportError,
   MAX_STORY_PREPARATION_FILE_BYTES,
@@ -118,7 +118,7 @@ function finalCandidates(value) {
   }
   if (new Set(rows.map((row) => row.id)).size !== rows.length
     || new Set(rows.map((row) => row.story.key)).size !== rows.length) fail("FINAL_STORY_IDENTITIES_INVALID");
-  return rows.sort((left, right) => utf8(left.id, right.id));
+  return rows;
 }
 
 function normalizedPrivacy(value, catalog) {
@@ -177,6 +177,47 @@ function sameIds(actual, expected, code) {
     || canonicalAuthorityJson([...actual].sort(utf8)) !== canonicalAuthorityJson([...expected].sort(utf8))) {
     fail(code);
   }
+}
+
+function validateFinalStoryOwnerAuthority(storyAuthority, validationAuthority) {
+  const representedRows = validationAuthority.coverageManifest.rows
+    .filter((row) => row.disposition === "represented");
+  const ownerIds = [...new Set(representedRows.map((row) => row.ownerId))].sort(utf8);
+  if (ownerIds.length === 0) fail("STORY_ZERO_REPRESENTED_OWNER_UNSUPPORTED");
+  sameIds(storyAuthority.manifest.unitIds, ownerIds, "STORY_OWNER_SCOPE_STALE");
+  const unitOwner = new Map(representedRows.map((row) => [row.unitId, row.ownerId]));
+  const seenOwners = new Set();
+  const seenUnits = new Set();
+  for (const [index, input] of storyAuthority.inputs.entries()) {
+    if (!exactKeys(input.payload, [
+      "validationAuthorityPath", "validationAuthorityDigest", "ownerBundles",
+    ]) || !Array.isArray(input.payload.ownerBundles) || input.payload.ownerBundles.length === 0) {
+      fail("STORY_INPUT_STALE");
+    }
+    const inputOwners = [];
+    for (const bundle of input.payload.ownerBundles) {
+      if (!exactKeys(bundle, [
+        "ownerId", "semanticManifest", "coverageManifest", "semanticUnits", "reviewedNarrative",
+      ]) || !stableId(bundle.ownerId) || seenOwners.has(bundle.ownerId)
+        || !Array.isArray(bundle.semanticUnits) || bundle.semanticUnits.length === 0) {
+        fail("STORY_OWNER_SCOPE_STALE");
+      }
+      seenOwners.add(bundle.ownerId);
+      inputOwners.push(bundle.ownerId);
+      for (const unit of bundle.semanticUnits) {
+        if (!stableId(unit?.id) || seenUnits.has(unit.id) || unitOwner.get(unit.id) !== bundle.ownerId) {
+          fail("STORY_OWNER_SCOPE_STALE");
+        }
+        seenUnits.add(unit.id);
+      }
+    }
+    sameIds(inputOwners, input.unitIds, "STORY_OWNER_SCOPE_STALE");
+    const shardOutput = storyAuthority.outputs[index];
+    if (!Array.isArray(shardOutput)) fail("STORY_OUTPUT_INVALID");
+    sameIds(shardOutput.map((record) => record?.story?.key), input.unitIds, "STORY_OWNER_SCOPE_STALE");
+  }
+  sameIds([...seenOwners], ownerIds, "STORY_OWNER_SCOPE_STALE");
+  sameIds([...seenUnits], [...unitOwner.keys()], "STORY_SCOPE_STALE");
 }
 
 function composeInsight(output, base, complete, storyKeys) {
@@ -282,7 +323,20 @@ async function finalize(args) {
     invalid: "FILE_UNREADABLE", changed: "FILE_CHANGED", jsonInvalid: "JSON_INVALID",
   });
   const semanticUnitIds = semantic.units.map((unit) => unit.id).sort(utf8);
-  const rows = finalCandidates(await jsonFile(resolve(candidatesPath)));
+  let rows = finalCandidates(await jsonFile(resolve(candidatesPath)));
+  const storyAuthority = await readLaneAuthority(shardRootInput, "story");
+  const validationAuthority = await readStoryValidationAuthority(storyAuthority);
+  if (canonicalAuthorityJson(validationAuthority.semanticManifest) !== canonicalAuthorityJson(semantic)) {
+    fail("STORY_INPUT_STALE");
+  }
+  validateFinalStoryOwnerAuthority(storyAuthority, validationAuthority);
+  const sourceEvidence = new Map(validationAuthority.evidence.map((row) => [row.id, row]));
+  rows = [...rows].sort((left, right) => {
+    const a = sourceEvidence.get(left.story.evidence.primary.eventId);
+    const b = sourceEvidence.get(right.story.evidence.primary.eventId);
+    if (!a || !b) fail("FINAL_STORY_IDENTITIES_INVALID");
+    return compareStorySourceIdentity(a, b);
+  });
   const sourceRows = rows.map(({ story, ...row }) => row);
   const validationRows = rows.map(({ story, ...row }) => ({
     ...row,
@@ -311,12 +365,6 @@ async function finalize(args) {
     await jsonFile(resolve(preferencePath)), workflowRunId, sourceRevision,
     preferenceInputDigest, evidence, evidenceIds,
   );
-  const storyAuthority = await readLaneAuthority(shardRootInput, "story");
-  const validationAuthority = await readStoryValidationAuthority(storyAuthority);
-  if (canonicalAuthorityJson(validationAuthority.semanticManifest) !== canonicalAuthorityJson(semantic)) {
-    fail("STORY_INPUT_STALE");
-  }
-  sameIds(storyAuthority.manifest.unitIds, semanticUnitIds, "STORY_SCOPE_STALE");
   composeStory([storyAuthority.output], base, "STORY");
   if (storyAuthority.outputCount !== base.length) fail("STORY_RECEIPT_STALE");
   const storyValidation = validateStorySourcePackage(

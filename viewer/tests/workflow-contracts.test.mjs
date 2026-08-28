@@ -256,11 +256,12 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
     sop,
   ].join("\n");
 
-  assert.match(productContract, /public deterministic Story input preparation/i);
+  assert.match(productContract, /public deterministic (?:owner-atomic )?Story input preparation/i);
   assert.match(productContract, /immutable input digests/i);
   assert.match(productContract, /bounded[\s\S]{0,40}worker input/i);
   assert.match(productContract, /dependent passes for Story writing and Insight reasoning[\s\S]{0,100}sibling Story Privacy and Preference-question passes/i);
-  assert.match(productContract, /recorder validates[\s\S]{0,160}input digest[\s\S]{0,420}atomic immutable pair/);
+  assert.match(productContract, /recorder validates[\s\S]{0,160}input digest/);
+  assert.match(productContract, /one Story batch[\s\S]{0,160}unchanged Viewer `validateStorySourcePackage`[\s\S]{0,180}atomic records-directory rename/i);
   assert.match(productContract, /composed launcher requires coverage, Story candidates, a deterministic Preference bundle/i);
   assert.match(productContract, /Exact union,[\s\S]{0,80}no foreign identities[\s\S]{0,100}executable checks/);
   assert.match(productContract, /No worker may silently expand scope[\s\S]{0,80}repair another lane/i);
@@ -301,4 +302,61 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
   assert.match(sop, /--preference-bundle/);
   assert.match(sop, /--preparation-manifest/);
   assert.doesNotMatch(sop, /tools[\\/]llm_redact[\\/]push_probes\.py/);
+});
+
+test("Story public transport is owner-atomic, phase-free, and globally recorded", async () => {
+  const [
+    agents,
+    sop,
+    storySkill,
+    storyDataContract,
+    storyTransport,
+    productContract,
+    checklist,
+    preparer,
+    recorder,
+  ] = await Promise.all([
+    read("AGENTS.md"),
+    read("SOP.md"),
+    read("skills/oxygen-storytelling-review/SKILL.md"),
+    read("skills/oxygen-storytelling-review/references/story-data-contract.md"),
+    read("skills/oxygen-storytelling-review/references/story-preparation-transport.md"),
+    read("skills/oxygen-storytelling-review/references/product-contract.md"),
+    read("skills/oxygen-storytelling-review/references/validation-checklist.md"),
+    read("skills/oxygen-storytelling-review/scripts/prepare_story_preparation.mjs"),
+    read("skills/oxygen-storytelling-review/scripts/record_story_preparation.mjs"),
+  ]);
+  const publicContracts = [
+    agents,
+    sop,
+    storySkill,
+    storyDataContract,
+    storyTransport,
+    productContract,
+    checklist,
+  ].join("\n");
+
+  assert.match(publicContracts, /finalized Coverage `ownerId`[^\n]{0,100}(?:sole|only)[^\n]{0,80}(?:owner|ownership)/i);
+  assert.match(publicContracts, /complete owner[- ]atomic Story bundles/i);
+  assert.match(publicContracts, /one owner never spans (?:workers|shards)/i);
+  assert.match(publicContracts, /shard may contain multiple owners/i);
+  assert.match(publicContracts, /phase-free Story proposal/i);
+  assert.match(publicContracts, /parent does not write Story prose/i);
+  assert.match(publicContracts, /(?:complete|every phase-free)[^\n]{0,80}(?:Story )?proposal[^\n]{0,80}(?:before|collected before)[^\n]{0,80}(?:receipt|authority)/i);
+  assert.match(publicContracts, /one Story batch recorder/i);
+  assert.match(publicContracts, /exactly one receipt per (?:expected )?shard/i);
+  assert.match(publicContracts, /Insight remains a separate later pass/i);
+  assert.match(publicContracts, /Static tests prove contracts and authority behavior, not\s+actual host-subagent spawning; that requires later E2E evidence/i);
+
+  for (const document of [sop, storyTransport]) {
+    assert.match(document, /"\$Transport" story "\$StoryProposals" "\$StoryPhases"[\s\S]{0,80}--correction-attempt-count 0/);
+    assert.doesNotMatch(document, /"\$Transport" story "<manifest-shard-id>" "<proposal-path>"/);
+  }
+
+  assert.doesNotMatch(preparer, /MAX_STORY_PREPARATION_SHARD_IDENTITIES/);
+  assert.match(preparer, /ownerBundles/);
+  assert.match(preparer, /STORY_OWNER_BUNDLE_TOO_LARGE/);
+  assert.match(recorder, /STORY_PROPOSAL_PARENT_FIELD_FORBIDDEN/);
+  assert.match(recorder, /PARTIAL_BATCH_REJECTED/);
+  assert.match(recorder, /validateStorySourcePackage/);
 });

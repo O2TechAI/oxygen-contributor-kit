@@ -18,13 +18,18 @@ Write for a technically curious reader. Make the supported arc engaging by quick
 
 ## Story Generation Order
 
+For a Story worker assignment, return complete phase-free Chapter proposals for the exact Coverage
+owners in the generated input. Do not author schema, Chapter keys, Phase, Coverage, exclusions,
+receipts, or authority. The workflow-owning parent orders the complete accepted Chapter set with
+the production comparator and assigns Phase once before global validation.
+
 Use these conceptual passes inside Build Project Story:
 
 1. Read the complete bounded semantic-unit projection and progressively inspect exact Evidence.
 2. Disposition every semantic unit and determine coherent Chapter narrative arcs.
 3. Write the complete ordered Chapter and Project Story narrative.
 4. Verify continuity, chronology, attribution, Evidence, causal restraint, Privacy, and uncertainty.
-5. Group adjacent Chapters into precise one- or two-word Phases.
+5. Verify the complete phase-free Chapter proposals for the assigned Coverage owners.
 6. After the complete Story is understood, identify independently warranted learning moments.
 7. Produce zero or more Insights.
 

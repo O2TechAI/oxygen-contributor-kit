@@ -124,6 +124,12 @@ timestamp -> documentId -> sequence -> row id
 
 Every Chapter key must be unique. Phases are assigned only after Chapters are complete and ordered. A Phase ID must occupy one contiguous Chapter range, use one consistent one- or two-word label, and avoid generic labels such as `Project Evolution`, `General Work`, `Other`, or `Later Stage`.
 
+Finalized Coverage `ownerId` is the sole Chapter-ownership source during preparation. Every
+represented unit for one owner belongs to one indivisible owner bundle and the final Chapter key is
+that exact owner ID. Story workers return phase-free authorable Chapter proposals. They do not
+author schema, keys, Phase, Coverage, exclusions, receipts, or authority. The parent assigns Phase
+only after every complete Chapter exists and has been ordered with the production comparator.
+
 `kind`, `transition`, and `chips` are optional presentation metadata. Emit `transition` only for an Evidence-supported before/after change. Emit at most 12 unique supported chips, each at most 200 characters. Absence is valid.
 
 ## People And Story Blocks
@@ -230,6 +236,13 @@ and redacted narrative from the canonical reviewed run, and persists no raw acto
 pre-redaction content. The recorder and finalizer call the exported Viewer
 `validateStorySourcePackage` directly; no transport-local People, Evidence, Phase, Coverage, or
 Insight-grounding validator substitutes for it.
+
+Story inputs contain complete owner-atomic bundles and no excluded narrative. The parent collects
+every expected proposal, injects canonical represented Coverage and the UTF-8-sorted exclusions,
+assigns Phase once, and invokes one complete Story batch recording boundary. No Story output or
+receipt exists until the full package passes the unchanged shared validator; all per-shard outputs
+and exactly one receipt per shard then install atomically. Insight remains a separate dependent
+pass.
 
 ## Activation Submission
 
