@@ -291,19 +291,17 @@ Completed-zero is a valid terminal result for the Insight and Preference lanes w
 Insight or valid question exists. The composed launcher transport now requires the deterministic
 Preference bundle and the `oxygen.story-preparation` manifest with coverage and Story candidates.
 It imports the exact bundle before it requests Review Story activation, and fails closed on missing,
-foreign, stale, malformed, or digest/count-mismatched authority. The Preference producer and
-preparation finalizer are composition dependencies of this isolated branch; their files are not
-present here and no fallback or stub replaces them.
+foreign, stale, malformed, or digest/count-mismatched authority. The tracked Story preparer,
+recorder, existing Preference producer, and preparation finalizer create and bind those files.
 
-Master-owned semantic work must start from deterministic input preparation, an immutable input
-digest, explicit unit IDs, and byte/content-balanced shard manifests. The desired design uses
-separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and
-Preference-question reasoning, with worker receipts, exact union coverage, no overlap,
-deterministic deduplication/composition, and fail-closed validation. The composed preparation
-finalizer validates and binds the four terminal receipts to activation. Exact union/no-overlap across
-worker shards remains a finalizer composition dependency; do not claim it from this launcher alone.
-Revision authority remains with the owning Agent/server lane; no worker may silently expand scope
-or repair another lane.
+Master-owned semantic work starts with the public deterministic preparer. It accepts the canonical
+Organization project map or bare semantic manifest through one bounded parser, freezes the exact
+assigned identities and input digest, and installs immutable provider-safe worker input before a
+proposal exists. Separate dependent workers write only Story, Insight, Story Privacy, or Preference
+proposals. The public recorder validates the lane-specific contract and installs output plus receipt
+as one atomic immutable pair. Final composition proves exact union, no overlap, no foreign or stale
+identity, deterministic ordering, and explicit completed-zero. Revision authority remains with the
+owning Agent/server lane; no worker may silently expand scope or repair another lane.
 
 Coverage draft rows use only `{unitId, disposition, ownerId}` for represented units or
 `{unitId, disposition, exclusionReason}` for excluded units. After successful activation, the exact
@@ -407,18 +405,76 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
 node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
   "$Review\project-map.json" `
   "$Review\story-coverage-draft.json" `
-  "$Review\story-coverage-manifest.json"
+  "$Review\story-coverage-manifest.json" `
+  --source-privacy "$Review\current-public-source-privacy.json"
 ```
 
 ## Composition sequence (implemented transport)
 
-1. Prepare Preference context.
-2. Produce bounded Agent candidates.
-3. Produce the deterministic Preference bundle.
-4. Run the preparation finalizer.
+Use one transport root and the current Viewer source revision:
 
-The producer and finalizer arrive from parallel composition lanes and are intentionally not stubbed
-in this isolated launcher branch.
+```powershell
+$Transport = "$Review\story-preparation"
+$SourceRevision = 0 # Replace with the current source revision reported by this Viewer run.
+
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare story "$Review\project-map.json" `
+  "$Review\story-coverage-manifest.json" `
+  "$Review\current-public-source-privacy.json" `
+  "$Review" "$Transport"
+# Bounded Story worker: generated input -> $Review\story-proposal.json
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" story story-0001 "$Review\story-proposal.json"
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  compose story "$Transport" "$Review\story-base-candidates.json"
+
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare insight "$Review\story-base-candidates.json" "$Transport"
+# Bounded Insight worker: generated input -> $Review\insight-proposal.json
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" insight insight-0001 "$Review\insight-proposal.json"
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  compose final "$Transport" "$Review\story-candidates.json"
+
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare story_privacy "$Review\story-candidates.json" "$Transport"
+# Bounded Story Privacy worker: generated input -> $Review\story-privacy-proposal.json
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" story_privacy story-privacy-0001 "$Review\story-privacy-proposal.json"
+
+python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference_context.py `
+  --story-candidates "$Review\story-candidates.json" `
+  --redacted "$Redaction\redacted" --privacy-report "$Redaction\report.json" `
+  --output "$Review\preference-context.json"
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare preference "$Review\story-candidates.json" `
+  "$Review\preference-context.json" "$Transport"
+# Bounded Preference worker: generated input -> $Review\preference-candidates.json
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
+  --context "$Review\preference-context.json" `
+  --candidates "$Review\preference-candidates.json" `
+  --workflow-run-id "$WorkflowRun" --source-revision $SourceRevision `
+  --output "$Review\preference-bundle.json"
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" preference preference-0001 "$Review\preference-bundle.json"
+
+node .\skills\oxygen-storytelling-review\scripts\finalize_story_preparation.mjs `
+  "$Review\project-map.json" "$Review\story-candidates.json" "$Transport" `
+  "$Review\preference-bundle.json" "$Review\story-preparation-manifest.json" `
+  --workflow-run-id "$WorkflowRun" --source-revision $SourceRevision
+```
+
+The Story and Insight passes are dependent. Story Privacy and Preference become sibling-ready only
+after final Story composition and may then run in either order. Workers never write receipts or
+digests; the recorder owns those fields. See the Story Skill transport reference for the exact
+lane proposal shapes.
+
+Story preparation freezes one minimal validation-authority bundle from the exact reviewed source
+generation, current semantic manifest, and current Coverage manifest. It projects private actor
+identity to equality-only tokens and applies current final Source Privacy redactions before any
+narrative reaches a worker input. The Story recorder and preparation finalizer both call the
+unchanged Viewer `validateStorySourcePackage`; a complete Story failure creates no receipt, and a
+forged or stale pair cannot create terminal preparation authority.
 
 With those four artifacts produced and validated, launcher ready is:
 
@@ -498,17 +554,26 @@ completed-zero batch before review.
    mutually exclusive, evidence-grounded choices, plus “Something else” and “Nothing worth
    recording here.”
 6. Present all probes as one batch. Do not interrupt the contributor once per event.
-7. Write `work/<run>-review/preference-probes.json` and validate it:
+7. Write the exact three-field `preference-candidates.json`, then use the existing Preference
+   producer to create the nine-field bundle. The full copyable commands are in the implemented
+   composition sequence above.
 
 ```bash
 python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py \
-  work/<run>-review
+  --context work/<run>-review/preference-context.json \
+  --candidates work/<run>-review/preference-candidates.json \
+  --workflow-run-id <run-id> --source-revision <current-source-revision> \
+  --output work/<run>-review/preference-bundle.json
 ```
 
 Native Windows PowerShell equivalent:
 
 ```powershell
-python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py "$Review"
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
+  --context "$Review\preference-context.json" `
+  --candidates "$Review\preference-candidates.json" `
+  --workflow-run-id "$WorkflowRun" --source-revision $SourceRevision `
+  --output "$Review\preference-bundle.json"
 ```
 
 Only explicit answers become checklist preferences. Unanswered and skipped probes produce no

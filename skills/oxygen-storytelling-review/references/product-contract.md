@@ -22,9 +22,13 @@ The implemented authority sequence is:
 
 ```text
 reviewed input boundary
--> provider/model drafting outside the launcher
--> `oxygen.story:` candidate rows
--> coverage finalizer output
+-> finalized current coverage authority
+-> public deterministic Story input preparation
+-> recorded bounded Story worker result
+-> public deterministic Insight input preparation
+-> recorded bounded Insight result and composed `oxygen.story:` candidate rows
+-> recorded Story Privacy result and exact Preference producer bundle
+-> preparation finalizer output
 -> workflow activation POST
 -> `oxygen.story-review-session`
 -> server reconstruction of `oxygen.reviewed-story`
@@ -61,19 +65,32 @@ Opening Project Story for human review requires terminal results for Story gener
 The composed launcher requires coverage, Story candidates, a deterministic Preference bundle, and
 an `oxygen.story-preparation` manifest at `--story-event ready`. It validates the exact four
 terminal receipts and imports the unchanged Preference bundle before requesting Review Story.
-The Preference producer and preparation finalizer are composition dependencies of this isolated
-branch, not local stubs or fallback paths.
+The tracked Story preparer and recorder create immutable worker inputs and atomic terminal
+output/receipt pairs. The existing Preference producer remains the sole nine-field bundle
+authority; the Preference recorder binds its exact output.
 
 Preference questions must be generated before Project Story human review opens by using reusable lessons represented by generated Insight candidates. Generated questions are not confirmed preferences; answers exist only after explicit contributor action.
 
 ## Bounded Semantic Workers
 
-Parallel semantic work is Master-owned. The owning Agent prepares deterministic inputs, computes one immutable input digest, assigns explicit semantic unit IDs, and writes byte/content-balanced shard manifests before any worker starts.
+Semantic work is Master-owned. The owning Agent runs the public preparer before any worker starts;
+it computes immutable input digests, assigns the exact current identities, and installs the bounded
+worker input and shard manifest together.
 
-The desired worker contract uses separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning. Each worker returns a receipt naming the input digest, shard ID, unit IDs covered, output path, and terminal status. Exact union coverage, no overlap, no foreign unit IDs, no stale digest, deterministic deduplication, and deterministic composition remain required.
+The public worker contract uses separate dependent passes for Story writing and Insight reasoning,
+then sibling Story Privacy and Preference-question passes. Workers write only lane proposals. The
+recorder validates each proposal against the frozen lane, shard, input digest, and assigned
+identities. For Story, the frozen input also digest-binds the current semantic and Coverage
+authorities plus a privacy-safe evidence/actor-equivalence projection, and the recorder directly
+calls the unchanged Viewer `validateStorySourcePackage`. It then creates the output and receipt as
+one atomic immutable pair. Exact union, no
+overlap, no foreign identities, no stale digest, deterministic deduplication, and deterministic
+composition are executable checks.
 
-The composed preparation finalizer validates the receipt and activation binding. Do not claim exact
-union/no-overlap has been validated by this launcher alone. Revision authority, coverage
+The composed preparation finalizer independently revalidates the frozen inputs, receipts, output
+digests, exact union, lane dependency digests, final Story composition, the same complete shared
+Story validation, Preference bundle, and
+activation binding. Revision authority, coverage
 finalization, activation, human-pause enforcement, and release reconstruction stay outside worker
 scope. No worker may silently expand scope, reopen raw history, repair another lane, or treat
 another lane's failure as success.

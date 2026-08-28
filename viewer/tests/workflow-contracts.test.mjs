@@ -163,13 +163,13 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
     sop,
   ].join("\n");
 
-  assert.match(productContract, /deterministic input/i);
-  assert.match(productContract, /immutable input digest/i);
-  assert.match(productContract, /byte\/content-balanced shard manifests/i);
-  assert.match(productContract, /separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning/i);
-  assert.match(productContract, /worker returns a receipt[\s\S]{0,160}input digest[\s\S]{0,80}unit IDs covered/);
+  assert.match(productContract, /public deterministic Story input preparation/i);
+  assert.match(productContract, /immutable input digests/i);
+  assert.match(productContract, /bounded[\s\S]{0,40}worker input/i);
+  assert.match(productContract, /dependent passes for Story writing and Insight reasoning[\s\S]{0,100}sibling Story Privacy and Preference-question passes/i);
+  assert.match(productContract, /recorder validates[\s\S]{0,160}input digest[\s\S]{0,420}atomic immutable pair/);
   assert.match(productContract, /composed launcher requires coverage, Story candidates, a deterministic Preference bundle/i);
-  assert.match(productContract, /Do not claim exact\s+union\/no-overlap has been validated by this launcher alone/);
+  assert.match(productContract, /Exact union,[\s\S]{0,80}no foreign identities[\s\S]{0,100}executable checks/);
   assert.match(productContract, /No worker may silently expand scope[\s\S]{0,80}repair another lane/i);
   assert.doesNotMatch(productContract, /The owning Agent validates exact union coverage/);
 

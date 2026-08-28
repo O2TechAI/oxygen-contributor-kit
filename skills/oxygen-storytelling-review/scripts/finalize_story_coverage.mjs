@@ -3,37 +3,24 @@ import { randomUUID } from "node:crypto";
 import { open, rename, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
-  canonicalAuthorityJson,
   MAX_COVERAGE_MANIFEST_BYTES,
-  MAX_SEMANTIC_MANIFEST_BYTES,
   finalizeCoverageManifestAuthority,
 } from "../../../viewer/lib/story-readiness.ts";
 import {
   MAX_SOURCE_PRIVACY_AUTHORITY_BYTES,
   deriveCoveragePrivacyAuthority,
 } from "../../../viewer/lib/story-coverage-privacy-authority.ts";
-
-// A canonical project map carries the same bounded semantic membership twice:
-// the Organization proposal and the finalized manifest. One additional manifest
-// budget bounds deterministic JSON framing and the remaining project metadata.
-const MAX_PROJECT_MAP_BYTES = 3 * MAX_SEMANTIC_MANIFEST_BYTES;
-const PROJECT_MAP_MARKERS = [
-  "schema_version", "primary_project", "semantic_units", "source_authority",
-];
-const encoder = new TextEncoder();
+import {
+  MAX_PROJECT_MAP_BYTES,
+  StoryPreparationTransportError,
+  readStrictJson,
+  selectSemanticManifest,
+} from "./story_preparation_transport.mjs";
 
 class FinalizationError extends Error {}
 
 function fail(code) {
   throw new FinalizationError(code);
-}
-
-function isObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function owns(value, key) {
-  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 const arguments_ = process.argv.slice(2);
@@ -52,63 +39,6 @@ for (let index = 3; index < arguments_.length; index += 2) {
   if (option === "--source-privacy") sourcePrivacyPath = value;
   else if (option === "--previous") previousPath = value;
   else argumentsValid = false;
-}
-
-async function readStrictJson(path, maximumBytes, oversizedCode) {
-  let handle;
-  try {
-    handle = await open(resolve(path), "r");
-    const before = await handle.stat({ bigint: true });
-    if (!before.isFile()) fail("STORY_COVERAGE_INPUT_INVALID");
-    if (before.size > BigInt(maximumBytes)) fail(oversizedCode);
-    const bytes = await handle.readFile();
-    const after = await handle.stat({ bigint: true });
-    if (bytes.byteLength > maximumBytes) fail(oversizedCode);
-    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-      || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs
-      || BigInt(bytes.byteLength) !== after.size) {
-      fail("STORY_COVERAGE_INPUT_CHANGED");
-    }
-    let text;
-    try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      return { value: JSON.parse(text), byteLength: bytes.byteLength };
-    } catch {
-      fail("STORY_COVERAGE_JSON_INVALID");
-    }
-  } catch (error) {
-    if (error instanceof FinalizationError) throw error;
-    fail("STORY_COVERAGE_INPUT_INVALID");
-  } finally {
-    await handle?.close().catch(() => {});
-  }
-}
-
-function selectSemanticManifest(document, transportBytes) {
-  const record = isObject(document) ? document : null;
-  const declaresManifest = Boolean(record && owns(record, "semantic_manifest"));
-  const looksLikeProjectMap = Boolean(record && PROJECT_MAP_MARKERS.some((key) => owns(record, key)));
-  let semanticManifest = document;
-  if (declaresManifest || looksLikeProjectMap) {
-    if (!declaresManifest || !isObject(record.semantic_manifest)) {
-      fail("PROJECT_MAP_SEMANTIC_MANIFEST_INVALID");
-    }
-    semanticManifest = record.semantic_manifest;
-  } else if (transportBytes > MAX_SEMANTIC_MANIFEST_BYTES) {
-    // Preserve the bare-manifest transport behavior while allowing a larger wrapper.
-    fail("SEMANTIC_MANIFEST_TOO_LARGE");
-  }
-  let serialized;
-  try {
-    serialized = canonicalAuthorityJson(semanticManifest);
-  } catch {
-    fail("SEMANTIC_MANIFEST_INVALID");
-  }
-  if (typeof serialized !== "string") fail("SEMANTIC_MANIFEST_INVALID");
-  if (encoder.encode(serialized).byteLength > MAX_SEMANTIC_MANIFEST_BYTES) {
-    fail("SEMANTIC_MANIFEST_TOO_LARGE");
-  }
-  return semanticManifest;
 }
 
 async function writeUtf8Atomically(path, text) {
@@ -133,31 +63,27 @@ if (!argumentsValid || sourcePrivacyPath === null) {
   process.exitCode = 2;
 } else {
   try {
-    const semanticDocument = await readStrictJson(
-      semanticPath,
-      MAX_PROJECT_MAP_BYTES,
-      "PROJECT_MAP_TRANSPORT_TOO_LARGE",
-    );
+    const semanticDocument = await readStrictJson(semanticPath, MAX_PROJECT_MAP_BYTES, {
+      invalid: "STORY_COVERAGE_INPUT_INVALID",
+      changed: "STORY_COVERAGE_INPUT_CHANGED",
+      oversized: "PROJECT_MAP_TRANSPORT_TOO_LARGE",
+      jsonInvalid: "STORY_COVERAGE_JSON_INVALID",
+    });
     const semanticManifest = selectSemanticManifest(
       semanticDocument.value,
       semanticDocument.byteLength,
     );
-    const draft = (await readStrictJson(
-      draftPath,
-      MAX_COVERAGE_MANIFEST_BYTES,
-      "COVERAGE_MANIFEST_TOO_LARGE",
-    )).value;
-    const sourcePrivacy = (await readStrictJson(
-      sourcePrivacyPath,
-      MAX_SOURCE_PRIVACY_AUTHORITY_BYTES,
-      "SOURCE_PRIVACY_AUTHORITY_TOO_LARGE",
-    )).value;
+    const coverageCodes = (oversized) => ({
+      invalid: "STORY_COVERAGE_INPUT_INVALID", changed: "STORY_COVERAGE_INPUT_CHANGED",
+      oversized, jsonInvalid: "STORY_COVERAGE_JSON_INVALID",
+    });
+    const draft = (await readStrictJson(draftPath, MAX_COVERAGE_MANIFEST_BYTES,
+      coverageCodes("COVERAGE_MANIFEST_TOO_LARGE"))).value;
+    const sourcePrivacy = (await readStrictJson(sourcePrivacyPath, MAX_SOURCE_PRIVACY_AUTHORITY_BYTES,
+      coverageCodes("SOURCE_PRIVACY_AUTHORITY_TOO_LARGE"))).value;
     const previous = previousPath
-      ? (await readStrictJson(
-          previousPath,
-          MAX_COVERAGE_MANIFEST_BYTES,
-          "COVERAGE_MANIFEST_TOO_LARGE",
-        )).value
+      ? (await readStrictJson(previousPath, MAX_COVERAGE_MANIFEST_BYTES,
+          coverageCodes("COVERAGE_MANIFEST_TOO_LARGE"))).value
       : null;
     // This provider-free boundary only projects the supplied semantic membership.
     // Server activation must revalidate every member/source digest before persistence.
@@ -199,7 +125,7 @@ if (!argumentsValid || sourcePrivacyPath === null) {
       coverageRows: submission.rows.length,
     }));
   } catch (error) {
-    console.error(error instanceof FinalizationError
+    console.error(error instanceof FinalizationError || error instanceof StoryPreparationTransportError
       ? error.message
       : "STORY_COVERAGE_FINALIZATION_FAILED");
     process.exitCode = 1;

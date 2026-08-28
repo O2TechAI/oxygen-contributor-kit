@@ -215,6 +215,22 @@ node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \
   --previous work/<run>-review/story-coverage-manifest.accepted.json
 ```
 
+## Public Story Preparation
+
+The canonical project map and bare semantic manifest enter Story preparation through the same
+bounded parser used by Coverage. Run the public prepare, record, and compose commands in
+[story-preparation-transport.md](story-preparation-transport.md). The Story worker returns only base
+Stories with empty `insights`; the dependent Insight worker returns Story-keyed Insight arrays.
+The deterministic composer, not the caller, creates the final two-field candidate rows below.
+Receipts and authority digests are recorder-owned and must never be handwritten.
+
+Before Story preparation, finalize Coverage. The Story preparer binds that exact authority to the
+same semantic generation and current public Source Privacy state, derives equality-only actor facts
+and redacted narrative from the canonical reviewed run, and persists no raw actor identity or
+pre-redaction content. The recorder and finalizer call the exported Viewer
+`validateStorySourcePackage` directly; no transport-local People, Evidence, Phase, Coverage, or
+Insight-grounding validator substitutes for it.
+
 ## Activation Submission
 
 `story-candidates.json` is a bounded array containing only:

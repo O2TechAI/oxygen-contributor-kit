@@ -108,6 +108,7 @@ test("the Story Skill Routed References table keeps stage-local links and gates"
   for (const reference of [
     "product-contract.md",
     "story-data-contract.md",
+    "story-preparation-transport.md",
     "privacy-evidence-boundary.md",
     "narrative-writing-contract.md",
   ]) assert.match(build.load, new RegExp(reference.replace(".", "\\.")));
