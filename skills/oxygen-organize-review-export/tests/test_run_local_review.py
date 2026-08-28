@@ -194,11 +194,37 @@ def file_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path):
         test_case.skipTest(f"file link creation is unavailable: {error.__class__.__name__}")
 
 
-def write_viewer_state(runtime_root: Path, rows: list[tuple[str, bytes]]) -> Path:
+def create_workflow_runs(connection, count: int = 1) -> None:
+    connection.execute("""
+        CREATE TABLE workflow_runs (
+            id TEXT PRIMARY KEY, target_confirmed INTEGER NOT NULL,
+            collection_status TEXT NOT NULL, collection_completed INTEGER NOT NULL,
+            collection_total INTEGER NOT NULL, story_generation_status TEXT NOT NULL,
+            story_generation_completed INTEGER NOT NULL, story_generation_total INTEGER NOT NULL,
+            story_source_revision INTEGER NOT NULL, active_story_digest TEXT,
+            blocker_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        )
+    """)
+    connection.executemany(
+        "INSERT INTO workflow_runs VALUES (?, 1, 'pending', 0, 0, 'not_started', 0, 0, 0, NULL, NULL, ?, ?)",
+        [
+            (f"workflow-{index}", "2026-08-28T00:00:00Z", "2026-08-28T00:00:00Z")
+            for index in range(count)
+        ],
+    )
+
+
+def write_viewer_state(
+    runtime_root: Path,
+    rows: list[tuple[str, bytes]],
+    *,
+    workflow_count: int = 1,
+) -> Path:
     state = runtime_root / "state"
     state.mkdir(parents=True)
     database = state / "oxygen.sqlite"
     with closing(sqlite3.connect(database)) as connection:
+        create_workflow_runs(connection, workflow_count)
         connection.execute(
             "CREATE TABLE persisted_state (authority TEXT PRIMARY KEY, value BLOB NOT NULL)"
         )
@@ -336,6 +362,44 @@ class LauncherUnitTest(unittest.TestCase):
                     self.assertNotIn(session.name, message)
                     self.assertNotIn("private raw content", message)
 
+    def test_integrity_valid_non_oxygen_and_invalid_workflow_identity_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions = {}
+
+            for name in ("missing-table", "arbitrary-valid"):
+                session = root / name
+                (session / "state").mkdir(parents=True)
+                with closing(sqlite3.connect(session / "state" / "oxygen.sqlite")) as connection:
+                    connection.execute("CREATE TABLE unrelated (value TEXT)")
+                    connection.commit()
+                sessions[name] = session
+
+            missing_columns = root / "missing-columns"
+            (missing_columns / "state").mkdir(parents=True)
+            with closing(
+                sqlite3.connect(missing_columns / "state" / "oxygen.sqlite")
+            ) as connection:
+                connection.execute("CREATE TABLE workflow_runs (id TEXT PRIMARY KEY)")
+                connection.execute("INSERT INTO workflow_runs VALUES ('not-oxygen')")
+                connection.commit()
+            sessions["missing-columns"] = missing_columns
+
+            for name, count in (("zero-rows", 0), ("multiple-rows", 2)):
+                session = root / name
+                (session / "state").mkdir(parents=True)
+                with closing(sqlite3.connect(session / "state" / "oxygen.sqlite")) as connection:
+                    create_workflow_runs(connection, count)
+                    connection.commit()
+                sessions[name] = session
+
+            for name, session in sessions.items():
+                with self.subTest(name=name), self.assertRaisesRegex(
+                    SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$"
+                ) as error:
+                    MODULE.validate_viewer_state(session)
+                self.assertEqual(str(error.exception), MODULE.VIEWER_STATE_INVALID)
+
     def test_existing_save_destination_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -394,6 +458,83 @@ class LauncherUnitTest(unittest.TestCase):
                     save_ready=True,
                 )
         save.assert_not_called()
+
+    def test_original_failure_survives_later_save_failure_as_safe_warning(self):
+        order = []
+        stderr = io.StringIO()
+
+        def fail_save(*_args):
+            order.append("save-failed")
+            raise RuntimeError("private SQLite path and content")
+
+        with (
+            mock.patch.object(
+                MODULE, "terminate_process_group", side_effect=lambda _process: order.append("stop")
+            ),
+            mock.patch.object(
+                MODULE, "wait_for_port_release", side_effect=lambda _port: order.append("released")
+            ),
+            mock.patch.object(
+                MODULE,
+                "save_viewer_state",
+                side_effect=fail_save,
+            ),
+            mock.patch("sys.stderr", stderr),
+        ):
+            with self.assertRaisesRegex(SystemExit, "^ORIGINAL_WORKFLOW_FAILURE$"):
+                try:
+                    raise SystemExit("ORIGINAL_WORKFLOW_FAILURE")
+                finally:
+                    MODULE.stop_owned_viewer(
+                        mock.sentinel.process,
+                        3210,
+                        runtime_root=Path("private-runtime"),
+                        save_destination=Path("private-session"),
+                        save_ready=True,
+                        preserve_active_failure=sys.exc_info()[0] is not None,
+                    )
+
+        self.assertEqual(order, ["stop", "released", "save-failed"])
+        self.assertEqual(
+            stderr.getvalue(), f"Warning: {MODULE.VIEWER_STATE_SAVE_FAILED}\n"
+        )
+        self.assertNotIn("private", stderr.getvalue().lower())
+        self.assertNotIn("sqlite", stderr.getvalue().lower())
+
+    def test_save_failure_without_earlier_failure_is_terminal_and_safe(self):
+        order = []
+        stderr = io.StringIO()
+
+        def fail_save(*_args):
+            order.append("save-failed")
+            raise RuntimeError("private SQLite path and content")
+
+        with (
+            mock.patch.object(
+                MODULE, "terminate_process_group", side_effect=lambda _process: order.append("stop")
+            ),
+            mock.patch.object(
+                MODULE, "wait_for_port_release", side_effect=lambda _port: order.append("released")
+            ),
+            mock.patch.object(
+                MODULE, "save_viewer_state",
+                side_effect=fail_save,
+            ),
+            mock.patch("sys.stderr", stderr),
+        ):
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_SAVE_FAILED)}$"
+            ):
+                MODULE.stop_owned_viewer(
+                    mock.sentinel.process,
+                    3210,
+                    runtime_root=Path("private-runtime"),
+                    save_destination=Path("private-session"),
+                    save_ready=True,
+                )
+
+        self.assertEqual(order, ["stop", "released", "save-failed"])
+        self.assertEqual(stderr.getvalue(), "")
 
     def test_save_failure_does_not_leak_raw_path_or_content(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -461,6 +602,7 @@ class LauncherUnitTest(unittest.TestCase):
                 save_destination=None,
                 workflow_run_id=None,
                 save_ready=True,
+                preserve_active_failure=False,
             )
 
     def test_save_cli_passes_established_workflow_to_post_release_save(self):
@@ -503,14 +645,19 @@ class LauncherUnitTest(unittest.TestCase):
                 save_destination=destination.resolve(),
                 workflow_run_id="run-saved",
                 save_ready=True,
+                preserve_active_failure=False,
             )
 
     def test_invalid_resume_fails_before_dependencies_listener_or_runtime(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            sessions = [root / "missing", root / "corrupt"]
+            sessions = [root / "missing", root / "corrupt", root / "wrong-valid"]
             (sessions[1] / "state").mkdir(parents=True)
             (sessions[1] / "state" / "oxygen.sqlite").write_bytes(b"private invalid bytes")
+            (sessions[2] / "state").mkdir(parents=True)
+            with closing(sqlite3.connect(sessions[2] / "state" / "oxygen.sqlite")) as connection:
+                connection.execute("CREATE TABLE unrelated (value TEXT)")
+                connection.commit()
             for session in sessions:
                 with (
                     self.subTest(session=session.name),

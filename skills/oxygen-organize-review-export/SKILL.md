@@ -137,9 +137,22 @@ package, publish, or change `publication_approved`.
 
 ## Continue the same progress-first Viewer
 
-The normal workflow already launched Workflow Progress before collection and retained its exact
-Viewer origin and stable workflow run ID. After `project-map.json` exists, attach the ingest run to
-that same process-owned Viewer state:
+Every owned E2E/local-review launch that reaches a usable Viewer must select a fresh, external,
+private `.old` session directory and pass `--save-state`. The directory must not already exist.
+For example, the progress-first launch before collection is:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --target /path/to/repo --save-state /external/private/.old/oxygen-session-<fresh-id>
+```
+
+Keep the exact selected session path. The launcher saves blocked, pending, partially reviewed, or
+complete Viewer state only after the owned Viewer stops and releases its port. The final Agent
+report must repeat the exact path printed by the launcher. If no Viewer/database was created, do
+not claim that a session was saved.
+
+The normal workflow retains the exact Viewer origin and stable workflow run ID while it is running.
+After `project-map.json` exists, attach the ingest run to that same process-owned Viewer state:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run> \
@@ -163,24 +176,39 @@ When the reattach changes only organization or staged Story metadata, the Viewer
 completed Privacy pass because its reviewed source identity is unchanged. Any source-bearing item
 change marks that pass stale and requires Privacy to complete again before Story activation.
 
-For a downstream reviewed-artifact resume that already satisfies the same canonical plural
-meeting contract, the launcher accepts the run directly and starts a fresh Viewer:
+For a downstream reviewed artifact that already satisfies the same canonical plural meeting
+contract, the launcher accepts the run directly and starts a fresh Viewer. This is also an owned
+launch and therefore requires a new external session destination:
 
 ```bash
-python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run>
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run> \
+  --save-state /external/private/.old/oxygen-session-<fresh-id>
 ```
 
-Direct resume starts after collection and therefore must not be claimed as a complete
-progress-first Toolkit run or as an alternate input contract.
+This direct reviewed-artifact launch starts after collection and therefore must not be claimed as
+a complete progress-first Toolkit run or as an alternate input contract.
 
 On native Windows and Linux/WSL it also verifies Node/npm and the platform-specific dependency
 installation, rebuilding incompatible modules with `npm ci`. Windows resolution uses the real
-`npm.cmd` command and rejects POSIX-only shims. Every official launcher invocation uses native Next
-and receives one fresh process-owned temporary local SQLite database. The Viewer owns cleanup when
-it stops; there is no online deployment path.
+`npm.cmd` command and rejects POSIX-only shims. A new owned launch uses native Next and a fresh
+process-owned temporary state directory. With `--save-state`, the launcher stops the Viewer,
+releases the port, verifies SQLite integrity, and copies the complete Viewer-owned state into the
+selected session before temporary cleanup. There is no online deployment path.
 Without `--port`, the launcher reserves an OS-selected free `127.0.0.1` port and announces only
 the exact port that becomes healthy. Use `--port <number>` when a specific isolated port is
 required. An occupied port fails without killing its owner or choosing a fallback port.
+
+When Bruce later says `resume`, use only the exact previously reported path:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --resume-state /external/private/.old/oxygen-session-<exact-id>
+```
+
+Resume uses that same local state directly, so later human Review, Privacy, Preference, `All set`, or
+release progress remains durable there. Do not rerun collection, import, or Story preparation; do
+not infer completion or bypass an existing blocker. A saved session is a private local convenience,
+not an immutable archive or product authority, and it never changes `publication_approved=false`.
 
 ## Browser handoff is required
 
@@ -190,6 +218,8 @@ After the Viewer becomes ready:
 2. Tell the user the URL and that no password is required.
 3. If automatic opening fails, surface the exact URL clearly.
 4. Keep the process alive until the user finishes or asks to stop.
+5. After stop, report the exact saved-session path printed by the launcher. If saving did not occur,
+   report that fact without claiming a saved state.
 
 The atomic transition to Stage 5 Review Story is an immediate human handoff, not permission for an
 Agent or evaluator to review the Story first. The same Agent must surface the exact URL, state that

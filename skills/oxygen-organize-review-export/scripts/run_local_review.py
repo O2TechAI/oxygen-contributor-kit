@@ -59,6 +59,12 @@ VIEWER_RESPONSE_INVALID = "VIEWER_RESPONSE_INVALID: The local Viewer returned an
 VIEWER_STATE_INVALID = "VIEWER_STATE_INVALID: The saved Viewer state is missing or corrupt."
 VIEWER_STATE_EXISTS = "VIEWER_STATE_EXISTS: The saved Viewer state destination already exists."
 VIEWER_STATE_SAVE_FAILED = "VIEWER_STATE_SAVE_FAILED: The Viewer state could not be saved."
+WORKFLOW_SESSION_QUERY = """
+SELECT id, target_confirmed, collection_status, collection_completed, collection_total,
+       story_generation_status, story_generation_completed, story_generation_total,
+       story_source_revision, active_story_digest, blocker_code, created_at, updated_at
+FROM workflow_runs
+"""
 VIEWER_WORKFLOW_BLOCKERS = {
     400: "VIEWER_WORKFLOW_BLOCKED_HTTP_400: The local Viewer rejected the workflow request.",
     404: "VIEWER_WORKFLOW_BLOCKED_HTTP_404: The local Viewer rejected the workflow request.",
@@ -320,7 +326,10 @@ def validate_viewer_state(runtime_root: Path) -> Path:
         database_uri = f"{database.resolve(strict=True).as_uri()}?mode=ro"
         with closing(sqlite3.connect(database_uri, uri=True)) as connection:
             integrity = connection.execute("PRAGMA integrity_check").fetchall()
+            workflow_rows = connection.execute(WORKFLOW_SESSION_QUERY).fetchmany(2)
         if integrity != [("ok",)]:
+            raise sqlite3.DatabaseError
+        if len(workflow_rows) != 1:
             raise sqlite3.DatabaseError
     except (OSError, ValueError, sqlite3.Error):
         raise SystemExit(VIEWER_STATE_INVALID) from None
@@ -395,11 +404,17 @@ def stop_owned_viewer(
     save_destination: Path | None = None,
     workflow_run_id: str | None = None,
     save_ready: bool = False,
+    preserve_active_failure: bool = False,
 ) -> None:
     terminate_process_group(process)
     wait_for_port_release(port)
     if save_destination is not None and save_ready:
-        save_viewer_state(runtime_root, save_destination, workflow_run_id)
+        try:
+            save_viewer_state(runtime_root, save_destination, workflow_run_id)
+        except (SystemExit, Exception):
+            if not preserve_active_failure:
+                raise SystemExit(VIEWER_STATE_SAVE_FAILED) from None
+            print(f"Warning: {VIEWER_STATE_SAVE_FAILED}", file=sys.stderr, flush=True)
 
 
 def viewer_command(port: int, npm: str = "npm") -> list[str]:
@@ -1609,6 +1624,7 @@ def main():
                 save_destination=save_destination,
                 workflow_run_id=workflow_run_id,
                 save_ready=viewer_ready,
+                preserve_active_failure=sys.exc_info()[0] is not None,
             )
 
 
