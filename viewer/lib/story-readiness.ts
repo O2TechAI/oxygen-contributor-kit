@@ -178,22 +178,9 @@ export const MAX_STORY_SEMANTIC_PROJECTION_BYTES = 325_000;
 export const MAX_COVERAGE_MANIFEST_BYTES = 250_000;
 export const MAX_SEMANTIC_EVIDENCE_ITEM_BYTES = 400_000;
 
-export const SEMANTIC_UNIT_KINDS = [
-  "discussion",
-  "decision_episode",
-  "failed_attempt",
-  "experiment",
-  "correction",
-  "handoff",
-  "review_cycle",
-  "progression",
-  "routine",
-  "duplicate",
-] as const;
-
 export const COVERAGE_EXCLUSION_REASONS = STORY_SEMANTIC_EXCLUSION_REASONS;
 
-export type SemanticUnitKind = typeof SEMANTIC_UNIT_KINDS[number];
+export type SemanticUnitKind = string;
 export type CoverageExclusionReason = typeof COVERAGE_EXCLUSION_REASONS[number];
 
 export type SemanticUnitAuthority = {
@@ -261,6 +248,7 @@ export type CoverageManifestAuthority = {
 export type SemanticManifestFailureCode =
   | "SEMANTIC_MANIFEST_INVALID"
   | "SEMANTIC_MANIFEST_TOO_LARGE"
+  | "SEMANTIC_WORKER_KIND_INVALID"
   | "SEMANTIC_UNIT_LIMIT_EXCEEDED"
   | "SEMANTIC_UNIT_ID_DUPLICATED"
   | "SEMANTIC_MEMBER_MISSING"
@@ -292,8 +280,8 @@ export type CoverageManifestValidation =
   | { ok: true; authority: CoverageManifestAuthority }
   | { ok: false; code: CoverageManifestFailureCode };
 
-const semanticKinds = new Set<string>(SEMANTIC_UNIT_KINDS);
 const coverageReasons = new Set<string>(COVERAGE_EXCLUSION_REASONS);
+const semanticUnitKindPattern = /^[a-z][a-z0-9_]{0,63}$/;
 const authorityEncoder = new TextEncoder();
 const hexDigest = (value: unknown): value is string => typeof value === "string"
   && /^[0-9a-f]{64}$/.test(value);
@@ -500,11 +488,14 @@ export async function validateSemanticManifestAuthority(
       "membershipDigest", "duplicateOfUnitId", "storyProjection",
     ]) || !boundedAuthorityId(unit.id) || !positiveRevision(unit.revision)
       || unit.projectId !== manifest.projectId || typeof unit.kind !== "string"
-      || !semanticKinds.has(unit.kind) || !Array.isArray(unit.members)
+      || !Array.isArray(unit.members)
       || unit.members.length === 0 || !Number.isSafeInteger(unit.memberCount)
       || unit.memberCount !== unit.members.length || !hexDigest(unit.membershipDigest)
       || (unit.duplicateOfUnitId !== undefined && !boundedAuthorityId(unit.duplicateOfUnitId))) {
       return { ok: false, code: "SEMANTIC_MANIFEST_INVALID" };
+    }
+    if (!semanticUnitKindPattern.test(unit.kind)) {
+      return { ok: false, code: "SEMANTIC_WORKER_KIND_INVALID" };
     }
     if (unitIds.has(unit.id)) return { ok: false, code: "SEMANTIC_UNIT_ID_DUPLICATED" };
     unitIds.add(unit.id);

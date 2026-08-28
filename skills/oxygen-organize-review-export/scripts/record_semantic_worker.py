@@ -7,7 +7,13 @@ import json
 from pathlib import Path
 import sys
 
-from build_project_map import assert_literal_physical_path, atomic_write_json, digest, read_object
+from build_project_map import (
+    SEMANTIC_WORKER_KIND_INVALID,
+    assert_literal_physical_path,
+    atomic_write_json,
+    digest,
+    read_object,
+)
 from finalize_semantic_units import contained_relative, proposal
 
 TOOLS_ROOT = Path(__file__).resolve().parents[3] / "tools"
@@ -31,6 +37,12 @@ def record(root: Path, shard_id: str, proposal_path: Path) -> dict:
     if len(matches) != 1:
         raise ValueError("semantic worker shard identity is foreign or duplicated")
     shard = matches[0]
+    output_path = root / "outputs" / f"{shard_id}.json"
+    receipt_path = root / "receipts" / f"{shard_id}.json"
+    output_exists = output_path.exists() or output_path.is_symlink()
+    receipt_exists = receipt_path.exists() or receipt_path.is_symlink()
+    if output_exists != receipt_exists:
+        raise ValueError("immutable semantic worker artifact pair is incomplete")
     assigned = set(shard["contributionIds"])
     raw = json.loads(proposal_path.read_text(encoding="utf-8"))
     if not isinstance(raw, list):
@@ -57,8 +69,8 @@ def record(root: Path, shard_id: str, proposal_path: Path) -> dict:
         "outputDigest": digest(output),
         "outputCount": len(raw),
     }
-    install_exact(root / "outputs" / f"{shard_id}.json", output)
-    install_exact(root / "receipts" / f"{shard_id}.json", receipt)
+    install_exact(output_path, output)
+    install_exact(receipt_path, receipt)
     return receipt
 
 
@@ -81,4 +93,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as error:
+        if str(error) == SEMANTIC_WORKER_KIND_INVALID:
+            raise SystemExit(SEMANTIC_WORKER_KIND_INVALID) from None
+        raise
