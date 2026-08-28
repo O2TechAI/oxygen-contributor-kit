@@ -35,11 +35,8 @@ from oxygen_utf8 import configure_utf8_stdio
 MAX_SEMANTIC_UNITS = 512
 MAX_SEMANTIC_MANIFEST_BYTES = 2_200_000
 MAX_STORY_SEMANTIC_PROJECTION_BYTES = 325_000
-SEMANTIC_UNIT_KINDS = {
-    "discussion", "decision_episode", "failed_attempt", "experiment",
-    "correction", "handoff", "review_cycle", "progression", "routine",
-    "duplicate",
-}
+SEMANTIC_WORKER_KIND_INVALID = "SEMANTIC_WORKER_KIND_INVALID"
+SEMANTIC_UNIT_KIND_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 SOURCE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}")
 CURRENT_PROJECT_MAP_KEYS = {
     "schema_version", "primary_project", "summary", "projects",
@@ -334,6 +331,10 @@ def bounded_text(value: Any, limit: int) -> bool:
     )
 
 
+def valid_semantic_unit_kind(value: Any) -> bool:
+    return isinstance(value, str) and SEMANTIC_UNIT_KIND_PATTERN.fullmatch(value) is not None
+
+
 def validate_previous_manifest(value: Any, project_id: str) -> dict[str, Any]:
     """Validate explicit revision lineage before it can influence new authority."""
     try:
@@ -374,6 +375,8 @@ def validate_previous_manifest(value: Any, project_id: str) -> dict[str, Any]:
         unit_id = raw.get("id")
         revision = raw.get("revision")
         members = raw.get("members")
+        if not valid_semantic_unit_kind(raw.get("kind")):
+            raise ValueError(SEMANTIC_WORKER_KIND_INVALID)
         if (
             not bounded_text(unit_id, 300)
             or unit_id in unit_ids
@@ -381,7 +384,6 @@ def validate_previous_manifest(value: Any, project_id: str) -> dict[str, Any]:
             or isinstance(revision, bool)
             or revision <= 0
             or raw.get("projectId") != project_id
-            or raw.get("kind") not in SEMANTIC_UNIT_KINDS
             or not isinstance(members, list)
             or not members
             or not isinstance(raw.get("memberCount"), int)
@@ -499,8 +501,10 @@ def finalize_units(
         members = raw.get("members")
         if not bounded_text(unit_id, 300) or unit_id in unit_ids:
             raise ValueError("semantic unit identity is invalid or duplicated")
-        if kind not in SEMANTIC_UNIT_KINDS or not isinstance(members, list) or not members:
-            raise ValueError(f"semantic unit kind or membership is invalid: {unit_id}")
+        if not valid_semantic_unit_kind(kind):
+            raise ValueError(SEMANTIC_WORKER_KIND_INVALID)
+        if not isinstance(members, list) or not members:
+            raise ValueError(f"semantic unit membership is invalid: {unit_id}")
         if not all(bounded_text(member, 300) for member in members):
             raise ValueError(f"semantic unit contains an invalid member: {unit_id}")
         normalized_members = sorted(members, key=lambda value: value.encode("utf-8"))
@@ -812,4 +816,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as error:
+        if str(error) == SEMANTIC_WORKER_KIND_INVALID:
+            raise SystemExit(SEMANTIC_WORKER_KIND_INVALID) from None
+        raise

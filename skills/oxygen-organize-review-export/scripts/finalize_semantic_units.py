@@ -11,13 +11,14 @@ import sys
 from typing import Any
 
 from build_project_map import (
-    SEMANTIC_UNIT_KINDS,
+    SEMANTIC_WORKER_KIND_INVALID,
     assert_literal_physical_path,
     atomic_write_json,
     bounded_text,
     canonical_project_map,
     digest,
     read_object,
+    valid_semantic_unit_kind,
     validate_current_project_map_skeleton,
 )
 from prepare_semantic_units import (
@@ -121,9 +122,10 @@ def proposal(value: Any, assigned: set[str]) -> dict[str, Any]:
         raise ValueError("worker unit proposal has unsupported or missing fields")
     unit_id = value["unitId"]
     contribution_ids = value["contributionIds"]
+    if not valid_semantic_unit_kind(value["kind"]):
+        raise ValueError(SEMANTIC_WORKER_KIND_INVALID)
     if (
         not stable_id(unit_id)
-        or value["kind"] not in SEMANTIC_UNIT_KINDS
         or not isinstance(contribution_ids, list) or not contribution_ids
         or any(not stable_id(member) for member in contribution_ids)
         or len(contribution_ids) != len(set(contribution_ids))
@@ -332,4 +334,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as error:
+        if str(error) == SEMANTIC_WORKER_KIND_INVALID:
+            raise SystemExit(SEMANTIC_WORKER_KIND_INVALID) from None
+        raise

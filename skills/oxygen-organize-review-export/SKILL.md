@@ -67,6 +67,13 @@ array at `handoffs/<shard-id>.proposals.json`. The Kit does not call a provider 
 prompts or responses. Semantic reasoning itself is performed by those external workers and is not
 provider-free.
 
+Each proposal requires `unitId`, `kind`, and the shard's UTF-8-ordered `contributionIds`.
+`kind` is an open machine label matching exactly `^[a-z][a-z0-9_]{0,63}$`; labels such as
+`direction_change`, `root_cause`, and domain-specific lower-snake-case values need no product-code
+registration. Never map an unrecognized label to a fallback. The reserved `duplicate` kind alone
+permits `duplicateOfUnitId`, which must name one direct non-duplicate unit. The reserved `routine`
+kind alone can later authorize the `routine_non_narrative` Coverage disposition.
+
 Record each terminal worker result without hand-editing generated authority:
 
 ```bash
@@ -80,6 +87,13 @@ python .\skills\oxygen-organize-review-export\scripts\record_semantic_worker.py 
   "work\<run>-organization" "<shard-id>" `
   "work\<run>-organization\handoffs\<shard-id>.proposals.json"
 ```
+
+A recorder validation failure is pre-receipt authoring feedback only when both
+`outputs/<shard-id>.json` and `receipts/<shard-id>.json` are absent. The external worker may then
+explicitly replace only its non-authoritative handoff proposal and resubmit it against the same
+immutable shard input. The recorder never retries, rewrites, maps, or repairs a proposal. Once an
+output or receipt exists, that durable authority is immutable; a differing resubmission fails
+closed and must not replace or repair either artifact.
 
 Workers may use the same stable `unitId` across shards. The deterministic composition stage merges
 those proposals, rejects conflicting metadata, and proves the exact global union. After every

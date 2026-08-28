@@ -193,6 +193,83 @@ def write_worker_results(output: Path, unit_for_id) -> None:
 
 
 class SemanticUnitTransportTests(unittest.TestCase):
+    def test_invalid_kind_can_be_explicitly_corrected_only_before_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / "run"
+            contribution_id = write_trajectory(run, "traj", ["one"])[0]
+            self.assertEqual(run_builder(run).returncode, 0)
+            semantic = root / "semantic"
+            prepared = prepare(run, semantic)
+            shard = prepared["manifest"]["shards"][0]
+            shard_id = shard["id"]
+            shard_input = semantic / shard["inputPath"]
+            input_before = shard_input.read_bytes()
+            proposal_path = semantic / "handoffs" / f"{shard_id}.proposals.json"
+            invalid_kind = "Direction Change RAW_KIND_SENTINEL"
+            proposal_path.write_text(json.dumps([{
+                "unitId": "unit-direction",
+                "kind": invalid_kind,
+                "contributionIds": [contribution_id],
+            }]), encoding="utf-8")
+            command = [
+                sys.executable, str(SCRIPTS / "record_semantic_worker.py"),
+                str(semantic), shard_id, str(proposal_path),
+            ]
+            rejected = subprocess.run(
+                command, capture_output=True, text=True, encoding="utf-8", check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertEqual(rejected.stderr.strip(), builder.SEMANTIC_WORKER_KIND_INVALID)
+            self.assertNotIn(invalid_kind, rejected.stderr)
+            self.assertNotIn("RAW_KIND_SENTINEL", rejected.stderr)
+            self.assertNotIn("Traceback", rejected.stderr)
+            output_path = semantic / "outputs" / f"{shard_id}.json"
+            receipt_path = semantic / "receipts" / f"{shard_id}.json"
+            self.assertFalse(output_path.exists())
+            self.assertFalse(receipt_path.exists())
+            self.assertEqual(shard_input.read_bytes(), input_before)
+
+            proposal_path.write_text(json.dumps([{
+                "unitId": "unit-direction",
+                "kind": "direction_change",
+                "contributionIds": [contribution_id],
+            }]), encoding="utf-8")
+            accepted = subprocess.run(
+                command, capture_output=True, text=True, encoding="utf-8", check=False,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertEqual(len(list((semantic / "outputs").glob("*.json"))), 1)
+            self.assertEqual(len(list((semantic / "receipts").glob("*.json"))), 1)
+            output_before = output_path.read_bytes()
+            receipt_before = receipt_path.read_bytes()
+            finalized = finalizer.finalize(run, semantic)
+            self.assertEqual(finalized["semantic_manifest"]["units"][0]["kind"],
+                             "direction_change")
+            self.assertEqual(finalized["semantic_manifest"]["units"][0]["memberCount"], 1)
+
+            proposal_path.write_text(json.dumps([{
+                "unitId": "unit-direction",
+                "kind": "root_cause",
+                "contributionIds": [contribution_id],
+            }]), encoding="utf-8")
+            immutable = subprocess.run(
+                command, capture_output=True, text=True, encoding="utf-8", check=False,
+            )
+            self.assertNotEqual(immutable.returncode, 0)
+            self.assertIn("immutable semantic worker artifact already differs", immutable.stderr)
+            self.assertEqual(output_path.read_bytes(), output_before)
+            self.assertEqual(receipt_path.read_bytes(), receipt_before)
+            self.assertEqual(shard_input.read_bytes(), input_before)
+
+    def test_cross_shard_matching_unit_ids_require_identical_open_kind_metadata(self):
+        proposals = [
+            {"id": "unit-shared", "kind": "laboratory_observation", "members": ["item-a"]},
+            {"id": "unit-shared", "kind": "supply_chain_exception", "members": ["item-b"]},
+        ]
+        with self.assertRaisesRegex(ValueError, "disagree on semantic authority"):
+            finalizer.compose(proposals, ["item-a", "item-b"])
+
     def test_current_ingest_sanitizer_closes_every_worker_secret_rule(self):
         unsafe = (
             list(generated_quoted_assignments())

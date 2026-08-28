@@ -14,6 +14,7 @@ import {
   canonicalAuthorityJson,
   contributionRecordSourceDigest,
   contributionSourceDigest,
+  finalizeCoverageManifestAuthority,
   projectSemanticManifestForStory,
   validateSemanticRevisionTransition,
   validateSemanticManifestAuthority,
@@ -176,6 +177,59 @@ test("semantic manifest is the exact disjoint union of the contribution universe
   ]);
 });
 
+test("semantic kind is an open lower-snake-case machine label", async () => {
+  const validKinds = [
+    "direction_change",
+    "root_cause",
+    "laboratory_observation",
+    "supply_chain_exception",
+  ];
+  for (const kind of validKinds) {
+    const ids = ["doc:event-1"];
+    const result = await validateSemanticManifestAuthority(
+      manifest(ids, [unit("unit-a", ids, { kind })]), contributionRecords(ids),
+    );
+    assert.equal(result.ok, true, kind);
+    assert.equal(result.authority.units[0].kind, kind);
+  }
+
+  const invalidKinds = [
+    "",
+    "Direction_change",
+    "1direction",
+    "direction-change",
+    "direction change",
+    "direction_\u0000change",
+    "a".repeat(65),
+  ];
+  for (const kind of invalidKinds) {
+    const ids = ["doc:event-1"];
+    const result = await validateSemanticManifestAuthority(
+      manifest(ids, [unit("unit-a", ids, { kind })]), contributionRecords(ids),
+    );
+    assert.deepEqual(result, { ok: false, code: "SEMANTIC_WORKER_KIND_INVALID" });
+  }
+});
+
+test("routine remains the only kind authorizing routine non-narrative coverage", async () => {
+  const ids = ["doc:event-1", "doc:event-2"];
+  const semantic = await validateSemanticManifestAuthority(manifest(ids, [
+    unit("unit-laboratory", [ids[0]], { kind: "laboratory_observation" }),
+    unit("unit-routine", [ids[1]], { kind: "routine" }),
+  ]), contributionRecords(ids));
+  assert.equal(semantic.ok, true);
+  const invalid = await finalizeCoverageManifestAuthority({ rows: [
+    { unitId: "unit-laboratory", disposition: "excluded", exclusionReason: "routine_non_narrative" },
+    { unitId: "unit-routine", disposition: "represented", ownerId: "chapter-a" },
+  ] }, semantic.authority);
+  assert.deepEqual(invalid, { ok: false, code: "COVERAGE_EXCLUSION_AUTHORITY_INVALID" });
+  const valid = await finalizeCoverageManifestAuthority({ rows: [
+    { unitId: "unit-laboratory", disposition: "represented", ownerId: "chapter-a" },
+    { unitId: "unit-routine", disposition: "excluded", exclusionReason: "routine_non_narrative" },
+  ] }, semantic.authority);
+  assert.equal(valid.ok, true);
+});
+
 test("missing, double-owned, unknown, and foreign members fail distinctly", async () => {
   const ids = ["doc:event-1", "doc:event-2"];
   const missingUnits = [unit("unit-a", [ids[0]])];
@@ -317,7 +371,7 @@ test("Python Organization finalizer and Viewer validator share one digest contra
     const shardId = shards.shards[0].id;
     const proposalPath = join(semanticRoot, "handoffs", `${shardId}.proposals.json`);
     writeFileSync(proposalPath, JSON.stringify([{
-      unitId: "unit-parity", kind: "discussion", contributionIds: [contributionId],
+      unitId: "unit-parity", kind: "direction_change", contributionIds: [contributionId],
     }]), "utf8");
     const receipt = spawnSync("python", [
       join(repository, "skills", "oxygen-organize-review-export", "scripts", "record_semantic_worker.py"),

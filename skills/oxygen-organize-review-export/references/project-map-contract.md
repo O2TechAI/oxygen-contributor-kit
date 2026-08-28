@@ -76,9 +76,12 @@ semantic reasoning is not provider-free. A proposal has only these fields:
 
 `duplicateOfUnitId` is allowed only for a `duplicate` unit and must name a current direct
 non-duplicate unit. `storyProjection` is optional; its label is at most 120 UTF-8 bytes and its
-summary at most 300 UTF-8 bytes. Allowed kinds are `discussion`, `decision_episode`,
-`failed_attempt`, `experiment`, `correction`, `handoff`, `review_cycle`, `progression`, `routine`,
-and `duplicate`.
+summary at most 300 UTF-8 bytes. `kind` is required and is an open machine label matching exactly
+`^[a-z][a-z0-9_]{0,63}$`. Ordinary labels including `direction_change`, `root_cause`,
+`laboratory_observation`, and industry-specific lower-snake-case values require no enum edit,
+registration, fallback, or compatibility mapping. `duplicate` is reserved for the direct
+duplicate topology above. `routine` is reserved as the only kind that can authorize the later
+`routine_non_narrative` Coverage disposition.
 
 Every shard contribution must occur exactly once across that worker's proposals. Use the same
 stable `unitId` in multiple shards when one semantic episode crosses shard boundaries. Do not use
@@ -102,6 +105,15 @@ python .\skills\oxygen-organize-review-export\scripts\record_semantic_worker.py 
 The receipt binds terminal status, shard ID, shard input digest, exact contribution IDs, output
 path, output digest, and output count. The recorder and finalizer make no provider, model, network,
 Viewer, or release call and do not store prompts or responses in product output.
+
+If proposal validation fails while both `outputs/<shard-id>.json` and
+`receipts/<shard-id>.json` are absent, the failure is pre-receipt authoring feedback. The external
+worker may explicitly replace only `handoffs/<shard-id>.proposals.json` and run the recorder again
+against the same immutable shard input. Invalid kind syntax exits nonzero with the fixed safe code
+`SEMANTIC_WORKER_KIND_INVALID`; it does not echo the rejected label, contribution content, paths,
+tracebacks, or raw exception details. There is no automatic retry, rewrite, fallback, or repair.
+After an output or receipt exists, the durable artifact pair is immutable and any differing
+resubmission fails closed.
 
 ## 4. Compose and install canonical authority
 

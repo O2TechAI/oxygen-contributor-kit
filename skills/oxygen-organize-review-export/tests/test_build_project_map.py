@@ -87,6 +87,53 @@ def semantic_source_digest(ids, source_digests):
 
 
 class BuildProjectMapTests(unittest.TestCase):
+    def test_semantic_kind_is_open_lower_snake_case_with_fixed_safe_failures(self):
+        valid_kinds = (
+            "direction_change",
+            "root_cause",
+            "laboratory_observation",
+            "supply_chain_exception",
+        )
+        ids = [f"item-{index}" for index in range(len(valid_kinds))]
+        digests = {item: hashlib.sha256(item.encode()).hexdigest() for item in ids}
+        source_digest = semantic_source_digest(ids, digests)
+        manifest = MODULE.finalize_units(
+            "Synthetic Project", ids, digests, source_digest, [{
+                "id": f"unit-{index}", "kind": kind, "members": [ids[index]],
+            } for index, kind in enumerate(valid_kinds)],
+        )
+        self.assertEqual(
+            [unit["kind"] for unit in manifest["units"]],
+            list(valid_kinds),
+        )
+        self.assertEqual(
+            MODULE.validate_previous_manifest(manifest, "Synthetic Project"),
+            {key: value for key, value in manifest.items() if key != "serializedBytes"},
+        )
+
+        invalid_kinds = (
+            "",
+            "Direction_change",
+            "1direction",
+            "direction-change",
+            "direction change",
+            "direction_\x00change",
+            "a" * 65,
+        )
+        for invalid in invalid_kinds:
+            with self.subTest(kind=repr(invalid)):
+                with self.assertRaisesRegex(
+                    ValueError, f"^{MODULE.SEMANTIC_WORKER_KIND_INVALID}$",
+                ) as failure:
+                    MODULE.finalize_units(
+                        "Synthetic Project", ["item"], {"item": "b" * 64},
+                        "a" * 64,
+                        [{"id": "unit", "kind": invalid, "members": ["item"]}],
+                    )
+                self.assertEqual(
+                    str(failure.exception), MODULE.SEMANTIC_WORKER_KIND_INVALID,
+                )
+
     def test_canonical_project_map_validator_rejects_stale_corpus_authority(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
