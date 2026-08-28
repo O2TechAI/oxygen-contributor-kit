@@ -17,7 +17,16 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Passage assistance, if any local UI later exposes it, is optional, human-facing, non-authoritative, non-readiness, and non-release.
 - [ ] Reviewed archive/input integrity, member paths, manifest counts, source hash, and `publication_approved=false` are safe.
 - [ ] Every primary/supporting/Person/Story-block/Insight Evidence reference is exact, fully qualified, same-document when required, and resolves once.
-- [ ] Bounded semantic workers preserve the Master-owned contract; the composed preparation finalizer is a dependency, and this launcher alone does not claim exact union/no-overlap validation.
+- [ ] Public Story preparation accepts canonical project-map and bare semantic-manifest authority through one parser and produces byte-identical worker authority.
+- [ ] Finalized Coverage owner IDs produce complete owner-atomic Story bundles; no owner spans shards, and a shard may contain multiple owners.
+- [ ] Every Story proposal and one complete parent Phase assignment validate before the atomic Story records directory and exactly one receipt per shard exist.
+- [ ] Story worker inputs are self-contained and contain no excluded narrative, raw actor identity, Source Privacy rows, pre-redaction content, or provider metadata.
+- [ ] Static tests do not claim actual host-subagent spawning; retain that proof for later E2E evidence.
+- [ ] Every bounded lane starts from a generated immutable input, and only the recorder creates the atomic output/receipt pair.
+- [ ] The recorder rejects invalid pre-receipt proposals without either authority file, permits correction only while both are absent, rejects differing post-receipt proposals, and never repairs a partial pair.
+- [ ] Preparation/finalization proves exact identity union, no overlap, no foreign identity, no missing shard, current input digest, physical containment, deterministic order, and explicit completed-zero output.
+- [ ] Final `story-candidates.json` is composed from recorded Story and Insight results; it is not duplicated manually by the caller.
+- [ ] The Preference recorder binds the exact nine-field output from the existing Preference producer.
 - [ ] Semantic coverage authority represents or explicitly excludes every unit exactly once.
 - [ ] Coverage draft rows are exactly `{unitId, disposition, ownerId}` or `{unitId, disposition, exclusionReason}`.
 - [ ] No Story JSON contains raw member lists, per-event negative ledgers, Privacy candidates, source originals, prompts, hidden reasoning, or Preference answers.

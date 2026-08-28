@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { canonicalPreferenceQuestionBatch } from "../lib/story-preparation.ts";
+import {
+  canonicalPreferenceQuestionBatch,
+  deriveStoryReleaseTargetCatalog,
+} from "../lib/story-preparation.ts";
 
 const root = resolve(import.meta.dirname, "../..");
 const script = join(root, "skills/oxygen-storytelling-review/scripts/finalize_story_preparation.mjs");
@@ -19,12 +22,17 @@ const digest = (value) => createHash("sha256").update(canonical(value)).digest("
 const json = (path, value) => writeFile(path, JSON.stringify(value), "utf8");
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
-function source(key, insightId = "shared") {
-  const evidence = { documentId: "doc", eventId: `event:${key}` };
+function source(key, insightId = "shared", semanticDigest = "a".repeat(64),
+  coverageDigest = "b".repeat(64), eventId = `event:${key}`) {
+  const evidence = { documentId: "doc", eventId };
   return {
     schema: "oxygen.story", key,
     phase: { id: `phase-${key}`, label: "Build" }, title: `Chapter ${key}`,
-    overview: `Overview ${key}`, people: [],
+    overview: `Overview ${key}`, people: [{
+      id: `person-${key}`, releaseLabel: `Person ${key}`, role: "reviewed participant",
+      description: `The reviewed participant supports ${key}.`, localIdentityState: "not_identified",
+      evidence: [evidence],
+    }],
     story: { blocks: [{ id: `block-${key}`, text: `Text ${key}`, evidence: [evidence] }] },
     insights: insightId === null ? [] : [{
       id: insightId, background: `Background ${key}`,
@@ -32,14 +40,15 @@ function source(key, insightId = "shared") {
       principle: `Principle ${key}`, evidence: [evidence],
     }],
     evidence: { primary: evidence, supporting: [] },
-    coverage: { semanticManifest: { revision: 1, digest: "a".repeat(64) },
-      coverageManifest: { revision: 1, digest: "b".repeat(64) }, representedUnitIds: [], excludedUnits: [] },
+    coverage: { semanticManifest: { revision: 1, digest: semanticDigest },
+      coverageManifest: { revision: 1, digest: coverageDigest },
+      representedUnitIds: [`unit-${key}`], excludedUnits: [] },
   };
 }
 
 function rowsFor(stories) {
   return stories.map((story) => ({
-    id: `event:${story.key}`,
+    id: story.evidence.primary.eventId,
     summary: `oxygen.story:${JSON.stringify(story)}`,
   }));
 }
@@ -83,16 +92,35 @@ async function fixture({
   const directory = await mkdtemp(join(tmpdir(), "story-finalizer-"));
   const shards = join(directory, "shards");
   await mkdir(shards);
-  const stories = [source("é", insightIds[0]), source("z", insightIds[1])];
-  const rows = rowsFor(stories).map((row, index) => ({
-    ...row, id: candidateIds?.[index] ?? row.id,
-  }));
-  const storyByRowId = new Map(rows.map((row, index) => [row.id, stories[index]]));
-  const canonicalRows = [...rows].sort((left, right) => utf8(left.id, right.id));
-  const canonicalStories = canonicalRows.map((row) => storyByRowId.get(row.id));
+  const eventIds = new Map([
+    ["é", candidateIds?.[0] ?? "event:é"],
+    ["z", candidateIds?.[1] ?? "event:z"],
+  ]);
+  const semanticUnits = ["z", "é"].map((key) => ({
+    id: `unit-${key}`, revision: 1, projectId: "project", kind: "decision_episode",
+    members: [eventIds.get(key)], memberCount: 1,
+    membershipDigest: digest([{ id: eventIds.get(key), sourceDigest: digest(key) }]),
+  })).sort((left, right) => utf8(left.id, right.id));
   const semanticCore = { projectId: "project", revision: 1, sourceDigest: "c".repeat(64),
-    universeDigest: "d".repeat(64), units: [{ id: "unit-z" }, { id: "unit-é" }] };
+    universeDigest: digest([...eventIds.values()].sort(utf8)), units: semanticUnits };
   const semantic = { ...semanticCore, manifestDigest: digest(semanticCore) };
+  const coverageCore = {
+    revision: 1, semanticManifestRevision: 1, semanticManifestDigest: semantic.manifestDigest,
+    rows: ["z", "é"].map((key) => ({
+      unitId: `unit-${key}`, disposition: "represented", ownerId: key,
+    })).sort((left, right) => utf8(left.unitId, right.unitId)),
+  };
+  const coverage = { ...coverageCore, coverageDigest: digest(coverageCore), serializedBytes: 1 };
+  const stories = [
+    source("é", insightIds[0], semantic.manifestDigest, coverage.coverageDigest, eventIds.get("é")),
+    source("z", insightIds[1], semantic.manifestDigest, coverage.coverageDigest, eventIds.get("z")),
+  ];
+  const rows = rowsFor(stories);
+  const storyByRowId = new Map(rows.map((row, index) => [row.id, stories[index]]));
+  const canonicalRows = [...rows].sort((left, right) => (
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+  ));
+  const canonicalStories = canonicalRows.map((row) => storyByRowId.get(row.id));
   const base = canonicalRows.map((row, index) => ({ id: row.id, story: { ...canonicalStories[index], insights: [] } }));
   const complete = canonicalRows.map((row, index) => ({ id: row.id, story: canonicalStories[index] }));
   const inputDigest = digest(lessons(canonicalStories));
@@ -126,41 +154,74 @@ async function fixture({
     preference: inputDigest,
   };
   const units = {
-    story: ["unit-é", "unit-z"], insight: ["é", "z"],
-    story_privacy: stories.flatMap((story) => [
-      `${story.key}::phase`, `${story.key}::title`, `${story.key}::overview`, `${story.key}::story:block-${story.key}`,
-      ...story.insights.flatMap((insight) => [
-        `${story.key}::insight:${insight.id}:background`,
-        `${story.key}::insight:${insight.id}:directlyAcquiredExperience`,
-        `${story.key}::insight:${insight.id}:principle`,
-      ]),
-    ]),
+    story: ["é", "z"], insight: ["é", "z"],
+    story_privacy: deriveStoryReleaseTargetCatalog(stories).map((target) => target.id),
     preference: insightIds[0] === null && insightIds[1] === null ? [] : [canonical({ storyKey: "é", insightId: insightIds[0] }), canonical({ storyKey: "z", insightId: insightIds[1] })],
   };
   const laneOutputs = {
-    story: [[base[0]], [base[1]]],
-    insight: insightIds[0] === null && insightIds[1] === null ? [[], []] : [[complete[0]], [complete[1]]],
-    story_privacy: [[...privacyCandidates], []],
-    preference: insightIds[0] === null && insightIds[1] === null ? [] : [{ probes, bulkDecisions }, { probes: [], bulkDecisions: [] }],
+    story: reverse ? [...base].reverse() : base,
+    insight: (reverse ? [...canonicalStories].reverse() : canonicalStories).map((story) => ({
+      storyKey: story.key, insights: story.insights,
+    })),
+    story_privacy: privacyCandidates,
+    preference,
   };
+  const validationAuthority = {
+    schema: "oxygen.story-validation-authority",
+    sourceDigest: "e".repeat(64), sourcePrivacyDigest: "f".repeat(64),
+    semanticManifest: semantic, coverageManifest: coverage,
+    evidence: ["z", "é"].map((key) => ({
+      id: eventIds.get(key), documentId: "doc", eventType: "message", actorType: "human",
+      actorEquivalence: `actor-${key}`,
+    })).sort((left, right) => utf8(left.id, right.id)),
+  };
+  await mkdir(join(shards, "story"), { recursive: true });
+  await json(join(shards, "story", "validation-authority.json"), validationAuthority);
   for (const lane of ["story", "insight", "story_privacy", "preference"]) {
-    const laneUnits = units[lane];
-    const outputParts = laneOutputs[lane];
-    const shardsValue = laneUnits.length === 0 ? [] : laneUnits.map((unit, index) => ({
-      id: `${lane}-${index}`, unitIds: [unit], receiptPath: `${lane}-${index}.receipt.json`,
-    }));
-    await json(join(shards, `${lane === "story_privacy" ? "story-privacy" : lane}.shards.json`), {
+    const laneUnits = [...units[lane]].sort(utf8);
+    const directoryName = lane === "story_privacy" ? "story-privacy" : lane;
+    const shardId = `${directoryName}-0001`;
+    const laneRoot = join(shards, directoryName);
+    const recordRoot = join(laneRoot, "records", shardId);
+    await mkdir(join(laneRoot, "inputs"), { recursive: true });
+    await mkdir(recordRoot, { recursive: true });
+    const workerInput = {
+      schema: "oxygen.story-preparation-worker-input", lane, shardId,
+      inputDigest: inputs[lane], unitIds: laneUnits, payload: lane === "story" ? {
+        validationAuthorityPath: "story/validation-authority.json",
+        validationAuthorityDigest: digest(validationAuthority),
+        ownerBundles: semanticUnits.map((unit) => ({
+          ownerId: unit.id.slice("unit-".length),
+          semanticManifest: { revision: semantic.revision, digest: semantic.manifestDigest },
+          coverageManifest: { revision: coverage.revision, digest: coverage.coverageDigest },
+          semanticUnits: [unit],
+          reviewedNarrative: [{
+            id: unit.members[0], documentId: "doc", sequence: 1, timestamp: null,
+            eventType: "message", actorType: "human",
+            actorEquivalence: `actor-${unit.id.slice("unit-".length)}`,
+            narrative: `Reviewed ${unit.id}.`,
+          }],
+        })).sort((left, right) => utf8(left.ownerId, right.ownerId)),
+      } : {},
+    };
+    const workerInputDigest = digest(workerInput);
+    await json(join(laneRoot, "inputs", `${shardId}.json`), workerInput);
+    await json(join(laneRoot, "shards.json"), {
       schema: "oxygen.story-preparation-shards", lane, inputDigest: inputs[lane],
-      unitIds: reverse ? [...laneUnits].reverse() : laneUnits, shards: reverse ? [...shardsValue].reverse() : shardsValue,
+      unitIds: laneUnits, shards: [{
+        id: shardId, unitIds: laneUnits, inputPath: `${directoryName}/inputs/${shardId}.json`,
+        workerInputDigest, receiptPath: `${directoryName}/records/${shardId}/receipt.json`,
+      }],
     });
-    for (let index = 0; index < shardsValue.length; index += 1) {
-      const name = `${lane}-${index}`;
-      await json(join(shards, `${name}.output.json`), outputParts[index] ?? (lane === "preference" ? { probes: [], bulkDecisions: [] } : []));
-      await json(join(shards, `${name}.receipt.json`), {
-        schema: "oxygen.story-preparation-worker-receipt", lane, shardId: name, status: "complete",
-        inputDigest: inputs[lane], unitIds: [laneUnits[index]], outputPath: `${name}.output.json`,
-      });
-    }
+    const output = laneOutputs[lane];
+    await json(join(recordRoot, "output.json"), output);
+    await json(join(recordRoot, "receipt.json"), {
+      schema: "oxygen.story-preparation-worker-receipt", lane, shardId, status: "complete",
+      inputDigest: inputs[lane], workerInputDigest, unitIds: laneUnits,
+      outputPath: `${directoryName}/records/${shardId}/output.json`, outputDigest: digest(output),
+      outputCount: lane === "insight" ? canonicalStories.reduce((total, story) => total + story.insights.length, 0)
+        : lane === "preference" ? preference.outputCount : output.length,
+    });
   }
   return { directory, shards, output: join(directory, "output.json"), rows, cleanup: () => rm(directory, { recursive: true, force: true }) };
 }
@@ -180,13 +241,14 @@ async function mutatePreferenceAuthority(fixtureValue, mutate) {
   preference.outputDigest = digest(batch);
   preference.outputCount = batch.length;
   await json(preferencePath, preference);
-  const manifest = await readJson(join(fixtureValue.shards, "preference.shards.json"));
-  for (let index = 0; index < manifest.shards.length; index += 1) {
-    const receipt = await readJson(join(fixtureValue.shards, manifest.shards[index].receiptPath));
-    await json(join(fixtureValue.shards, receipt.outputPath), index === 0
-      ? { probes: preference.probes, bulkDecisions: preference.bulkDecisions }
-      : { probes: [], bulkDecisions: [] });
-  }
+  const manifest = await readJson(join(fixtureValue.shards, "preference", "shards.json"));
+  const receiptPath = join(fixtureValue.shards, ...manifest.shards[0].receiptPath.split("/"));
+  const receipt = await readJson(receiptPath);
+  const outputPath = join(fixtureValue.shards, ...receipt.outputPath.split("/"));
+  await json(outputPath, preference);
+  receipt.outputDigest = digest(preference);
+  receipt.outputCount = preference.outputCount;
+  await json(receiptPath, receipt);
 }
 
 test("four lanes finalize exact public Story rows with reordered shards and cross-Chapter Insight IDs", async () => {
@@ -209,10 +271,10 @@ test("four lanes finalize exact public Story rows with reordered shards and cros
   } finally { await first.cleanup(); await second.cleanup(); }
 });
 
-test("Story candidate order uses UTF-8 bytes for producer-identical lessons and digests", async () => {
+test("Story candidate order uses the production comparator for producer-identical lessons and digests", async () => {
   const candidateIds = ["\u{1f600}", "\ue000"];
-  const first = await fixture({ candidateIds });
-  const second = await fixture({ candidateIds, reverse: true });
+  const first = await fixture({ candidateIds, questions: false });
+  const second = await fixture({ candidateIds, reverse: true, questions: false });
   try {
     const firstRun = run(first);
     const secondRun = run(second);
@@ -221,7 +283,7 @@ test("Story candidate order uses UTF-8 bytes for producer-identical lessons and 
     assert.equal(await readFile(first.output, "utf8"), await readFile(second.output, "utf8"));
     const result = await readJson(first.output);
     const receipt = result.receipts.find((item) => item.lane === "preference");
-    assert.equal(receipt.inputDigest, digest(lessons([source("z", "same"), source("é", "same")])));
+    assert.equal(receipt.inputDigest, digest(lessons([source("é", "same"), source("z", "same")])));
   } finally { await first.cleanup(); await second.cleanup(); }
 });
 
@@ -323,10 +385,10 @@ test("physical shard containment rejects junction escapes for receipts and outpu
     const value = await fixture();
     const outside = await mkdtemp(join(tmpdir(), "story-finalizer-outside-"));
     try {
-      const receipt = await readJson(join(value.shards, "story-0.receipt.json"));
+      const receipt = await readJson(join(value.shards, "story", "records", "story-0001", "receipt.json"));
       await json(join(outside, "receipt.json"), receipt);
       await symlink(outside, join(value.shards, "escape"), process.platform === "win32" ? "junction" : "dir");
-      const manifestPath = join(value.shards, "story.shards.json");
+      const manifestPath = join(value.shards, "story", "shards.json");
       const manifest = await readJson(manifestPath);
       manifest.shards[0].receiptPath = "escape/receipt.json";
       await json(manifestPath, manifest);
@@ -338,10 +400,10 @@ test("physical shard containment rejects junction escapes for receipts and outpu
     const value = await fixture();
     const outside = await mkdtemp(join(tmpdir(), "story-finalizer-outside-"));
     try {
-      const output = await readJson(join(value.shards, "story-0.output.json"));
+      const output = await readJson(join(value.shards, "story", "records", "story-0001", "output.json"));
       await json(join(outside, "output.json"), output);
       await symlink(outside, join(value.shards, "escape"), process.platform === "win32" ? "junction" : "dir");
-      const receiptPath = join(value.shards, "story-0.receipt.json");
+      const receiptPath = join(value.shards, "story", "records", "story-0001", "receipt.json");
       const receipt = await readJson(receiptPath);
       receipt.outputPath = "escape/output.json";
       await json(receiptPath, receipt);
@@ -352,14 +414,14 @@ test("physical shard containment rejects junction escapes for receipts and outpu
 
 test("missing, duplicate, overlap, foreign, stale, nonterminal, and tampered worker inputs fail closed", async (t) => {
   const mutations = {
-    missing: async (value) => { const path = join(value.shards, "story-0.receipt.json"); await rm(path); },
-    duplicate: async (value) => { const path = join(value.shards, "story.shards.json"); const data = await readJson(path); data.shards[1].unitIds = ["unit-é"]; await json(path, data); },
-    overlap: async (value) => { const path = join(value.shards, "story.shards.json"); const data = await readJson(path); data.shards[1].unitIds = ["unit-é", "unit-z"]; await json(path, data); },
-    foreign: async (value) => { const path = join(value.shards, "story.shards.json"); const data = await readJson(path); data.shards[0].unitIds = ["foreign"]; await json(path, data); },
-    stale: async (value) => { const path = join(value.shards, "story.shards.json"); const data = await readJson(path); data.inputDigest = "0".repeat(64); await json(path, data); },
-    nonterminal: async (value) => { const path = join(value.shards, "story-0.receipt.json"); const data = await readJson(path); data.status = "running"; await json(path, data); },
-    receipt: async (value) => { const path = join(value.shards, "story-0.receipt.json"); const data = await readJson(path); data.shardId = "other"; await json(path, data); },
-    output: async (value) => { const path = join(value.shards, "story-0.output.json"); const data = await readJson(path); data[0].id = "tampered"; await json(path, data); },
+    missing: async (value) => { const path = join(value.shards, "story", "records", "story-0001", "receipt.json"); await rm(path); },
+    duplicate: async (value) => { const path = join(value.shards, "story", "shards.json"); const data = await readJson(path); data.unitIds.push(data.unitIds[0]); data.shards[0].unitIds = data.unitIds; await json(path, data); },
+    overlap: async (value) => { const path = join(value.shards, "story", "shards.json"); const data = await readJson(path); data.shards.push({ ...data.shards[0], id: "story-0002", unitIds: [data.unitIds[0]] }); await json(path, data); },
+    foreign: async (value) => { const path = join(value.shards, "story", "shards.json"); const data = await readJson(path); data.shards[0].unitIds = ["foreign"]; await json(path, data); },
+    stale: async (value) => { const path = join(value.shards, "story", "shards.json"); const data = await readJson(path); data.inputDigest = "0".repeat(64); await json(path, data); },
+    nonterminal: async (value) => { const path = join(value.shards, "story", "records", "story-0001", "receipt.json"); const data = await readJson(path); data.status = "running"; await json(path, data); },
+    receipt: async (value) => { const path = join(value.shards, "story", "records", "story-0001", "receipt.json"); const data = await readJson(path); data.shardId = "other"; await json(path, data); },
+    output: async (value) => { const path = join(value.shards, "story", "records", "story-0001", "output.json"); const data = await readJson(path); data[0].id = "tampered"; await json(path, data); },
   };
   for (const [name, mutate] of Object.entries(mutations)) await t.test(name, async () => {
     const value = await fixture();
@@ -375,7 +437,7 @@ test("conflicting identities and forbidden worker metadata fail without replacin
     const value = await fixture();
     try {
       await writeFile(value.output, "preserve-this-byte-for-byte", "utf8");
-      const path = join(value.shards, "story_privacy-0.output.json");
+      const path = join(value.shards, "story-privacy", "records", "story-privacy-0001", "output.json");
       const data = await readJson(path);
       if (mode === "conflict") data.push({ ...data[0], title: "Different" });
       else data[0].provider = "forbidden";

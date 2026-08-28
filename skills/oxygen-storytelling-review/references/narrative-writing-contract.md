@@ -12,7 +12,16 @@ Retain every reviewed-Evidence-supported unit that materially explains backgroun
 
 Never invent dialogue, people, emotion, motivation, Evidence, causal certainty, consensus, or a cleaner ending.
 
+## Evidence-Backed Engagement
+
+Write for a technically curious reader. Make the supported arc engaging by quickly establishing the real purpose, constraint, or starting state; using concrete actors and actions; and preserving supported attempts, failures, corrections, decisions, consequences, or unresolved boundaries when present. Let interest come from what actually changed, became understood, or was established. Do not invent stakes, drama, emotion, dialogue, motive, conflict, causality, or closure. When the evidence is ordinary, make it clear and specific rather than theatrical.
+
 ## Story Generation Order
+
+For a Story worker assignment, return complete phase-free Chapter proposals for the exact Coverage
+owners in the generated input. Do not author schema, Chapter keys, Phase, Coverage, exclusions,
+receipts, or authority. The workflow-owning parent orders the complete accepted Chapter set with
+the production comparator and assigns Phase once before global validation.
 
 Use these conceptual passes inside Build Project Story:
 
@@ -20,7 +29,7 @@ Use these conceptual passes inside Build Project Story:
 2. Disposition every semantic unit and determine coherent Chapter narrative arcs.
 3. Write the complete ordered Chapter and Project Story narrative.
 4. Verify continuity, chronology, attribution, Evidence, causal restraint, Privacy, and uncertainty.
-5. Group adjacent Chapters into precise one- or two-word Phases.
+5. Verify the complete phase-free Chapter proposals for the assigned Coverage owners.
 6. After the complete Story is understood, identify independently warranted learning moments.
 7. Produce zero or more Insights.
 

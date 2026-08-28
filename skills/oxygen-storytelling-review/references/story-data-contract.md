@@ -124,6 +124,12 @@ timestamp -> documentId -> sequence -> row id
 
 Every Chapter key must be unique. Phases are assigned only after Chapters are complete and ordered. A Phase ID must occupy one contiguous Chapter range, use one consistent one- or two-word label, and avoid generic labels such as `Project Evolution`, `General Work`, `Other`, or `Later Stage`.
 
+Finalized Coverage `ownerId` is the sole Chapter-ownership source during preparation. Every
+represented unit for one owner belongs to one indivisible owner bundle and the final Chapter key is
+that exact owner ID. Story workers return phase-free authorable Chapter proposals. They do not
+author schema, keys, Phase, Coverage, exclusions, receipts, or authority. The parent assigns Phase
+only after every complete Chapter exists and has been ordered with the production comparator.
+
 `kind`, `transition`, and `chips` are optional presentation metadata. Emit `transition` only for an Evidence-supported before/after change. Emit at most 12 unique supported chips, each at most 200 characters. Absence is valid.
 
 ## People And Story Blocks
@@ -214,6 +220,29 @@ node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \
   --source-privacy work/<run>-review/current-public-source-privacy.json \
   --previous work/<run>-review/story-coverage-manifest.accepted.json
 ```
+
+## Public Story Preparation
+
+The canonical project map and bare semantic manifest enter Story preparation through the same
+bounded parser used by Coverage. Run the public prepare, record, and compose commands in
+[story-preparation-transport.md](story-preparation-transport.md). The Story worker returns only base
+Stories with empty `insights`; the dependent Insight worker returns Story-keyed Insight arrays.
+The deterministic composer, not the caller, creates the final two-field candidate rows below.
+Receipts and authority digests are recorder-owned and must never be handwritten.
+
+Before Story preparation, finalize Coverage. The Story preparer binds that exact authority to the
+same semantic generation and current public Source Privacy state, derives equality-only actor facts
+and redacted narrative from the canonical reviewed run, and persists no raw actor identity or
+pre-redaction content. The recorder and finalizer call the exported Viewer
+`validateStorySourcePackage` directly; no transport-local People, Evidence, Phase, Coverage, or
+Insight-grounding validator substitutes for it.
+
+Story inputs contain complete owner-atomic bundles and no excluded narrative. The parent collects
+every expected proposal, injects canonical represented Coverage and the UTF-8-sorted exclusions,
+assigns Phase once, and invokes one complete Story batch recording boundary. No Story output or
+receipt exists until the full package passes the unchanged shared validator; all per-shard outputs
+and exactly one receipt per shard then install atomically. Insight remains a separate dependent
+pass.
 
 ## Activation Submission
 

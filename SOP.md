@@ -291,19 +291,60 @@ Completed-zero is a valid terminal result for the Insight and Preference lanes w
 Insight or valid question exists. The composed launcher transport now requires the deterministic
 Preference bundle and the `oxygen.story-preparation` manifest with coverage and Story candidates.
 It imports the exact bundle before it requests Review Story activation, and fails closed on missing,
-foreign, stale, malformed, or digest/count-mismatched authority. The Preference producer and
-preparation finalizer are composition dependencies of this isolated branch; their files are not
-present here and no fallback or stub replaces them.
+foreign, stale, malformed, or digest/count-mismatched authority. The tracked Story preparer,
+recorder, existing Preference producer, and preparation finalizer create and bind those files.
 
-Master-owned semantic work must start from deterministic input preparation, an immutable input
-digest, explicit unit IDs, and byte/content-balanced shard manifests. The desired design uses
-separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and
-Preference-question reasoning, with worker receipts, exact union coverage, no overlap,
-deterministic deduplication/composition, and fail-closed validation. The composed preparation
-finalizer validates and binds the four terminal receipts to activation. Exact union/no-overlap across
-worker shards remains a finalizer composition dependency; do not claim it from this launcher alone.
-Revision authority remains with the owning Agent/server lane; no worker may silently expand scope
-or repair another lane.
+Parent-owned semantic work starts with the public deterministic preparer. It accepts the canonical
+Organization project map or bare semantic manifest through one bounded parser, freezes the exact
+assigned identities and input digest, and installs immutable provider-safe worker input before a
+proposal exists. Story, Insight, and Story Privacy remain multi-shard lanes, and the
+workflow-owning parent enumerates every nonempty manifest shard for them. Preference intentionally
+uses exactly one global bounded worker because it produces one deduplicated questionnaire
+authority, capped at 12 probes by default and 20 maximum; never fan Preference out. When host
+subagents are available, assignments run automatically with at most three live at once. Each
+assignment reads exactly one Privacy-safe immutable `inputPath` and writes only its proposal.
+Workers never write receipts, final manifests, SQLite, Viewer APIs, revisions, activation state,
+release state, or publication state. Internal host subagents are not product provider/API calls,
+require no separate API key, and receive no raw/private source beyond the prepared input.
+
+Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
+
+1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
+2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
+3. Then read exactly the assignment's one generated Privacy-safe `inputPath`.
+4. Write only that assignment's proposal.
+
+Do not dispatch a Story worker until the assignment names both contract paths, the actual generated
+`inputPath`, and the proposal-only write boundary. No other data input is part of that assignment.
+
+Finalized Coverage `ownerId` is the sole Story Chapter-ownership source. The Story preparer keeps
+every owner's represented units in one complete, Privacy-safe, self-contained bundle and balances
+shards only by whole-bundle bytes. Story workers return phase-free proposals. On a subagent-capable
+host the parent does not write Story prose, People, Evidence choices, titles, overviews, or blocks.
+It waits for every proposal, orders complete Chapters with the production comparator, assigns only
+Phase IDs and labels, injects canonical Coverage and exclusions, and invokes one complete Story
+batch recorder. No Story receipt exists before full-package validation; all outputs and exactly one
+receipt per shard install together. Insight remains a separate later pass.
+
+Each assignment gets one initial proposal plus at most two automatic proposal-only correction attempts. `correctionAttemptCount` is
+assignment-local, counts corrections only, excludes the initial proposal, and is always `0..2`;
+never sum it across a multi-shard lane. Every correction uses the byte-identical immutable input,
+and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed
+safe pre-receipt authoring-validation code is correctable. If the second correction fails, stop the
+lane safely, report correction exhaustion and the last safe validation code, and do not continue
+downstream. Authority, immutability, containment, path, I/O, infrastructure, and corrupt-state
+failures stop immediately and are never correctable. This is not a contributor pause and may never
+rewrite durable output. If host subagents are genuinely unavailable, the parent processes the same
+assignments serially, reports
+`executionMode=serial_capability_limited`, and uses the identical recorder/finalizer authority.
+`PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal orchestration boundary. Revision authority and
+all Viewer mutations remain with the parent/server lane; no worker may silently expand scope or
+repair another lane.
+
+Story uses at most two lane-wide correction waves. Replacing a rejected Story proposal or replacing
+only the transient parent Phase assignment consumes the same wave; there is no separate Phase retry
+budget. Every failed Story wave leaves all Story outputs and receipts absent. Static tests prove the
+contract and batch boundary, while later E2E evidence proves actual host-subagent spawning.
 
 Coverage draft rows use only `{unitId, disposition, ownerId}` for represented units or
 `{unitId, disposition, exclusionReason}` for excluded units. After successful activation, the exact
@@ -407,18 +448,116 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
 node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
   "$Review\project-map.json" `
   "$Review\story-coverage-draft.json" `
-  "$Review\story-coverage-manifest.json"
+  "$Review\story-coverage-manifest.json" `
+  --source-privacy "$Review\current-public-source-privacy.json"
 ```
 
 ## Composition sequence (implemented transport)
 
-1. Prepare Preference context.
-2. Produce bounded Agent candidates.
-3. Produce the deterministic Preference bundle.
-4. Run the preparation finalizer.
+Use one transport root and the current Viewer source revision. For each prepared lane, the parent
+performs this lifecycle without contributor intervention:
 
-The producer and finalizer arrive from parallel composition lanes and are intentionally not stubbed
-in this isolated launcher branch.
+1. For Story, Insight, and Story Privacy, read the lane's `shards.json` and enumerate every
+   deterministic shard. For Preference, require exactly one global shard and one bounded worker;
+   do not fan the questionnaire authority out.
+2. Dispatch available host subagents with at most three live at once. Each receives exactly one
+   `inputPath` and may write only its proposal. If subagents are unavailable, process those same
+   assignments serially and set `executionMode=serial_capability_limited`.
+   For every `story`-lane assignment, first convey the complete-read requirements for
+   `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` and
+   `skills/oxygen-storytelling-review/references/story-data-contract.md`; only after both reads may
+   the worker read its named generated `inputPath` and write its proposal.
+3. Wait for every Story proposal, place exactly one `<shard-id>.json` file in the proposal-only
+   directory, order all complete Chapters with the production comparator, create one transient
+   unversioned Phase assignment, and invoke the Story batch recorder once. For other lanes, run the
+   recorder with that manifest shard ID and proposal path.
+4. If the recorder returns a fixed safe pre-receipt authoring-validation code while output and
+   receipt are both absent, return it automatically to the same assignment for at most two
+   proposal-only corrections. Preserve the byte-identical input and allow only the proposal to
+   change. Count only corrections, so assignment-local `correctionAttemptCount` is `0..2` and does
+   not include the initial proposal.
+   For Story, replacing only the non-authoritative parent Phase assignment is also allowed and
+   consumes the same lane-wide correction wave.
+5. If the second correction fails, stop the lane safely, report correction exhaustion and the last
+   safe validation code, and do not continue downstream. Stop immediately without correction for
+   authority, immutability, containment, path, I/O, infrastructure, or corrupt-state failures.
+6. For Story, require the atomically installed complete records directory with exactly one terminal
+   receipt per expected shard. For other lanes, require one terminal subordinate receipt per
+   assignment. Verify exact union and no overlap, then compose/finalize.
+7. Continue automatically to the next dependent lane or to the next genuine human-review boundary.
+
+For each reached lane, retain E2E evidence for `executionMode`, `lane`, `shardCount`,
+`spawnedSubagentCount`, `maxConcurrentSubagents`, `correctionAttemptCount`, and
+`terminalReceiptCount`. The parent owns all recorder/finalizer commands and every Viewer mutation.
+The non-Story commands containing `<manifest-shard-id>` and `<proposal-path>` below are executed
+once for each enumerated shard, not typed or scheduled by the contributor.
+
+```powershell
+$Transport = "$Review\story-preparation"
+$StoryProposals = "$Review\story-proposals"
+$StoryPhases = "$Review\story-phases.json"
+$SourceRevision = 0 # Replace with the current source revision reported by this Viewer run.
+
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare story "$Review\project-map.json" `
+  "$Review\story-coverage-manifest.json" `
+  "$Review\current-public-source-privacy.json" `
+  "$Review" "$Transport"
+# Parent dispatches every Story shard (maximum three live), collects one phase-free
+# <shard-id>.json proposal per shard, orders all Chapters, and writes one transient Phase assignment.
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" story "$StoryProposals" "$StoryPhases" `
+  --correction-attempt-count 0
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  compose story "$Transport" "$Review\story-base-candidates.json"
+
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare insight "$Review\story-base-candidates.json" "$Transport"
+# Parent dispatches every Insight manifest shard (maximum three live), waits, then records each proposal.
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" insight "<manifest-shard-id>" "<proposal-path>"
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  compose final "$Transport" "$Review\story-candidates.json"
+
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare story_privacy "$Review\story-candidates.json" "$Transport"
+# Parent dispatches every Story Privacy manifest shard (maximum three live), waits, then records each proposal.
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" story_privacy "<manifest-shard-id>" "<proposal-path>"
+
+python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference_context.py `
+  --story-candidates "$Review\story-candidates.json" `
+  --redacted "$Redaction\redacted" --privacy-report "$Redaction\report.json" `
+  --output "$Review\preference-context.json"
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare preference "$Review\story-candidates.json" `
+  "$Review\preference-context.json" "$Transport"
+# Parent dispatches the one global Preference worker, waits, then validates and records its proposal.
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
+  --context "$Review\preference-context.json" `
+  --candidates "<proposal-path>" `
+  --workflow-run-id "$WorkflowRun" --source-revision $SourceRevision `
+  --output "$Review\preference-bundle.json"
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" preference "<manifest-shard-id>" "$Review\preference-bundle.json"
+
+node .\skills\oxygen-storytelling-review\scripts\finalize_story_preparation.mjs `
+  "$Review\project-map.json" "$Review\story-candidates.json" "$Transport" `
+  "$Review\preference-bundle.json" "$Review\story-preparation-manifest.json" `
+  --workflow-run-id "$WorkflowRun" --source-revision $SourceRevision
+```
+
+The Story and Insight passes are dependent. Story Privacy and Preference become sibling-ready only
+after final Story composition and may then run in either order. Workers never write receipts or
+digests; the recorder owns those fields. See the Story Skill transport reference for the exact
+lane proposal shapes.
+
+Story preparation freezes one minimal validation-authority bundle from the exact reviewed source
+generation, current semantic manifest, and current Coverage manifest. It projects private actor
+identity to equality-only tokens and applies current final Source Privacy redactions before any
+narrative reaches a worker input. The Story recorder and preparation finalizer both call the
+unchanged Viewer `validateStorySourcePackage`; a complete Story failure creates no receipt, and a
+forged or stale pair cannot create terminal preparation authority.
 
 With those four artifacts produced and validated, launcher ready is:
 
@@ -498,17 +637,26 @@ completed-zero batch before review.
    mutually exclusive, evidence-grounded choices, plus “Something else” and “Nothing worth
    recording here.”
 6. Present all probes as one batch. Do not interrupt the contributor once per event.
-7. Write `work/<run>-review/preference-probes.json` and validate it:
+7. Write the exact three-field `preference-candidates.json`, then use the existing Preference
+   producer to create the nine-field bundle. The full copyable commands are in the implemented
+   composition sequence above.
 
 ```bash
 python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py \
-  work/<run>-review
+  --context work/<run>-review/preference-context.json \
+  --candidates work/<run>-review/preference-candidates.json \
+  --workflow-run-id <run-id> --source-revision <current-source-revision> \
+  --output work/<run>-review/preference-bundle.json
 ```
 
 Native Windows PowerShell equivalent:
 
 ```powershell
-python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py "$Review"
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
+  --context "$Review\preference-context.json" `
+  --candidates "$Review\preference-candidates.json" `
+  --workflow-run-id "$WorkflowRun" --source-revision $SourceRevision `
+  --output "$Review\preference-bundle.json"
 ```
 
 Only explicit answers become checklist preferences. Unanswered and skipped probes produce no

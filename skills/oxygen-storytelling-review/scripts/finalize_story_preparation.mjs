@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFile, realpath, rename, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
+import { rename, writeFile } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 import {
   canonicalPreferenceQuestionBatch,
   deriveStoryReleaseTargetCatalog,
@@ -12,15 +12,23 @@ import {
   normalizeBulkPreferencePresentations,
   normalizeProbePresentations,
 } from "../../../viewer/lib/preference-presentation.ts";
-import { canonicalAuthorityJson } from "../../../viewer/lib/story-readiness.ts";
-import { parseStorySource } from "../../../viewer/lib/timeline.ts";
-
-const laneFiles = Object.freeze({
-  story: "story.shards.json",
-  insight: "insight.shards.json",
-  story_privacy: "story-privacy.shards.json",
-  preference: "preference.shards.json",
-});
+import {
+  canonicalAuthorityJson,
+  validateStorySourcePackage,
+} from "../../../viewer/lib/story-readiness.ts";
+import { compareStorySourceIdentity, parseStorySource } from "../../../viewer/lib/timeline.ts";
+import {
+  StoryPreparationTransportError,
+  MAX_STORY_PREPARATION_FILE_BYTES,
+  readSemanticTransport,
+  readStrictJson,
+} from "./story_preparation_transport.mjs";
+import { readLaneAuthority } from "./story_preparation_protocol.mjs";
+import {
+  readStoryValidationAuthority,
+  storyCompletenessAuthority,
+  storyEvidenceRows,
+} from "./story_preparation_validation_authority.mjs";
 const hex = /^[0-9a-f]{64}$/;
 const metadataKeys = new Set([
   "raworiginal", "original", "evidence", "provider", "model", "prompt", "rewrite",
@@ -72,32 +80,10 @@ const normalizeOptionText = (value) => value.trim().replace(/\.+$/u, "")
   .replace(/[A-Z]/gu, (character) => String.fromCharCode(character.charCodeAt(0) + 32));
 
 async function jsonFile(path) {
-  let text;
-  try {
-    text = await readFile(path, "utf8");
-  } catch {
-    fail("FILE_UNREADABLE");
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    fail("JSON_INVALID");
-  }
-}
-
-async function contained(root, value) {
-  if (typeof value !== "string" || !value || isAbsolute(value) || win32.isAbsolute(value)
-    || value.split(/[\\/]/u).some((part) => part === "..")) fail("PATH_NOT_CONTAINED");
-  const target = resolve(root, value);
-  let physical;
-  try {
-    physical = await realpath(target);
-  } catch {
-    fail("FILE_UNREADABLE");
-  }
-  const rel = relative(root, physical);
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) fail("PATH_NOT_CONTAINED");
-  return physical;
+  return (await readStrictJson(path, MAX_STORY_PREPARATION_FILE_BYTES, {
+    invalid: "FILE_UNREADABLE", changed: "FILE_CHANGED",
+    oversized: "FILE_TOO_LARGE", jsonInvalid: "JSON_INVALID",
+  })).value;
 }
 
 function rejectMetadata(value) {
@@ -112,28 +98,6 @@ function rejectMetadata(value) {
     }
     rejectMetadata(nested);
   }
-}
-
-function semanticAuthority(value) {
-  if (!exactKeys(value, ["projectId", "revision", "sourceDigest", "universeDigest", "manifestDigest", "units"])
-    || !stableId(value.projectId) || !Number.isSafeInteger(value.revision) || value.revision < 1
-    || !hex.test(value.sourceDigest) || !hex.test(value.universeDigest) || !hex.test(value.manifestDigest)
-    || !Array.isArray(value.units)) fail("SEMANTIC_MANIFEST_INVALID");
-  const canonical = {
-    projectId: value.projectId,
-    revision: value.revision,
-    sourceDigest: value.sourceDigest,
-    universeDigest: value.universeDigest,
-    units: [...value.units].sort((left, right) => utf8(String(left?.id), String(right?.id))),
-  };
-  return storyPreparationDigest(canonical).then((digest) => {
-    if (digest !== value.manifestDigest) fail("SEMANTIC_MANIFEST_DIGEST_STALE");
-    const unitIds = canonical.units.map((unit) => unit?.id);
-    if (unitIds.some((id) => !stableId(id)) || new Set(unitIds).size !== unitIds.length) {
-      fail("SEMANTIC_UNIT_SET_INVALID");
-    }
-    return { manifestDigest: value.manifestDigest, unitIds: unitIds.sort(utf8) };
-  });
 }
 
 function finalCandidates(value) {
@@ -154,7 +118,7 @@ function finalCandidates(value) {
   }
   if (new Set(rows.map((row) => row.id)).size !== rows.length
     || new Set(rows.map((row) => row.story.key)).size !== rows.length) fail("FINAL_STORY_IDENTITIES_INVALID");
-  return rows.sort((left, right) => utf8(left.id, right.id));
+  return rows;
 }
 
 function normalizedPrivacy(value, catalog) {
@@ -190,45 +154,6 @@ function dedupe(items, identity) {
   return [...found.values()];
 }
 
-async function laneManifest(root, lane, expectedInputDigest, universe) {
-  const path = await contained(root, laneFiles[lane]);
-  const value = await jsonFile(path);
-  if (!exactKeys(value, ["schema", "lane", "inputDigest", "unitIds", "shards"])
-    || value.schema !== "oxygen.story-preparation-shards" || value.lane !== lane
-    || value.inputDigest !== expectedInputDigest || !Array.isArray(value.unitIds) || !Array.isArray(value.shards)) {
-    fail("SHARD_MANIFEST_INVALID");
-  }
-  const unitIds = [...value.unitIds];
-  if (unitIds.some((id) => !stableId(id)) || new Set(unitIds).size !== unitIds.length
-    || canonicalAuthorityJson(unitIds.sort(utf8)) !== canonicalAuthorityJson([...universe].sort(utf8))) fail("SHARD_MANIFEST_UNIVERSE_INVALID");
-  if ((universe.length === 0) !== (value.shards.length === 0)) fail("SHARD_MANIFEST_EMPTY_INVALID");
-  const seenShards = new Set();
-  const assigned = [];
-  const outputs = [];
-  for (const shard of value.shards) {
-    if (!exactKeys(shard, ["id", "unitIds", "receiptPath"]) || !stableId(shard.id)
-      || seenShards.has(shard.id) || !Array.isArray(shard.unitIds) || shard.unitIds.length === 0
-      || shard.unitIds.some((id) => !stableId(id)) || new Set(shard.unitIds).size !== shard.unitIds.length) {
-      fail("SHARD_INVALID");
-    }
-    seenShards.add(shard.id);
-    assigned.push(...shard.unitIds);
-    const receiptPath = await contained(root, shard.receiptPath);
-    const receipt = await jsonFile(receiptPath);
-    if (!exactKeys(receipt, ["schema", "lane", "shardId", "status", "inputDigest", "unitIds", "outputPath"])
-      || receipt.schema !== "oxygen.story-preparation-worker-receipt" || receipt.lane !== lane
-      || receipt.shardId !== shard.id || receipt.status !== "complete" || receipt.inputDigest !== expectedInputDigest
-      || !Array.isArray(receipt.unitIds) || canonicalAuthorityJson([...receipt.unitIds].sort(utf8))
-        !== canonicalAuthorityJson([...shard.unitIds].sort(utf8))) fail("RECEIPT_INVALID");
-    const outputPath = await contained(root, receipt.outputPath);
-    const output = await jsonFile(outputPath);
-    outputs.push(output);
-  }
-  if (assigned.length !== new Set(assigned).size
-    || canonicalAuthorityJson(assigned.sort(utf8)) !== canonicalAuthorityJson([...universe].sort(utf8))) fail("SHARD_UNION_INVALID");
-  return outputs;
-}
-
 function expectedStoryOutputs(rows) {
   const base = rows.map((row) => ({ id: row.id, story: { ...row.story, insights: [] } }));
   const complete = rows.map((row) => ({ id: row.id, story: row.story }));
@@ -244,6 +169,72 @@ function composeStory(outputs, expected, label) {
   const actual = dedupe(records, (record) => record.id).sort((a, b) => utf8(a.id, b.id));
   const wanted = [...expected].sort((a, b) => utf8(a.id, b.id));
   if (canonicalAuthorityJson(actual) !== canonicalAuthorityJson(wanted)) fail(`${label}_OUTPUT_STALE`);
+}
+
+function sameIds(actual, expected, code) {
+  if (!Array.isArray(actual) || actual.some((id) => !stableId(id))
+    || new Set(actual).size !== actual.length
+    || canonicalAuthorityJson([...actual].sort(utf8)) !== canonicalAuthorityJson([...expected].sort(utf8))) {
+    fail(code);
+  }
+}
+
+function validateFinalStoryOwnerAuthority(storyAuthority, validationAuthority) {
+  const representedRows = validationAuthority.coverageManifest.rows
+    .filter((row) => row.disposition === "represented");
+  const ownerIds = [...new Set(representedRows.map((row) => row.ownerId))].sort(utf8);
+  if (ownerIds.length === 0) fail("STORY_ZERO_REPRESENTED_OWNER_UNSUPPORTED");
+  sameIds(storyAuthority.manifest.unitIds, ownerIds, "STORY_OWNER_SCOPE_STALE");
+  const unitOwner = new Map(representedRows.map((row) => [row.unitId, row.ownerId]));
+  const seenOwners = new Set();
+  const seenUnits = new Set();
+  for (const [index, input] of storyAuthority.inputs.entries()) {
+    if (!exactKeys(input.payload, [
+      "validationAuthorityPath", "validationAuthorityDigest", "ownerBundles",
+    ]) || !Array.isArray(input.payload.ownerBundles) || input.payload.ownerBundles.length === 0) {
+      fail("STORY_INPUT_STALE");
+    }
+    const inputOwners = [];
+    for (const bundle of input.payload.ownerBundles) {
+      if (!exactKeys(bundle, [
+        "ownerId", "semanticManifest", "coverageManifest", "semanticUnits", "reviewedNarrative",
+      ]) || !stableId(bundle.ownerId) || seenOwners.has(bundle.ownerId)
+        || !Array.isArray(bundle.semanticUnits) || bundle.semanticUnits.length === 0) {
+        fail("STORY_OWNER_SCOPE_STALE");
+      }
+      seenOwners.add(bundle.ownerId);
+      inputOwners.push(bundle.ownerId);
+      for (const unit of bundle.semanticUnits) {
+        if (!stableId(unit?.id) || seenUnits.has(unit.id) || unitOwner.get(unit.id) !== bundle.ownerId) {
+          fail("STORY_OWNER_SCOPE_STALE");
+        }
+        seenUnits.add(unit.id);
+      }
+    }
+    sameIds(inputOwners, input.unitIds, "STORY_OWNER_SCOPE_STALE");
+    const shardOutput = storyAuthority.outputs[index];
+    if (!Array.isArray(shardOutput)) fail("STORY_OUTPUT_INVALID");
+    sameIds(shardOutput.map((record) => record?.story?.key), input.unitIds, "STORY_OWNER_SCOPE_STALE");
+  }
+  sameIds([...seenOwners], ownerIds, "STORY_OWNER_SCOPE_STALE");
+  sameIds([...seenUnits], [...unitOwner.keys()], "STORY_SCOPE_STALE");
+}
+
+function composeInsight(output, base, complete, storyKeys) {
+  if (!Array.isArray(output)) fail("INSIGHT_OUTPUT_INVALID");
+  const records = output.map((record) => {
+    if (!exactKeys(record, ["storyKey", "insights"]) || !stableId(record.storyKey)
+      || !Array.isArray(record.insights)) fail("INSIGHT_OUTPUT_INVALID");
+    return record;
+  }).sort((left, right) => utf8(left.storyKey, right.storyKey));
+  sameIds(records.map((record) => record.storyKey), storyKeys, "INSIGHT_OUTPUT_IDENTITY_INVALID");
+  const byKey = new Map(records.map((record) => [record.storyKey, record.insights]));
+  const composed = base.map((record) => ({
+    id: record.id,
+    story: { ...record.story, insights: byKey.get(record.story.key) },
+  }));
+  if (canonicalAuthorityJson(composed) !== canonicalAuthorityJson(complete)) fail("INSIGHT_OUTPUT_STALE");
+  return records.reduce((total, record) => total + record.insights.length, 0);
 }
 
 function preferenceOption(value) {
@@ -321,25 +312,6 @@ async function preferenceAuthority(value, workflowRunId, sourceRevision, inputDi
   return value;
 }
 
-function composePreference(outputs, authority) {
-  const probes = [];
-  const bulkDecisions = [];
-  for (const output of outputs) {
-    rejectMetadata(output);
-    if (!exactKeys(output, ["probes", "bulkDecisions"]) || !Array.isArray(output.probes)
-      || !Array.isArray(output.bulkDecisions)) fail("PREFERENCE_OUTPUT_INVALID");
-    probes.push(...output.probes);
-    bulkDecisions.push(...output.bulkDecisions);
-  }
-  const composed = canonicalPreferenceQuestionBatch(
-    dedupe(probes, (item) => typeof item?.id === "string" ? `probe:${item.id}` : fail("PREFERENCE_OUTPUT_INVALID")),
-    dedupe(bulkDecisions, (item) => typeof item?.id === "string" ? `bulk:${item.id}` : fail("PREFERENCE_OUTPUT_INVALID")),
-  );
-  const supplied = canonicalPreferenceQuestionBatch(authority.probes, authority.bulkDecisions);
-  if (canonicalAuthorityJson(composed) !== canonicalAuthorityJson(supplied)) fail("PREFERENCE_OUTPUT_STALE");
-  return composed;
-}
-
 async function finalize(args) {
   const [semanticPath, candidatesPath, shardRootInput, preferencePath, outputPath, marker, workflowRunId, revisionMarker, revision] = args;
   if (args.length !== 9 || !semanticPath || !candidatesPath || !shardRootInput || !preferencePath || !outputPath
@@ -347,15 +319,29 @@ async function finalize(args) {
     || !/^(0|[1-9][0-9]*)$/u.test(revision || "")) fail("CLI_USAGE");
   const sourceRevision = Number(revision);
   if (!Number.isSafeInteger(sourceRevision)) fail("CLI_USAGE");
-  let shardRoot;
-  try {
-    shardRoot = await realpath(resolve(shardRootInput));
-  } catch {
-    fail("FILE_UNREADABLE");
+  const semantic = await readSemanticTransport(semanticPath, {
+    invalid: "FILE_UNREADABLE", changed: "FILE_CHANGED", jsonInvalid: "JSON_INVALID",
+  });
+  const semanticUnitIds = semantic.units.map((unit) => unit.id).sort(utf8);
+  let rows = finalCandidates(await jsonFile(resolve(candidatesPath)));
+  const storyAuthority = await readLaneAuthority(shardRootInput, "story");
+  const validationAuthority = await readStoryValidationAuthority(storyAuthority);
+  if (canonicalAuthorityJson(validationAuthority.semanticManifest) !== canonicalAuthorityJson(semantic)) {
+    fail("STORY_INPUT_STALE");
   }
-  const semantic = await semanticAuthority(await jsonFile(resolve(semanticPath)));
-  const rows = finalCandidates(await jsonFile(resolve(candidatesPath)));
+  validateFinalStoryOwnerAuthority(storyAuthority, validationAuthority);
+  const sourceEvidence = new Map(validationAuthority.evidence.map((row) => [row.id, row]));
+  rows = [...rows].sort((left, right) => {
+    const a = sourceEvidence.get(left.story.evidence.primary.eventId);
+    const b = sourceEvidence.get(right.story.evidence.primary.eventId);
+    if (!a || !b) fail("FINAL_STORY_IDENTITIES_INVALID");
+    return compareStorySourceIdentity(a, b);
+  });
   const sourceRows = rows.map(({ story, ...row }) => row);
+  const validationRows = rows.map(({ story, ...row }) => ({
+    ...row,
+    documentId: story.evidence.primary.documentId,
+  }));
   const { base, complete, insightCount } = expectedStoryOutputs(rows);
   const storyKeys = rows.map((row) => row.story.key).sort(utf8);
   const catalog = deriveStoryReleaseTargetCatalog(rows.map((row) => row.story));
@@ -379,25 +365,43 @@ async function finalize(args) {
     await jsonFile(resolve(preferencePath)), workflowRunId, sourceRevision,
     preferenceInputDigest, evidence, evidenceIds,
   );
-  const storyOutputs = await laneManifest(shardRoot, "story", semantic.manifestDigest, semantic.unitIds);
-  composeStory(storyOutputs, base, "STORY");
+  composeStory([storyAuthority.output], base, "STORY");
+  if (storyAuthority.outputCount !== base.length) fail("STORY_RECEIPT_STALE");
+  const storyValidation = validateStorySourcePackage(
+    validationRows,
+    storyEvidenceRows(validationAuthority),
+    storyCompletenessAuthority(validationAuthority),
+  );
+  if (!storyValidation.ok) fail(storyValidation.code);
   const baseDigest = await storyPreparationDigest(base);
-  const insightOutputs = await laneManifest(shardRoot, "insight", baseDigest, storyKeys);
-  composeStory(insightOutputs, insightCount === 0 ? [] : complete, "INSIGHT");
+  const insightAuthority = await readLaneAuthority(shardRootInput, "insight");
+  if (insightAuthority.manifest.inputDigest !== baseDigest) fail("INSIGHT_INPUT_STALE");
+  sameIds(insightAuthority.manifest.unitIds, storyKeys, "INSIGHT_SCOPE_STALE");
+  const recordedInsightCount = composeInsight(insightAuthority.output, base, complete, storyKeys);
+  if (recordedInsightCount !== insightCount || insightAuthority.outputCount !== insightCount) {
+    fail("INSIGHT_RECEIPT_STALE");
+  }
   const completeDigest = await storyPreparationDigest(complete);
-  const privacyOutputs = await laneManifest(shardRoot, "story_privacy", completeDigest, catalog.map((target) => target.id));
-  const privacy = normalizedPrivacy(privacyOutputs.flat(), catalog);
+  const privacyAuthority = await readLaneAuthority(shardRootInput, "story_privacy");
+  if (privacyAuthority.manifest.inputDigest !== completeDigest) fail("PRIVACY_INPUT_STALE");
+  sameIds(privacyAuthority.manifest.unitIds, catalog.map((target) => target.id), "PRIVACY_SCOPE_STALE");
+  const privacy = normalizedPrivacy(privacyAuthority.output, catalog);
+  if (privacyAuthority.outputCount !== privacy.length) fail("PRIVACY_RECEIPT_STALE");
   const preferenceUniverse = rows.flatMap((row) => row.story.insights.map((insight) => ({
     storyKey: row.story.key, insightId: insight.id,
   }))).sort((a, b) => utf8(a.storyKey, b.storyKey) || utf8(a.insightId, b.insightId));
-  const preferenceOutputs = await laneManifest(shardRoot, "preference", preferenceInputDigest,
-    preferenceUniverse.map((identity) => canonicalAuthorityJson(identity)));
-  const questions = composePreference(preferenceOutputs, preference);
+  const preferenceAuthorityRecord = await readLaneAuthority(shardRootInput, "preference");
+  if (preferenceAuthorityRecord.manifest.inputDigest !== preferenceInputDigest) fail("PREFERENCE_INPUT_STALE");
+  sameIds(preferenceAuthorityRecord.manifest.unitIds,
+    preferenceUniverse.map((identity) => canonicalAuthorityJson(identity)), "PREFERENCE_SCOPE_STALE");
+  if (canonicalAuthorityJson(preferenceAuthorityRecord.output) !== canonicalAuthorityJson(preference)
+    || preferenceAuthorityRecord.receipt.outputCount !== preference.outputCount) fail("PREFERENCE_OUTPUT_STALE");
+  const questions = canonicalPreferenceQuestionBatch(preference.probes, preference.bulkDecisions);
   const outputDigest = await storyPreparationDigest(questions);
   if (outputDigest !== preference.outputDigest || questions.length !== preference.outputCount) fail("PREFERENCE_BUNDLE_STALE");
   const receipts = [
     { lane: "story", status: "complete", inputDigest: semantic.manifestDigest,
-      scopeDigest: await storyPreparationDigest(semantic.unitIds), scopeCount: semantic.unitIds.length,
+      scopeDigest: await storyPreparationDigest(semanticUnitIds), scopeCount: semanticUnitIds.length,
       outputDigest: baseDigest, outputCount: base.length },
     { lane: "insight", status: "complete", inputDigest: baseDigest,
       scopeDigest: await storyPreparationDigest(storyKeys), scopeCount: storyKeys.length,
@@ -414,7 +418,7 @@ async function finalize(args) {
     workflowRunId,
     sourceRevision,
     semanticManifestDigest: semantic.manifestDigest,
-    semanticUnitIds: semantic.unitIds,
+    semanticUnitIds,
     storyCandidates: sourceRows,
     preference: { workflowRunId, sourceRevision, inputDigest: preferenceInputDigest, outputDigest, outputCount: questions.length },
   });
@@ -428,6 +432,7 @@ async function finalize(args) {
 try {
   await finalize(process.argv.slice(2));
 } catch (error) {
-  process.stderr.write(`${error instanceof FinalizerError ? error.code : "FINALIZER_FAILED"}\n`);
+  process.stderr.write(`${error instanceof FinalizerError || error instanceof StoryPreparationTransportError
+    ? error.code : "FINALIZER_FAILED"}\n`);
   process.exitCode = 1;
 }

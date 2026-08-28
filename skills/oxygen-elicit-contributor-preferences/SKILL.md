@@ -8,8 +8,9 @@ description: Turn a privacy-prepared reviewed Oxygen run into a small set of ans
 The goal is a **cheap** annotation pass. A contributor will not read 400 events and write
 freeform notes. They will answer roughly ten well-posed multiple-choice questions.
 
-Everything here runs on the contributor's own machine and their own model key. Nothing is
-uploaded. `publication_approved` stays `false`.
+Everything here runs on the contributor's own machine. Internal host subagents are not product
+provider/API calls and require no separate API key. Nothing is uploaded. `publication_approved`
+stays `false`.
 
 ## Vocabulary warning
 
@@ -39,9 +40,26 @@ python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference
   --output "$Review\preference-context.json"
 ```
 
-The bounded Agent reads only that context and writes `preference-candidates.json` with exactly
-`probes`, `bulkDecisions`, and `setAside`. It never writes answers, Privacy aggregates, digests,
-provider metadata, release state, or publication state.
+Preference intentionally uses exactly one global bounded worker because it produces one
+deduplicated questionnaire authority. The workflow-owning parent assigns its one immutable
+Preference `inputPath` to one bounded host subagent when that capability exists; Preference never
+fans out across multiple shards or workers. The subagent reads only that one Privacy-safe context
+and writes `preference-candidates.json` with exactly `probes`, `bulkDecisions`, and `setAside`,
+capped at 12 probes by default and 20 maximum.
+It never writes answers, receipts, final manifests, SQLite, Viewer APIs, Privacy aggregates,
+digests, provider metadata, revisions, activation state, release state, or publication state. The
+parent runs validation and recording, owns the immutable output/receipt pair, and continues without
+asking the contributor to create a worker. If subagents are unavailable, the parent uses the same
+input and authority serially with `executionMode=serial_capability_limited`.
+
+The global Preference assignment gets one initial proposal plus at most two automatic
+proposal-only correction attempts. `correctionAttemptCount` counts corrections only, excludes the
+initial proposal, and is always `0..2`. Every correction uses the byte-identical immutable input,
+and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed
+safe pre-receipt authoring-validation code is correctable. If the second correction fails, stop the
+Preference lane safely, report correction exhaustion and the last safe validation code, and do not
+continue downstream. Authority, immutability, containment, path, I/O, infrastructure, and
+corrupt-state failures stop immediately and are never correctable.
 
 Work only on events whose project label is the primary project unless the contributor asks
 otherwise. Off-project events are noise and spending the contributor's attention on them is the
