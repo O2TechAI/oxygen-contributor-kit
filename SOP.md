@@ -93,7 +93,8 @@ collection**:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
-  --target /path/to/repo
+  --target /path/to/repo \
+  --save-state /external/private/.old/oxygen-session-<fresh-id>
 ```
 
 The launcher reserves an arbitrary free loopback port, opens the sanitized Workflow Progress UI,
@@ -102,6 +103,12 @@ the remaining stages. Do not begin collection until this surface is healthy. It 
 target-confirmed flag, fixed stage/status/blocker codes, justified counts, timestamps, and human-
 action state—never the target path, session names, reasoning, prompts, raw model/tool data,
 private messages, Story/Evidence payloads, or removed content.
+
+Select a fresh external private `.old` session directory for every owned launch; an existing
+destination is never replaced. After the Viewer stops and releases its port, the launcher verifies
+SQLite integrity, saves the complete Viewer-owned state, and prints the exact resumable session
+path. Pending, blocked, partially reviewed, and complete states are all saveable. If the Viewer or
+database was never created, do not claim that a state was saved.
 
 ## 2. Collect
 
@@ -381,8 +388,9 @@ python3 tools/llm_redact/push_redactions.py \
 
 The initial launcher validates Node/npm, resolves the platform-native npm command, repairs missing
 or cross-OS `node_modules` with lockfile-preserving `npm ci`, and starts native Next with one fresh
-process-owned temporary local SQLite database for this official launcher invocation. The Viewer
-owns cleanup when it stops; local database state is not reused. It reserves an OS-selected free
+process-owned temporary local state directory. Every owned launch must pass `--save-state` with a
+fresh external private `.old` session destination. After stop and port release, the complete state
+directory is saved there and the temporary runtime is cleaned. It reserves an OS-selected free
 `127.0.0.1` port by default and announces only the exact healthy URL. There is no online deployment
 path. An explicit occupied `--port` fails immediately without killing the owning process or
 silently falling back.
@@ -398,10 +406,12 @@ $Kit = (Get-Location).Path
 $Target = "D:\Coding Projects\my-project"
 $Viewer = "http://127.0.0.1:3210"
 $WorkflowRun = "oxygen-local-review-001"
+$SavedSession = "D:\private\.old\oxygen-session-<fresh-id>"
 Set-Location -LiteralPath $Kit
 
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  --target "$Target" --workflow-run-id "$WorkflowRun" --port 3210 --no-browser
+  --target "$Target" --workflow-run-id "$WorkflowRun" --port 3210 `
+  --save-state "$SavedSession" --no-browser
 ```
 
 Keep Terminal A running. Run Terminal B from the same contributor-kit root after Collect,
@@ -451,6 +461,18 @@ node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
   "$Review\story-coverage-manifest.json" `
   --source-privacy "$Review\current-public-source-privacy.json"
 ```
+
+When Bruce later says `resume`, use the exact saved path printed by the prior launcher:
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --resume-state "D:\private\.old\oxygen-session-<exact-id>"
+```
+
+Resume starts the Viewer on that same saved state. Do not rerun collection, import, Story
+preparation, or infer completion. Preserve any existing blocker and allow later human Review,
+Privacy, Preference, `All set`, and release progress to remain durable in that session. The saved
+session remains private/local and does not change `publication_approved=false`.
 
 ## Composition sequence (implemented transport)
 
@@ -740,6 +762,8 @@ git status --short
 Tell the contributor:
 
 - the exact Viewer URL and that it has no password;
+- after the Viewer stops, the exact saved-session path printed by the launcher, or explicitly that
+  no session was saved when no Viewer/database was created;
 - included inputs, project groups, primary project, and Chapter count;
 - exact privacy-removal counts and any unresolved privacy review;
 - probe count, confirmed preference count, and set-aside count;
