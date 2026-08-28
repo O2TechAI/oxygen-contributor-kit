@@ -33,17 +33,29 @@ Stage ownership:
 
 Repository-development Agents are outside the Toolkit runtime contract. During a normal Toolkit
 request, the workflow-owning parent Agent automatically executes every nonempty immutable semantic
-shard. When host subagents are available, it must dispatch them in waves with no more than three
-live at once; each subagent reads exactly one Privacy-safe `inputPath` and writes only that shard's
-proposal. The parent alone runs recorders and finalizers, installs output/receipt pairs, proves
-exact union and no overlap, mutates Viewer state, and waits for all terminal receipts. Fixed safe
-pre-receipt validation failures enter a bounded proposal-only correction loop against the identical
-input and never pause the contributor or rewrite durable output. `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS`
-is therefore an internal orchestration boundary. If host subagents are genuinely unavailable, the
-parent processes the same shards serially, reports `executionMode=serial_capability_limited`, and
-continues through the identical recorder/finalizer authority without asking the contributor to
-create workers. Internal host subagents are not product provider/API calls, require no separate API
-key, and receive no raw/private source beyond the prepared Privacy-safe input.
+shard. Story, Insight, and Story Privacy remain multi-shard lanes. Preference intentionally uses
+exactly one global bounded worker because it produces one deduplicated questionnaire authority,
+capped at 12 probes by default and 20 maximum; never fan Preference out across multiple workers.
+When host subagents are available, the parent dispatches with no more than three live at once; each
+subagent reads exactly one Privacy-safe `inputPath` and writes only its assigned proposal. The
+parent alone runs recorders and finalizers, installs output/receipt pairs, proves exact union and no
+overlap, mutates Viewer state, and waits for all terminal receipts.
+
+Each shard assignment gets one initial proposal plus at most two automatic proposal-only correction
+attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
+initial proposal, and is always `0..2`; never sum it across a multi-shard lane. Every correction
+uses the byte-identical immutable input. Every invalid initial or correction attempt leaves both
+output and receipt absent. Only a fixed safe pre-receipt authoring-validation code is correctable.
+If the second correction fails, stop the lane safely, report correction exhaustion and the last
+safe validation code, and do not continue downstream. Authority, immutability, containment, path,
+I/O, infrastructure, and corrupt-state failures stop immediately and are never correctable.
+
+`PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal orchestration boundary. If host subagents are
+genuinely unavailable, the parent processes the same assignments serially, reports
+`executionMode=serial_capability_limited`, and continues through the identical recorder/finalizer
+authority without asking the contributor to create workers. Internal host subagents are not
+product provider/API calls, require no separate API key, and receive no raw/private source beyond
+the prepared Privacy-safe input.
 
 Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
 

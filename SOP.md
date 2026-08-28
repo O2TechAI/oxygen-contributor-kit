@@ -297,9 +297,12 @@ recorder, existing Preference producer, and preparation finalizer create and bin
 Parent-owned semantic work starts with the public deterministic preparer. It accepts the canonical
 Organization project map or bare semantic manifest through one bounded parser, freezes the exact
 assigned identities and input digest, and installs immutable provider-safe worker input before a
-proposal exists. The workflow-owning parent enumerates every nonempty manifest shard and, when host
-subagents are available, dispatches them automatically in waves with at most three live at once.
-Each assignment reads exactly one Privacy-safe immutable `inputPath` and writes only its proposal.
+proposal exists. Story, Insight, and Story Privacy remain multi-shard lanes, and the
+workflow-owning parent enumerates every nonempty manifest shard for them. Preference intentionally
+uses exactly one global bounded worker because it produces one deduplicated questionnaire
+authority, capped at 12 probes by default and 20 maximum; never fan Preference out. When host
+subagents are available, assignments run automatically with at most three live at once. Each
+assignment reads exactly one Privacy-safe immutable `inputPath` and writes only its proposal.
 Workers never write receipts, final manifests, SQLite, Viewer APIs, revisions, activation state,
 release state, or publication state. Internal host subagents are not product provider/API calls,
 require no separate API key, and receive no raw/private source beyond the prepared input.
@@ -314,12 +317,19 @@ Every `story`-lane subagent assignment must convey this ordered contract before 
 Do not dispatch a Story worker until the assignment names both contract paths, the actual generated
 `inputPath`, and the proposal-only write boundary. No other data input is part of that assignment.
 
-The parent waits for proposals, invokes the public recorder for each shard, installs output plus
-receipt as one atomic immutable pair, verifies the terminal receipt count, composes, proves exact
-union/no overlap, and finalizes authority before continuing. A fixed safe pre-receipt validation
-code is automatically returned through a bounded proposal-only correction loop against the
-byte-identical input; it is not a contributor pause and may never rewrite durable output. If host
-subagents are genuinely unavailable, the parent processes the same inputs serially, reports
+The parent waits for proposals, invokes the public recorder for each assignment, installs output
+plus receipt as one atomic immutable pair, verifies the terminal receipt count, composes, proves
+exact union/no overlap, and finalizes authority before continuing. Each assignment gets one initial
+proposal plus at most two automatic proposal-only correction attempts. `correctionAttemptCount` is
+assignment-local, counts corrections only, excludes the initial proposal, and is always `0..2`;
+never sum it across a multi-shard lane. Every correction uses the byte-identical immutable input,
+and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed
+safe pre-receipt authoring-validation code is correctable. If the second correction fails, stop the
+lane safely, report correction exhaustion and the last safe validation code, and do not continue
+downstream. Authority, immutability, containment, path, I/O, infrastructure, and corrupt-state
+failures stop immediately and are never correctable. This is not a contributor pause and may never
+rewrite durable output. If host subagents are genuinely unavailable, the parent processes the same
+assignments serially, reports
 `executionMode=serial_capability_limited`, and uses the identical recorder/finalizer authority.
 `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal orchestration boundary. Revision authority and
 all Viewer mutations remain with the parent/server lane; no worker may silently expand scope or
@@ -436,21 +446,28 @@ node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
 Use one transport root and the current Viewer source revision. For each prepared lane, the parent
 performs this lifecycle without contributor intervention:
 
-1. Read the lane's `shards.json` and enumerate every deterministic shard.
-2. Dispatch available host subagents in waves of at most three. Each receives exactly one
+1. For Story, Insight, and Story Privacy, read the lane's `shards.json` and enumerate every
+   deterministic shard. For Preference, require exactly one global shard and one bounded worker;
+   do not fan the questionnaire authority out.
+2. Dispatch available host subagents with at most three live at once. Each receives exactly one
    `inputPath` and may write only its proposal. If subagents are unavailable, process those same
-   inputs serially and set `executionMode=serial_capability_limited`.
+   assignments serially and set `executionMode=serial_capability_limited`.
    For every `story`-lane assignment, first convey the complete-read requirements for
    `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` and
    `skills/oxygen-storytelling-review/references/story-data-contract.md`; only after both reads may
    the worker read its named generated `inputPath` and write its proposal.
 3. Wait for each proposal, then run the recorder with that manifest shard ID and proposal path.
-4. If the recorder returns a fixed safe validation code before output and receipt exist, return it
-   automatically to the same assignment through a bounded correction loop. Preserve the input
-   bytes and allow only the proposal to change.
-5. Require one terminal subordinate receipt per shard, verify the receipt count, exact union, and
+4. If the recorder returns a fixed safe pre-receipt authoring-validation code while output and
+   receipt are both absent, return it automatically to the same assignment for at most two
+   proposal-only corrections. Preserve the byte-identical input and allow only the proposal to
+   change. Count only corrections, so assignment-local `correctionAttemptCount` is `0..2` and does
+   not include the initial proposal.
+5. If the second correction fails, stop the lane safely, report correction exhaustion and the last
+   safe validation code, and do not continue downstream. Stop immediately without correction for
+   authority, immutability, containment, path, I/O, infrastructure, or corrupt-state failures.
+6. Require one terminal subordinate receipt per assignment, verify the receipt count, exact union, and
    no overlap, then compose/finalize with the public commands below.
-6. Continue automatically to the next dependent lane or to the next genuine human-review boundary.
+7. Continue automatically to the next dependent lane or to the next genuine human-review boundary.
 
 For each reached lane, retain E2E evidence for `executionMode`, `lane`, `shardCount`,
 `spawnedSubagentCount`, `maxConcurrentSubagents`, `correctionAttemptCount`, and
@@ -494,7 +511,7 @@ python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   prepare preference "$Review\story-candidates.json" `
   "$Review\preference-context.json" "$Transport"
-# Parent dispatches every Preference manifest shard (maximum three live), waits, then validates and records each proposal.
+# Parent dispatches the one global Preference worker, waits, then validates and records its proposal.
 python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
   --context "$Review\preference-context.json" `
   --candidates "<proposal-path>" `

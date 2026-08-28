@@ -78,14 +78,25 @@ it computes immutable input digests, assigns the exact current identities, and i
 worker input and shard manifest together.
 
 The public worker contract uses separate dependent passes for Story writing and Insight reasoning,
-then sibling Story Privacy and Preference-question passes. Workers write only lane proposals. The
-recorder validates each proposal against the frozen lane, shard, input digest, and assigned
+then sibling Story Privacy and Preference-question passes. Story, Insight, and Story Privacy remain
+multi-shard. Preference intentionally uses exactly one global bounded worker because it produces
+one deduplicated questionnaire authority, capped at 12 probes by default and 20 maximum. Workers
+write only lane proposals. The recorder validates each proposal against the frozen lane, shard, input digest, and assigned
 identities. For Story, the frozen input also digest-binds the current semantic and Coverage
 authorities plus a privacy-safe evidence/actor-equivalence projection, and the recorder directly
 calls the unchanged Viewer `validateStorySourcePackage`. It then creates the output and receipt as
 one atomic immutable pair. Exact union, no
 overlap, no foreign identities, no stale digest, deterministic deduplication, and deterministic
 composition are executable checks.
+
+Each assignment gets one initial proposal plus at most two automatic proposal-only correction
+attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
+initial proposal, and is always `0..2`. Every correction uses the byte-identical immutable input;
+an invalid initial or correction attempt creates neither output nor receipt. Only a fixed safe
+pre-receipt authoring-validation code is correctable. If the second correction fails, the lane
+stops safely, reports correction exhaustion and the last safe validation code, and does not
+continue downstream. Authority, immutability, containment, path, I/O, infrastructure, and
+corrupt-state failures stop immediately and are never correctable.
 
 The composed preparation finalizer independently revalidates the frozen inputs, receipts, output
 digests, exact union, lane dependency digests, final Story composition, the same complete shared

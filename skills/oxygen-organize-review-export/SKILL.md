@@ -101,11 +101,18 @@ python .\skills\oxygen-organize-review-export\scripts\record_semantic_worker.py 
 
 A recorder validation failure is pre-receipt authoring feedback only when both
 `outputs/<shard-id>.json` and `receipts/<shard-id>.json` are absent. The parent automatically
-returns only the fixed safe validation code as authoring feedback through a bounded correction loop;
-the assigned worker may replace only its non-authoritative handoff proposal against the byte-identical
-immutable shard input. This is not a contributor pause. The recorder never rewrites, maps, or
-repairs a proposal, and the loop may never replace durable output. Once an output or receipt exists,
-that durable authority is immutable; a differing resubmission fails closed and must not replace or
+returns only the fixed safe validation code as authoring feedback. Each shard assignment gets one
+initial proposal plus at most two automatic proposal-only correction attempts.
+`correctionAttemptCount` is assignment-local, counts corrections only, excludes the initial
+proposal, and is always `0..2`; never sum it across the multi-shard Organization lane. Every
+correction uses the byte-identical immutable shard input, and every invalid initial or correction
+attempt leaves both output and receipt absent. If the second correction fails, stop the lane safely,
+report correction exhaustion and the last safe validation code, and do not continue downstream.
+Authority, immutability, containment, path, I/O, infrastructure, and corrupt-state failures stop
+immediately and are never correctable. The assigned worker may replace only its non-authoritative
+handoff proposal. This is not a contributor pause. The recorder never rewrites, maps, or repairs a
+proposal, and correction may never replace durable output. Once an output or receipt exists, that
+durable authority is immutable; a differing resubmission fails closed and must not replace or
 repair either artifact.
 
 Workers may use the same stable `unitId` across shards. The deterministic composition stage merges

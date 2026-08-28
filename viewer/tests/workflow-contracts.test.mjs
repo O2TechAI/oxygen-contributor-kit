@@ -182,6 +182,52 @@ test("Narrative contract asks for evidence-backed engagement without fabrication
   assert.doesNotMatch(storyDataContract, /engagement/i);
 });
 
+test("Story preparation bounds proposal correction and keeps Preference global", async () => {
+  const [
+    agents,
+    sop,
+    storySkill,
+    storyTransport,
+    productContract,
+    preferenceSkill,
+    organizerSkill,
+  ] = await Promise.all([
+    read("AGENTS.md"),
+    read("SOP.md"),
+    read("skills/oxygen-storytelling-review/SKILL.md"),
+    read("skills/oxygen-storytelling-review/references/story-preparation-transport.md"),
+    read("skills/oxygen-storytelling-review/references/product-contract.md"),
+    read("skills/oxygen-elicit-contributor-preferences/SKILL.md"),
+    read("skills/oxygen-organize-review-export/SKILL.md"),
+  ]);
+
+  for (const document of [
+    agents, sop, storySkill, storyTransport, productContract, preferenceSkill, organizerSkill,
+  ]) {
+    assert.match(document, /one\s+initial\s+proposal\s+plus\s+at\s+most\s+two\s+automatic[\s\S]{0,60}proposal-only\s+correction\s+attempts/i);
+    assert.match(document, /`correctionAttemptCount`[\s\S]{0,120}counts corrections only[\s\S]{0,120}`0\.\.2`/i);
+    assert.match(document, /byte-identical immutable(?: shard)? input/i);
+    assert.match(document, /invalid\s+initial\s+or\s+correction\s+attempt[\s\S]{0,100}(?:leaves\s+both|creates\s+neither)[\s\S]{0,60}output[\s\S]{0,40}receipt/i);
+    assert.match(document, /second correction fails[\s\S]{0,140}correction exhaustion[\s\S]{0,100}last\s+safe\s+validation\s+code[\s\S]{0,120}(?:do not|does not)\s+continue\s+downstream/i);
+    assert.match(document, /Authority,\s+immutability,\s+containment,\s+path,\s+I\/O,\s+infrastructure,\s+and\s+corrupt-state\s+failures\s+stop\s+immediately[\s\S]{0,80}never\s+correctable/i);
+  }
+
+  for (const document of [agents, sop, storySkill, storyTransport, productContract]) {
+    assert.match(document, /Story, Insight, and Story Privacy[\s\S]{0,140}multi-shard/i);
+  }
+  for (const document of [agents, sop, storySkill, storyTransport, productContract, preferenceSkill]) {
+    assert.match(document, /Preference[\s\S]{0,120}exactly one global bounded worker/i);
+    assert.match(document, /one\s+deduplicated\s+questionnaire\s+authority/i);
+    assert.match(document, /12\s+probes\s+by\s+default[\s\S]{0,50}20\s+maximum/i);
+  }
+
+  const allContracts = [agents, sop, storySkill, storyTransport, productContract, preferenceSkill].join("\n");
+  assert.doesNotMatch(allContracts, /every Preference manifest shard/i);
+  for (const document of [agents, sop, storySkill, storyTransport, organizerSkill]) {
+    assert.match(document, /(?:at\s+most|no\s+more\s+than)\s+three\s+live/i);
+  }
+});
+
 test("Story public contracts preserve coverage, Insight, and Privacy release semantics", async () => {
   const [
     storySkill,

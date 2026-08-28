@@ -150,7 +150,8 @@ requires the owning Agent to prepare deterministic inputs first:
 - create an immutable input digest;
 - assign explicit semantic unit IDs;
 - write byte/content-balanced shard manifests;
-- automatically enumerate every nonempty shard and run separate bounded workers for Story writing, Insight reasoning, Privacy reasoning, and Preference-question reasoning;
+- automatically enumerate every nonempty Story, Insight, and Story Privacy shard and run those as multi-shard lanes;
+- run Preference as exactly one global bounded worker producing one deduplicated questionnaire authority, capped at 12 probes by default and 20 maximum;
 - require a receipt from every worker with input digest, shard ID, unit IDs covered, output path, and terminal status;
 - validate exact union coverage and no overlap across shard manifests and receipts;
 - deterministically deduplicate and compose outputs;
@@ -177,10 +178,17 @@ Do not dispatch a Story worker unless its assignment names both required contrac
 actual generated `inputPath`, and its proposal-only write boundary. The worker must not read any
 other data input or write a receipt, final artifact, or authority file.
 
-A fixed safe pre-receipt validation failure enters a bounded automatic authoring-correction loop
-against the byte-identical shard input. Only the non-authoritative proposal may change; this is not
-a contributor pause and may never rewrite durable output. If host subagents are genuinely
-unavailable, the parent runs the same shards serially, reports
+A shard assignment gets one initial proposal plus at most two automatic proposal-only correction
+attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
+initial proposal, and is always `0..2`; never sum it across a multi-shard lane. Every correction
+uses the byte-identical immutable input, and every invalid initial or correction attempt leaves both
+output and receipt absent. Only a fixed safe pre-receipt authoring-validation code is correctable.
+If the second correction fails, stop the lane safely, report correction exhaustion and the last
+safe validation code, and do not continue downstream. Authority, immutability, containment, path,
+I/O, infrastructure, and corrupt-state failures stop immediately and are never correctable. Only
+the non-authoritative proposal may change; this is not a contributor pause and may never rewrite
+durable output. If host subagents are genuinely unavailable, the parent runs the same assignments
+serially, reports
 `executionMode=serial_capability_limited`, and continues through the identical recorder/finalizer
 authority without asking the contributor to create workers. Internal host subagents are not product
 provider/API calls, require no separate API key, and receive no raw/private source beyond the

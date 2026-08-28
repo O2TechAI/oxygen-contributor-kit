@@ -40,14 +40,26 @@ python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference
   --output "$Review\preference-context.json"
 ```
 
-The workflow-owning parent automatically assigns the immutable Preference `inputPath` to a bounded
-host subagent when that capability exists; the subagent reads only that one Privacy-safe context
-and writes `preference-candidates.json` with exactly `probes`, `bulkDecisions`, and `setAside`.
+Preference intentionally uses exactly one global bounded worker because it produces one
+deduplicated questionnaire authority. The workflow-owning parent assigns its one immutable
+Preference `inputPath` to one bounded host subagent when that capability exists; Preference never
+fans out across multiple shards or workers. The subagent reads only that one Privacy-safe context
+and writes `preference-candidates.json` with exactly `probes`, `bulkDecisions`, and `setAside`,
+capped at 12 probes by default and 20 maximum.
 It never writes answers, receipts, final manifests, SQLite, Viewer APIs, Privacy aggregates,
 digests, provider metadata, revisions, activation state, release state, or publication state. The
 parent runs validation and recording, owns the immutable output/receipt pair, and continues without
 asking the contributor to create a worker. If subagents are unavailable, the parent uses the same
 input and authority serially with `executionMode=serial_capability_limited`.
+
+The global Preference assignment gets one initial proposal plus at most two automatic
+proposal-only correction attempts. `correctionAttemptCount` counts corrections only, excludes the
+initial proposal, and is always `0..2`. Every correction uses the byte-identical immutable input,
+and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed
+safe pre-receipt authoring-validation code is correctable. If the second correction fails, stop the
+Preference lane safely, report correction exhaustion and the last safe validation code, and do not
+continue downstream. Authority, immutability, containment, path, I/O, infrastructure, and
+corrupt-state failures stop immediately and are never correctable.
 
 Work only on events whose project label is the primary project unless the contributor asks
 otherwise. Off-project events are noise and spending the contributor's attention on them is the
