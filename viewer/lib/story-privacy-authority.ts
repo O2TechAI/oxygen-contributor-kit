@@ -3,17 +3,17 @@ import {
   deriveStoryReleaseTargetCatalog,
   storyPreparationDigest,
   type StoryPreparationPrivacyCandidate,
-} from "./story-preparation";
+} from "./story-preparation.ts";
 import {
   validateCurrentStorySourcePackage,
   type StoryEvidenceRow,
-} from "./story-readiness";
+} from "./story-readiness.ts";
 import {
   compareStorySourceIdentity,
   parseStorySource,
   type StoryReleaseTarget,
   type StorySource,
-} from "./timeline";
+} from "./timeline.ts";
 import {
   reconstructReviewedStoryPrivacyRevision,
   type ReviewedStoryPrivacyRevision,

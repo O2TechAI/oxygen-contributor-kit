@@ -85,6 +85,21 @@ async function storyAuthoritySnapshot(db) {
     active_story_digest FROM workflow_runs WHERE id='workflow-redaction-atomicity'`).first();
 }
 
+async function seedReleaseConfirmation(db, workflowRunId = "workflow-redaction-atomicity") {
+  await db.prepare(`INSERT INTO project_release_confirmations
+    (workflow_run_id,review_gate_digest,confirmed_at) VALUES (?,?,?)
+    ON CONFLICT(workflow_run_id) DO UPDATE SET
+      review_gate_digest=excluded.review_gate_digest,confirmed_at=excluded.confirmed_at`)
+    .bind(workflowRunId, "9".repeat(64), oldTime).run();
+}
+
+async function releaseConfirmationSnapshot(db) {
+  const rows = await db.prepare(
+    "SELECT * FROM project_release_confirmations ORDER BY workflow_run_id",
+  ).all();
+  return rows.results;
+}
+
 function deferred() {
   let resolve;
   const promise = new Promise((done) => { resolve = done; });
@@ -175,16 +190,16 @@ async function seedConcurrentPrivacyState(db, establishWorkflowRun, computeSourc
         "c".repeat(64), "d".repeat(64), 0, "e".repeat(64), "f".repeat(64),
         "1".repeat(64), 1, oldTime,
       ),
-    db.prepare(`INSERT INTO project_all_set
-      (workflow_run_id,active_story_digest,source_revision,server_version,all_set_at)
-      VALUES (?,?,?,?,?)`).bind(workflowRunId, activeStoryDigest, sourceRevision, 1, oldTime),
+    db.prepare(`INSERT INTO project_release_confirmations
+      (workflow_run_id,review_gate_digest,confirmed_at)
+      VALUES (?,?,?)`).bind(workflowRunId, "9".repeat(64), oldTime),
   ]);
   return { workflowRunId, sourceRevision, sourceDigest, activeStoryDigest };
 }
 
 async function completeAuthoritySnapshot(db) {
   return db.transaction(async () => {
-    const [documents, items, jobs, redactions, workflow, storyPrivacy, allSet, manifest] =
+    const [documents, items, jobs, redactions, workflow, storyPrivacy, releaseConfirmation, manifest] =
       await Promise.all([
         db.prepare("SELECT * FROM documents ORDER BY id").all(),
         db.prepare("SELECT * FROM items ORDER BY id").all(),
@@ -192,7 +207,7 @@ async function completeAuthoritySnapshot(db) {
         db.prepare("SELECT * FROM redactions ORDER BY id").all(),
         db.prepare("SELECT * FROM workflow_runs ORDER BY id").all(),
         db.prepare("SELECT * FROM story_privacy_authorities ORDER BY workflow_run_id").all(),
-        db.prepare("SELECT * FROM project_all_set ORDER BY workflow_run_id").all(),
+        db.prepare("SELECT * FROM project_release_confirmations ORDER BY workflow_run_id").all(),
         db.prepare("SELECT * FROM finalized_corpus_manifests ORDER BY workflow_run_id").all(),
       ]);
     return {
@@ -202,7 +217,7 @@ async function completeAuthoritySnapshot(db) {
       redactions: redactions.results,
       workflow: workflow.results,
       storyPrivacy: storyPrivacy.results,
-      allSet: allSet.results,
+      releaseConfirmation: releaseConfirmation.results,
       manifest: manifest.results,
     };
   });
@@ -319,9 +334,11 @@ test("redaction replacement validates completely and commits once with real SQLi
           active_story_digest=? WHERE id='workflow-redaction-atomicity'`)
       .bind(sourceRevision, activeStoryDigest).run();
     await activateStory();
+    await seedReleaseConfirmation(db);
 
     const oldSnapshot = await privacySnapshot(db);
     const oldStoryAuthority = await storyAuthoritySnapshot(db);
+    const oldReleaseConfirmation = await releaseConfirmationSnapshot(db);
     const originalBatch = db.batch.bind(db);
     let routeBatchCalls = 0;
     db.batch = async (statements) => {
@@ -380,6 +397,7 @@ test("redaction replacement validates completely and commits once with real SQLi
         /RAW_PRIVACY_URL|RAW_PRIVACY_REASON|private\.invalid|sqlite|trace/iu, name);
       assert.deepEqual(await privacySnapshot(db), oldSnapshot, name);
       assert.deepEqual(await storyAuthoritySnapshot(db), oldStoryAuthority, name);
+      assert.deepEqual(await releaseConfirmationSnapshot(db), oldReleaseConfirmation, name);
       assert.equal(routeBatchCalls, 0, `${name} must not start a write batch`);
     }
 
@@ -394,6 +412,7 @@ test("redaction replacement validates completely and commits once with real SQLi
     });
     assert.deepEqual(await privacySnapshot(db), oldSnapshot);
     assert.deepEqual(await storyAuthoritySnapshot(db), oldStoryAuthority);
+    assert.deepEqual(await releaseConfirmationSnapshot(db), oldReleaseConfirmation);
 
     await originalBatch([
       db.prepare(`CREATE TRIGGER fail_atomic_redaction BEFORE INSERT ON redactions
@@ -411,6 +430,8 @@ test("redaction replacement validates completely and commits once with real SQLi
     assert.doesNotMatch(JSON.stringify(failedSqlBody), /forced|sqlite|trigger|trace/iu);
     assert.deepEqual(await privacySnapshot(db), oldSnapshot);
     assert.deepEqual(await storyAuthoritySnapshot(db), oldStoryAuthority);
+    assert.deepEqual(await releaseConfirmationSnapshot(db), oldReleaseConfirmation,
+      "failed Privacy SQL preserves release confirmation");
     assert.equal(routeBatchCalls, 1, "failed replacement uses one rolled-back batch");
 
     const validRedactions = [
@@ -427,9 +448,8 @@ test("redaction replacement validates completely and commits once with real SQLi
       }),
     ];
     await originalBatch([
-      db.prepare(`CREATE TRIGGER fail_story_privacy_invalidation
-        BEFORE UPDATE OF story_generation_status ON workflow_runs
-        WHEN OLD.story_generation_status='ready_for_human_review'
+      db.prepare(`CREATE TRIGGER fail_release_confirmation_invalidation
+        BEFORE DELETE ON project_release_confirmations
         BEGIN SELECT RAISE(ABORT, 'RAW_SQLITE_PATH_D:/private/oxygen.sqlite'); END`),
     ]);
     const failedInvalidation = await post(route, payload(validRedactions));
@@ -439,9 +459,10 @@ test("redaction replacement validates completely and commits once with real SQLi
     assert.doesNotMatch(JSON.stringify(failedInvalidationBody),
       /RAW_SQLITE_PATH|private|oxygen\.sqlite|trace/iu);
     assert.deepEqual(await privacySnapshot(db), oldSnapshot,
-      "failed Story invalidation rolls back the complete valid Privacy replacement");
+      "failed release-confirmation invalidation rolls back the complete valid Privacy replacement");
     assert.deepEqual(await storyAuthoritySnapshot(db), oldStoryAuthority);
-    await originalBatch([db.prepare("DROP TRIGGER fail_story_privacy_invalidation")]);
+    assert.deepEqual(await releaseConfirmationSnapshot(db), oldReleaseConfirmation);
+    await originalBatch([db.prepare("DROP TRIGGER fail_release_confirmation_invalidation")]);
     const response = await post(route, payload(validRedactions));
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
@@ -455,6 +476,8 @@ test("redaction replacement validates completely and commits once with real SQLi
       story_source_revision: sourceRevision,
       active_story_digest: null,
     });
+    assert.deepEqual(await releaseConfirmationSnapshot(db), [],
+      "POST replacement retires final release confirmation atomically");
 
     const replacement = await privacySnapshot(db);
     assert.equal(replacement.jobs.length, 1);
@@ -520,7 +543,9 @@ test("redaction replacement validates completely and commits once with real SQLi
     assert.deepEqual(await privacySnapshot(db), beforeDelete, "obsolete DELETE cannot mutate review state");
     const beforeRejectedDecisions = await privacySnapshot(db);
     await activateStory();
+    await seedReleaseConfirmation(db);
     const beforeRejectedAuthority = await storyAuthoritySnapshot(db);
+    const beforeRejectedReleaseConfirmation = await releaseConfirmationSnapshot(db);
     for (const body of [
       { status: "removed" },
       { review_state: "confirmed_keep" },
@@ -534,6 +559,7 @@ test("redaction replacement validates completely and commits once with real SQLi
       assert.equal((await rejectedDecision.json()).code, "SOURCE_PRIVACY_DECISION_INVALID");
       assert.deepEqual(await privacySnapshot(db), beforeRejectedDecisions);
       assert.deepEqual(await storyAuthoritySnapshot(db), beforeRejectedAuthority);
+      assert.deepEqual(await releaseConfirmationSnapshot(db), beforeRejectedReleaseConfirmation);
     }
     const malformedDecision = await decisionRoute.PATCH(new Request(
       "http://localhost/api/redactions/replacement-keep",
@@ -542,6 +568,7 @@ test("redaction replacement validates completely and commits once with real SQLi
     assert.equal(malformedDecision.status, 400);
     assert.equal((await malformedDecision.json()).code, "SOURCE_PRIVACY_DECISION_INVALID");
     assert.deepEqual(await storyAuthoritySnapshot(db), beforeRejectedAuthority);
+    assert.deepEqual(await releaseConfirmationSnapshot(db), beforeRejectedReleaseConfirmation);
     const deterministicDecision = await decide(decisionRoute, "replacement-alpha", {
       decision: "keep",
     });
@@ -550,11 +577,11 @@ test("redaction replacement validates completely and commits once with real SQLi
       "SOURCE_PRIVACY_DECISION_NOT_ACTIONABLE");
     assert.deepEqual(await privacySnapshot(db), beforeRejectedDecisions);
     assert.deepEqual(await storyAuthoritySnapshot(db), beforeRejectedAuthority);
+    assert.deepEqual(await releaseConfirmationSnapshot(db), beforeRejectedReleaseConfirmation);
 
     await originalBatch([
-      db.prepare(`CREATE TRIGGER fail_story_privacy_decision_invalidation
-        BEFORE UPDATE OF story_generation_status ON workflow_runs
-        WHEN OLD.story_generation_status='ready_for_human_review'
+      db.prepare(`CREATE TRIGGER fail_release_confirmation_decision_invalidation
+        BEFORE DELETE ON project_release_confirmations
         BEGIN SELECT RAISE(ABORT, 'RAW_PRIVACY_TRACE_SQLITE_PATH'); END`),
     ]);
     const failedDecision = await decide(decisionRoute, "replacement-keep", { decision: "keep" });
@@ -563,9 +590,10 @@ test("redaction replacement validates completely and commits once with real SQLi
     assert.equal(failedDecisionBody.code, "SOURCE_PRIVACY_MUTATION_CONFLICT");
     assert.doesNotMatch(JSON.stringify(failedDecisionBody), /RAW_PRIVACY_TRACE|sqlite|path/iu);
     assert.deepEqual(await privacySnapshot(db), beforeRejectedDecisions,
-      "failed Story invalidation rolls back the contributor Privacy decision");
+      "failed release-confirmation invalidation rolls back the contributor Privacy decision");
     assert.deepEqual(await storyAuthoritySnapshot(db), beforeRejectedAuthority);
-    await originalBatch([db.prepare("DROP TRIGGER fail_story_privacy_decision_invalidation")]);
+    assert.deepEqual(await releaseConfirmationSnapshot(db), beforeRejectedReleaseConfirmation);
+    await originalBatch([db.prepare("DROP TRIGGER fail_release_confirmation_decision_invalidation")]);
 
     const beforeKeepDigest = (await capturePackageReleasePrivacySnapshot(db)).digest;
     const keepResponse = await decide(decisionRoute, "replacement-keep", { decision: "keep" });
@@ -582,10 +610,13 @@ test("redaction replacement validates completely and commits once with real SQLi
       story_source_revision: sourceRevision,
       active_story_digest: null,
     });
+    assert.deepEqual(await releaseConfirmationSnapshot(db), [],
+      "PATCH keep retires final release confirmation atomically");
     const afterKeepDigest = (await capturePackageReleasePrivacySnapshot(db)).digest;
     assert.notEqual(afterKeepDigest, beforeKeepDigest, "a review decision changes the snapshot digest");
 
     await activateStory();
+    await seedReleaseConfirmation(db);
     const redactResponse = await decide(decisionRoute, "replacement-redact", {
       decision: "redact",
     });
@@ -602,6 +633,8 @@ test("redaction replacement validates completely and commits once with real SQLi
       story_source_revision: sourceRevision,
       active_story_digest: null,
     });
+    assert.deepEqual(await releaseConfirmationSnapshot(db), [],
+      "PATCH redact retires final release confirmation atomically");
 
     const readResponse = await route.GET();
     assert.equal(readResponse.status, 200);
@@ -616,9 +649,10 @@ test("redaction replacement validates completely and commits once with real SQLi
       exportedAt: oldTime,
     });
     assert.equal(releasedPackage.status, 400,
-      "resolved source redactions cannot bypass the final Story and All set authority");
+      "resolved source redactions cannot bypass final Story and release-confirmation authority");
 
     await activateStory();
+    await seedReleaseConfirmation(db);
     const zeroResponse = await post(route, payload([]));
     assert.equal(zeroResponse.status, 200);
     assert.deepEqual(await zeroResponse.json(), { imported: 0, rejected: [], status: "complete" });
@@ -636,6 +670,8 @@ test("redaction replacement validates completely and commits once with real SQLi
       story_source_revision: sourceRevision,
       active_story_digest: null,
     });
+    assert.deepEqual(await releaseConfirmationSnapshot(db), [],
+      "completed-zero POST retires final release confirmation atomically");
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
     delete globalThis.__oxygenLocalSqlite;
@@ -740,12 +776,20 @@ test("Privacy-first replacement linearizes before source publication and unrelat
     await realPrepare(`INSERT INTO organization_jobs
       (id,status,stage,started_at,updated_at) VALUES (?,?,?,?,?)`)
       .bind("unrelated-write", "complete", "done", oldTime, oldTime).run();
+    await realPrepare(`INSERT INTO probe_runs
+      (workflow_run_id,id,source_revision,input_digest,output_digest,output_count,status,stage,
+       generated,set_aside,auto_removed_json,started_at,updated_at,completed_at)
+      VALUES (?,?,?,?,?,0,'complete','preference',0,0,'{}',?,?,?)`)
+      .bind("unrelated-probe-run", "unrelated-probe-run", 1,
+        "b".repeat(64), "c".repeat(64), oldTime, oldTime, oldTime).run();
     releasePrivacy.resolve();
     const privacyResponse = await currentPrivacy;
     db.prepare = realPrepare;
     assert.equal(privacyResponse.status, 200);
     assert.equal((await privacyResponse.json()).imported, 1);
     assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM organization_jobs").first()).count, 1);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM probe_runs WHERE workflow_run_id=?")
+      .bind("unrelated-probe-run").first()).count, 1);
     const completed = await privacySnapshot(db);
     assert.equal(completed.jobs[0].status, "complete");
     assert.equal(completed.jobs[0].source_digest, seeded.sourceDigest);

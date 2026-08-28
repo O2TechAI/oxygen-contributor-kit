@@ -28,7 +28,7 @@ export function activeStoryPrivacyInvalidationStatements(
   const activeGuard = `EXISTS (SELECT 1 FROM workflow_runs
     WHERE id=? AND story_generation_status='ready_for_human_review')`;
   return [
-    db.prepare(`DELETE FROM project_all_set WHERE workflow_run_id=? AND ${activeGuard}`)
+    db.prepare(`DELETE FROM project_release_confirmations WHERE workflow_run_id=? AND ${activeGuard}`)
       .bind(workflowRunId, workflowRunId),
     db.prepare(`DELETE FROM story_privacy_authorities
       WHERE workflow_run_id=? AND ${activeGuard}`).bind(workflowRunId, workflowRunId),

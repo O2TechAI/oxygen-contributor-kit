@@ -183,12 +183,10 @@ const statements = [
     candidate_count INTEGER NOT NULL CHECK(candidate_count >= 0),
     imported_at TEXT NOT NULL
   )`,
-  `CREATE TABLE IF NOT EXISTS project_all_set (
+  `CREATE TABLE IF NOT EXISTS project_release_confirmations (
     workflow_run_id TEXT PRIMARY KEY,
-    active_story_digest TEXT NOT NULL,
-    source_revision INTEGER NOT NULL CHECK(source_revision > 0),
-    server_version INTEGER NOT NULL CHECK(server_version > 0),
-    all_set_at TEXT NOT NULL
+    review_gate_digest TEXT NOT NULL,
+    confirmed_at TEXT NOT NULL
   )`,
 ];
 

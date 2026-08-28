@@ -1,6 +1,6 @@
 import type { BulkDecision, Probe, ProbeRun } from "./probe-panel";
 
-export function projectAllSetPreferencesComplete(
+export function projectReleaseConfirmationPreferencesComplete(
   run: ProbeRun,
   probes: Probe[],
   bulkDecisions: BulkDecision[],
@@ -10,7 +10,7 @@ export function projectAllSetPreferencesComplete(
     && bulkDecisions.every((decision) => Boolean(decision.answered_at && decision.answer));
 }
 
-export type ProjectAllSetRequest = {
+export type ProjectReleaseConfirmationRequest = {
   generation: number;
   workflowRunId: string;
   signal: AbortSignal;
@@ -19,11 +19,11 @@ export type ProjectAllSetRequest = {
 /** One contributor click owns one request epoch. Replacement or cleanup aborts
  * the fetch and makes every response from the retired epoch ineligible to
  * update the current run. */
-export class ProjectAllSetRequestGate {
+export class ProjectReleaseConfirmationRequestGate {
   private generation = 0;
-  private active: (ProjectAllSetRequest & { controller: AbortController }) | null = null;
+  private active: (ProjectReleaseConfirmationRequest & { controller: AbortController }) | null = null;
 
-  begin(workflowRunId: string): ProjectAllSetRequest | null {
+  begin(workflowRunId: string): ProjectReleaseConfirmationRequest | null {
     if (this.active || !workflowRunId) return null;
     const controller = new AbortController();
     const request = {
@@ -36,13 +36,13 @@ export class ProjectAllSetRequestGate {
     return request;
   }
 
-  isCurrent(request: ProjectAllSetRequest) {
+  isCurrent(request: ProjectReleaseConfirmationRequest) {
     return this.active?.generation === request.generation
       && this.active.workflowRunId === request.workflowRunId
       && !request.signal.aborted;
   }
 
-  finish(request: ProjectAllSetRequest) {
+  finish(request: ProjectReleaseConfirmationRequest) {
     if (this.active?.generation === request.generation) this.active = null;
   }
 
