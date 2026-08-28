@@ -11,9 +11,50 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+VENDOR = Path(__file__).resolve().parents[3] / "tools" / "ingest" / "vendor"
+sys.path.insert(0, str(VENDOR))
 import build_project_map as builder
+import extract_codex_trajectory as extractor
 import finalize_semantic_units as finalizer
 import prepare_semantic_units as preparer
+
+SENSITIVE_KEY_SPELLINGS = (
+    "api key", "api_key", "api-key", "apikey",
+    "access token", "access_token", "access-token", "accesstoken",
+    "token", "password", "passwd", "secret", "authorization",
+)
+ASSIGNMENT_SEPARATORS = ("=", " = ", "\t=\t", ":", " : ", "\t:\t")
+QUOTED_MATRIX_KEYS = ("password", "token", "secret", "authorization")
+QUOTES = ('"', "'")
+SHORT_PREFIXES = tuple("p" * length for length in range(8))
+INTERNAL_SEPARATORS = (" ", "\t", ",", ";")
+SECRET_TAILS = (
+    "SYNTHETIC_ALPHA_TAIL_7F31",
+    "SYNTHETIC_BETA_TAIL_8E42",
+    "SYNTHETIC_GAMMA_TAIL_9D53",
+)
+
+
+def generated_quoted_assignments():
+    for key in QUOTED_MATRIX_KEYS:
+        for quote in QUOTES:
+            for prefix in SHORT_PREFIXES:
+                for internal_separator in INTERNAL_SEPARATORS:
+                    for tail in SECRET_TAILS:
+                        value = f"{prefix}{internal_separator}{tail}"
+                        yield f"{key}={quote}{value}{quote}, preserve"
+                        yield f"{key}={quote}{value}\npreserve"
+
+
+def generated_key_separator_quoted_assignments():
+    sentinel = "CROSS_FAMILY_QUOTED_SENTINEL_6C20"
+    for key in SENSITIVE_KEY_SPELLINGS:
+        for assignment_separator in ASSIGNMENT_SEPARATORS:
+            for quote in QUOTES:
+                for prefix in SHORT_PREFIXES:
+                    value = f"{prefix}\t{sentinel}"
+                    yield f"{key}{assignment_separator}{quote}{value}{quote}; preserve"
+                    yield f"{key}{assignment_separator}{quote}{value}\r\npreserve"
 
 
 def event_id(label: str) -> str:
@@ -152,6 +193,91 @@ def write_worker_results(output: Path, unit_for_id) -> None:
 
 
 class SemanticUnitTransportTests(unittest.TestCase):
+    def test_current_ingest_sanitizer_closes_every_worker_secret_rule(self):
+        unsafe = (
+            list(generated_quoted_assignments())
+            + list(generated_key_separator_quoted_assignments())
+            + [
+            "-----BEGIN SYNTHETIC PRIVATE KEY-----",
+            "api_key=synthetic-sentinel",
+            "access token : synthetic-sentinel",
+            "TOKEN=synthetic-sentinel",
+            "Password = \"synthetic-sentinel\"",
+            "passwd=synthetic-sentinel",
+            "secret=synthetic-sentinel",
+            "Authorization=synthetic-sentinel",
+            "sk-syntheticvalue",
+            "ghp-syntheticvalue",
+            "xoxb-syntheticvalue",
+            "AKIAABCDEFGHIJKLMNOP",
+            "https://synthetic-user:synthetic-password@example.invalid/path",
+            'password="synthetic-sentinel secondword"',
+            "password='synthetic-sentinel secondword'",
+            'password="synthetic-sentinel, secondword; tail"',
+            'password="synthetic-sentinel \\"quoted\\" tail"',
+            'password="synthetic-sentinel secondword',
+            "password='synthetic-sentinel secondword",
+            "token=<redacted>",
+            "token=[redacted]",
+            "token=<REDACTED>-stillsecret",
+            "token=[redacted]-stillsecret",
+            'token="<REDACTED>-stillsecret"',
+            'token="<REDACTED>" MARKER_SUFFIX_SENTINEL',
+            "token=<REDACTED> MARKER_SUFFIX_SENTINEL",
+            "authorization: Bearer UNQUOTED_BEARER_SENTINEL",
+            "authorization=Basic UNQUOTED_BASIC_SENTINEL credential",
+            "Authorization: Token UNQUOTED_TOKEN_SENTINEL",
+            "access token: prefix UNQUOTED_ARBITRARY_SENTINEL tail",
+            "password=a",
+            "前文 token=synthetic-sentinel; password='secondword secret' 后文",
+            ]
+        )
+        self.assertEqual(len(list(generated_quoted_assignments())), 1536)
+        self.assertEqual(len(list(generated_key_separator_quoted_assignments())), 2496)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertTrue(all(preparer.secret_like_text(value) for value in unsafe))
+            run = root / "run"
+            sanitized = [extractor.redact_text(value, root) for value in unsafe]
+            self.assertTrue(all(not preparer.secret_like_text(value) for value in sanitized))
+            self.assertEqual(
+                [extractor.redact_text(value, root) for value in sanitized],
+                sanitized,
+            )
+            ids = write_trajectory(run, "traj-sanitized", sanitized)
+            self.assertEqual(run_builder(run).returncode, 0)
+            prepared = preparer.build_preparation(run, 4096)
+            records = prepared["context"]["contributions"]
+            shard_records = [
+                record for shard in prepared["inputs"] for record in shard["contributions"]
+            ]
+            self.assertEqual(
+                [record["id"] for record in records],
+                sorted(ids, key=lambda value: value.encode("utf-8")),
+            )
+            self.assertEqual(
+                sorted(record["id"] for record in shard_records),
+                sorted(ids),
+            )
+            self.assertTrue(all(not preparer.secret_like_text(record["content"]) for record in records))
+            serialized = builder.canonical_json({
+                "context": prepared["context"], "inputs": prepared["inputs"],
+            })
+            for residual in (
+                "synthetic-sentinel", "syntheticvalue", "synthetic-user",
+                "synthetic-password", "secondword", "stillsecret", "quoted",
+                "[redacted]", "<redacted>", "MARKER_SUFFIX_SENTINEL",
+                "UNQUOTED_BEARER_SENTINEL", "UNQUOTED_BASIC_SENTINEL",
+                "UNQUOTED_TOKEN_SENTINEL", "UNQUOTED_ARBITRARY_SENTINEL",
+                "CROSS_FAMILY_QUOTED_SENTINEL_6C20",
+                *SECRET_TAILS,
+            ):
+                self.assertNotIn(residual, serialized)
+            self.assertTrue(all(
+                not preparer.secret_like_text(record["content"])
+                for shard in prepared["inputs"] for record in shard["contributions"]
+            ))
+
     def test_one_multi_and_mixed_current_runs_finalize_without_project_map_editing(self):
         cases = ((["one"], []), (["one", "two", "three"], []), (["one", "two"], ["meeting"]))
         for trajectory_texts, meeting_texts in cases:

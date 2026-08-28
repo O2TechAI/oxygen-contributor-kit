@@ -1,5 +1,6 @@
-import importlib.util
+import copy
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -13,6 +14,7 @@ MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+from ingest import secret_safety
 
 PROJECTION_PATH = Path(__file__).resolve().parents[1] / "human_source_projection.py"
 PROJECTION_SPEC = importlib.util.spec_from_file_location(
@@ -22,8 +24,283 @@ PROJECTION = importlib.util.module_from_spec(PROJECTION_SPEC)
 assert PROJECTION_SPEC and PROJECTION_SPEC.loader
 PROJECTION_SPEC.loader.exec_module(PROJECTION)
 
+SENSITIVE_KEY_SPELLINGS = (
+    "api key", "api_key", "api-key", "apikey",
+    "access token", "access_token", "access-token", "accesstoken",
+    "token", "password", "passwd", "secret", "authorization",
+)
+ASSIGNMENT_SEPARATORS = ("=", " = ", "\t=\t", ":", " : ", "\t:\t")
+QUOTED_MATRIX_KEYS = ("password", "token", "secret", "authorization")
+QUOTES = ('"', "'")
+SHORT_PREFIXES = tuple("p" * length for length in range(8))
+INTERNAL_SEPARATORS = (" ", "\t", ",", ";")
+SECRET_TAILS = (
+    "SYNTHETIC_ALPHA_TAIL_7F31",
+    "SYNTHETIC_BETA_TAIL_8E42",
+    "SYNTHETIC_GAMMA_TAIL_9D53",
+)
+
+
+def generated_quoted_assignment_cases():
+    for key in QUOTED_MATRIX_KEYS:
+        for quote in QUOTES:
+            for prefix in SHORT_PREFIXES:
+                for internal_separator in INTERNAL_SEPARATORS:
+                    for tail in SECRET_TAILS:
+                        value = f"{prefix}{internal_separator}{tail}"
+                        yield (
+                            f"{key}={quote}{value}{quote}, 保留",
+                            f"{key}={quote}<REDACTED>{quote}, 保留",
+                            tail,
+                        )
+                        yield (
+                            f"{key}={quote}{value}\n保留",
+                            f"{key}=<REDACTED>\n保留",
+                            tail,
+                        )
+
+
+def generated_key_separator_quoted_cases():
+    sentinel = "CROSS_FAMILY_QUOTED_SENTINEL_6C20"
+    for key in SENSITIVE_KEY_SPELLINGS:
+        for assignment_separator in ASSIGNMENT_SEPARATORS:
+            for quote in QUOTES:
+                for prefix in SHORT_PREFIXES:
+                    value = f"{prefix}\t{sentinel}"
+                    yield (
+                        f"{key}{assignment_separator}{quote}{value}{quote}; 保留",
+                        f"{key}{assignment_separator}{quote}<REDACTED>{quote}; 保留",
+                    )
+                    yield (
+                        f"{key}{assignment_separator}{quote}{value}\r\n保留",
+                        f"{key}{assignment_separator}<REDACTED>\r\n保留",
+                    )
+
 
 class PlatformFilterTest(unittest.TestCase):
+    def test_secret_sanitizer_closes_worker_grammar_and_preserves_safe_text(self):
+        unsafe = {
+            "prefix -----BEGIN SYNTHETIC PRIVATE KEY----- suffix": None,
+            "TOKEN : synthetic-sentinel, suffix": "TOKEN : <REDACTED>, suffix",
+            "authorization\t=\tsynthetic-sentinel": "authorization\t=\t<REDACTED>",
+            "unicode 😀 API key: synthetic-sentinel 二": "unicode 😀 API key: <REDACTED>",
+            "first line\nSeCrEt=synthetic-sentinel\nlast line": (
+                "first line\nSeCrEt=<REDACTED>\nlast line"
+            ),
+            "sk-syntheticvalue": None,
+            "ghp-syntheticvalue": None,
+            "xoxb-syntheticvalue": None,
+            "AKIAABCDEFGHIJKLMNOP": None,
+            "https://synthetic-user:synthetic-password@example.invalid/path": None,
+            'password="longsecret secondword"': 'password="<REDACTED>"',
+            "password='longsecret secondword'": "password='<REDACTED>'",
+            'password="longsecret, secondword; tail"': 'password="<REDACTED>"',
+            'password="longsecret \\"quoted\\" tail"': 'password="<REDACTED>"',
+            'prefix password="longsecret secondword': 'prefix password=<REDACTED>',
+            "prefix password='longsecret secondword": 'prefix password=<REDACTED>',
+            'token=<redacted>': 'token=<REDACTED>',
+            'token=<ReDaCtEd>': 'token=<REDACTED>',
+            'token=[redacted]': 'token=<REDACTED>',
+            'token=<REDACTED>-stillsecret': 'token=<REDACTED>',
+            'token=<REDACTED> stillsecret': 'token=<REDACTED>',
+            'token=[redacted]-stillsecret': 'token=<REDACTED>',
+            'token="<REDACTED>-stillsecret"': 'token="<REDACTED>"',
+            'token="<REDACTED>"-stillsecret': 'token=<REDACTED>',
+            'authorization: Bearer ARBITRARY_SYNTHETIC_SECRET': 'authorization: <REDACTED>',
+            'authorization=Basic opaque synthetic credential': 'authorization=<REDACTED>',
+            'Authorization: Token opaque synthetic credential': 'Authorization: <REDACTED>',
+            'access token: prefix SYNTHETIC_SENTINEL': 'access token: <REDACTED>',
+            'token=<REDACTED> SYNTHETIC_SENTINEL': 'token=<REDACTED>',
+            'password=longsecret SYNTHETIC_SENTINEL': 'password=<REDACTED>',
+            (
+                "前文 α token=firstsecret, password='second secret'; "
+                'authorization="third; secret", 后文 Ω'
+            ): (
+                "前文 α token=<REDACTED>, password='<REDACTED>'; "
+                'authorization="<REDACTED>", 后文 Ω'
+            ),
+        }
+        safe = [
+            "The token count is a public metric.",
+            "api_key != synthetic-sentinel",
+            "password >= minimum_length",
+            "secret < threshold",
+            "authorization headers are discussed without a value.",
+            "x == y",
+            "token=<REDACTED>",
+            'token="<REDACTED>"',
+            "token=  <REDACTED>  ; suffix",
+            'token="  <REDACTED>  ", suffix',
+            "password=",
+            'password=""',
+            "secret: ; suffix",
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            for value, expected in unsafe.items():
+                with self.subTest(kind="unsafe", value=value[:24]):
+                    self.assertTrue(secret_safety.secret_like_text(value))
+                    redacted = MODULE.redact_text(value, home)
+                    self.assertNotEqual(redacted, value)
+                    if expected is not None:
+                        self.assertEqual(redacted, expected)
+                    self.assertFalse(secret_safety.secret_like_text(redacted))
+                    self.assertEqual(MODULE.redact_text(redacted, home), redacted)
+            for value in safe:
+                with self.subTest(kind="safe", value=value):
+                    self.assertFalse(secret_safety.secret_like_text(value))
+                    self.assertEqual(MODULE.redact_text(value, home), value)
+
+            class NonText:
+                def __repr__(self):
+                    return "password=must-not-echo"
+
+            with self.assertRaises(TypeError) as raised:
+                MODULE.redact_secret_like_text(NonText())
+            self.assertEqual(str(raised.exception), "secret safety input must be text")
+            self.assertNotIn("must-not-echo", str(raised.exception))
+
+    def test_generated_quoted_assignment_matrix_closes_every_short_prefix(self):
+        cases = list(generated_quoted_assignment_cases())
+        self.assertEqual(len(cases), 1536)
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            for value, expected, sentinel in cases:
+                with self.subTest(value=value[:48]):
+                    self.assertTrue(secret_safety.secret_like_text(value))
+                    redacted = MODULE.redact_text(value, home)
+                    self.assertEqual(redacted, expected)
+                    self.assertNotIn(sentinel, redacted)
+                    self.assertFalse(secret_safety.secret_like_text(redacted))
+                    self.assertEqual(MODULE.redact_text(redacted, home), redacted)
+
+    def test_generated_key_separator_quoted_matrix_covers_every_spelling(self):
+        cases = list(generated_key_separator_quoted_cases())
+        self.assertEqual(len(cases), 2496)
+        for source, expected in cases:
+            with self.subTest(source=source[:56]):
+                self.assertTrue(secret_safety.secret_like_text(source))
+                redacted = MODULE.redact_secret_like_text(source)
+                self.assertEqual(redacted, expected)
+                self.assertNotIn("CROSS_FAMILY_QUOTED_SENTINEL_6C20", redacted)
+                self.assertFalse(secret_safety.secret_like_text(redacted))
+                self.assertEqual(MODULE.redact_secret_like_text(redacted), redacted)
+
+    def test_generated_key_separator_short_value_and_unquoted_contract(self):
+        short_values = ("a", "bc", "def", "ghij", "klmno")
+        for key in SENSITIVE_KEY_SPELLINGS:
+            for separator in ASSIGNMENT_SEPARATORS:
+                for value in short_values:
+                    source = f"前文 {key}{separator}{value}; 后文"
+                    expected = f"前文 {key}{separator}<REDACTED>; 后文"
+                    with self.subTest(key=key, separator=repr(separator), value=value):
+                        self.assertTrue(secret_safety.secret_like_text(source))
+                        self.assertEqual(MODULE.redact_secret_like_text(source), expected)
+
+        schemes = (
+            "Bearer UNQUOTED_BEARER_SENTINEL",
+            "Basic UNQUOTED_BASIC_SENTINEL credential",
+            "Token UNQUOTED_TOKEN_SENTINEL",
+            "prefix UNQUOTED_ARBITRARY_SENTINEL tail",
+        )
+        boundaries = (", 后文", "; 后文", "\n后文", "\r\n后文", "")
+        keys = ("authorization", "access token", "token", "password")
+        for key in keys:
+            for scheme in schemes:
+                for boundary in boundaries:
+                    source = f"{key}: {scheme}{boundary}"
+                    expected = f"{key}: <REDACTED>{boundary}"
+                    with self.subTest(key=key, scheme=scheme.split()[0], boundary=repr(boundary)):
+                        self.assertTrue(secret_safety.secret_like_text(source))
+                        redacted = MODULE.redact_secret_like_text(source)
+                        self.assertEqual(redacted, expected)
+                        self.assertFalse(secret_safety.secret_like_text(redacted))
+                        self.assertEqual(MODULE.redact_secret_like_text(redacted), redacted)
+
+    def test_generated_marker_suffix_escape_and_quote_completion_contract(self):
+        for marker in ("<redacted>", "<ReDaCtEd>", "[redacted]", "[ReDaCtEd]"):
+            for quote in ("", '"', "'"):
+                source = f"token={quote}{marker}{quote}; suffix"
+                expected = f"token={quote}<REDACTED>{quote}; suffix"
+                with self.subTest(marker=marker, quote=quote):
+                    self.assertTrue(secret_safety.secret_like_text(source))
+                    self.assertEqual(MODULE.redact_secret_like_text(source), expected)
+
+        for suffix in ("-MARKER_SUFFIX_SENTINEL", " MARKER_SUFFIX_SENTINEL"):
+            for quote in ("", '"', "'"):
+                if quote:
+                    sources = (
+                        f"token={quote}<REDACTED>{suffix}{quote}; suffix",
+                        f"token={quote}<REDACTED>{quote}{suffix}; suffix",
+                    )
+                else:
+                    sources = (f"token=<REDACTED>{suffix}; suffix",)
+                for source in sources:
+                    with self.subTest(suffix=suffix, quote=quote, source=source):
+                        self.assertTrue(secret_safety.secret_like_text(source))
+                        redacted = MODULE.redact_secret_like_text(source)
+                        self.assertNotIn("MARKER_SUFFIX_SENTINEL", redacted)
+                        self.assertFalse(secret_safety.secret_like_text(redacted))
+
+        for backslash_count in range(6):
+            backslashes = "\\" * backslash_count
+            source = f'password="head{backslashes}"ESCAPE_SENTINEL"; suffix'
+            expected = (
+                'password="<REDACTED>"; suffix'
+                if backslash_count % 2 else
+                'password=<REDACTED>; suffix'
+            )
+            with self.subTest(backslash_count=backslash_count):
+                self.assertTrue(secret_safety.secret_like_text(source))
+                self.assertEqual(MODULE.redact_secret_like_text(source), expected)
+
+        completed = (
+            ('password="secret"   , suffix', 'password="<REDACTED>"   , suffix'),
+            ('password="secret"suffix, prose', 'password=<REDACTED>, prose'),
+            ('password="secret suffix\nprose', 'password=<REDACTED>\nprose'),
+            ("password='secret suffix\r\nprose", 'password=<REDACTED>\r\nprose'),
+        )
+        for source, expected in completed:
+            with self.subTest(source=source):
+                redacted = MODULE.redact_secret_like_text(source)
+                self.assertEqual(redacted, expected)
+                self.assertEqual(MODULE.redact_secret_like_text(redacted), redacted)
+
+    def test_secret_sanitization_changes_only_projected_content_authority(self):
+        raw = {
+            "schema_version": "0.2",
+            "event_id": "raw-event",
+            "trajectory_id": "traj-synthetic",
+            "event_type": "message",
+            "sequence": 1,
+            "timestamp": "2026-08-27T00:00:00Z",
+            "actor": {"id": "actor", "type": "human"},
+            "relations": [],
+            "source": {
+                "system": "codex", "session_id": "session", "origin": "top_level",
+                "record_id": "stable-record", "record_type": "message",
+            },
+            "payload": {
+                "role": "user", "interaction_direction": "human_to_agent",
+                "text": "authorization=synthetic-sentinel", "attachments": [],
+            },
+        }
+        sanitized = copy.deepcopy(raw)
+        sanitized["payload"]["text"] = MODULE.redact_text(raw["payload"]["text"], Path.cwd())
+        raw_projected, raw_summary = PROJECTION.project_events([raw])
+        safe_projected, safe_summary = PROJECTION.project_events([sanitized])
+
+        self.assertEqual(raw_projected[0]["event_id"], safe_projected[0]["event_id"])
+        self.assertEqual(raw_projected[0]["source"], safe_projected[0]["source"])
+        self.assertEqual(raw_projected[0]["sequence"], safe_projected[0]["sequence"])
+        normalized = copy.deepcopy(safe_projected[0])
+        normalized["payload"]["text"] = raw_projected[0]["payload"]["text"]
+        self.assertEqual(normalized, raw_projected[0])
+        self.assertNotEqual(
+            raw_summary["projected_universe_digest"],
+            safe_summary["projected_universe_digest"],
+        )
+
     def test_platform_wrappers_are_filtered(self):
         for value in (
             "<recommended_plugins>\n...",
