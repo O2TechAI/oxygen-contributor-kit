@@ -269,7 +269,6 @@ export async function POST(request: Request) {
         { results: itemRows },
         { results: documentRows },
         semanticManifest,
-        previousCoverage,
         preferenceAuthority,
       ] = await Promise.all([
         db.prepare(`SELECT id,document_id AS documentId,sequence,timestamp,
@@ -280,7 +279,6 @@ export async function POST(request: Request) {
         db.prepare("SELECT id,formatted_summary_json FROM documents ORDER BY id")
           .all<{ id: string; formatted_summary_json: string }>(),
         readSemanticManifestAuthority(db, workflowRunId),
-        readStoredCoverageManifestAuthority(db, workflowRunId),
         readPreferenceBatchAuthority(db, workflowRunId, leasedRevision),
       ]);
       if (!semanticManifest) {
@@ -299,6 +297,7 @@ export async function POST(request: Request) {
           code: privacyAuthority.code,
         }, { status: 409 });
       }
+      const previousCoverage = await readStoredCoverageManifestAuthority(db, workflowRunId);
       if (!preferenceAuthority) {
         await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
         return Response.json({ error: "Current Preference preparation is required" }, { status: 409 });
@@ -382,13 +381,14 @@ export async function POST(request: Request) {
           .bind(workflowRunId, ...leaseBindings),
         db.prepare(`INSERT INTO story_coverage_manifests
           (workflow_run_id,revision,semantic_manifest_revision,semantic_manifest_digest,
-           coverage_digest,unit_count,serialized_bytes,created_at,updated_at)
-          SELECT ?,?,?,?,?,?,?,?,? WHERE ${leaseSql}`).bind(
+           coverage_digest,privacy_authority_digest,unit_count,serialized_bytes,created_at,updated_at)
+          SELECT ?,?,?,?,?,?,?,?,?,? WHERE ${leaseSql}`).bind(
           workflowRunId,
           coverageManifest.revision,
           coverageManifest.semanticManifestRevision,
           coverageManifest.semanticManifestDigest,
           coverageManifest.coverageDigest,
+          privacyAuthority.authority.snapshotDigest,
           coverageManifest.rows.length,
           coverageManifest.serializedBytes,
           now,
@@ -500,21 +500,11 @@ export async function POST(request: Request) {
         preferenceAuthority.outputCount,
         now,
       )) {
-        const currentPrivacyAuthority = await readCoveragePrivacyAuthority(
-          db,
-          workflowRunId,
-          semanticManifest,
-        );
-        if (!currentPrivacyAuthority.ok
-          || currentPrivacyAuthority.authority.snapshotDigest
-            !== privacyAuthority.authority.snapshotDigest) {
-          await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
-          return Response.json({
-            error: "Story activation authority changed before commit",
-            code: "COVERAGE_PRIVACY_AUTHORITY_MISSING",
-          }, { status: 409 });
-        }
-        throw new Error("Story source publication boundary changed during activation");
+        await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
+        return Response.json({
+          error: "Story activation authority changed before commit",
+          code: "STORY_ACTIVATION_AUTHORITY_CHANGED",
+        }, { status: 409 });
       }
       return Response.json(deriveWorkflowProgress({
         workflowRunId,
@@ -534,9 +524,12 @@ export async function POST(request: Request) {
         storySessionSchema: "oxygen.story-review-session",
         updatedAt: now,
       }));
-    } catch (error) {
+    } catch {
       await abortStorySourceMutation(db, workflowRunId, now, leasedRevision);
-      throw error;
+      return Response.json({
+        error: "Story activation authority changed before commit",
+        code: "STORY_ACTIVATION_AUTHORITY_CHANGED",
+      }, { status: 409 });
     }
   }
 

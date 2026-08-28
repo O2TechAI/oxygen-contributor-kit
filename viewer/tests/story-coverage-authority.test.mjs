@@ -197,6 +197,34 @@ test("provider-free finalization owns normalized coverage revision and digest", 
   )).code, "COVERAGE_MANIFEST_INVALID");
 });
 
+test("provider-free Privacy projection cannot make a forged membership digest durable", async () => {
+  const semantic = await semanticAuthority();
+  const forgedCore = {
+    projectId: semantic.projectId,
+    revision: semantic.revision,
+    sourceDigest: semantic.sourceDigest,
+    universeDigest: semantic.universeDigest,
+    units: semantic.units.map((unit, index) => ({
+      ...unit,
+      membershipDigest: index === 0 ? "f".repeat(64) : unit.membershipDigest,
+    })),
+  };
+  const forged = { ...forgedCore, manifestDigest: hash(forgedCore) };
+
+  const projection = await deriveCoveragePrivacyAuthority(
+    sourcePrivacy([privacyRow("redaction-a", "doc:item-a")]),
+    forged,
+  );
+  assert.equal(projection.ok, true);
+
+  const canonical = await validateSemanticManifestAuthority(
+    forged,
+    contributionRecords(["doc:item-a", "doc:item-b"]),
+  );
+  assert.equal(canonical.ok, false);
+  assert.equal(canonical.code, "SEMANTIC_MEMBERSHIP_DIGEST_STALE");
+});
+
 test("coverage CLI advances only from explicitly server-accepted prior authority", async () => {
   const root = mkdtempSync(join(tmpdir(), "oxygen-coverage-finalizer-"));
   try {

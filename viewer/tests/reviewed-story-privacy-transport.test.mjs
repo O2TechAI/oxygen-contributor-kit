@@ -20,6 +20,7 @@ import {
 } from "../lib/story-review.ts";
 import { createStoryReviewSession } from "../lib/story-review-session.ts";
 import { storyPreparationDigest } from "../lib/story-preparation.ts";
+import { seedCoveragePrivacyAuthority } from "./story-coverage-privacy-fixture.mjs";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -80,8 +81,8 @@ const source = {
   },
 };
 const summary = `oxygen.story:${JSON.stringify(source)}`;
-const activeDigest = await storyPreparationDigest([{ id: evidence.eventId, summary }]);
-const inputDigest = await storyPreparationDigest([{ id: evidence.eventId, story: source }]);
+let activeDigest = await storyPreparationDigest([{ id: evidence.eventId, summary }]);
+let inputDigest = await storyPreparationDigest([{ id: evidence.eventId, story: source }]);
 
 function context(state = null, supportedEditIds = []) {
   const blocks = storyBlocks(source);
@@ -172,6 +173,14 @@ async function insertInitial(db) {
     (id,document_id,sequence,content,original_json,organization_reason,event_type,actor_id,actor_type)
     VALUES (?,'doc',0,'PRIVATE_SOURCE_SENTINEL','{}',?,'message','person','human')`)
     .bind(evidence.eventId, summary).run();
+  const seeded = await seedCoveragePrivacyAuthority(db, {
+    workflowRunId: RUN_ID,
+    sourceRevision: SOURCE_REVISION,
+    stories: [source],
+    now: NOW,
+  });
+  activeDigest = seeded.activeStoryDigest;
+  inputDigest = seeded.storyPrivacyInputDigest;
   const candidates = [changed, unchanged].sort((a, b) => Buffer.compare(Buffer.from(a.id), Buffer.from(b.id)));
   const outputDigest = await storyPreparationDigest(candidates);
   await db.prepare(`INSERT INTO story_preparation_receipts

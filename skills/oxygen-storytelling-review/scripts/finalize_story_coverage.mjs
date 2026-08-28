@@ -51,6 +51,8 @@ if (!argumentsValid || sourcePrivacyPath === null) {
     const previous = previousPath
       ? await readStrictJson(previousPath, MAX_COVERAGE_MANIFEST_BYTES)
       : null;
+    // This provider-free boundary only projects the supplied semantic membership.
+    // Server activation must revalidate every member/source digest before persistence.
     const privacyAuthority = await deriveCoveragePrivacyAuthority(
       sourcePrivacy,
       semanticManifest,

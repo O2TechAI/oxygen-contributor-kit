@@ -7,6 +7,7 @@ import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { storyPreparationDigest } from "../lib/story-preparation.ts";
+import { seedCoveragePrivacyAuthority } from "./story-coverage-privacy-fixture.mjs";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -54,8 +55,8 @@ const STORY_ROWS = STORIES.map((source) => ({
   id: `doc:${source.key}`,
   summary: `oxygen.story:${JSON.stringify(source)}`,
 }));
-const ACTIVE_DIGEST = await storyPreparationDigest(STORY_ROWS);
-const STORY_PRIVACY_INPUT_DIGEST = await storyPreparationDigest(STORIES.map((source) => ({
+let ACTIVE_DIGEST = await storyPreparationDigest(STORY_ROWS);
+let STORY_PRIVACY_INPUT_DIGEST = await storyPreparationDigest(STORIES.map((source) => ({
   id: `doc:${source.key}`,
   story: source,
 })));
@@ -108,6 +109,17 @@ async function insertAuthority(db, candidates) {
       "message", `contributor-${source.key}`, "human",
     ).run();
   }
+  const seeded = await seedCoveragePrivacyAuthority(db, {
+    workflowRunId: RUN_ID,
+    sourceRevision: SOURCE_REVISION,
+    stories: STORIES,
+    now: "2041-01-01T00:00:00.000Z",
+  });
+  ACTIVE_DIGEST = seeded.activeStoryDigest;
+  STORY_PRIVACY_INPUT_DIGEST = seeded.storyPrivacyInputDigest;
+  STORIES.forEach((source, index) => {
+    STORY_ROWS[index].summary = `oxygen.story:${JSON.stringify(source)}`;
+  });
   return replaceCandidates(db, candidates);
 }
 

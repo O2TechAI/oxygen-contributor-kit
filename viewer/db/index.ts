@@ -58,6 +58,7 @@ const statements = [
     workflow_run_id TEXT PRIMARY KEY, revision INTEGER NOT NULL,
     semantic_manifest_revision INTEGER NOT NULL,
     semantic_manifest_digest TEXT NOT NULL, coverage_digest TEXT NOT NULL,
+    privacy_authority_digest TEXT NOT NULL,
     unit_count INTEGER NOT NULL, serialized_bytes INTEGER NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   )`,

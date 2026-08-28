@@ -130,6 +130,7 @@ class SourceSelectorDb {
         throw new Error(`Unexpected selector all SQL: ${sql}`);
       },
       first: async () => {
+        if (/SELECT 1 AS current FROM semantic_manifests/.test(sql)) return null;
         if (/story_generation_status,story_source_revision/.test(sql)) {
           return {
             story_generation_status: this.status,

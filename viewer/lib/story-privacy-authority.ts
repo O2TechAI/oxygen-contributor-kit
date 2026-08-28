@@ -5,7 +5,7 @@ import {
   type StoryPreparationPrivacyCandidate,
 } from "./story-preparation";
 import {
-  validateStorySourcePackage,
+  validateCurrentStorySourcePackage,
   type StoryEvidenceRow,
 } from "./story-readiness";
 import {
@@ -259,7 +259,12 @@ async function captureInitialAuthority(
       actorType: row.actorType as string | null,
     });
   }
-  const storyValidation = validateStorySourcePackage(storyRows, evidenceRows);
+  const storyValidation = await validateCurrentStorySourcePackage(
+    db,
+    workflowRunId,
+    storyRows,
+    evidenceRows,
+  );
   if (!storyValidation.ok
     || await storyPreparationDigest(JSON.parse(storyValidation.canonicalCandidate)) !== activeStoryDigest
     || await storyPreparationDigest(storyRows.map((row, index) => ({

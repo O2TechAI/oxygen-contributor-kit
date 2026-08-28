@@ -8,7 +8,7 @@ import {
 } from "./story-review-session.ts";
 import {
   readReservedStoryCandidateRows,
-  validateStorySourcePackage,
+  validateCurrentStorySourcePackage,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
 import { parseStorySource } from "./timeline.ts";
@@ -112,9 +112,10 @@ export async function readActiveStoryReviewSource(
 
 /** Derive the active source/session contract from the complete recognized
  * package. The version is never selected by the browser or persisted twice. */
-async function readActiveStoryReviewPackage(
+export async function readActiveStoryReviewPackage(
   db: ReviewSessionDatabase,
   workflowRunId: string,
+  options: { verifyCurrentSource?: boolean } = {},
 ) {
   const active = await readActiveStoryReviewSource(db, workflowRunId);
   if (!active.ready || active.sourceRevision === null) {
@@ -126,9 +127,12 @@ async function readActiveStoryReviewPackage(
       actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`)
       .all<StoryEvidenceRow>(),
   ]);
-  const validation = validateStorySourcePackage(
+  const validation = await validateCurrentStorySourcePackage(
+    db,
+    workflowRunId,
     candidateRows,
     evidenceResult.results || [],
+    options,
   );
   return { active, candidateRows, validation: validation.ok ? validation : null };
 }
@@ -138,6 +142,27 @@ export async function readActiveStoryReviewContract(
   workflowRunId: string,
 ) {
   const { active, validation } = await readActiveStoryReviewPackage(db, workflowRunId);
+  return validation
+    ? {
+        ...active,
+        storySourceSchema: "oxygen.story" as const,
+        storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
+      }
+    : { ...active, storySourceSchema: null, storySessionSchema: null };
+}
+
+/** Sanitized polling projection. It consumes the same persisted semantic,
+ * coverage, and source-Privacy rows without selecting or hashing source text;
+ * every Story-bearing hydration re-runs the deep contract above. */
+export async function readPassiveActiveStoryReviewContract(
+  db: ReviewSessionDatabase,
+  workflowRunId: string,
+) {
+  const { active, validation } = await readActiveStoryReviewPackage(
+    db,
+    workflowRunId,
+    { verifyCurrentSource: false },
+  );
   return validation
     ? {
         ...active,

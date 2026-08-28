@@ -14,7 +14,7 @@ import {
 import { parseStoredStoryReviewSession } from "./story-review-session-server.ts";
 import {
   selectReservedStorySourceItems,
-  validateStorySourcePackage,
+  validateCurrentStorySourcePackage,
   type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
@@ -418,7 +418,12 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     actorId: item.actor_id,
     actorType: item.actor_type,
   }));
-  const validation = validateStorySourcePackage(candidateRows, evidenceRows);
+  const validation = await validateCurrentStorySourcePackage(
+    db,
+    request.workflowRunId,
+    candidateRows,
+    evidenceRows,
+  );
   if (!validation.ok || !run.active_story_digest
     || await sha256(validation.canonicalCandidate) !== run.active_story_digest) {
     return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);

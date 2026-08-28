@@ -7,6 +7,7 @@ import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { storyPreparationDigest } from "../lib/story-preparation.ts";
+import { seedCoveragePrivacyAuthority } from "./story-coverage-privacy-fixture.mjs";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -48,13 +49,13 @@ function story() {
 }
 
 const SOURCE = story();
-const STORY_SUMMARY = `oxygen.story:${JSON.stringify(SOURCE)}`;
-const ACTIVE_DIGEST = await storyPreparationDigest([{ id: "event-a", summary: STORY_SUMMARY }]);
-const STORY_PRIVACY_INPUT_DIGEST = await storyPreparationDigest([{
+let STORY_SUMMARY = `oxygen.story:${JSON.stringify(SOURCE)}`;
+let ACTIVE_DIGEST = await storyPreparationDigest([{ id: "event-a", summary: STORY_SUMMARY }]);
+let STORY_PRIVACY_INPUT_DIGEST = await storyPreparationDigest([{
   id: "event-a",
   story: SOURCE,
 }]);
-const MUTATED_STORY_SUMMARY = `oxygen.story:${JSON.stringify({
+let MUTATED_STORY_SUMMARY = `oxygen.story:${JSON.stringify({
   ...SOURCE,
   overview: "Changed Story text with the same release targets.",
 })}`;
@@ -124,6 +125,19 @@ test("fresh SQLite defaults, immutable CAS, replacement reset, and mutation-boun
        event_type,actor_id,actor_type)
       VALUES ('event-a','doc',0,'source','{}',?,'message','contributor-a','human')`)
       .bind(STORY_SUMMARY).run();
+    const seeded = await seedCoveragePrivacyAuthority(db, {
+      workflowRunId: RUN_ID,
+      sourceRevision: SOURCE_REVISION,
+      stories: [SOURCE],
+      now: "2042-01-01T00:00:00.000Z",
+    });
+    ACTIVE_DIGEST = seeded.activeStoryDigest;
+    STORY_PRIVACY_INPUT_DIGEST = seeded.storyPrivacyInputDigest;
+    STORY_SUMMARY = `oxygen.story:${JSON.stringify(SOURCE)}`;
+    MUTATED_STORY_SUMMARY = `oxygen.story:${JSON.stringify({
+      ...SOURCE,
+      overview: "Changed Story text with the same release targets.",
+    })}`;
     let receiptOutputDigest = await putReceipt(db, candidate);
 
     // This is the unchanged Core activation insert shape.

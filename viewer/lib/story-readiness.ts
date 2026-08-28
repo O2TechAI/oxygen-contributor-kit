@@ -946,16 +946,18 @@ export async function readCoverageManifestAuthority(
   db: StorySourceDatabase,
   workflowRunId: string,
   semanticManifest: SemanticManifestAuthority,
+  options: { verifyCurrentSource?: boolean } = {},
 ): Promise<CoverageManifestAuthority | null> {
   const { readCoveragePrivacyAuthority } = await import("./story-coverage-privacy-authority.ts");
   const privacyAuthority = await readCoveragePrivacyAuthority(
     db,
     workflowRunId,
     semanticManifest,
+    options,
   );
   if (!privacyAuthority.ok) return null;
   const manifest = await db.prepare(`SELECT revision,semantic_manifest_revision,
-      semantic_manifest_digest,coverage_digest,serialized_bytes
+      semantic_manifest_digest,coverage_digest,privacy_authority_digest,serialized_bytes
       FROM story_coverage_manifests WHERE workflow_run_id=?`)
     .bind(workflowRunId).first<Record<string, unknown>>();
   if (!manifest) return null;
@@ -982,7 +984,9 @@ export async function readCoverageManifestAuthority(
     semanticManifest,
     privacyAuthority.authority.authorizedUnitIds,
   );
-  return validation.ok ? validation.authority : null;
+  return validation.ok
+    && manifest.privacy_authority_digest === privacyAuthority.authority.snapshotDigest
+    ? validation.authority : null;
 }
 
 /** Read the last normalized coverage revision even when its semantic authority
@@ -992,7 +996,7 @@ export async function readStoredCoverageManifestAuthority(
   workflowRunId: string,
 ): Promise<CoverageManifestAuthority | null> {
   const manifest = await db.prepare(`SELECT revision,semantic_manifest_revision,
-      semantic_manifest_digest,coverage_digest,serialized_bytes
+      semantic_manifest_digest,coverage_digest,privacy_authority_digest,serialized_bytes
       FROM story_coverage_manifests WHERE workflow_run_id=?`)
     .bind(workflowRunId).first<Record<string, unknown>>();
   if (!manifest) return null;
@@ -1297,6 +1301,31 @@ export function validateStorySourcePackage(
     chapterCount: orderedCandidateRows.length,
     canonicalCandidate: JSON.stringify(orderedCandidateRows.map((row) => ({ id: row.id, summary: row.summary }))),
   };
+}
+
+/** Read and consume the one durable semantic, coverage, and source-Privacy
+ * authority before accepting an active Story package. Passive callers may skip
+ * full source-content verification only when they never hydrate Story bytes. */
+export async function validateCurrentStorySourcePackage(
+  db: StorySourceDatabase,
+  workflowRunId: string,
+  candidateRows: StoryCandidateRow[],
+  evidenceRows: StoryEvidenceRow[],
+  options: { verifyCurrentSource?: boolean } = {},
+): Promise<StorySourceValidation> {
+  const semanticManifest = await readSemanticManifestAuthority(db, workflowRunId);
+  if (!semanticManifest) return storySourceFailure("STORY_SEMANTIC_AUTHORITY_STALE");
+  const coverageManifest = await readCoverageManifestAuthority(
+    db,
+    workflowRunId,
+    semanticManifest,
+    options,
+  );
+  if (!coverageManifest) return storySourceFailure("STORY_COVERAGE_INVALID");
+  return validateStorySourcePackage(candidateRows, evidenceRows, {
+    semanticManifest,
+    coverageManifest,
+  });
 }
 
 /** One canonical activation seam: normalize server-owned unit coverage, then

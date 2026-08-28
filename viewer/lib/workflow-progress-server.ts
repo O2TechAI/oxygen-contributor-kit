@@ -10,6 +10,7 @@ import {
 } from "./story-review";
 import {
   readActiveStoryReviewContract,
+  readPassiveActiveStoryReviewContract,
   readStoryReviewSessionRecord,
 } from "./story-review-session-server";
 import {
@@ -92,7 +93,7 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     .sort()
     .at(-1) || null;
   const activeContract = run?.story_generation_status === "ready_for_human_review"
-    ? await readActiveStoryReviewContract(db, authority.workflowRunId)
+    ? await readPassiveActiveStoryReviewContract(db, authority.workflowRunId)
     : null;
   let storedSourceRevision: number | null = null;
   try {

@@ -8,7 +8,7 @@ import { readStoryReviewSessionRecord } from "./story-review-session-server.ts";
 import { storyPreparationDigest } from "./story-preparation.ts";
 import {
   readReservedStoryCandidateRows,
-  validateStorySourcePackage,
+  validateCurrentStorySourcePackage,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
 import {
@@ -182,7 +182,12 @@ export async function reconstructReviewedStoryPrivacyRevision(
     || typeof activeStoryDigest !== "string" || !digestPattern.test(activeStoryDigest)) {
     return { ok: false, code: STORY_PRIVACY_REVISION_ERROR.invalidAuthority };
   }
-  const validation = validateStorySourcePackage(storyRows, evidenceResult.results || []);
+  const validation = await validateCurrentStorySourcePackage(
+    db,
+    workflowRunId,
+    storyRows,
+    evidenceResult.results || [],
+  );
   if (!validation.ok
     || await storyPreparationDigest(JSON.parse(validation.canonicalCandidate)) !== activeStoryDigest) {
     return { ok: false, code: STORY_PRIVACY_REVISION_ERROR.invalidAuthority };

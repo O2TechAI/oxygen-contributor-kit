@@ -30,7 +30,14 @@ import {
 import { readActiveStoryReviewContract } from "../lib/story-review-session-server.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { captureStoryReleasePrivacySnapshot } from "../lib/release-privacy-snapshot.ts";
-import { validateStorySourcePackage } from "../lib/story-readiness.ts";
+import { readCoveragePrivacyAuthority } from "../lib/story-coverage-privacy-authority.ts";
+import {
+  canonicalAuthorityJson,
+  contributionRecordSourceDigest,
+  finalizeCoverageManifestAuthority,
+  validateSemanticManifestAuthority,
+  validateStorySourcePackage,
+} from "../lib/story-readiness.ts";
 import { STORY_PREFIX } from "../lib/timeline.ts";
 import {
   deriveStoryReleaseTargetCatalog,
@@ -321,7 +328,8 @@ async function sha256(value) {
 
 
 class FakeStoryReleaseDb {
-  constructor({ items, run, session, redactionJob, redactions = [], receipts, probeRun, allSet }) {
+  constructor({ items, run, session, redactionJob, redactions = [], receipts, probeRun, allSet,
+    completeness }) {
     this.items = items;
     this.runs = new Map([[run.id, run]]);
     this.session = session;
@@ -330,6 +338,7 @@ class FakeStoryReleaseDb {
     this.receipts = receipts;
     this.probeRun = probeRun;
     this.allSet = allSet;
+    this.completeness = completeness;
   }
 
   prepare(sql) {
@@ -353,6 +362,15 @@ class FakeStoryReleaseDb {
           return { results: this.session ? [structuredClone(this.session)] : [] };
         }
         if (/FROM story_preparation_receipts/.test(sql)) return { results: structuredClone(this.receipts) };
+        if (/FROM semantic_units WHERE workflow_run_id=/.test(sql)) {
+          return { results: structuredClone(this.completeness.unitRows) };
+        }
+        if (/FROM semantic_unit_members/.test(sql)) {
+          return { results: structuredClone(this.completeness.memberRows) };
+        }
+        if (/FROM story_coverage_rows/.test(sql)) {
+          return { results: structuredClone(this.completeness.coverageRows) };
+        }
         if (/FROM story_privacy_candidates/.test(sql)) return { results: [] };
         if (/FROM probe_runs WHERE workflow_run_id=\?/.test(sql)) return { results: [structuredClone(this.probeRun)] };
         if (/FROM probes ORDER BY id/.test(sql)) return { results: [] };
@@ -373,6 +391,16 @@ class FakeStoryReleaseDb {
         throw new Error(`Unexpected story release all SQL: ${sql}`);
       },
       first: async () => {
+        if (/SELECT 1 AS current FROM semantic_manifests/.test(sql)) return { current: 1 };
+        if (/FROM workflow_runs r JOIN semantic_manifests/.test(sql)) {
+          return structuredClone(this.completeness.binding);
+        }
+        if (/FROM semantic_manifests WHERE workflow_run_id=/.test(sql)) {
+          return structuredClone(this.completeness.manifestRow);
+        }
+        if (/FROM story_coverage_manifests WHERE workflow_run_id=/.test(sql)) {
+          return structuredClone(this.completeness.coverageManifestRow);
+        }
         if (/FROM workflow_runs WHERE id=\?/.test(sql)) {
           const run = this.runs.get(values[0]);
           return run ? {
@@ -409,10 +437,6 @@ async function serverFixture({
   initiallyRedacted = true,
 } = {}) {
   const currentSource = source(sourceInsights, {}, storyPrivate);
-  const humans = includeHuman
-    ? [["human:approved", humanContent(currentSource)]] : [];
-  const state = reviewedState(currentSource, decisions, humans);
-  const session = createStoryReviewSession(RUN_ID, { [currentSource.key]: state }, {});
   const item = {
     id: evidence.eventId,
     document_id: evidence.documentId,
@@ -422,8 +446,55 @@ async function serverFixture({
     actor_type: "user",
     timestamp: "2026-08-25T00:00:00.000Z",
     content: `${storyPrivate} supporting evidence`,
-    organization_reason: `${STORY_PREFIX}${JSON.stringify(currentSource)}`,
+    original_json: "{}",
   };
+  const contribution = {
+    id: item.id,
+    sourceDigest: await contributionRecordSourceDigest({}, {
+      id: item.id, documentId: item.document_id, sequence: item.sequence,
+      eventType: item.event_type, actorId: item.actor_id, actorType: item.actor_type,
+      timestamp: item.timestamp, content: item.content,
+    }),
+  };
+  const semanticUnit = {
+    id: "unit-release",
+    revision: 1,
+    projectId: "story-release-test",
+    kind: "discussion",
+    members: [item.id],
+    memberCount: 1,
+    membershipDigest: await sha256(canonicalAuthorityJson([contribution])),
+  };
+  const semanticCore = {
+    projectId: semanticUnit.projectId,
+    revision: 1,
+    sourceDigest: await sha256(canonicalAuthorityJson([contribution])),
+    universeDigest: await sha256(canonicalAuthorityJson([item.id])),
+    units: [semanticUnit],
+  };
+  const semanticValidation = await validateSemanticManifestAuthority({
+    ...semanticCore,
+    manifestDigest: await sha256(canonicalAuthorityJson(semanticCore)),
+  }, [contribution]);
+  assert.equal(semanticValidation.ok, true);
+  const semantic = semanticValidation.authority;
+  const coverageValidation = await finalizeCoverageManifestAuthority({ rows: [{
+    unitId: semanticUnit.id, disposition: "represented", ownerId: currentSource.key,
+  }] }, semantic);
+  assert.equal(coverageValidation.ok, true);
+  const coverage = coverageValidation.authority;
+  currentSource.coverage = {
+    semanticManifest: { revision: semantic.revision, digest: semantic.manifestDigest },
+    coverageManifest: { revision: coverage.revision, digest: coverage.coverageDigest },
+    representedUnitIds: [semanticUnit.id],
+    excludedUnits: [],
+  };
+  item.organization_reason = `${STORY_PREFIX}${JSON.stringify(currentSource)}`;
+  item.content_length = item.content.length;
+  const humans = includeHuman
+    ? [["human:approved", humanContent(currentSource)]] : [];
+  const state = reviewedState(currentSource, decisions, humans);
+  const session = createStoryReviewSession(RUN_ID, { [currentSource.key]: state }, {});
   const candidateRows = [{ id: item.id, documentId: item.document_id, summary: item.organization_reason }];
   const evidenceRows = [{
     id: item.id,
@@ -471,19 +542,33 @@ async function serverFixture({
       server_version: SERVER_VERSION,
     },
     redactionJob: {
+      id: "privacy-story-release",
       status: "complete",
+      stage: "privacy",
+      model: null,
       completed: initiallyRedacted ? 1 : 0,
       total: initiallyRedacted ? 1 : 0,
       rejected: 0,
       source_digest: sourceDigest,
+      started_at: completedAt,
+      updated_at: completedAt,
+      completed_at: completedAt,
     },
     redactions: initiallyRedacted ? [{
+      id: "redaction-story-release",
       item_id: item.id,
+      document_id: item.document_id,
       start_offset: 0,
       end_offset: storyPrivate.length,
-      category: "secret",
+      category: "sensitive",
+      confidence: null,
+      reason: null,
       review_state: "deterministic",
+      uncertainty_reason: null,
       status: "active",
+      created_by: "deterministic",
+      created_at: completedAt,
+      updated_at: completedAt,
     }] : [],
     receipts,
     probeRun: {
@@ -498,8 +583,91 @@ async function serverFixture({
       server_version: SERVER_VERSION,
       all_set_at: "2026-08-25T00:00:11.000Z",
     },
+    completeness: {
+      semantic,
+      manifestRow: {
+        project_id: semantic.projectId,
+        revision: semantic.revision,
+        source_digest: semantic.sourceDigest,
+        universe_digest: semantic.universeDigest,
+        manifest_digest: semantic.manifestDigest,
+        serialized_bytes: semantic.serializedBytes,
+      },
+      unitRows: [{
+        id: semanticUnit.id,
+        workflow_run_id: RUN_ID,
+        revision: semanticUnit.revision,
+        project_id: semanticUnit.projectId,
+        kind: semanticUnit.kind,
+        member_count: semanticUnit.memberCount,
+        membership_digest: semanticUnit.membershipDigest,
+        duplicate_of_unit_id: null,
+        story_projection_json: "{}",
+      }],
+      memberRows: [{
+        unit_id: semanticUnit.id,
+        item_id: item.id,
+        source_digest: contribution.sourceDigest,
+      }],
+      coverageManifestRow: {
+        revision: coverage.revision,
+        semantic_manifest_revision: coverage.semanticManifestRevision,
+        semantic_manifest_digest: coverage.semanticManifestDigest,
+        coverage_digest: coverage.coverageDigest,
+        privacy_authority_digest: "0".repeat(64),
+        unit_count: coverage.rows.length,
+        serialized_bytes: coverage.serializedBytes,
+      },
+      coverageRows: [{
+        unit_id: semanticUnit.id,
+        disposition: "represented",
+        owner_id: currentSource.key,
+        exclusion_reason: null,
+      }],
+      binding: {
+        workflow_run_id: RUN_ID,
+        story_generation_status: "ready_for_human_review",
+        story_source_revision: SOURCE_REVISION,
+        source_revision: SOURCE_REVISION,
+        project_id: semantic.projectId,
+        revision: semantic.revision,
+        source_digest: semantic.sourceDigest,
+        universe_digest: semantic.universeDigest,
+        manifest_digest: semantic.manifestDigest,
+        unit_count: semantic.units.length,
+        serialized_bytes: semantic.serializedBytes,
+        story_projection_bytes: semanticValidation.storyProjectionBytes,
+        corpus_revision: 1,
+        corpus_digest: "c".repeat(64),
+        corpus_document_count: 1,
+        corpus_item_count: 1,
+        finalized_revision: 1,
+        finalized_digest: "c".repeat(64),
+        document_count: 1,
+        item_count: 1,
+        current_document_count: 1,
+        current_item_count: 1,
+        current_unit_count: 1,
+        current_member_count: 1,
+      },
+    },
   });
+  const privacyAuthority = await readCoveragePrivacyAuthority(db, RUN_ID, semantic);
+  assert.equal(privacyAuthority.ok, true);
+  db.completeness.coverageManifestRow.privacy_authority_digest =
+    privacyAuthority.authority.snapshotDigest;
   return { db, currentSource };
+}
+
+async function rebindFixtureCoveragePrivacy(fixture) {
+  const privacyAuthority = await readCoveragePrivacyAuthority(
+    fixture.db,
+    RUN_ID,
+    fixture.db.completeness.semantic,
+  );
+  assert.equal(privacyAuthority.ok, true);
+  fixture.db.completeness.coverageManifestRow.privacy_authority_digest =
+    privacyAuthority.authority.snapshotDigest;
 }
 
 const request = (overrides = {}) => ({
@@ -578,6 +746,7 @@ test("missing, unknown, or pending Privacy blocks release while confirmed keep a
   };
   const keepSnapshot = await captureStoryReleasePrivacySnapshot(keepFixture.db, RUN_ID);
   assert.notEqual(keepSnapshot.digest, pendingSnapshot.digest);
+  await rebindFixtureCoveragePrivacy(keepFixture);
   const kept = await reconstructReviewedStoryReleaseFromDatabase(keepFixture.db, request());
   assert.equal(kept.ok, true);
   assert.match(kept.serializedStory, new RegExp(PRIVATE));
@@ -597,6 +766,7 @@ test("missing, unknown, or pending Privacy blocks release while confirmed keep a
     review_state: "confirmed_redact",
     status: "active",
   }];
+  await rebindFixtureCoveragePrivacy(redactFixture);
   const redacted = await reconstructReviewedStoryReleaseFromDatabase(redactFixture.db, request());
   assert.equal(redacted.ok, true);
   assert.doesNotMatch(redacted.serializedStory, new RegExp(PRIVATE));
@@ -720,6 +890,7 @@ test("a contributor review decision during Story assembly fails the snapshot rac
     created_at: "2026-08-25T00:00:03.000Z",
     updated_at: "2026-08-25T00:00:03.000Z",
   };
+  await rebindFixtureCoveragePrivacy(fixture);
   const result = await reconstructReviewedStoryReleaseFromDatabase(
     fixture.db,
     request(),

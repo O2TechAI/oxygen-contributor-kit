@@ -66,6 +66,7 @@ import {
   isStoryReviewReady,
   isStoryWorkspaceReady,
   isWorkflowRunId,
+  startWorkflowPolling,
   withHumanReviewProgress,
   type WorkflowProgressState,
 } from "../lib/workflow-progress";
@@ -328,8 +329,10 @@ export function InlineWorkspace({
   }, []);
 
   useEffect(() => {
-    const polling = setInterval(() => { void loadWorkflow(); }, 2000);
-    return () => clearInterval(polling);
+    const polling = startWorkflowPolling(async ({ signal }) => {
+      await loadWorkflow(signal);
+    });
+    return () => polling.retire();
   }, [loadWorkflow]);
 
   useEffect(() => () => projectAllSetRequests.retire(), [projectAllSetRequests, workflowRunId]);

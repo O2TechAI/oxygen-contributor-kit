@@ -166,7 +166,10 @@ type CoverageDraftRow =
   | { unitId: string; disposition: "excluded"; exclusionReason: "duplicate" | "privacy_withheld" | "routine_non_narrative" | "outside_story_scope" };
 ```
 
-The finalizer rejects omissions, overlaps, unknown unit IDs, stale semantic authority, invalid exclusion reasons, and any extra keys. Run it before activation:
+The finalizer rejects omissions, overlaps, unknown unit IDs, structurally stale semantic authority,
+invalid exclusion reasons, and any extra keys. It is a provider-free structural projection, not the
+source-backed semantic validator: activation revalidates every semantic member/source digest before
+anything can become durable, ready, reviewable, or releasable. Run it before activation:
 
 ```bash
 node skills/oxygen-storytelling-review/scripts/finalize_story_coverage.mjs \

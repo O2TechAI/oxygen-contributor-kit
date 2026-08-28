@@ -6,6 +6,7 @@ import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerHooks } from "node:module";
 import test from "node:test";
+import { seedCoveragePrivacyAuthority } from "./story-coverage-privacy-fixture.mjs";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -153,10 +154,10 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
     ).run();
     await db.prepare(`INSERT INTO story_coverage_manifests
       (workflow_run_id,revision,semantic_manifest_revision,semantic_manifest_digest,
-       coverage_digest,unit_count,serialized_bytes,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`).bind(
+       coverage_digest,privacy_authority_digest,unit_count,serialized_bytes,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(
       RUN_ID, COVERAGE_REVISION, 1, SEMANTIC_DIGEST, COVERAGE_DIGEST,
-      0, 2, "2037-12-31T00:00:00.000Z", "2037-12-31T00:00:00.000Z",
+      "0".repeat(64), 0, 2, "2037-12-31T00:00:00.000Z", "2037-12-31T00:00:00.000Z",
     ).run();
 
     await db.prepare(`INSERT INTO documents
@@ -325,8 +326,21 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
     ), false);
     assert.deepEqual(await activationSnapshot(db), activated);
 
+    const sessionSource = JSON.parse(currentStorySource().slice("oxygen.story:".length));
+    for (const table of [
+      "story_coverage_rows", "story_coverage_manifests", "semantic_unit_members",
+      "semantic_units", "semantic_manifests",
+    ]) await db.prepare(`DELETE FROM ${table}`).run();
+    await seedCoveragePrivacyAuthority(db, {
+      workflowRunId: RUN_ID,
+      sourceRevision: INITIAL_SOURCE_REVISION + 1,
+      stories: [sessionSource],
+      now: ACTIVATED_AT,
+      projectId: "synthetic-project",
+    });
+
     const session = (label) => {
-      const review = emptyChapterReview(JSON.parse(currentStorySource().slice("oxygen.story:".length)));
+      const review = emptyChapterReview(sessionSource);
       review.evidenceVerified = label === "writer-a";
       return createStoryReviewSession(RUN_ID, { "story-authority": review }, {}, "2099-01-01T00:00:00.000Z");
     };
@@ -600,35 +614,120 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     };
 
     const realBatch = db.batch.bind(db);
+    const originalRedaction = await db.prepare("SELECT * FROM redactions WHERE id='source-private'").first();
+    const races = [{
+      label: "redaction decision",
+      mutate: () => db.prepare(`UPDATE redactions SET review_state='confirmed_keep',status='removed',
+        updated_at='2041-01-01T00:00:01.000Z' WHERE id='source-private'`).run(),
+      restore: () => db.prepare(`UPDATE redactions SET review_state='deterministic',status='active',
+        updated_at=? WHERE id='source-private'`).bind(timestamp).run(),
+    }, {
+      label: "redaction deletion",
+      mutate: () => db.prepare("DELETE FROM redactions WHERE id='source-private'").run(),
+      restore: () => db.prepare(`INSERT INTO redactions
+        (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,review_state,
+         uncertainty_reason,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .bind(...[
+          "id", "item_id", "document_id", "start_offset", "end_offset", "category",
+          "confidence", "reason", "review_state", "uncertainty_reason", "status",
+          "created_by", "created_at", "updated_at",
+        ].map((key) => originalRedaction[key])).run(),
+    }, {
+      label: "source Privacy job",
+      mutate: () => db.prepare(`UPDATE redaction_jobs SET updated_at='2041-01-01T00:00:01.000Z'`).run(),
+      restore: () => db.prepare("UPDATE redaction_jobs SET updated_at=?").bind(timestamp).run(),
+    }, {
+      label: "semantic membership",
+      mutate: () => db.prepare(`UPDATE semantic_unit_members SET source_digest=?
+        WHERE item_id=?`).bind("f".repeat(64), PRIVATE_ITEM_ID).run(),
+      restore: () => db.prepare(`UPDATE semantic_unit_members SET source_digest=?
+        WHERE item_id=?`).bind(
+        contributionRecords.find((record) => record.id === PRIVATE_ITEM_ID).sourceDigest,
+        PRIVATE_ITEM_ID,
+      ).run(),
+    }, {
+      label: "semantic unit",
+      mutate: () => db.prepare(`UPDATE semantic_units SET membership_digest=?
+        WHERE id='unit-private'`).bind("f".repeat(64)).run(),
+      restore: () => db.prepare(`UPDATE semantic_units SET membership_digest=?
+        WHERE id='unit-private'`).bind(
+        semantic.units.find((unit) => unit.id === "unit-private").membershipDigest,
+      ).run(),
+    }, {
+      label: "corpus binding",
+      mutate: () => db.prepare(`UPDATE finalized_corpus_manifests SET corpus_digest=?
+        WHERE workflow_run_id=?`).bind("f".repeat(64), RUN_ID).run(),
+      restore: () => db.prepare(`UPDATE finalized_corpus_manifests SET corpus_digest=?
+        WHERE workflow_run_id=?`).bind("c".repeat(64), RUN_ID).run(),
+    }, {
+      label: "current source",
+      mutate: () => db.prepare("UPDATE items SET content=? WHERE id=?")
+        .bind("Changed private synthetic event.", PRIVATE_ITEM_ID).run(),
+      restore: () => db.prepare("UPDATE items SET content=? WHERE id=?")
+        .bind("Private synthetic event.", PRIVATE_ITEM_ID).run(),
+    }, {
+      label: "coverage binding",
+      mutate: () => db.prepare(`INSERT INTO story_coverage_manifests
+        (workflow_run_id,revision,semantic_manifest_revision,semantic_manifest_digest,
+         coverage_digest,privacy_authority_digest,unit_count,serialized_bytes,created_at,updated_at)
+        VALUES (?,99,1,?,?,?,0,2,?,?)`).bind(
+        RUN_ID, semantic.manifestDigest, "f".repeat(64), "0".repeat(64), timestamp, timestamp,
+      ).run(),
+      restore: () => db.prepare("DELETE FROM story_coverage_manifests WHERE workflow_run_id=?")
+        .bind(RUN_ID).run(),
+    }];
+    for (const race of races) {
+      db.batch = async (statements) => {
+        await race.mutate();
+        return realBatch(statements);
+      };
+      const mutationResponse = await workflowRoute.POST(new Request("http://localhost/api/workflow", {
+        method: "POST", body: JSON.stringify(body),
+      }));
+      db.batch = realBatch;
+      assert.equal(mutationResponse.status, 409, race.label);
+      const failure = await mutationResponse.json();
+      assert.deepEqual(failure, {
+        error: "Story activation authority changed before commit",
+        code: "STORY_ACTIVATION_AUTHORITY_CHANGED",
+      }, race.label);
+      assert.doesNotMatch(JSON.stringify(failure), /localhost|sqlite|trace|private synthetic/i);
+      await race.restore();
+      const rolledBack = await activationSnapshot(db);
+      assert.equal(rolledBack.coverage, null, race.label);
+      assert.deepEqual(rolledBack.receipts, [], race.label);
+      assert.deepEqual(rolledBack.candidates, [], race.label);
+      assert.equal(rolledBack.probeRun.source_revision, INITIAL_SOURCE_REVISION, race.label);
+      assert.equal(
+        rolledBack.items.find((item) => item.id === STORY_ITEM_ID).organization_reason,
+        null,
+        race.label,
+      );
+      assert.equal(rolledBack.run.story_source_revision, INITIAL_SOURCE_REVISION, race.label);
+      await db.prepare(`UPDATE workflow_runs
+        SET story_generation_status='running',story_source_revision=? WHERE id=?`)
+        .bind(INITIAL_SOURCE_REVISION, RUN_ID).run();
+    }
+
     db.batch = async (statements) => {
-      await db.prepare(`UPDATE redactions SET review_state='confirmed_keep',status='removed',
-        updated_at=? WHERE id='source-private'`)
-        .bind("2041-01-01T00:00:01.000Z").run();
+      await db.prepare(`INSERT INTO organization_jobs
+        (id,status,stage,completed,total,warnings_json,started_at,updated_at,completed_at)
+        VALUES ('unrelated-organization','complete','done',0,0,'[]',?,?,?)`)
+        .bind(timestamp, timestamp, timestamp).run();
+      await db.prepare(`INSERT INTO probes
+        (id,document_id,document_kind,event_ids_json,signal,recap,question,options_json,
+         presentations_json,created_at) VALUES
+        ('unrelated-probe',?,'synthetic','[]','preference','recap','Question?','[]','{}',?)`)
+        .bind(DOCUMENT_ID, timestamp).run();
+      await db.prepare(`INSERT INTO story_review_sessions
+        (workflow_run_id,state_json,updated_at,server_version) VALUES (?,'{}',?,0)`)
+        .bind(RUN_ID, timestamp).run();
       return realBatch(statements);
     };
-    const mutationResponse = await workflowRoute.POST(new Request("http://localhost/api/workflow", {
-      method: "POST", body: JSON.stringify(body),
-    }));
-    assert.equal(mutationResponse.status, 409, await mutationResponse.text());
-    const rolledBack = await activationSnapshot(db);
-    assert.equal(rolledBack.coverage, null);
-    assert.deepEqual(rolledBack.receipts, []);
-    assert.deepEqual(rolledBack.candidates, []);
-    assert.equal(rolledBack.probeRun.source_revision, INITIAL_SOURCE_REVISION);
-    assert.equal(
-      rolledBack.items.find((item) => item.id === STORY_ITEM_ID).organization_reason,
-      null,
-    );
-
-    db.batch = realBatch;
-    await db.prepare(`UPDATE redactions SET review_state='deterministic',status='active',
-      updated_at=? WHERE id='source-private'`).bind(timestamp).run();
-    await db.prepare(`UPDATE workflow_runs
-      SET story_generation_status='running',story_source_revision=? WHERE id=?`)
-      .bind(INITIAL_SOURCE_REVISION, RUN_ID).run();
     const response = await workflowRoute.POST(new Request("http://localhost/api/workflow", {
       method: "POST", body: JSON.stringify(body),
     }));
+    db.batch = realBatch;
     assert.equal(response.status, 200, await response.text());
     const activated = await activationSnapshot(db);
     assert.equal(activated.run.story_generation_status, "ready_for_human_review");
