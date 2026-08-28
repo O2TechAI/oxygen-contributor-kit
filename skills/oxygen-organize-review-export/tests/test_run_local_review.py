@@ -1,12 +1,15 @@
 import importlib.util
+from contextlib import closing
 import hashlib
 import http.server
 import io
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -191,7 +194,342 @@ def file_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path):
         test_case.skipTest(f"file link creation is unavailable: {error.__class__.__name__}")
 
 
+def write_viewer_state(runtime_root: Path, rows: list[tuple[str, bytes]]) -> Path:
+    state = runtime_root / "state"
+    state.mkdir(parents=True)
+    database = state / "oxygen.sqlite"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            "CREATE TABLE persisted_state (authority TEXT PRIMARY KEY, value BLOB NOT NULL)"
+        )
+        connection.executemany("INSERT INTO persisted_state VALUES (?, ?)", rows)
+        connection.commit()
+    (state / "viewer-owned.bin").write_bytes(b"synthetic-viewer-sidecar\x00\xff")
+    return database
+
+
+def state_file_bytes(state: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(state).as_posix(): path.read_bytes()
+        for path in state.rglob("*")
+        if path.is_file()
+    }
+
+
 class LauncherUnitTest(unittest.TestCase):
+    def test_complete_viewer_state_and_locator_survive_save(self):
+        rows = [
+            ("workflow", b"complete\x00workflow"),
+            ("story", b"reviewed story bytes"),
+            ("privacy", b"keep:redact:exact"),
+            ("preference", b"answer bytes"),
+            ("release", b"confirmed locally"),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(runtime, rows)
+            before = state_file_bytes(runtime / "state")
+            destination = root / ".old" / "viewer-session"
+
+            with (
+                mock.patch.object(MODULE, "_current_head", return_value="a" * 40),
+                mock.patch("builtins.print") as printed,
+            ):
+                saved_session = MODULE.save_viewer_state(runtime, destination, "run-synthetic")
+
+            self.assertEqual(saved_session, destination.resolve())
+            saved_state = saved_session / "state"
+            self.assertEqual(state_file_bytes(saved_state), before)
+            with closing(sqlite3.connect(saved_state / "oxygen.sqlite")) as connection:
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT authority, value FROM persisted_state ORDER BY authority"
+                    ).fetchall(),
+                    sorted(rows),
+                )
+            locator = (destination / "viewer-session.txt").read_text(encoding="utf-8")
+            self.assertIn(f"origin_worktree: {MODULE.KIT_ROOT.resolve()}", locator)
+            self.assertIn(f"origin_head: {'a' * 40}", locator)
+            self.assertIn("workflow_run_id: run-synthetic", locator)
+            self.assertIn(f"saved_path: {saved_session}", locator)
+            printed.assert_called_once_with(f"Saved Viewer state: {saved_session}", flush=True)
+
+    def test_blocked_pending_and_partial_state_are_saved_without_inference(self):
+        rows = [
+            ("blocked", b"existing blocker"),
+            ("pending", b"collection pending"),
+            ("partial-review", b"two of five reviewed"),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(runtime, rows)
+            destination = root / ".old" / "progress-session"
+            with (
+                mock.patch.object(MODULE, "_current_head", return_value="b" * 40),
+                mock.patch("builtins.print"),
+            ):
+                saved_session = MODULE.save_viewer_state(runtime, destination, None)
+
+            with closing(sqlite3.connect(saved_session / "state" / "oxygen.sqlite")) as connection:
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT authority, value FROM persisted_state ORDER BY authority"
+                    ).fetchall(),
+                    sorted(rows),
+                )
+            self.assertIn(
+                "workflow_run_id: unknown",
+                (destination / "viewer-session.txt").read_text(encoding="utf-8"),
+            )
+
+    def test_change_after_resume_remains_present_on_next_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(runtime, [("partial-review", b"before")])
+            destination = root / ".old" / "durable-session"
+            with (
+                mock.patch.object(MODULE, "_current_head", return_value="c" * 40),
+                mock.patch("builtins.print"),
+            ):
+                MODULE.save_viewer_state(runtime, destination, "run-durable")
+
+            first_database = MODULE.validate_viewer_state(destination)
+            environment = MODULE.viewer_environment(destination)
+            self.assertEqual(environment["OXYGEN_VIEWER_STATE_DIR"], str(destination / "state"))
+            with closing(sqlite3.connect(first_database)) as connection:
+                connection.execute(
+                    "UPDATE persisted_state SET value = ? WHERE authority = ?",
+                    (b"after-resume exact bytes", "partial-review"),
+                )
+                connection.commit()
+
+            second_database = MODULE.validate_viewer_state(destination)
+            self.assertEqual(first_database, second_database)
+            with closing(sqlite3.connect(second_database)) as connection:
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT value FROM persisted_state WHERE authority = 'partial-review'"
+                    ).fetchone(),
+                    (b"after-resume exact bytes",),
+                )
+
+    def test_missing_and_corrupt_sqlite_fail_with_fixed_safe_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            missing = root / "private-missing-session"
+            corrupt = root / "private-corrupt-session"
+            (missing / "state").mkdir(parents=True)
+            (corrupt / "state").mkdir(parents=True)
+            (corrupt / "state" / "oxygen.sqlite").write_bytes(
+                b"private raw content that is not sqlite"
+            )
+            for session in (missing, corrupt):
+                with self.subTest(session=session.name):
+                    with self.assertRaisesRegex(
+                        SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$"
+                    ) as error:
+                        MODULE.validate_viewer_state(session)
+                    message = str(error.exception)
+                    self.assertNotIn(session.name, message)
+                    self.assertNotIn("private raw content", message)
+
+    def test_existing_save_destination_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(runtime, [("workflow", b"complete")])
+            destination = root / ".old" / "existing"
+            destination.mkdir(parents=True)
+            sentinel = destination / "owner.txt"
+            sentinel.write_bytes(b"owner bytes")
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_EXISTS)}$"
+            ):
+                MODULE.save_viewer_state(runtime, destination, "run-existing")
+            self.assertEqual(sentinel.read_bytes(), b"owner bytes")
+            self.assertEqual(list(destination.iterdir()), [sentinel])
+
+    def test_save_runs_after_termination_and_port_release(self):
+        order = []
+        with (
+            mock.patch.object(
+                MODULE, "terminate_process_group", side_effect=lambda _process: order.append("stop")
+            ),
+            mock.patch.object(
+                MODULE, "wait_for_port_release", side_effect=lambda _port: order.append("released")
+            ),
+            mock.patch.object(
+                MODULE, "save_viewer_state", side_effect=lambda *_args: order.append("saved")
+            ) as save,
+        ):
+            MODULE.stop_owned_viewer(
+                mock.sentinel.process,
+                3210,
+                runtime_root=Path("runtime"),
+                save_destination=Path("session"),
+                workflow_run_id="run-order",
+                save_ready=True,
+            )
+        self.assertEqual(order, ["stop", "released", "saved"])
+        save.assert_called_once_with(Path("runtime"), Path("session"), "run-order")
+
+    def test_failed_port_release_never_saves(self):
+        with (
+            mock.patch.object(MODULE, "terminate_process_group"),
+            mock.patch.object(
+                MODULE, "wait_for_port_release", side_effect=RuntimeError("private port detail")
+            ),
+            mock.patch.object(MODULE, "save_viewer_state") as save,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "private port detail"):
+                MODULE.stop_owned_viewer(
+                    mock.sentinel.process,
+                    3210,
+                    runtime_root=Path("runtime"),
+                    save_destination=Path("session"),
+                    save_ready=True,
+                )
+        save.assert_not_called()
+
+    def test_save_failure_does_not_leak_raw_path_or_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime-private"
+            write_viewer_state(runtime, [("workflow", b"private database bytes")])
+            destination = root / ".old" / "private-destination"
+            with mock.patch.object(
+                MODULE.shutil,
+                "copytree",
+                side_effect=OSError("C:/private/source token=secret"),
+            ):
+                with self.assertRaisesRegex(
+                    SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_SAVE_FAILED)}$"
+                ) as error:
+                    MODULE.save_viewer_state(runtime, destination, "private-run")
+            message = str(error.exception)
+            self.assertNotIn("private", message.lower())
+            self.assertNotIn("secret", message.lower())
+            self.assertFalse(destination.exists())
+
+    def test_resume_cli_uses_saved_state_without_collection_or_import(self):
+        class FakeProcess:
+            def poll(self):
+                return None
+
+        class ReadyResponse:
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary) / "saved-session"
+            write_viewer_state(session, [("partial-review", b"preserved")])
+            with (
+                mock.patch.object(sys, "argv", [
+                    "run_local_review.py", "--resume-state", str(session),
+                    "--port", "3210", "--skip-install", "--no-browser", "--smoke-test",
+                ]),
+                mock.patch.object(MODULE, "install_signal_handlers"),
+                mock.patch.object(MODULE, "ensure_port_available"),
+                mock.patch.object(MODULE, "ensure_dependencies", return_value="npm"),
+                mock.patch.object(MODULE, "start_owned_process", return_value=FakeProcess()) as start,
+                mock.patch.object(MODULE.urllib.request, "urlopen", return_value=ReadyResponse()),
+                mock.patch.object(
+                    MODULE, "request_json", return_value={"workflowRunId": "run-preserved"}
+                ) as request,
+                mock.patch.object(MODULE, "stop_owned_viewer") as stop,
+                mock.patch.object(MODULE, "establish_workflow_run") as establish,
+                mock.patch.object(MODULE, "import_run") as imported,
+                mock.patch("builtins.print"),
+            ):
+                MODULE.main()
+
+            environment = start.call_args.kwargs["env"]
+            self.assertEqual(environment["OXYGEN_VIEWER_STATE_DIR"], str(session / "state"))
+            request.assert_called_once_with(
+                mock.ANY, "http://127.0.0.1:3210/api/workflow"
+            )
+            establish.assert_not_called()
+            imported.assert_not_called()
+            stop.assert_called_once_with(
+                start.return_value,
+                3210,
+                runtime_root=session.resolve(),
+                save_destination=None,
+                workflow_run_id=None,
+                save_ready=True,
+            )
+
+    def test_save_cli_passes_established_workflow_to_post_release_save(self):
+        class FakeProcess:
+            def poll(self):
+                return None
+
+        class ReadyResponse:
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            target.mkdir()
+            destination = root / ".old" / "saved-session"
+            with (
+                mock.patch.object(sys, "argv", [
+                    "run_local_review.py", "--target", str(target),
+                    "--save-state", str(destination), "--port", "3211",
+                    "--skip-install", "--no-browser", "--smoke-test",
+                ]),
+                mock.patch.object(MODULE, "install_signal_handlers"),
+                mock.patch.object(MODULE, "ensure_port_available"),
+                mock.patch.object(MODULE, "ensure_dependencies", return_value="npm"),
+                mock.patch.object(MODULE, "start_owned_process", return_value=FakeProcess()) as start,
+                mock.patch.object(MODULE.urllib.request, "urlopen", return_value=ReadyResponse()),
+                mock.patch.object(MODULE, "establish_workflow_run", return_value="run-saved"),
+                mock.patch.object(MODULE, "request_json", return_value={"workflowRunId": "run-saved"}),
+                mock.patch.object(MODULE, "stop_owned_viewer") as stop,
+                mock.patch("builtins.print"),
+            ):
+                MODULE.main()
+
+            runtime_root = Path(start.call_args.kwargs["env"]["OXYGEN_VIEWER_STATE_DIR"]).parent
+            stop.assert_called_once_with(
+                start.return_value,
+                3211,
+                runtime_root=runtime_root,
+                save_destination=destination.resolve(),
+                workflow_run_id="run-saved",
+                save_ready=True,
+            )
+
+    def test_invalid_resume_fails_before_dependencies_listener_or_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions = [root / "missing", root / "corrupt"]
+            (sessions[1] / "state").mkdir(parents=True)
+            (sessions[1] / "state" / "oxygen.sqlite").write_bytes(b"private invalid bytes")
+            for session in sessions:
+                with (
+                    self.subTest(session=session.name),
+                    mock.patch.object(sys, "argv", [
+                        "run_local_review.py", "--resume-state", str(session), "--no-browser",
+                    ]),
+                    mock.patch.object(MODULE, "ensure_dependencies") as dependencies,
+                    mock.patch.object(MODULE, "reserve_free_port") as reserve,
+                    mock.patch.object(MODULE, "start_owned_process") as start,
+                ):
+                    with self.assertRaisesRegex(
+                        SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$"
+                    ):
+                        MODULE.main()
+                dependencies.assert_not_called()
+                reserve.assert_not_called()
+                start.assert_not_called()
+
+
     def test_story_blocked_cli_sanitizes_hostile_409_without_retry(self):
         hostile_body = (
             b'{"private":"token=secret-value","sqlite":"C:/private/state.db",'

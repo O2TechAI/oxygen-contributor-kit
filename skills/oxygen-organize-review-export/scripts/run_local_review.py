@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing, nullcontext
 import hashlib
 import http.cookiejar
 import json
@@ -13,6 +14,7 @@ import re
 import signal
 import shutil
 import socket
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -54,6 +56,9 @@ INPUT_FILE_INVALID = "INPUT_FILE_INVALID"
 INPUT_PROJECTION_INVALID = "INPUT_PROJECTION_INVALID"
 VIEWER_NETWORK_ERROR = "VIEWER_NETWORK_ERROR: The local Viewer could not be reached."
 VIEWER_RESPONSE_INVALID = "VIEWER_RESPONSE_INVALID: The local Viewer returned an invalid response."
+VIEWER_STATE_INVALID = "VIEWER_STATE_INVALID: The saved Viewer state is missing or corrupt."
+VIEWER_STATE_EXISTS = "VIEWER_STATE_EXISTS: The saved Viewer state destination already exists."
+VIEWER_STATE_SAVE_FAILED = "VIEWER_STATE_SAVE_FAILED: The Viewer state could not be saved."
 VIEWER_WORKFLOW_BLOCKERS = {
     400: "VIEWER_WORKFLOW_BLOCKED_HTTP_400: The local Viewer rejected the workflow request.",
     404: "VIEWER_WORKFLOW_BLOCKED_HTTP_404: The local Viewer rejected the workflow request.",
@@ -303,6 +308,98 @@ def viewer_environment(runtime_root: Path) -> dict[str, str]:
     environment["OXYGEN_VIEWER_STATE_DIR"] = str(runtime_root / "state")
     environment["NEXT_TELEMETRY_DISABLED"] = "1"
     return environment
+
+
+def validate_viewer_state(runtime_root: Path) -> Path:
+    """Return the SQLite path for a complete, readable Viewer state directory."""
+    state_root = runtime_root / "state"
+    database = state_root / "oxygen.sqlite"
+    try:
+        if not state_root.is_dir() or not database.is_file():
+            raise OSError
+        database_uri = f"{database.resolve(strict=True).as_uri()}?mode=ro"
+        with closing(sqlite3.connect(database_uri, uri=True)) as connection:
+            integrity = connection.execute("PRAGMA integrity_check").fetchall()
+        if integrity != [("ok",)]:
+            raise sqlite3.DatabaseError
+    except (OSError, ValueError, sqlite3.Error):
+        raise SystemExit(VIEWER_STATE_INVALID) from None
+    return database
+
+
+def resolve_state_path(path: Path, error: str) -> Path:
+    try:
+        return path.expanduser().resolve()
+    except (OSError, RuntimeError):
+        raise SystemExit(error) from None
+
+
+def _current_head() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=KIT_ROOT,
+        capture_output=True,
+        **text_subprocess_options(),
+    )
+    head = result.stdout.strip()
+    if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", head) is None:
+        raise RuntimeError
+    return head
+
+
+def save_viewer_state(
+    runtime_root: Path,
+    destination: Path,
+    workflow_run_id: str | None,
+) -> Path:
+    """Copy one stopped Viewer's complete state directory into a new local session."""
+    validate_viewer_state(runtime_root)
+    destination = resolve_state_path(destination, VIEWER_STATE_SAVE_FAILED)
+    if destination.exists() or destination.is_symlink():
+        raise SystemExit(VIEWER_STATE_EXISTS)
+
+    created = False
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.mkdir()
+        created = True
+        saved_state = destination / "state"
+        shutil.copytree(runtime_root / "state", saved_state, symlinks=True)
+        validate_viewer_state(destination)
+        locator = "\n".join((
+            f"origin_worktree: {KIT_ROOT.resolve()}",
+            f"origin_head: {_current_head()}",
+            f"workflow_run_id: {workflow_run_id or 'unknown'}",
+            f"saved_path: {destination}",
+            "",
+        ))
+        (destination / "viewer-session.txt").write_text(locator, encoding="utf-8")
+    except SystemExit:
+        if created:
+            shutil.rmtree(destination, ignore_errors=True)
+        raise SystemExit(VIEWER_STATE_SAVE_FAILED) from None
+    except (OSError, RuntimeError, shutil.Error, sqlite3.Error):
+        if created:
+            shutil.rmtree(destination, ignore_errors=True)
+        raise SystemExit(VIEWER_STATE_SAVE_FAILED) from None
+
+    print(f"Saved Viewer state: {destination}", flush=True)
+    return destination
+
+
+def stop_owned_viewer(
+    process: OwnedProcess,
+    port: int,
+    *,
+    runtime_root: Path,
+    save_destination: Path | None = None,
+    workflow_run_id: str | None = None,
+    save_ready: bool = False,
+) -> None:
+    terminate_process_group(process)
+    wait_for_port_release(port)
+    if save_destination is not None and save_ready:
+        save_viewer_state(runtime_root, save_destination, workflow_run_id)
 
 
 def viewer_command(port: int, npm: str = "npm") -> list[str]:
@@ -1289,11 +1386,23 @@ def main():
     parser.add_argument("--port", type=int)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--skip-install", action="store_true")
+    state_mode = parser.add_mutually_exclusive_group()
+    state_mode.add_argument(
+        "--save-state", type=Path,
+        help="save the stopped Viewer's complete state into a new local session directory",
+    )
+    state_mode.add_argument(
+        "--resume-state", type=Path,
+        help="launch the Viewer using an existing saved local session directory",
+    )
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if args.story_event:
-        if args.run or args.target or not args.attach_url or not args.workflow_run_id:
+        if (
+            args.run or args.target or args.save_state or args.resume_state
+            or not args.attach_url or not args.workflow_run_id
+        ):
             parser.error("Story events require --attach-url and --workflow-run-id only")
         has_counts = args.story_completed is not None or args.story_total is not None
         if args.story_event == "progress":
@@ -1347,13 +1456,19 @@ def main():
         return
 
     if args.attach_url:
-        if not args.run or args.target or not args.workflow_run_id:
+        if (
+            not args.run or args.target or args.save_state or args.resume_state
+            or not args.workflow_run_id
+        ):
             parser.error("attach mode requires RUN, --attach-url, and --workflow-run-id only")
         run = args.run.expanduser().resolve()
         attach_run(normalize_local_viewer_url(args.attach_url), args.workflow_run_id, run)
         return
 
-    if bool(args.run) == bool(args.target):
+    if args.resume_state:
+        if args.run or args.target or args.workflow_run_id:
+            parser.error("resume mode requires --resume-state without RUN or --target")
+    elif bool(args.run) == bool(args.target):
         parser.error("choose exactly one of RUN or --target")
     if args.port is not None and not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
@@ -1362,6 +1477,20 @@ def main():
 
     run = args.run.expanduser().resolve() if args.run else None
     target = args.target.expanduser().resolve() if args.target else None
+    save_destination = (
+        resolve_state_path(args.save_state, VIEWER_STATE_SAVE_FAILED)
+        if args.save_state else None
+    )
+    resume_session = (
+        resolve_state_path(args.resume_state, VIEWER_STATE_INVALID)
+        if args.resume_state else None
+    )
+    if save_destination is not None and (
+        save_destination.exists() or save_destination.is_symlink()
+    ):
+        raise SystemExit(VIEWER_STATE_EXISTS)
+    if resume_session is not None:
+        validate_viewer_state(resume_session)
     if run:
         locate_inputs(run)
     if target and not target.is_dir():
@@ -1381,12 +1510,20 @@ def main():
     ensure_port_available(port)
     base_url = f"http://{VIEWER_HOST}:{port}"
 
-    with tempfile.TemporaryDirectory(prefix=f"oxygen-viewer-{port}-") as runtime:
+    runtime_context = (
+        nullcontext(resume_session)
+        if resume_session is not None
+        else tempfile.TemporaryDirectory(prefix=f"oxygen-viewer-{port}-")
+    )
+    with runtime_context as runtime:
+        runtime_root = Path(runtime)
         process = start_owned_process(
             viewer_command(port, npm),
             cwd=VIEWER,
-            env=viewer_environment(Path(runtime)),
+            env=viewer_environment(runtime_root),
         )
+        viewer_ready = False
+        workflow_run_id = None
         try:
             for _ in range(90):
                 try:
@@ -1398,6 +1535,28 @@ def main():
                     time.sleep(0.5)
             else:
                 raise SystemExit("Viewer did not become ready")
+            viewer_ready = True
+
+            if resume_session is not None:
+                print(f"\nOxygen local review resumed: {base_url}", flush=True)
+                print(f"Saved Viewer state: {resume_session}", flush=True)
+                print("No collection or import was rerun.", flush=True)
+                print("Changes remain in this saved local session. Press Ctrl+C to stop.\n", flush=True)
+                if not args.no_browser:
+                    webbrowser.open(base_url)
+                if args.smoke_test:
+                    opener = urllib.request.build_opener(
+                        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+                    )
+                    workflow = request_json(opener, f"{base_url}/api/workflow")
+                    print(json.dumps({
+                        "smoke_test": "passed", "resumed": True, "workflow": workflow,
+                    }))
+                    return
+                return_code = wait_for_owned_exit(process)
+                if return_code != 0:
+                    raise SystemExit(f"Viewer exited unexpectedly with status {return_code}")
+                return
 
             opener = urllib.request.build_opener(
                 urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
@@ -1443,8 +1602,14 @@ def main():
         except KeyboardInterrupt:
             pass
         finally:
-            terminate_process_group(process)
-            wait_for_port_release(port)
+            stop_owned_viewer(
+                process,
+                port,
+                runtime_root=runtime_root,
+                save_destination=save_destination,
+                workflow_run_id=workflow_run_id,
+                save_ready=viewer_ready,
+            )
 
 
 if __name__ == "__main__":
