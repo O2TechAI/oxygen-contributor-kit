@@ -50,6 +50,7 @@ function buildStoryFixture(caseId) {
     eventType: "message",
     actorId: item.actorId,
     actorType: "human",
+    reviewedNarrative: item.text,
   }));
   const candidateRows = expectation.chapters.map((chapterItem, index) => {
     const phase = expectation.phases.find((item) => item.id === chapterItem.phaseId);
@@ -82,13 +83,19 @@ function buildStoryFixture(caseId) {
       })),
       story: { blocks },
       insights: chapterItem.insights.map((item) => {
-        const anchoredEvidence = [...new Map(item.quote.storyBlockIds.flatMap((blockId) => (
+        const anchoredEvidence = [...new Map(item.background.supportingStoryBlockIds.flatMap((blockId) => (
           blocks.find((block) => block.id === blockId).evidence
         )).map((reference) => [JSON.stringify(reference), reference])).values()];
+        const anchorStoryBlockId = item.anchorStoryBlockId;
+        const quoteEvidence = blocks.find((block) => block.id === anchorStoryBlockId).evidence[0];
         return {
           id: item.id,
           background: item.background.requiredConcepts.join("; "),
-          quote: { storyBlockIds: item.quote.storyBlockIds },
+          anchorStoryBlockId,
+          quote: {
+            text: records.get(quoteEvidence.eventId).text,
+            evidence: quoteEvidence,
+          },
           directlyAcquiredExperience: item.directlyAcquiredExperience.requiredConcepts.join("; "),
           principle: `When ${item.principle.requiredCondition}, ${item.principle.requiredResponse}, because ${item.principle.boundedReason}.`,
           evidence: anchoredEvidence,
@@ -172,9 +179,10 @@ test("the target corpus represents valid zero, one, and multiple sparse Insights
 test("every target Insight carries the four frozen meanings and safe Story grounding", () => {
   for (const item of allInsights()) {
     assert.deepEqual(Object.keys(item).filter((key) => insightMeanings.includes(key)), insightMeanings);
-    assert.ok(item.background.storyBlockIds.length > 0);
-    assert.equal(item.quote.source, "safe_reviewed_story");
-    assert.ok(item.quote.storyBlockIds.length > 0);
+    assert.ok(item.background.supportingStoryBlockIds.length > 0);
+    assert.equal(item.quote.source, "privacy_reviewed_trajectory");
+    assert.equal(item.quote.evidenceStoryBlockId, item.anchorStoryBlockId);
+    assert.equal(item.quote.exactSubstringRequired, true);
     assert.equal(item.directlyAcquiredExperience.generalModelKnowledgeAllowed, false);
     assert.equal(item.principle.genericSloganAllowed, false);
     assert.ok(item.principle.requiredCondition && item.principle.requiredResponse && item.principle.boundedReason);
@@ -261,22 +269,21 @@ test("story Story and Evidence anchors are exact and same-Chapter", () => {
 
   const foreignChapterBlock = sourceFromRow(candidateRows[0]);
   const foreignPackage = buildStoryFixture("mundane-setup");
-  foreignChapterBlock.insights[0].quote.storyBlockIds = [
-    sourceFromRow(foreignPackage.candidateRows[1]).story.blocks[0].id,
-  ];
+  foreignChapterBlock.insights[0].anchorStoryBlockId =
+    sourceFromRow(foreignPackage.candidateRows[1]).story.blocks[0].id;
   assert.deepEqual(validateStorySourcePackage(
     [rowWithSource(candidateRows[0], foreignChapterBlock)], evidenceRows,
   ), { ok: false, code: "STORY_INSIGHT_GROUNDING_INVALID" });
 
   const missingBlock = sourceFromRow(candidateRows[0]);
-  missingBlock.insights[0].quote.storyBlockIds = ["missing-story-block"];
+  missingBlock.insights[0].anchorStoryBlockId = "missing-story-block";
   assert.deepEqual(validateStorySourcePackage(
     [rowWithSource(candidateRows[0], missingBlock)], evidenceRows,
   ), { ok: false, code: "STORY_INSIGHT_GROUNDING_INVALID" });
 
-  const duplicateAnchor = sourceFromRow(candidateRows[0]);
-  duplicateAnchor.insights[0].quote.storyBlockIds.push(duplicateAnchor.insights[0].quote.storyBlockIds[0]);
-  assert.equal(parseStorySource(rowWithSource(candidateRows[0], duplicateAnchor).summary), null);
+  const obsoleteAnchorShape = sourceFromRow(candidateRows[0]);
+  obsoleteAnchorShape.insights[0].quote.obsoleteStoryAnchor = obsoleteAnchorShape.insights[0].anchorStoryBlockId;
+  assert.equal(parseStorySource(rowWithSource(candidateRows[0], obsoleteAnchorShape).summary), null);
 
   const foreignEvidence = sourceFromRow(candidateRows[0]);
   foreignEvidence.insights[0].evidence = [{ documentId: "fixture-foreign", eventId: "foreign-record" }];

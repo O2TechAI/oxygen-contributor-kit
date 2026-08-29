@@ -63,7 +63,8 @@ function sourceFixture({ insights = true } = {}) {
       id: "ai:detail-proof",
       title: "Bounded AI observation",
       background: "The Detail changed the release decision.",
-      quote: { storyBlockIds: ["detail-0"] },
+      anchorStoryBlockId: "detail-0",
+      quote: { text: "exact bounded result", evidence: detailEvidence },
       directlyAcquiredExperience: "The reviewer checked the exact Detail before continuing.",
       principle: "Keep every Insight owned by the Story paragraph that supports it.",
       evidence: [detailEvidence],
@@ -196,7 +197,7 @@ test("Story edit and review data survive Apply, canonical session JSON, hydratio
   assert.equal(chapter.en.story.uncertainty, "The proof does not grant publication approval.");
   assert.deepEqual(chapter.en.story.blocks.flatMap((block) => block.insights.map(({ quote }) => quote)), [
     "safe baseline",
-    "The reviewed Detail recorded the exact bounded result.",
+    "exact bounded result",
   ]);
   assert.deepEqual(buildReviewedStoryRelease([source], { [source.key]: confirmed }), release);
 });

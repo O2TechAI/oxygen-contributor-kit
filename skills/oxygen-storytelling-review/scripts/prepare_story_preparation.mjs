@@ -35,6 +35,7 @@ import {
 } from "./story_preparation_protocol.mjs";
 import {
   buildStoryValidationAuthority,
+  insightReviewedNarrative,
 } from "./story_preparation_validation_authority.mjs";
 
 export const TARGET_STORY_PREPARATION_SHARD_BYTES = 1_000_000;
@@ -330,14 +331,18 @@ async function prepareInsight(candidatesPath, root) {
   const storyAuthority = await readLaneAuthority(root, "story");
   const { validationAuthorityPath, validationAuthorityDigest } = storyAuthority.input.payload;
   const groups = balancedGroups(rows.map((row) => ({ id: row.story.key, value: row })));
-  return installLane(root, "insight", canonicalDigest(records), groups.map((group) => ({
-    unitIds: group.map((entry) => entry.id),
-    payload: {
-      validationAuthorityPath,
-      validationAuthorityDigest,
-      storyCandidates: group.map(({ value: { id, summary } }) => ({ id, summary })),
-    },
-  })));
+  return installLane(root, "insight", canonicalDigest(records), groups.map((group) => {
+    const storyCandidates = group.map(({ value: { id, summary } }) => ({ id, summary }));
+    return {
+      unitIds: group.map((entry) => entry.id),
+      payload: {
+        validationAuthorityPath,
+        validationAuthorityDigest,
+        storyCandidates,
+        reviewedNarrative: insightReviewedNarrative(storyAuthority.inputs, storyCandidates),
+      },
+    };
+  }));
 }
 
 async function preparePrivacy(candidatesPath, root) {

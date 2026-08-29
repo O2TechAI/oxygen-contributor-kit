@@ -324,14 +324,22 @@ Every `story`-lane subagent assignment must convey this ordered contract before 
 Do not dispatch a Story worker until the assignment names both contract paths, the actual generated
 `inputPath`, and the proposal-only write boundary. No other data input is part of that assignment.
 
-Finalized Coverage `ownerId` is the sole Story Chapter-ownership source. The Story preparer keeps
+Before Coverage finalization, the parent selects Chapter owners by coherent narrative arc across
+the complete Privacy-safe semantic projection; it never defaults or mechanically copies `ownerId`
+from `unitId`, and no source, semantic-unit, Chapter, or Phase count is golden. Finalized Coverage
+`ownerId` is then the sole Story Chapter-ownership source. The Story preparer keeps
 every owner's represented units in one complete, Privacy-safe, self-contained bundle and balances
 shards only by whole-bundle bytes. Story workers return phase-free proposals. On a subagent-capable
-host the parent does not write Story prose, People, Evidence choices, titles, overviews, or blocks.
-It waits for every proposal, orders complete Chapters with the production comparator, assigns only
-Phase IDs and labels, injects canonical Coverage and exclusions, and invokes one complete Story
-batch recorder. No Story receipt exists before full-package validation; all outputs and exactly one
-receipt per shard install together. Insight remains a separate later pass.
+host the parent does not initially write Story prose, People, Evidence choices, titles, overviews,
+or blocks. It waits for every proposal, reads each Chapter in full, binds all eight editorial
+decisions to the exact proposal digest, and rejects negative or stale review before Phase or
+receipt. After the initial proposal and two editorially rejected subagent corrections, the Ultra
+parent may complete that same still-unrecorded assignment from the byte-identical input through the
+same phase-free proposal shape, editorial gate, recorder, and validators. It then orders complete
+accepted Chapters with the production comparator, assigns only the smallest coherent global Phase
+IDs and labels, injects canonical Coverage and exclusions, and invokes one complete Story batch
+recorder. No Story receipt exists before editorial and full-package validation; all outputs and
+exactly one receipt per shard install together. Insight remains a separate later pass.
 
 Each assignment gets one initial proposal plus at most two automatic proposal-only correction attempts. `correctionAttemptCount` is
 assignment-local, counts corrections only, excludes the initial proposal, and is always `0..2`;
@@ -339,8 +347,9 @@ never sum it across a multi-shard lane. Every correction uses the byte-identical
 and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed
 safe pre-receipt authoring-validation code is correctable. If the second correction fails, stop the
 lane safely, report correction exhaustion and the last safe validation code, and do not continue
-downstream. Authority, immutability, containment, path, I/O, infrastructure, and corrupt-state
-failures stop immediately and are never correctable. This is not a contributor pause and may never
+downstream, except for the narrow Story-editorial parent takeover above. Authority, immutability,
+containment, path, I/O, infrastructure, and corrupt-state failures stop immediately and are never
+correctable. This is not a contributor pause and may never
 rewrite durable output. If host subagents are genuinely unavailable, the parent processes the same
 assignments serially, reports
 `executionMode=serial_capability_limited`, and uses the identical recorder/finalizer authority.
@@ -539,6 +548,7 @@ catch {
 
 $Transport = "$Review\story-preparation"
 $StoryProposals = "$Review\story-proposals"
+$StoryEditorialReview = "$Review\story-editorial-review.json"
 $StoryPhases = "$Review\story-phases.json"
 
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
@@ -547,9 +557,10 @@ node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   "$Review\current-public-source-privacy.json" `
   "$Review" "$Transport"
 # Parent dispatches every Story shard (maximum three live), collects one phase-free
-# <shard-id>.json proposal per shard, orders all Chapters, and writes one transient Phase assignment.
+# <shard-id>.json proposal per shard, reads every Chapter, writes the exact proposal-digest-bound
+# editorial review, then orders all accepted Chapters and writes one coherent Phase assignment.
 node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
-  "$Transport" story "$StoryProposals" "$StoryPhases" `
+  "$Transport" story "$StoryProposals" "$StoryEditorialReview" "$StoryPhases" `
   --correction-attempt-count 0
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   compose story "$Transport" "$Review\story-base-candidates.json"

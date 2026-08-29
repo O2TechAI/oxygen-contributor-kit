@@ -639,6 +639,9 @@ test("HTML and ZIP are POST-only, byte-identical for reviewed Story, and exclude
   const zipText = new TextDecoder().decode(await zipResponse.arrayBuffer());
   assert.match(zipText, /oxygen\.reviewed-story/);
   assert.match(zipText, /"publication_approved": false/);
+  assert.match(zipText, /story-row/);
+  assert.match(zipText, /b\.insights\.map\(card\)/);
+  assert.match(zipText, /esc\(i\.quote\)/);
   assert.doesNotMatch(zipText, /candidate-auto|candidate-human|whyFlagged|releaseTargets|decisionVersion|reviewGateDigest|review_gate_digest/);
   assert.doesNotMatch(zipText, /provider|model|evidence_sample|PRIVATE_/i);
 

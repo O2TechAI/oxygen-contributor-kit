@@ -312,7 +312,10 @@ export async function POST(request: Request) {
       }
       const activationValidation = await validateStoryActivationAuthority(
         normalized.rows,
-        itemRows,
+        itemRows.map((row) => ({
+          ...row,
+          reviewedNarrative: privacyAuthority.authority.reviewedNarrativeByItemId?.get(row.id),
+        })),
         semanticManifest,
         record.coverageManifest,
         privacyAuthority.authority.authorizedUnitIds,

@@ -66,7 +66,8 @@ function story(key, { insight = true } = {}) {
       id: `insight-${key}`,
       title: `Insight ${key}`,
       background: `Background ${key}.`,
-      quote: { storyBlockIds: [`block-${key}`] },
+      anchorStoryBlockId: `block-${key}`,
+      quote: { text: `Story block ${key}.`, evidence },
       directlyAcquiredExperience: `Experience ${key}.`,
       principle: `Principle ${key}.`,
       evidence: [evidence],
@@ -338,6 +339,7 @@ test("final target catalog is exact, namespaced, deterministic, and contains no 
     "a::people:person-a:releaseLabel", "a::people:person-a:role",
     "a::people:person-a:description", "a::story:block-a", "a::uncertainty",
     "a::insight:insight-a:title", "a::insight:insight-a:background",
+    "a::insight:insight-a:quote",
     "a::insight:insight-a:directlyAcquiredExperience", "a::insight:insight-a:principle",
   ]) assert.ok(ids.includes(expected), expected);
   assert.doesNotMatch(JSON.stringify(ids), /scene|reconstruction-|detail-|outcome/);

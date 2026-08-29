@@ -36,7 +36,9 @@ function source(key, insightId = "shared", semanticDigest = "a".repeat(64),
     story: { blocks: [{ id: `block-${key}`, text: `Text ${key}`, evidence: [evidence] }] },
     insights: insightId === null ? [] : [{
       id: insightId, background: `Background ${key}`,
-      quote: { storyBlockIds: [`block-${key}`] }, directlyAcquiredExperience: `Experience ${key}`,
+      anchorStoryBlockId: `block-${key}`,
+      quote: { text: `Reviewed unit-${key}.`, evidence },
+      directlyAcquiredExperience: `Experience ${key}`,
       principle: `Principle ${key}`, evidence: [evidence],
     }],
     evidence: { primary: evidence, supporting: [] },
@@ -177,6 +179,29 @@ async function fixture({
   };
   await mkdir(join(shards, "story"), { recursive: true });
   await json(join(shards, "story", "validation-authority.json"), validationAuthority);
+  const ownerBundles = semanticUnits.map((unit) => ({
+    ownerId: unit.id.slice("unit-".length),
+    semanticManifest: { revision: semantic.revision, digest: semantic.manifestDigest },
+    coverageManifest: { revision: coverage.revision, digest: coverage.coverageDigest },
+    semanticUnits: [unit],
+    reviewedNarrative: [{
+      id: unit.members[0], documentId: "doc", sequence: 1, timestamp: null,
+      eventType: "message", actorType: "human",
+      actorEquivalence: `actor-${unit.id.slice("unit-".length)}`,
+      narrative: `Reviewed ${unit.id}.`,
+    }],
+  })).sort((left, right) => utf8(left.ownerId, right.ownerId));
+  const baseStoryCandidates = base.map(({ id, story }) => ({
+    id,
+    summary: `oxygen.story:${canonical(story)}`,
+  }));
+  const insightReviewedNarrative = ownerBundles
+    .flatMap((bundle) => bundle.reviewedNarrative)
+    .map(({ id, documentId, narrative }) => ({ id, documentId, narrative }))
+    .sort((left, right) => utf8(
+      canonical([left.documentId, left.id]),
+      canonical([right.documentId, right.id]),
+    ));
   for (const lane of ["story", "insight", "story_privacy", "preference"]) {
     const laneUnits = [...units[lane]].sort(utf8);
     const directoryName = lane === "story_privacy" ? "story-privacy" : lane;
@@ -190,18 +215,12 @@ async function fixture({
       inputDigest: inputs[lane], unitIds: laneUnits, payload: lane === "story" ? {
         validationAuthorityPath: "story/validation-authority.json",
         validationAuthorityDigest: digest(validationAuthority),
-        ownerBundles: semanticUnits.map((unit) => ({
-          ownerId: unit.id.slice("unit-".length),
-          semanticManifest: { revision: semantic.revision, digest: semantic.manifestDigest },
-          coverageManifest: { revision: coverage.revision, digest: coverage.coverageDigest },
-          semanticUnits: [unit],
-          reviewedNarrative: [{
-            id: unit.members[0], documentId: "doc", sequence: 1, timestamp: null,
-            eventType: "message", actorType: "human",
-            actorEquivalence: `actor-${unit.id.slice("unit-".length)}`,
-            narrative: `Reviewed ${unit.id}.`,
-          }],
-        })).sort((left, right) => utf8(left.ownerId, right.ownerId)),
+        ownerBundles,
+      } : lane === "insight" ? {
+        validationAuthorityPath: "story/validation-authority.json",
+        validationAuthorityDigest: digest(validationAuthority),
+        storyCandidates: baseStoryCandidates,
+        reviewedNarrative: insightReviewedNarrative,
       } : {},
     };
     const workerInputDigest = digest(workerInput);

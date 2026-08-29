@@ -347,6 +347,7 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
     storyDataContract,
     storyTransport,
     productContract,
+    narrativeContract,
     checklist,
     preparer,
     recorder,
@@ -357,6 +358,7 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
     read("skills/oxygen-storytelling-review/references/story-data-contract.md"),
     read("skills/oxygen-storytelling-review/references/story-preparation-transport.md"),
     read("skills/oxygen-storytelling-review/references/product-contract.md"),
+    read("skills/oxygen-storytelling-review/references/narrative-writing-contract.md"),
     read("skills/oxygen-storytelling-review/references/validation-checklist.md"),
     read("skills/oxygen-storytelling-review/scripts/prepare_story_preparation.mjs"),
     read("skills/oxygen-storytelling-review/scripts/record_story_preparation.mjs"),
@@ -368,6 +370,7 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
     storyDataContract,
     storyTransport,
     productContract,
+    narrativeContract,
     checklist,
   ].join("\n");
 
@@ -376,7 +379,12 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
   assert.match(publicContracts, /one owner never spans (?:workers|shards)/i);
   assert.match(publicContracts, /shard may contain multiple owners/i);
   assert.match(publicContracts, /phase-free Story proposal/i);
-  assert.match(publicContracts, /parent does not write Story prose/i);
+  assert.match(publicContracts, /parent does not initially write Story prose/i);
+  assert.match(publicContracts, /never (?:defaults|defaulting)[\s\S]{0,80}`ownerId`[\s\S]{0,80}`unitId`/i);
+  assert.match(publicContracts, /related (?:semantic )?units may share one owner/i);
+  assert.match(publicContracts, /multiple Chapters may (?:later )?share one Phase/i);
+  assert.match(publicContracts, /proposal[- ]digest[- ]bound editorial (?:review|acceptance)/i);
+  assert.match(publicContracts, /After the initial\s+proposal plus two rejected subagent corrections,[\s\S]{0,200}Ultra parent may complete/i);
   assert.match(publicContracts, /(?:complete|every phase-free)[^\n]{0,80}(?:Story )?proposal[^\n]{0,80}(?:before|collected before)[^\n]{0,80}(?:receipt|authority)/i);
   assert.match(publicContracts, /one Story batch recorder/i);
   assert.match(publicContracts, /exactly one receipt per (?:expected )?shard/i);
@@ -384,7 +392,7 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
   assert.match(publicContracts, /Static tests prove contracts and authority behavior, not\s+actual host-subagent spawning; that requires later E2E evidence/i);
 
   for (const document of [sop, storyTransport]) {
-    assert.match(document, /"\$Transport" story "\$StoryProposals" "\$StoryPhases"[\s\S]{0,80}--correction-attempt-count 0/);
+    assert.match(document, /"\$Transport" story "\$StoryProposals" "\$StoryEditorialReview" "\$StoryPhases"[\s\S]{0,80}--correction-attempt-count 0/);
     assert.doesNotMatch(document, /"\$Transport" story "<manifest-shard-id>" "<proposal-path>"/);
   }
 
@@ -392,6 +400,8 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
   assert.match(preparer, /ownerBundles/);
   assert.match(preparer, /STORY_OWNER_BUNDLE_TOO_LARGE/);
   assert.match(recorder, /STORY_PROPOSAL_PARENT_FIELD_FORBIDDEN/);
+  assert.match(recorder, /STORY_EDITORIAL_REVIEW_REJECTED/);
+  assert.match(recorder, /proposalDigest !== canonicalDigest\(proposal\)/);
   assert.match(recorder, /PARTIAL_BATCH_REJECTED/);
   assert.match(recorder, /validateStorySourcePackage/);
 });

@@ -148,6 +148,7 @@ function storyTargetNames(story: StorySource): StoryReleaseTargetName[] {
     if (insight.title !== undefined) targets.push(`insight:${insight.id}:title`);
     targets.push(
       `insight:${insight.id}:background`,
+      `insight:${insight.id}:quote`,
       `insight:${insight.id}:directlyAcquiredExperience`,
       `insight:${insight.id}:principle`,
     );

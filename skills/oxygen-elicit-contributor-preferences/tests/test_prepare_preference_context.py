@@ -18,18 +18,23 @@ SPEC.loader.exec_module(PREPARE)
 
 
 def story(key="chapter-a", event="event-a", document="trajectory-a", insight="lesson-a"):
+    evidence = {"documentId": document, "eventId": event}
     return {
         "schema": "oxygen.story", "key": key,
         "phase": {"id": "build", "label": "Build"}, "title": "Title", "overview": "Overview",
-        "people": [], "story": {"blocks": []},
+        "people": [], "story": {"blocks": [{
+            "id": "block", "text": "A safe reviewed contribution established the boundary.",
+            "evidence": [evidence],
+        }]},
         "insights": [{
             "id": insight, "title": "Lesson", "background": "Background",
-            "quote": {"storyBlockIds": ["block"]},
+            "anchorStoryBlockId": "block",
+            "quote": {"text": "safe synthetic reviewed text", "evidence": evidence},
             "directlyAcquiredExperience": "Experience", "principle": "Principle",
-            "evidence": [{"documentId": document, "eventId": event}],
+            "evidence": [],
         }],
         "evidence": {
-            "primary": {"documentId": document, "eventId": event}, "supporting": [],
+            "primary": evidence, "supporting": [],
         },
         "coverage": {
             "semanticManifest": {"revision": 1, "digest": "a" * 64},

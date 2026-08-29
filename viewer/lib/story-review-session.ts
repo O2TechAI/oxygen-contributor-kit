@@ -43,8 +43,15 @@ const validDecision = (value: unknown): value is PrivacyDecision => value === "k
 const onlyKeys = (value: object, allowed: string[]) => Object.keys(value).every((key) => allowed.includes(key));
 
 function canonicalEvidence(value: unknown) {
-  if (!isRecord(value) || !onlyKeys(value, ["documentId", "eventId"])) return null;
-  return { documentId: value.documentId, eventId: value.eventId };
+  if (!isRecord(value) || !onlyKeys(value, ["documentId", "eventId", "label"])
+    || !validStableId(value.documentId) || !validStableId(value.eventId)
+    || (value.label !== undefined
+      && (typeof value.label !== "string" || value.label.length > 500))) return null;
+  return {
+    documentId: value.documentId,
+    eventId: value.eventId,
+    ...(value.label === undefined ? {} : { label: value.label }),
+  };
 }
 
 function canonicalEvidenceList(value: unknown) {
@@ -172,14 +179,16 @@ function canonicalChapterReviewCore(value: unknown): ChapterReviewCore | null {
 }
 
 function canonicalStoryInsightContent(value: unknown): StoryInsightContent | null {
-  if (!isRecord(value) || !isRecord(value.quote)
-    || !onlyKeys(value, ["title", "background", "quote", "directlyAcquiredExperience", "principle", "evidence"])
-    || !onlyKeys(value.quote, ["storyBlockIds"])) return null;
-  const storyBlockIds = canonicalStringArray(value.quote.storyBlockIds, 500);
+  if (!isRecord(value) || !isRecord(value.quote) || !isRecord(value.quote.evidence)
+    || !onlyKeys(value, ["title", "background", "anchorStoryBlockId", "quote", "directlyAcquiredExperience", "principle", "evidence"])
+    || !onlyKeys(value.quote, ["text", "evidence"])
+    || !onlyKeys(value.quote.evidence, ["documentId", "eventId"])) return null;
   const evidence = canonicalEvidenceList(value.evidence);
-  if (!storyBlockIds || storyBlockIds.length === 0 || !storyBlockIds.every(validStableId)
-    || new Set(storyBlockIds).size !== storyBlockIds.length
-    || !evidence || evidence.length === 0
+  const quoteEvidence = canonicalEvidence(value.quote.evidence);
+  if (!validStableId(value.anchorStoryBlockId)
+    || typeof value.quote.text !== "string" || !value.quote.text.trim() || value.quote.text.length > 20_000
+    || !quoteEvidence || !validStableId(quoteEvidence.documentId) || !validStableId(quoteEvidence.eventId)
+    || !evidence
     || evidence.some((item) => !validStableId(item!.documentId) || !validStableId(item!.eventId))
     || new Set(evidence.map((item) => JSON.stringify(item))).size !== evidence.length
     || (value.title !== undefined && (typeof value.title !== "string" || value.title.length > 500))
@@ -190,7 +199,8 @@ function canonicalStoryInsightContent(value: unknown): StoryInsightContent | nul
   return {
     ...(value.title === undefined ? {} : { title: value.title }),
     background: value.background,
-    quote: { storyBlockIds },
+    anchorStoryBlockId: value.anchorStoryBlockId,
+    quote: { text: value.quote.text, evidence: quoteEvidence },
     directlyAcquiredExperience: value.directlyAcquiredExperience,
     principle: value.principle,
     evidence: evidence as StoryInsightContent["evidence"],
@@ -207,14 +217,23 @@ function canonicalHumanInsightContent(value: unknown): HumanInsightContent | nul
   const selectionEnd = value.quote.selection.end;
   const selectionText = value.quote.selection.text;
   const baseRevision = value.quote.baseRevision;
+  const evidence = canonicalEvidenceList(value.evidence);
   if (typeof selectionStart !== "number" || typeof selectionEnd !== "number"
-    || typeof selectionText !== "string" || typeof baseRevision !== "number") return null;
-  const content = canonicalStoryInsightContent({
-    ...value,
-    quote: { storyBlockIds: [value.quote.storyBlockId] },
-  });
-  return content ? {
-    ...content,
+    || typeof selectionText !== "string" || typeof baseRevision !== "number"
+    || !evidence || evidence.length === 0
+    || evidence.some((item) => !validStableId(item!.documentId) || !validStableId(item!.eventId))
+    || new Set(evidence.map((item) => JSON.stringify(item))).size !== evidence.length
+    || (value.title !== undefined && (typeof value.title !== "string" || value.title.length > 500))
+    || typeof value.background !== "string" || !value.background.trim() || value.background.length > 4_000
+    || typeof value.directlyAcquiredExperience !== "string"
+    || !value.directlyAcquiredExperience.trim() || value.directlyAcquiredExperience.length > 4_000
+    || typeof value.principle !== "string" || !value.principle.trim() || value.principle.length > 4_000) return null;
+  return {
+    ...(value.title === undefined ? {} : { title: value.title }),
+    background: value.background,
+    directlyAcquiredExperience: value.directlyAcquiredExperience,
+    principle: value.principle,
+    evidence: evidence as HumanInsightContent["evidence"],
     quote: {
       chapterKey: value.quote.chapterKey,
       storyBlockId: value.quote.storyBlockId,
@@ -225,7 +244,7 @@ function canonicalHumanInsightContent(value: unknown): HumanInsightContent | nul
       },
       baseRevision,
     },
-  } : null;
+  };
 }
 
 function canonicalSourceInsightReview(value: unknown): SourceInsightReview | null {

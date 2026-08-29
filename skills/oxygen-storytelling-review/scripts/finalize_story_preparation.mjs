@@ -25,9 +25,9 @@ import {
 } from "./story_preparation_transport.mjs";
 import { readLaneAuthority } from "./story_preparation_protocol.mjs";
 import {
+  insightStoryEvidenceRows,
   readStoryValidationAuthority,
   storyCompletenessAuthority,
-  storyEvidenceRows,
 } from "./story_preparation_validation_authority.mjs";
 const hex = /^[0-9a-f]{64}$/;
 const metadataKeys = new Set([
@@ -354,12 +354,13 @@ async function finalize(args) {
     directlyAcquiredExperience: insight.directlyAcquiredExperience,
     principle: insight.principle,
   })));
-  const evidence = new Set(rows.flatMap((row) => row.story.insights.flatMap((insight) => (
-    insight.evidence.map((reference) => canonicalAuthorityJson([reference.documentId, reference.eventId]))
-  ))));
-  const evidenceIds = new Set(rows.flatMap((row) => row.story.insights.flatMap((insight) => (
-    insight.evidence.map((reference) => reference.eventId)
-  ))));
+  const insightGrounding = rows.flatMap((row) => row.story.insights.flatMap((insight) => (
+    [insight.quote.evidence, ...insight.evidence]
+  )));
+  const evidence = new Set(insightGrounding.map((reference) => (
+    canonicalAuthorityJson([reference.documentId, reference.eventId])
+  )));
+  const evidenceIds = new Set(insightGrounding.map((reference) => reference.eventId));
   const preferenceInputDigest = await storyPreparationDigest(lessons);
   const preference = await preferenceAuthority(
     await jsonFile(resolve(preferencePath)), workflowRunId, sourceRevision,
@@ -367,12 +368,6 @@ async function finalize(args) {
   );
   composeStory([storyAuthority.output], base, "STORY");
   if (storyAuthority.outputCount !== base.length) fail("STORY_RECEIPT_STALE");
-  const storyValidation = validateStorySourcePackage(
-    validationRows,
-    storyEvidenceRows(validationAuthority),
-    storyCompletenessAuthority(validationAuthority),
-  );
-  if (!storyValidation.ok) fail(storyValidation.code);
   const baseDigest = await storyPreparationDigest(base);
   const insightAuthority = await readLaneAuthority(shardRootInput, "insight");
   if (insightAuthority.manifest.inputDigest !== baseDigest) fail("INSIGHT_INPUT_STALE");
@@ -381,6 +376,18 @@ async function finalize(args) {
   if (recordedInsightCount !== insightCount || insightAuthority.outputCount !== insightCount) {
     fail("INSIGHT_RECEIPT_STALE");
   }
+  const insightEvidenceRows = insightStoryEvidenceRows(
+    validationAuthority,
+    insightAuthority.inputs,
+    storyAuthority.inputs,
+    storyAuthority.output,
+  );
+  const storyValidation = validateStorySourcePackage(
+    validationRows,
+    insightEvidenceRows,
+    storyCompletenessAuthority(validationAuthority),
+  );
+  if (!storyValidation.ok) fail(storyValidation.code);
   const completeDigest = await storyPreparationDigest(complete);
   const privacyAuthority = await readLaneAuthority(shardRootInput, "story_privacy");
   if (privacyAuthority.manifest.inputDigest !== completeDigest) fail("PRIVACY_INPUT_STALE");

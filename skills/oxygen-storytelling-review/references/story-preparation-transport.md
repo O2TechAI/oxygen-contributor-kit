@@ -24,8 +24,13 @@ actor-equivalence tokens. It contains no source text, raw actor ID, redaction ro
 metadata, or private value. The worker input binds its digest and carries the corresponding
 Privacy-reviewed narrative once; it never carries pre-redaction text.
 
-Each lane is prepared once under one transport root. Finalized Coverage `ownerId` is the sole Story
-Chapter-ownership source. Preparation groups every represented unit for one owner into one
+Each lane is prepared once under one transport root. Before Coverage finalization, the parent
+establishes the global Chapter-owner skeleton by coherent narrative arc across the complete
+Privacy-safe semantic projection. It does not default or mechanically copy `ownerId` from `unitId`,
+derive Chapter count from semantic-unit/source/meeting/prior-run count, or derive Phase count from
+Chapter count or semantic kind. Related units may share one owner, one Chapter may represent
+multiple units, and multiple Chapters may share one Phase. Finalized Coverage `ownerId` is then the
+sole Story Chapter-ownership source. Preparation groups every represented unit for one owner into one
 indivisible bundle, byte-balances whole bundles, and installs deterministic bounded immutable
 worker inputs plus `shards.json` before a proposal exists. One owner never spans Story shards; a
 Story shard may contain multiple complete owners. No fixed Chapter, Phase, owner, unit, or shard
@@ -63,13 +68,21 @@ capability, the parent processes the identical assignments serially, reports
 `executionMode=serial_capability_limited`, and continues through the same recorder/finalizer
 authority without asking the contributor to create workers.
 
-On a subagent-capable host the parent does not author Story prose, People, primary or supporting
-Evidence choices, titles, overviews, or blocks. It assigns only Phase IDs and labels after every
-complete Chapter proposal exists. Static tests validate this contract and the batch authority;
-later E2E evidence is required to prove actual host-subagent spawning.
+On a subagent-capable host the parent does not initially author Story prose, People, primary or
+supporting Evidence choices, titles, overviews, or blocks. It reads each complete Chapter proposal
+in full and writes only the transient digest-bound editorial acceptance described below. After the
+initial proposal and two subagent corrections remain editorially unacceptable, the Ultra parent may
+complete that same still-unrecorded assignment from the byte-identical input through the same
+phase-free proposal shape, editorial gate, recorder, and validators. It assigns the smallest
+coherent global Phase sequence only after every complete Chapter proposal passes. Static tests
+validate this contract and the batch authority; later E2E evidence is required to prove actual
+host-subagent spawning.
 
 Story workers return phase-free, non-authoritative Chapter proposals. The parent collects one
-proposal file for every current Story shard, orders complete Chapters with the production
+proposal file for every current Story shard, reads every Chapter in full, and writes one transient
+unversioned editorial review bound to each exact current proposal digest. The recorder rejects a
+missing, stale, foreign, incomplete, or negative review before it reads Phase and before any output
+or receipt exists. The parent then orders complete accepted Chapters with the production
 timestamp -> documentId -> sequence -> row-id comparator, supplies one transient unversioned Phase
 assignment for that exact ordered owner set, and invokes the Story recorder once. The recorder
 injects schema, Chapter keys equal to Coverage owner IDs, Phase, semantic/Coverage references,
@@ -86,9 +99,10 @@ initial proposal, and is always `0..2`; never sum it across a multi-shard lane. 
 uses the byte-identical immutable input. Every invalid initial or correction attempt leaves both
 Story outputs and receipts absent. Only a fixed safe pre-receipt authoring-validation code is
 correctable. If the second correction fails, stop the lane safely, report correction exhaustion
-and the last safe validation code, and do not continue downstream. Authority, immutability,
-containment, path, I/O, infrastructure, and corrupt-state failures stop immediately and are never
-correctable. For Story these corrections are at most two lane-wide waves: replacing a rejected
+and the last safe validation code, and do not continue downstream, except for the narrow
+Story-editorial parent takeover above. Authority, immutability, containment, path, I/O,
+infrastructure, and corrupt-state failures stop immediately and are never correctable. For Story
+these corrections are at most two lane-wide waves: replacing a rejected
 proposal or replacing only the transient Phase assignment consumes the same wave, and failed waves
 leave the complete Story records directory absent. This is not a contributor pause. Once the Story
 records directory or another lane's authority directory exists, a differing
@@ -112,6 +126,23 @@ Phase, Coverage, exclusions, receipt, or authority. Primary and supporting Evide
 the complete assigned owner bundle. The parent does not rewrite prose, People, Evidence, titles,
 overviews, or blocks while assigning Phase.
 
+After reading all complete proposals, the parent writes one transient editorial-review row per
+owner. This is pre-receipt validation input and is never copied into Story output, receipts,
+authority, Viewer state, release HTML, or ZIP:
+
+```json
+[{"ownerId":"coverage-owner-id","inputDigest":"current-story-lane-input-digest","proposalDigest":"sha256-of-canonical-proposal","criteria":{"beginningIsUnderstandable":true,"participantsAreIdentifiable":true,"chronologyIsTraceable":true,"responsesAndChangesAreExplained":true,"arcIsCoherent":true,"endingIsClear":true,"interactionsAreEvidenceSupported":true,"proseIsReadable":true}}]
+```
+
+`inputDigest` is the current immutable Story lane input digest from `story/shards.json`; it prevents
+a review from being replayed across a fresh source or Story input boundary. `proposalDigest` is the
+recorder's canonical SHA-256 digest of the exact `{ "ownerId", "chapter" }` proposal row. All eight
+fields are required booleans and must be `true`. The parent reaches those
+decisions by reading the prose and Evidence, not through a word/paragraph count, prose score,
+keyword detector, domain enum, or mandatory template. A negative decision triggers a specific
+proposal-only correction naming the missing narrative relationship; the corrected proposal is
+re-read and receives a new digest-bound review against the byte-identical worker input.
+
 Each Insight worker reads its manifest `inputPath` and returns exactly one record for every
 assigned Story key, including an empty array when no Insight is warranted:
 
@@ -120,6 +151,15 @@ assigned Story key, including an empty array when no Insight is warranted:
 ```
 
 Each nonempty `insights` array must make the frozen base Story satisfy the Story data contract.
+The immutable input contains only assigned Story candidates, their Story blocks and Evidence
+references, the minimum `reviewedNarrative` rows referenced by those blocks, and the existing
+validation-authority reference. It contains no raw/pre-redaction source, Source Privacy rows,
+unrelated Chapters or trajectory narrative, private actor identity, or provider metadata. Every
+nonempty proposal uses `anchorStoryBlockId` only for placement and `quote: { text, evidence }` for
+one exact current Privacy-reviewed trajectory substring. Quote Evidence must support the anchored
+block. Top-level `evidence` may be empty and is retained only for broader same-Chapter grounding.
+Replacing a rejected proposal against byte-identical immutable input is allowed before receipt;
+invalid proposals create neither output nor receipt.
 Final composition injects those arrays into the recorded base Stories and writes the canonical
 two-field `story-candidates.json`; the caller never duplicates full Story JSON to add Insights.
 
@@ -140,7 +180,8 @@ Identity sets, exclusions, and non-Story lane arrays use stable UTF-8 identity o
 Chapters use the production comparator. The finalizer independently
 reopens the frozen inputs, receipts, and outputs through physical containment, checks every content
 digest and exact identity union, reconstructs the final Story/Insight result, calls the same
-`validateStorySourcePackage` again on the composed package, binds the unchanged
+`validateStorySourcePackage` again on the composed package using the reopened immutable minimum
+Privacy-reviewed narrative rows, binds the unchanged
 Preference bundle, and emits the existing `oxygen.story-preparation` manifest.
 
 ## Public PowerShell sequence
@@ -172,6 +213,7 @@ catch {
 
 $Transport = "$Review\story-preparation"
 $StoryProposals = "$Review\story-proposals"
+$StoryEditorialReview = "$Review\story-editorial-review.json"
 $StoryPhases = "$Review\story-phases.json"
 ```
 
@@ -207,10 +249,11 @@ node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   "$Review\story-coverage-manifest.json" `
   "$Review\current-public-source-privacy.json" `
   "$Review" "$Transport"
-# Parent collects one phase-free <shard-id>.json proposal per manifest shard, orders the complete
-# Chapter set with the production comparator, and writes one transient Phase assignment.
+# Parent collects one phase-free <shard-id>.json proposal per manifest shard, reads every Chapter,
+# writes the digest-bound editorial review, then orders the accepted Chapter set with the production
+# comparator and writes one transient smallest coherent global Phase assignment.
 node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
-  "$Transport" story "$StoryProposals" "$StoryPhases" `
+  "$Transport" story "$StoryProposals" "$StoryEditorialReview" "$StoryPhases" `
   --correction-attempt-count 0
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   compose story "$Transport" "$Review\story-base-candidates.json"

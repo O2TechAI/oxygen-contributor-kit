@@ -170,6 +170,7 @@ export type StoryEvidenceRow = {
   eventType?: string | null;
   actorId?: string | null;
   actorType?: string | null;
+  reviewedNarrative?: string;
 };
 
 export const MAX_SEMANTIC_UNITS = MAX_STORY_SEMANTIC_UNIT_REFERENCES;
@@ -937,7 +938,10 @@ export async function readCoverageManifestAuthority(
   db: StorySourceDatabase,
   workflowRunId: string,
   semanticManifest: SemanticManifestAuthority,
-  options: { verifyCurrentSource?: boolean } = {},
+  options: {
+    verifyCurrentSource?: boolean;
+    expectedPrivacyAuthorityDigest?: string;
+  } = {},
 ): Promise<CoverageManifestAuthority | null> {
   const { readCoveragePrivacyAuthority } = await import("./story-coverage-privacy-authority.ts");
   const privacyAuthority = await readCoveragePrivacyAuthority(
@@ -946,7 +950,9 @@ export async function readCoverageManifestAuthority(
     semanticManifest,
     options,
   );
-  if (!privacyAuthority.ok) return null;
+  if (!privacyAuthority.ok
+    || (options.expectedPrivacyAuthorityDigest !== undefined
+      && privacyAuthority.authority.snapshotDigest !== options.expectedPrivacyAuthorityDigest)) return null;
   const manifest = await db.prepare(`SELECT revision,semantic_manifest_revision,
       semantic_manifest_digest,coverage_digest,privacy_authority_digest,serialized_bytes
       FROM story_coverage_manifests WHERE workflow_run_id=?`)
@@ -1259,17 +1265,24 @@ export function validateStorySourcePackage(
       block.evidence.forEach((reference) => narrativeEvidence.add(reference.eventId));
     }
     for (const insight of parsed.insights) {
-      const anchoredBlocks = insight.quote.storyBlockIds.map((blockId) => storyBlocks.get(blockId));
-      if (anchoredBlocks.some((block) => !block)
+      const anchoredBlock = storyBlocks.get(insight.anchorStoryBlockId);
+      const quoteEvidenceKey = JSON.stringify([
+        insight.quote.evidence.documentId,
+        insight.quote.evidence.eventId,
+      ]);
+      const quoteEvidence = chapterEvidence.get(quoteEvidenceKey);
+      const anchoredEvidence = new Set(anchoredBlock?.evidence.map((reference) => (
+        JSON.stringify([reference.documentId, reference.eventId])
+      )) || []);
+      if (!anchoredBlock || !quoteEvidence || !anchoredEvidence.has(quoteEvidenceKey)
         || !insight.evidence.every(belongsToChapter)) {
         return storySourceFailure("STORY_INSIGHT_GROUNDING_INVALID");
       }
-      const anchoredEvidence = new Set(anchoredBlocks.flatMap((block) => (
-        block?.evidence.map((reference) => JSON.stringify([reference.documentId, reference.eventId])) || []
-      )));
-      if (insight.evidence.some((reference) => !anchoredEvidence.has(
-        JSON.stringify([reference.documentId, reference.eventId]),
-      ))) return storySourceFailure("STORY_INSIGHT_GROUNDING_INVALID");
+      if (typeof quoteEvidence.row.reviewedNarrative !== "string"
+        || !quoteEvidence.row.reviewedNarrative.includes(insight.quote.text)) {
+        return storySourceFailure("STORY_INSIGHT_GROUNDING_INVALID");
+      }
+      narrativeEvidence.add(insight.quote.evidence.eventId);
       insight.evidence.forEach((reference) => narrativeEvidence.add(reference.eventId));
     }
     if (completenessAuthority) {
@@ -1306,14 +1319,38 @@ export async function validateCurrentStorySourcePackage(
 ): Promise<StorySourceValidation> {
   const semanticManifest = await readSemanticManifestAuthority(db, workflowRunId);
   if (!semanticManifest) return storySourceFailure("STORY_SEMANTIC_AUTHORITY_STALE");
+  const hasInsights = candidateRows.some((row) => Boolean(
+    parseStorySource(row.summary)?.insights.length,
+  ));
+  const verifyCurrentSource = options.verifyCurrentSource !== false || hasInsights;
+  const { readCoveragePrivacyAuthority } = await import("./story-coverage-privacy-authority.ts");
+  const privacyAuthority = verifyCurrentSource
+    ? await readCoveragePrivacyAuthority(db, workflowRunId, semanticManifest)
+    : null;
+  if (verifyCurrentSource && (!privacyAuthority?.ok
+    || !privacyAuthority.authority.reviewedNarrativeByItemId)) {
+    return storySourceFailure("STORY_INSIGHT_GROUNDING_INVALID");
+  }
   const coverageManifest = await readCoverageManifestAuthority(
     db,
     workflowRunId,
     semanticManifest,
-    options,
+    {
+      ...options,
+      verifyCurrentSource,
+      ...(privacyAuthority?.ok ? {
+        expectedPrivacyAuthorityDigest: privacyAuthority.authority.snapshotDigest,
+      } : {}),
+    },
   );
   if (!coverageManifest) return storySourceFailure("STORY_COVERAGE_INVALID");
-  return validateStorySourcePackage(candidateRows, evidenceRows, {
+  const currentEvidenceRows = verifyCurrentSource
+    ? evidenceRows.map((row) => ({
+        ...row,
+        reviewedNarrative: privacyAuthority!.authority.reviewedNarrativeByItemId!.get(row.id),
+      }))
+    : evidenceRows;
+  return validateStorySourcePackage(candidateRows, currentEvidenceRows, {
     semanticManifest,
     coverageManifest,
   });

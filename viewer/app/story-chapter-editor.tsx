@@ -68,7 +68,6 @@ type CompletedComposition = {
 type InsightDraft = {
   title: string;
   background: string;
-  storyBlockIds: string[];
   directlyAcquiredExperience: string;
   principle: string;
 };
@@ -125,50 +124,42 @@ function insightDraft(content: StoryInsightContent): InsightDraft {
   return {
     title: content.title || "",
     background: content.background,
-    storyBlockIds: [...content.quote.storyBlockIds],
     directlyAcquiredExperience: content.directlyAcquiredExperience,
     principle: content.principle,
   };
 }
 
 function humanInsightDraft(content: HumanInsightContent): InsightDraft {
-  return insightDraft({
-    ...content,
-    quote: { storyBlockIds: [content.quote.storyBlockId] },
-  });
-}
-
-function groundedEvidence(source: StorySource, storyBlockIds: string[]) {
-  const evidence = source.story.blocks
-    .filter((block) => storyBlockIds.includes(block.id))
-    .flatMap((block) => block.evidence);
-  return [...new Map(evidence.map((item) => [JSON.stringify([item.documentId, item.eventId]), item])).values()];
-}
-
-function contentFromDraft(source: StorySource, draft: InsightDraft): StoryInsightContent {
   return {
-    ...(draft.title.trim() ? { title: draft.title.trim() } : {}),
-    background: draft.background.trim(),
-    quote: { storyBlockIds: draft.storyBlockIds },
-    directlyAcquiredExperience: draft.directlyAcquiredExperience.trim(),
-    principle: draft.principle.trim(),
-    evidence: groundedEvidence(source, draft.storyBlockIds),
+    title: content.title || "",
+    background: content.background,
+    directlyAcquiredExperience: content.directlyAcquiredExperience,
+    principle: content.principle,
   };
 }
 
-function quoteText(source: StorySource, storyBlockIds: string[]) {
-  return source.story.blocks
-    .filter((block) => storyBlockIds.includes(block.id))
-    .map((block) => block.text)
-    .join("\n\n");
+function groundedEvidence(source: StorySource, blockIds: string[]) {
+  const evidence = source.story.blocks
+    .filter((block) => blockIds.includes(block.id))
+    .flatMap((block) => block.evidence)
+    .map(({ documentId, eventId }) => ({ documentId, eventId }));
+  return [...new Map(evidence.map((item) => [JSON.stringify([item.documentId, item.eventId]), item])).values()];
 }
 
-function validInsightDraft(source: StorySource, draft: InsightDraft) {
+function contentFromDraft(draft: InsightDraft, evidence: StoryInsightContent["evidence"]) {
+  return {
+    ...(draft.title.trim() ? { title: draft.title.trim() } : {}),
+    background: draft.background.trim(),
+    directlyAcquiredExperience: draft.directlyAcquiredExperience.trim(),
+    principle: draft.principle.trim(),
+    evidence,
+  };
+}
+
+function validInsightDraft(draft: InsightDraft) {
   return Boolean(draft.background.trim()
     && draft.directlyAcquiredExperience.trim()
-    && draft.principle.trim()
-    && draft.storyBlockIds.length
-    && groundedEvidence(source, draft.storyBlockIds).length);
+    && draft.principle.trim());
 }
 
 function nodeElement(node: Node | null) {
@@ -198,58 +189,26 @@ function readStorySelection(root: HTMLElement, selection: Selection | null): Sto
     : null;
 }
 
-function QuoteFields({
-  source,
-  draft,
-  onChange,
-}: {
-  source: StorySource;
-  draft: InsightDraft;
-  onChange: (draft: InsightDraft) => void;
-}) {
-  return <fieldset className="storyQuoteChoices">
-    <legend>Quote</legend>
-    <p>Select safe reviewed Story grounding. Raw Evidence is never shown.</p>
-    {source.story.blocks.map((block) => <label key={block.id}>
-      <input
-        type="checkbox"
-        checked={draft.storyBlockIds.includes(block.id)}
-        onChange={(event) => onChange({
-          ...draft,
-          storyBlockIds: event.target.checked
-            ? [...draft.storyBlockIds, block.id]
-            : draft.storyBlockIds.filter((id) => id !== block.id),
-        })}
-      />
-      <span>{block.text}</span>
-    </label>)}
-  </fieldset>;
-}
-
 function InsightEditor({
-  source,
   draft,
   onChange,
   onSave,
   onCancel,
   fixedQuote,
 }: {
-  source: StorySource;
   draft: InsightDraft;
   onChange: (draft: InsightDraft) => void;
   onSave: () => void;
   onCancel: () => void;
-  fixedQuote?: string;
+  fixedQuote: string;
 }) {
   return <div className="inlineInsightEdit storyInsightEditor">
     <label>Title <small>Optional presentation metadata</small><input value={draft.title} onChange={(event) => onChange({ ...draft, title: event.target.value })} /></label>
     <label>Background<textarea rows={3} value={draft.background} onChange={(event) => onChange({ ...draft, background: event.target.value })} /></label>
-    {fixedQuote === undefined
-      ? <QuoteFields source={source} draft={draft} onChange={onChange} />
-      : <div className="storySelectedQuote"><b>Quote</b><blockquote>{fixedQuote}</blockquote></div>}
+    <div className="storySelectedQuote"><b>Quote · read-only</b><blockquote>{fixedQuote}</blockquote></div>
     <label>Directly Acquired Experience<textarea rows={3} value={draft.directlyAcquiredExperience} onChange={(event) => onChange({ ...draft, directlyAcquiredExperience: event.target.value })} /></label>
     <label>Principle<textarea rows={3} value={draft.principle} onChange={(event) => onChange({ ...draft, principle: event.target.value })} /></label>
-    <div className="compactActions"><button className="primary" disabled={!validInsightDraft(source, draft)} onClick={onSave}>Save</button><button onClick={onCancel}>Cancel</button></div>
+    <div className="compactActions"><button className="primary" disabled={!validInsightDraft(draft)} onClick={onSave}>Save</button><button onClick={onCancel}>Cancel</button></div>
   </div>;
 }
 
@@ -272,10 +231,11 @@ function AiInsightCard({
   const sourceContent: StoryInsightContent = {
     ...(insight.title === undefined ? {} : { title: insight.title }),
     background: insight.background,
+    anchorStoryBlockId: insight.anchorStoryBlockId,
     quote: insight.quote,
     directlyAcquiredExperience: insight.directlyAcquiredExperience,
     principle: insight.principle,
-    evidence: insight.evidence,
+    evidence: insight.evidence.map((reference) => ({ ...reference })),
   };
   const visible = review?.editedContent || sourceContent;
   const [editing, setEditing] = useState(false);
@@ -292,7 +252,11 @@ function AiInsightCard({
     onChapterReview(updateAiInsightDecision(reopen(), source, insight.id, decision));
   };
   const save = () => {
-    const next = editAiInsight(reopen(), source, insight.id, contentFromDraft(source, draft));
+    const next = editAiInsight(reopen(), source, insight.id, {
+      ...contentFromDraft(draft, sourceContent.evidence),
+      anchorStoryBlockId: sourceContent.anchorStoryBlockId,
+      quote: sourceContent.quote,
+    });
     onChapterReview(next);
     setEditing(false);
   };
@@ -303,10 +267,10 @@ function AiInsightCard({
       : `${review.decision === "accepted" ? "Accepted" : "Do not preserve"} · revision ${review.appliedRevision}`;
   return <article className={`storyInsightCard ${review?.decision === "rejected" ? "rejected" : ""}`} data-story-insight={insight.id} data-insight-origin="source_ai" ref={insightRef} tabIndex={-1}>
     <header><div><span>✦ {language === "zh" ? "AI 洞察" : "AI Insight"}</span><b>{visible.title || "Untitled Insight"}</b><small>AI-generated · separate from historical fact</small></div><span className="storyInsightStatus" role="status" aria-live="polite">{status}</span></header>
-    {editing ? <InsightEditor source={source} draft={draft} onChange={setDraft} onSave={save} onCancel={() => setEditing(false)} /> : <>
+    {editing ? <InsightEditor draft={draft} onChange={setDraft} onSave={save} onCancel={() => setEditing(false)} fixedQuote={sourceContent.quote.text} /> : <>
       <dl>
         <div><dt>Background</dt><dd>{visible.background}</dd></div>
-        <div><dt>Quote</dt><dd><blockquote>{quoteText(source, visible.quote.storyBlockIds)}</blockquote></dd></div>
+        <div><dt>Quote</dt><dd><blockquote>{sourceContent.quote.text}</blockquote></dd></div>
         <div><dt>Directly Acquired Experience</dt><dd>{visible.directlyAcquiredExperience}</dd></div>
         <div><dt>Principle</dt><dd>{visible.principle}</dd></div>
       </dl>
@@ -354,7 +318,7 @@ function HumanInsightCard({
       ? returnChapterToReview(chapterReview) as ChapterReviewState
       : chapterReview;
     const result = saveHumanInsight(base, context, insightId, {
-      ...contentFromDraft(source, draft),
+      ...contentFromDraft(draft, groundedEvidence(source, [review.content.quote.storyBlockId])),
       quote: review.content.quote,
     });
     if (result.blockedReason) {
@@ -366,7 +330,7 @@ function HumanInsightCard({
   };
   return <article className="storyInsightCard humanCreated" data-story-insight={insightId} data-insight-origin="human_created" ref={insightRef} tabIndex={-1}>
     <header><div><span>Human Insight</span><b>{review.content.title || "Untitled Insight"}</b><small>Human-created · approved on Save</small></div><span className="storyInsightStatus">{status}</span></header>
-    {editing ? <InsightEditor source={source} draft={draft} onChange={setDraft} onSave={save} onCancel={() => setEditing(false)} fixedQuote={exactQuote || "Quote needs a new Story selection."} /> : <>
+    {editing ? <InsightEditor draft={draft} onChange={setDraft} onSave={save} onCancel={() => setEditing(false)} fixedQuote={exactQuote || "Quote needs a new Story selection."} /> : <>
       <dl>
         <div><dt>Background</dt><dd>{review.content.background}</dd></div>
         <div><dt>Quote</dt><dd><blockquote>{exactQuote || "Quote needs a new Story selection."}</blockquote></dd></div>
@@ -438,7 +402,7 @@ export function StoryChapterEditor({
   const readingMinutes = Math.max(1, Math.ceil(source.story.blocks
     .reduce((count, block) => count + block.text.trim().split(/\s+/u).length, 0) / 220));
   const aiInsightsByBlock = useMemo(() => source.insights.reduce<Record<string, StoryInsight[]>>((result, insight) => {
-    const ownerBlockId = (chapterReview.sourceInsightReviews[insight.id]?.editedContent || insight).quote.storyBlockIds[0];
+    const ownerBlockId = insight.anchorStoryBlockId;
     if (source.story.blocks.some((block) => block.id === ownerBlockId)) (result[ownerBlockId] ||= []).push(insight);
     return result;
   }, {}), [chapterReview.sourceInsightReviews, source]);
@@ -712,7 +676,6 @@ export function StoryChapterEditor({
       draft: {
         title: "",
         background: "",
-        storyBlockIds: [selection.blockId],
         directlyAcquiredExperience: "",
         principle: "",
       },
@@ -726,7 +689,7 @@ export function StoryChapterEditor({
       ? returnChapterToReview(chapterReview) as ChapterReviewState
       : chapterReview;
     const content: HumanInsightContent = {
-      ...contentFromDraft(source, humanDraft.draft),
+      ...contentFromDraft(humanDraft.draft, groundedEvidence(source, [humanDraft.quote.storyBlockId])),
       quote: humanDraft.quote,
     };
     const result = saveHumanInsight(base, context, humanDraft.id, content);
@@ -867,7 +830,7 @@ export function StoryChapterEditor({
           {selectionError && <p className="completionBlocker" role="alert">{selectionError}</p>}
           {humanDraft && <section className="storyHumanComposer" aria-labelledby="human-insight-heading">
             <header><span>Human Insight</span><h4 id="human-insight-heading">Add Insight from selected Story text</h4></header>
-            <InsightEditor source={source} draft={humanDraft.draft} onChange={(draft) => setHumanDraft({ ...humanDraft, draft })} onSave={saveHumanInsightDraft} onCancel={() => setHumanDraft(null)} fixedQuote={humanDraft.quote.selection.text} />
+            <InsightEditor draft={humanDraft.draft} onChange={(draft) => setHumanDraft({ ...humanDraft, draft })} onSave={saveHumanInsightDraft} onCancel={() => setHumanDraft(null)} fixedQuote={humanDraft.quote.selection.text} />
           </section>}
         </section>
         <section className="episodePrimarySection privacySection" aria-labelledby="story-privacy-heading">

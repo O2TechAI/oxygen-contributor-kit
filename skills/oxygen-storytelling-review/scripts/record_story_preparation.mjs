@@ -34,12 +34,14 @@ import {
 import {
   LANES,
   laneDirectory,
+  readLaneAuthority,
   readPreparedManifest,
   readPreparedShard,
   readShardAuthority,
   relativeLanePath,
 } from "./story_preparation_protocol.mjs";
 import {
+  insightStoryEvidenceRows,
   readStoryValidationAuthority,
   storyCompletenessAuthority,
   storyEvidenceRows,
@@ -101,6 +103,16 @@ const storyChapterOptionalKeys = ["kind", "transition", "chips"];
 const storyParentKeys = new Set([
   "schema", "key", "phase", "coverage", "exclusions", "receipt", "authority",
 ]);
+const storyEditorialCriteriaKeys = [
+  "beginningIsUnderstandable",
+  "participantsAreIdentifiable",
+  "chronologyIsTraceable",
+  "responsesAndChangesAreExplained",
+  "arcIsCoherent",
+  "endingIsClear",
+  "interactionsAreEvidenceSupported",
+  "proseIsReadable",
+];
 
 function exactAllowedKeys(value, required, optional) {
   if (!isObject(value) || required.some((key) => !Object.hasOwn(value, key))) return false;
@@ -237,7 +249,39 @@ function phaseAssignments(value, ownerIds) {
   return phases;
 }
 
-async function storyBatchProposal(rootInput, proposalDirectory, phasePath) {
+function editorialAcceptances(value, proposals, ownerIds, inputDigest) {
+  if (!Array.isArray(value) || value.length !== ownerIds.length) {
+    fail("STORY_EDITORIAL_REVIEW_INVALID");
+  }
+  const acceptances = new Map();
+  for (const acceptance of value) {
+    if (!exactKeys(acceptance, ["ownerId", "inputDigest", "proposalDigest", "criteria"])
+      || !stableId(acceptance.ownerId) || acceptances.has(acceptance.ownerId)
+      || acceptance.inputDigest !== inputDigest
+      || !/^[0-9a-f]{64}$/u.test(acceptance.proposalDigest)
+      || !exactKeys(acceptance.criteria, storyEditorialCriteriaKeys)
+      || storyEditorialCriteriaKeys.some((key) => typeof acceptance.criteria[key] !== "boolean")) {
+      fail("STORY_EDITORIAL_REVIEW_INVALID");
+    }
+    acceptances.set(acceptance.ownerId, acceptance);
+  }
+  if (canonicalAuthorityJson([...acceptances.keys()].sort(compareUtf8))
+    !== canonicalAuthorityJson([...ownerIds].sort(compareUtf8))) {
+    fail("STORY_EDITORIAL_REVIEW_INVALID");
+  }
+  for (const ownerId of ownerIds) {
+    const proposal = proposals.get(ownerId);
+    const acceptance = acceptances.get(ownerId);
+    if (!proposal || acceptance.proposalDigest !== canonicalDigest(proposal)) {
+      fail("STORY_EDITORIAL_REVIEW_INVALID");
+    }
+    if (storyEditorialCriteriaKeys.some((key) => acceptance.criteria[key] !== true)) {
+      fail("STORY_EDITORIAL_REVIEW_REJECTED");
+    }
+  }
+}
+
+async function storyBatchProposal(rootInput, proposalDirectory, editorialReviewPath, phasePath) {
   const manifest = await readPreparedManifest(rootInput, "story");
   const inputs = [];
   for (const shard of manifest.shards) {
@@ -266,6 +310,22 @@ async function storyBatchProposal(rootInput, proposalDirectory, phasePath) {
       proposals.set(proposal.ownerId, proposal);
     }
   }
+  const editorialValue = (await readStrictJson(
+    editorialReviewPath,
+    MAX_STORY_PREPARATION_FILE_BYTES,
+    {
+      invalid: "STORY_EDITORIAL_REVIEW_INVALID",
+      changed: "STORY_EDITORIAL_REVIEW_CHANGED",
+      oversized: "STORY_EDITORIAL_REVIEW_TOO_LARGE",
+      jsonInvalid: "STORY_EDITORIAL_REVIEW_INVALID",
+    },
+  )).value;
+  editorialAcceptances(
+    editorialValue,
+    proposals,
+    [...bundles.keys()],
+    prepared.manifest.inputDigest,
+  );
   const phaseValue = (await readStrictJson(phasePath, MAX_STORY_PREPARATION_FILE_BYTES, {
     invalid: "STORY_PHASE_ASSIGNMENT_INVALID", changed: "STORY_PHASE_ASSIGNMENT_CHANGED",
     oversized: "STORY_PHASE_ASSIGNMENT_TOO_LARGE", jsonInvalid: "STORY_PHASE_ASSIGNMENT_INVALID",
@@ -343,6 +403,17 @@ async function storyBatchProposal(rootInput, proposalDirectory, phasePath) {
 
 async function validateInsight(value, input, prepared) {
   if (!Array.isArray(value) || !Array.isArray(input.payload?.storyCandidates)) fail("INSIGHT_OUTPUT_INVALID");
+  const storyAuthority = await readLaneAuthority(prepared.root, "story");
+  if (prepared.manifest.inputDigest !== canonicalDigest(storyAuthority.output)) {
+    fail("INSIGHT_INPUT_STALE");
+  }
+  const authority = await readStoryValidationAuthority(storyAuthority);
+  const insightEvidenceRows = insightStoryEvidenceRows(
+    authority,
+    [input],
+    storyAuthority.inputs,
+    storyAuthority.output,
+  );
   const baseByKey = new Map();
   for (const row of input.payload.storyCandidates) {
     const story = parseStorySource(row?.summary);
@@ -375,11 +446,12 @@ async function validateInsight(value, input, prepared) {
     ...story.coverage.excludedUnits.map((excluded) => excluded.unitId),
   ]);
   if (new Set(unitIds).size !== unitIds.length) fail("STORY_COVERAGE_INVALID");
-  const authority = await readStoryValidationAuthority(prepared);
   const scope = storyValidationScope(authority, unitIds);
+  const insightEvidenceById = new Map(insightEvidenceRows.map((row) => [row.id, row]));
+  const evidenceRows = scope.evidenceRows.map((row) => insightEvidenceById.get(row.id) || row);
   const validation = validateStorySourcePackage(
     completeRows.map(({ story, ...row }) => row),
-    scope.evidenceRows,
+    evidenceRows,
     scope.completenessAuthority,
   );
   if (!validation.ok) fail(validation.code);
@@ -526,10 +598,21 @@ async function writeSynced(path, value) {
   }
 }
 
-async function recordStoryBatch(rootInput, proposalDirectory, phasePath, correctionAttemptCount) {
+async function recordStoryBatch(
+  rootInput,
+  proposalDirectory,
+  editorialReviewPath,
+  phasePath,
+  correctionAttemptCount,
+) {
   if (!Number.isSafeInteger(correctionAttemptCount) || correctionAttemptCount < 0) fail("CLI_USAGE");
   if (correctionAttemptCount > 2) fail("STORY_CORRECTION_EXHAUSTED");
-  const { prepared, outputs } = await storyBatchProposal(rootInput, proposalDirectory, phasePath);
+  const { prepared, outputs } = await storyBatchProposal(
+    rootInput,
+    proposalDirectory,
+    editorialReviewPath,
+    phasePath,
+  );
   const recordsPath = resolve(prepared.root, laneDirectory.story, "records");
   const state = await exists(recordsPath);
   if (state) {
@@ -647,12 +730,21 @@ try {
   const args = process.argv.slice(2);
   const [root, lane] = args;
   if (lane === "story") {
-    const [storyRoot, storyLane, proposalDirectory, phasePath, marker, count, ...extra] = args;
-    if (!storyRoot || storyLane !== "story" || !proposalDirectory || !phasePath
+    const [
+      storyRoot,
+      storyLane,
+      proposalDirectory,
+      editorialReviewPath,
+      phasePath,
+      marker,
+      count,
+      ...extra
+    ] = args;
+    if (!storyRoot || storyLane !== "story" || !proposalDirectory || !editorialReviewPath || !phasePath
       || marker !== "--correction-attempt-count" || !/^(0|[1-9][0-9]*)$/u.test(count || "")
       || extra.length) fail("CLI_USAGE");
     const receipts = await recordStoryBatch(
-      storyRoot, proposalDirectory, phasePath, Number(count),
+      storyRoot, proposalDirectory, editorialReviewPath, phasePath, Number(count),
     );
     process.stdout.write(`${canonicalAuthorityJson({
       ok: true,

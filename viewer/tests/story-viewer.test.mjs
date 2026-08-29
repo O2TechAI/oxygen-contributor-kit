@@ -81,7 +81,7 @@ test("story People render safe source copy once without a clipped marker or gene
 });
 
 test("AI and human Insights are owned by their exact Story anchors and rendered once in narrative order", () => {
-  assert.match(storyEditor, /const ownerBlockId = \(chapterReview\.sourceInsightReviews\[insight\.id\]\?\.editedContent \|\| insight\)\.quote\.storyBlockIds\[0\]/);
+  assert.match(storyEditor, /const ownerBlockId = insight\.anchorStoryBlockId/);
   assert.match(storyEditor, /\(result\[ownerBlockId\] \|\|= \[\]\)\.push\(insight\)/);
   assert.match(storyEditor, /const ownerBlockId = chapterReview\.humanInsights\[insightId\]\.content\.quote\.storyBlockId/);
   assert.match(storyEditor, /Object\.keys\(chapterReview\.humanInsights\)\.sort\(\)/);
@@ -114,7 +114,11 @@ test("the rendered editor keeps paragraph-owned Insight cards in a separate resp
     insights: [{
       id: "ai:paragraph-two",
       background: "The second paragraph supplies the bounded context.",
-      quote: { storyBlockIds: ["paragraph-two"] },
+      anchorStoryBlockId: "paragraph-two",
+      quote: {
+        text: "Another reviewer challenged the assumption.",
+        evidence,
+      },
       directlyAcquiredExperience: "The exact paragraph changed the next check.",
       principle: "Keep the card beside its supporting paragraph.",
       evidence: [evidence],
@@ -174,6 +178,8 @@ test("the rendered editor keeps paragraph-owned Insight cards in a separate resp
   assert.match(secondRow, /data-story-block="paragraph-two"[\s\S]*?<p data-story-copy="true">The second paragraph owns both separate Insight cards\.<\/p><\/div><aside class="storyAnchoredInsights"/);
   assert.match(secondRow, /data-story-insight="ai:paragraph-two"[^>]*data-insight-origin="source_ai"/);
   assert.match(secondRow, /data-story-insight="human:paragraph-two"[^>]*data-insight-origin="human_created"/);
+  assert.match(secondRow, /<dt>Quote<\/dt><dd><blockquote>Another reviewer challenged the assumption\.<\/blockquote><\/dd>/);
+  assert.doesNotMatch(secondRow, /<blockquote>The second paragraph owns both separate Insight cards\.<\/blockquote>/);
   assert.equal((html.match(/data-story-insight="ai:paragraph-two"/g) || []).length, 1);
   assert.equal((html.match(/data-story-insight="human:paragraph-two"/g) || []).length, 1);
   assert.doesNotMatch(html.slice(secondRowEnd), /storyInsightCard|storyAnchoredInsights/);
@@ -182,6 +188,7 @@ test("the rendered editor keeps paragraph-owned Insight cards in a separate resp
   assert.match(css, /\.storyNarrativeRow\{display:grid;grid-template-columns:minmax\(0,720px\) minmax\(280px,360px\)/);
   assert.match(css, /\.storyAnchoredInsights\{display:grid;gap:16px;min-width:0;align-self:start\}/);
   assert.match(css, /@media\(max-width:1050px\)\{\.storyNarrativeRow\{grid-template-columns:minmax\(0,720px\)\}\.storyAnchoredInsights\{margin:0 0 14px 8px\}/);
+  assert.match(css, /@media\(max-width:760px\)\{\.storyNarrativeRow\{grid-template-columns:1fr\}/);
   assert.ok(secondRow.indexOf('class="storyBlock"') < secondRow.indexOf('class="storyAnchoredInsights"'),
     "desktop and narrow layouts preserve a separate prose component followed by its owned card component");
 });
@@ -232,14 +239,16 @@ test("human Add Insight uses one native same-block selection and a stable human 
   assert.doesNotMatch(editor, /Accept human Insight|redundant Accept/);
 });
 
-test("four meanings use safe Story grounding without raw Evidence copy", () => {
+test("AI source Quote is read-only trajectory text while Human Quote keeps exact Story selection", () => {
   for (const label of ["Background", "Quote", "Directly Acquired Experience", "Principle"]) {
     assert.match(editor, new RegExp(label));
   }
-  assert.match(editor, /quoteText\(source, visible\.quote\.storyBlockIds\)/);
+  assert.match(editor, /<blockquote>\{sourceContent\.quote\.text\}<\/blockquote>/);
+  assert.match(editor, /fixedQuote=\{sourceContent\.quote\.text\}/);
+  assert.match(editor, /Quote · read-only/);
   assert.match(editor, /humanQuoteText\(chapterReview, source, review\.content\)/);
   assert.match(editor, /fixedQuote=\{humanDraft\.quote\.selection\.text\}/);
-  assert.match(editor, /Raw Evidence is never shown/);
+  assert.doesNotMatch(editor, /QuoteFields|storyBlockIds/);
   assert.doesNotMatch(storyEditor, /eventId\}|documentId\}|Inspect exact evidence/);
 });
 

@@ -109,7 +109,8 @@ export const dynamicStorySources = definitions.map((definition, chapterIndex) =>
     insights: definition.insights.map((item) => ({
       id: item.id,
       background: item.background,
-      quote: { storyBlockIds: [blocks[item.block].id] },
+      anchorStoryBlockId: blocks[item.block].id,
+      quote: { text: blocks[item.block].text, evidence: primary },
       directlyAcquiredExperience: item.experience,
       principle: item.principle,
       evidence: [primary],

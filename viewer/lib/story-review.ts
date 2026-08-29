@@ -1,6 +1,7 @@
 import type {
   EvidenceReference,
   StoryLanguage,
+  StoryInsight,
   StoryPrivacyCandidate,
   StoryReleaseTargetCatalog,
   StorySource,
@@ -93,15 +94,21 @@ export type ChapterReviewStage = "reviewing" | "revision_ready" | "human_confirm
 
 type StoryBlockCollection = Record<StoryLanguage, Record<string, string>>;
 
-export type StoryInsightContent = {
+export type InsightExplanatoryContent = {
   title?: string;
   background: string;
-  quote: { storyBlockIds: string[] };
   directlyAcquiredExperience: string;
   principle: string;
   evidence: EvidenceReference[];
 };
-export type HumanInsightContent = Omit<StoryInsightContent, "quote"> & {
+export type StoryInsightContent = InsightExplanatoryContent & {
+  anchorStoryBlockId: string;
+  quote: {
+    text: string;
+    evidence: { documentId: string; eventId: string };
+  };
+};
+export type HumanInsightContent = InsightExplanatoryContent & {
   quote: {
     chapterKey: string;
     storyBlockId: string;
@@ -772,30 +779,37 @@ const validStableId = (value: unknown): value is string => typeof value === "str
   && value.trim().length > 0
   && value.length <= 300;
 const validEvidenceReference = (value: unknown): value is EvidenceReference => Boolean(value)
-  && typeof value === "object"
+  && typeof value === "object" && !Array.isArray(value)
+  && onlyKeys(value as object, ["documentId", "eventId", "label"])
   && typeof (value as EvidenceReference).documentId === "string"
   && Boolean((value as EvidenceReference).documentId.trim())
   && typeof (value as EvidenceReference).eventId === "string"
-  && Boolean((value as EvidenceReference).eventId.trim());
+  && Boolean((value as EvidenceReference).eventId.trim())
+  && ((value as EvidenceReference).label === undefined
+    || (typeof (value as EvidenceReference).label === "string"
+      && (value as EvidenceReference).label!.length <= 500));
 
 const onlyKeys = (value: object, allowed: string[]) => Object.keys(value).every((key) => allowed.includes(key));
 
 function validStoryInsightContent(value: unknown): value is StoryInsightContent {
   if (!value || typeof value !== "object" || Array.isArray(value)
-    || !onlyKeys(value, ["title", "background", "quote", "directlyAcquiredExperience", "principle", "evidence"])) return false;
+    || !onlyKeys(value, ["title", "background", "anchorStoryBlockId", "quote", "directlyAcquiredExperience", "principle", "evidence"])) return false;
   const content = value as Partial<StoryInsightContent>;
   const quote = content.quote;
   return (content.title === undefined || (typeof content.title === "string" && content.title.length <= 500))
     && typeof content.background === "string" && Boolean(content.background.trim()) && content.background.length <= 4_000
+    && validStableId(content.anchorStoryBlockId)
     && Boolean(quote && typeof quote === "object" && !Array.isArray(quote)
-      && onlyKeys(quote, ["storyBlockIds"])
-      && Array.isArray(quote.storyBlockIds) && quote.storyBlockIds.length > 0 && quote.storyBlockIds.length <= 500
-      && quote.storyBlockIds.every(validStableId)
-      && new Set(quote.storyBlockIds).size === quote.storyBlockIds.length)
+      && onlyKeys(quote, ["text", "evidence"])
+      && typeof quote.text === "string" && Boolean(quote.text.trim()) && quote.text.length <= 20_000
+      && quote.evidence && typeof quote.evidence === "object" && !Array.isArray(quote.evidence)
+      && onlyKeys(quote.evidence, ["documentId", "eventId"])
+      && validStableId(quote.evidence.documentId)
+      && validStableId(quote.evidence.eventId))
     && typeof content.directlyAcquiredExperience === "string"
     && Boolean(content.directlyAcquiredExperience.trim()) && content.directlyAcquiredExperience.length <= 4_000
     && typeof content.principle === "string" && Boolean(content.principle.trim()) && content.principle.length <= 4_000
-    && Array.isArray(content.evidence) && content.evidence.length > 0 && content.evidence.length <= 500
+    && Array.isArray(content.evidence) && content.evidence.length <= 500
     && content.evidence.every(validEvidenceReference)
     && new Set(content.evidence.map(evidenceKey)).size === content.evidence.length;
 }
@@ -803,9 +817,18 @@ function validStoryInsightContent(value: unknown): value is StoryInsightContent 
 function validHumanInsightContent(value: unknown): value is HumanInsightContent {
   const quote = (value as { quote?: unknown } | null)?.quote;
   if (!value || typeof value !== "object" || Array.isArray(value)
-    || !quote || typeof quote !== "object" || Array.isArray(quote)) return false;
+    || !quote || typeof quote !== "object" || Array.isArray(quote)
+    || !onlyKeys(value, ["title", "background", "quote", "directlyAcquiredExperience", "principle", "evidence"])) return false;
   const content = value as unknown as HumanInsightContent;
-  return validStableId(content.quote.chapterKey)
+  return (content.title === undefined || (typeof content.title === "string" && content.title.length <= 500))
+    && typeof content.background === "string" && Boolean(content.background.trim()) && content.background.length <= 4_000
+    && typeof content.directlyAcquiredExperience === "string"
+    && Boolean(content.directlyAcquiredExperience.trim()) && content.directlyAcquiredExperience.length <= 4_000
+    && typeof content.principle === "string" && Boolean(content.principle.trim()) && content.principle.length <= 4_000
+    && Array.isArray(content.evidence) && content.evidence.length > 0 && content.evidence.length <= 500
+    && content.evidence.every(validEvidenceReference)
+    && new Set(content.evidence.map(evidenceKey)).size === content.evidence.length
+    && validStableId(content.quote.chapterKey)
     && onlyKeys(content.quote, ["chapterKey", "storyBlockId", "selection", "baseRevision"])
     && validStableId(content.quote.storyBlockId)
     && Number.isInteger(content.quote.baseRevision) && content.quote.baseRevision >= 1
@@ -817,23 +840,27 @@ function validHumanInsightContent(value: unknown): value is HumanInsightContent 
       && content.quote.selection.start >= 0
       && content.quote.selection.end > content.quote.selection.start
       && typeof content.quote.selection.text === "string"
-      && content.quote.selection.text.length === content.quote.selection.end - content.quote.selection.start)
-    && validStoryInsightContent({
-      ...content,
-      quote: { storyBlockIds: [content.quote.storyBlockId] },
-    });
+      && content.quote.selection.text.length === content.quote.selection.end - content.quote.selection.start);
 }
 
-function insightContentBelongsToSource(content: StoryInsightContent, source: StorySource) {
+function insightContentBelongsToSource(
+  content: StoryInsightContent,
+  source: StorySource,
+  sourceInsight: StoryInsight,
+) {
   if (!validStoryInsightContent(content)) return false;
   const blocks = new Map(source.story.blocks.map((block) => [block.id, block]));
   const allowedEvidence = new Set([source.evidence.primary, ...source.evidence.supporting].map(evidenceKey));
-  if (content.quote.storyBlockIds.some((blockId) => !blocks.has(blockId))
+  const anchor = blocks.get(content.anchorStoryBlockId);
+  const quoteEvidenceKey = evidenceKey(content.quote.evidence);
+  if (!anchor
+    || !anchor.evidence.some((reference) => evidenceKey(reference) === quoteEvidenceKey)
+    || !allowedEvidence.has(quoteEvidenceKey)
     || content.evidence.some((item) => !allowedEvidence.has(evidenceKey(item)))) return false;
-  const anchoredEvidence = new Set(content.quote.storyBlockIds.flatMap((blockId) => (
-    blocks.get(blockId)?.evidence.map(evidenceKey) || []
-  )));
-  return content.evidence.every((item) => anchoredEvidence.has(evidenceKey(item)));
+  return content.anchorStoryBlockId === sourceInsight.anchorStoryBlockId
+    && content.quote.text === sourceInsight.quote.text
+    && evidenceKey(content.quote.evidence) === evidenceKey(sourceInsight.quote.evidence)
+    && JSON.stringify(content.evidence) === JSON.stringify(sourceInsight.evidence);
 }
 
 function humanQuoteTextForValidation(
@@ -872,10 +899,12 @@ function humanContentBelongsToSource(
 ) {
   return validHumanInsightContent(content)
     && content.quote.chapterKey === source.key
-    && insightContentBelongsToSource({
-      ...content,
-      quote: { storyBlockIds: [content.quote.storyBlockId] },
-    }, source)
+    && source.story.blocks.some((block) => block.id === content.quote.storyBlockId
+      && content.evidence.every((reference) => block.evidence.some((owned) => (
+        evidenceKey(owned) === evidenceKey(reference)
+      ))))
+    && content.evidence.every((reference) => [source.evidence.primary, ...source.evidence.supporting]
+      .some((owned) => evidenceKey(owned) === evidenceKey(reference)))
     && humanQuoteTextForValidation(state, source, content, allowStaleCurrent) !== null;
 }
 
@@ -912,20 +941,24 @@ export function validateChapterReviewLedger(
     || humanIds.some((id) => !validStableId(id) || !id.startsWith("human:") || sourceIds.includes(id))
     || new Set([...reviewIds, ...humanIds]).size !== reviewIds.length + humanIds.length) return false;
 
-  const sourceReviewsValid = Object.values(state.sourceInsightReviews).every((review) => Boolean(review)
-    && review.origin === "source_ai"
-    && Number.isInteger(review.version) && review.version >= 1
-    && ["pending", "accepted", "rejected"].includes(review.decision)
-    && (review.resolution === "pending" || review.resolution === "applied")
-    && (review.editedContent === undefined
-      ? review.version === 1
-      : review.version >= 2 && insightContentBelongsToSource(review.editedContent, source))
-    && (review.resolution === "pending"
-      ? review.appliedVersion === undefined && review.appliedRevision === undefined
-      : review.decision !== "pending"
-        && Number.isInteger(review.appliedVersion) && review.appliedVersion! >= 1
-        && Number.isInteger(review.appliedRevision) && review.appliedRevision! >= 2
-        && review.appliedRevision! <= state.revision));
+  const sourceReviewsValid = Object.entries(state.sourceInsightReviews).every(([insightId, review]) => {
+    const sourceInsight = source.insights.find((insight) => insight.id === insightId);
+    return Boolean(review)
+      && review.origin === "source_ai"
+      && Number.isInteger(review.version) && review.version >= 1
+      && ["pending", "accepted", "rejected"].includes(review.decision)
+      && (review.resolution === "pending" || review.resolution === "applied")
+      && (review.editedContent === undefined
+        ? review.version === 1
+        : review.version >= 2 && Boolean(sourceInsight)
+          && insightContentBelongsToSource(review.editedContent, source, sourceInsight!))
+      && (review.resolution === "pending"
+        ? review.appliedVersion === undefined && review.appliedRevision === undefined
+        : review.decision !== "pending"
+          && Number.isInteger(review.appliedVersion) && review.appliedVersion! >= 1
+          && Number.isInteger(review.appliedRevision) && review.appliedRevision! >= 2
+          && review.appliedRevision! <= state.revision);
+  });
   if (!sourceReviewsValid) return false;
 
   const humanReviewsValid = Object.values(state.humanInsights).every((review) => Boolean(review)
@@ -1011,7 +1044,9 @@ export function editAiInsight(
   content: StoryInsightContent,
 ): ChapterReviewState {
   const previous = state.sourceInsightReviews[insightId];
-  if (state.stage === "human_confirmed" || !previous || !insightContentBelongsToSource(content, source)) return state;
+  const sourceInsight = source.insights.find((insight) => insight.id === insightId);
+  if (state.stage === "human_confirmed" || !previous || !sourceInsight
+    || !insightContentBelongsToSource(content, source, sourceInsight)) return state;
   return {
     ...state,
     stage: "reviewing",

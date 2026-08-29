@@ -148,12 +148,17 @@ Use parent-owned bounded semantic workers only for drafts and checks. The tracke
 requires the owning Agent to prepare deterministic inputs first:
 
 - create an immutable input digest;
+- establish one global Chapter-owner skeleton by coherent narrative arc across the complete
+  Privacy-safe semantic projection, never by defaulting or mechanically copying `ownerId` from
+  `unitId` and never from a golden count;
 - derive canonical Chapter owners only from finalized Coverage `ownerId`;
 - write byte-balanced Story shards containing indivisible complete owner bundles;
 - automatically enumerate every nonempty Story, Insight, and Story Privacy shard and run those as multi-shard lanes;
 - run Preference as exactly one global bounded worker producing one deduplicated questionnaire authority, capped at 12 probes by default and 20 maximum;
-- collect every phase-free Story proposal before creating any Story receipt;
-- assign Phase once across the complete production-ordered Chapter set and run one Story batch recorder;
+- collect and read every phase-free Story proposal in full before creating any Story receipt;
+- bind one eight-question parent editorial acceptance to the exact digest of every current proposal;
+- assign the smallest coherent Phase sequence once across the complete production-ordered and
+  editorially accepted Chapter set, then run one Story batch recorder;
 - require exactly one terminal receipt per Story shard after global validation;
 - validate exact union coverage and no overlap across shard manifests and receipts;
 - deterministically deduplicate and compose outputs;
@@ -187,12 +192,24 @@ narrative, raw actor identity, Source Privacy rows, pre-redaction content, priva
 provider metadata. One owner never spans workers; a shard may carry multiple complete owners.
 
 Story workers return phase-free Chapter proposals and do not author schema, Chapter keys, Phase,
-Coverage, exclusions, receipts, or authority. On a subagent-capable host the parent does not write
-Story prose, People, Evidence choices, titles, overviews, or blocks. After all proposals exist, the
-parent orders complete Chapters with the production comparator, assigns only Phase IDs and labels,
-injects canonical Coverage and UTF-8-sorted exclusions, and invokes the complete Story batch
-recorder. All Story outputs and exactly one receipt per shard install atomically only after the
-unchanged shared validator accepts the complete package. Insight remains a separate later pass.
+Coverage, exclusions, receipts, or authority. On a subagent-capable host the parent does not
+initially write Story prose, People, Evidence choices, titles, overviews, or blocks. The parent
+reads every Chapter in full and binds its eight narrative decisions to that exact proposal digest.
+A dry, fragmented, mechanical, incomplete, or record-by-record proposal is rejected before Phase
+and receipt, receives a specific proposal-only correction against the byte-identical input, and is
+then re-read in full. After all proposals pass, the parent orders complete Chapters with the
+production comparator, assigns only the smallest coherent global Phase IDs and labels, injects
+canonical Coverage and UTF-8-sorted exclusions, and invokes the complete Story batch recorder. All
+Story outputs and exactly one receipt per shard install atomically only after the editorial gate and
+unchanged shared validator accept the complete package. Insight remains a separate later pass.
+
+Each Insight worker receives only assigned frozen Story candidates, their Story blocks and Evidence
+references, the minimum Privacy-reviewed narrative rows those blocks reference, and the existing
+validation-authority reference. `anchorStoryBlockId` controls card placement only; `quote.text` must
+be one exact current Privacy-reviewed trajectory substring bound to one supporting `quote.evidence`
+identity for that anchored passage. It is never reconstructed from Story prose. Invalid proposals
+create no output or receipt; finalization and Viewer activation independently reopen current
+authority and fail closed. Completed-zero is valid.
 
 A shard assignment gets one initial proposal plus at most two automatic proposal-only correction
 attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
@@ -200,8 +217,12 @@ initial proposal, and is always `0..2`; never sum it across a multi-shard lane. 
 uses the byte-identical immutable input, and every invalid initial or correction attempt leaves both
 output and receipt absent. Only a fixed safe pre-receipt authoring-validation code is correctable.
 If the second correction fails, stop the lane safely, report correction exhaustion and the last
-safe validation code, and do not continue downstream. Authority, immutability, containment, path,
-I/O, infrastructure, and corrupt-state failures stop immediately and are never correctable. Only
+safe validation code, and do not continue downstream, except that after two Story proposals are
+rejected specifically for editorial quality, the Ultra parent may complete that same
+still-unrecorded assignment from the byte-identical input using the same canonical phase-free
+proposal shape, editorial gate, recorder, and validators. This narrow takeover is not a second
+authority, fallback format, or repair of recorded output. Authority, immutability, containment,
+path, I/O, infrastructure, and corrupt-state failures stop immediately and are never correctable. Only
 the non-authoritative proposal may change; this is not a contributor pause and may never rewrite
 durable output. If host subagents are genuinely unavailable, the parent runs the same assignments
 serially, reports
@@ -337,6 +358,12 @@ Activation revalidates the exact source package, semantic manifest, coverage man
 ## Review, Preferences, And Release
 
 The contributor reviews the Story in the Viewer. The review session contains only the implemented fields documented in [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md). It does not store Preference answers. Preference questions are generated and validated before the human review opens, then remain unanswered until the contributor explicitly answers in the Preferences authority.
+
+AI Insight cards remain separate from Story prose and appear beside their one anchored paragraph;
+on narrow screens they follow it immediately. The exact safe source Quote and its anchor are
+read-only while the explanatory fields are reviewed. Human-created Insight keeps its distinct exact
+user-selected Story-substring Quote origin and lifecycle. Release uses the accepted source Quote,
+not Story paragraph text, and strips anchor and Evidence identities.
 
 Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base. Production still exposes obsolete category/delete controls, so clean-room product completion is blocked. Required Release Preview behavior is release-safe projection only: deterministic or contributor-confirmed safe content shows safe projection only; `needs_confirmation` is the only actionable state; actions are exactly Keep/Redact; pending content may show only the minimum permitted original and safe projection; unavailable originals are never reconstructed; pending confirmation blocks release. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
 

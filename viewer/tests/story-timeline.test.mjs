@@ -14,7 +14,8 @@ const evidence = { documentId: "doc-a", eventId: "doc-a:event-1" };
 const insight = {
   id: "insight-one",
   background: "A bounded source changed the decision.",
-  quote: { storyBlockIds: ["scene"] },
+  anchorStoryBlockId: "scene",
+  quote: { text: "reviewed exact evidence", evidence },
   directlyAcquiredExperience: "The exact source was reviewed.",
   principle: "Preserve exact source ownership.",
   evidence: [evidence],
@@ -55,7 +56,7 @@ test("strict parser permits sparse zero, one, or multiple independently owned In
   assert.equal(parseStorySource(serialized(one)).insights.length, 1);
   assert.deepEqual(parseStorySource(serialized(two)).insights.map((item) => item.id), ["insight-one", "insight-two"]);
 
-  const unknownBlock = story({ insights: [{ ...insight, quote: { storyBlockIds: ["absent"] } }] });
+  const unknownBlock = story({ insights: [{ ...insight, anchorStoryBlockId: "absent" }] });
   assert.ok(parseStorySource(serialized(unknownBlock)), "syntax parsing is separate from package ownership validation");
 });
 

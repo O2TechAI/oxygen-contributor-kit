@@ -26,7 +26,8 @@ const source = {
   insights: [{
     id: insightId,
     background: "A synthetic review context.",
-    quote: { storyBlockIds: ["scene"] },
+    anchorStoryBlockId: "scene",
+    quote: { text: "Safe source.", evidence },
     directlyAcquiredExperience: "The exact bounded review was exercised.",
     principle: "Block release until every Insight decision is applied.",
     evidence: [evidence],

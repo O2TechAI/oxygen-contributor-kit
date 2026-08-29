@@ -1,4 +1,7 @@
-import type { ChapterReviewState, HumanInsightContent } from "./story-review.ts";
+import type {
+  ChapterReviewState,
+  InsightExplanatoryContent,
+} from "./story-review.ts";
 import {
   applyStoryReviewToBlock,
   humanQuoteText,
@@ -105,16 +108,18 @@ function optionalCopy(
 function insightProduct(
   storyKey: string,
   insightId: string,
-  content: Omit<HumanInsightContent, "quote" | "evidence">,
+  content: InsightExplanatoryContent,
   quote: string,
   privacy: ReleasePrivacy,
+  quoteTarget?: StoryReleaseTargetName,
 ): ReleaseInsight | null {
   const required: Array<[StoryReleaseTargetName, string]> = [
     [`insight:${insightId}:background`, content.background],
     [`insight:${insightId}:directlyAcquiredExperience`, content.directlyAcquiredExperience],
     [`insight:${insightId}:principle`, content.principle],
   ];
-  if (required.some(([target, copy]) => (
+  if ((quoteTarget && targetSuppressed(privacy, storyKey, quoteTarget))
+    || required.some(([target, copy]) => (
     targetSuppressed(privacy, storyKey, target) || privacy.redact(copy) !== copy
   )) || privacy.redact(quote) !== quote) return null;
   const title = content.title === undefined
@@ -131,7 +136,7 @@ function insightProduct(
 
 /** Build the only reviewed Story product. Privacy is applied once from exact
  * target IDs, then internal IDs, anchors, Evidence and revision ledgers are
- * removed. Each Insight is nested under its exact first safe paragraph. */
+ * removed. Each Insight is nested under its exact safe anchor paragraph. */
 export function buildReviewedStoryRelease(
   sources: StorySource[],
   reviews: Record<string, ChapterReviewState>,
@@ -160,12 +165,17 @@ export function buildReviewedStoryRelease(
       if (!review || review.decision !== "accepted" || review.resolution !== "applied"
         || review.appliedVersion !== review.version) return [];
       const content = review.editedContent || sourceInsight;
-      const anchors = content.quote.storyBlockIds.map((blockId) => releaseBlockIndex.get(blockId));
-      if (!anchors.length || anchors.some((index) => index === undefined)) continue;
-      const quote = content.quote.storyBlockIds
-        .map((blockId) => releaseBlocks[releaseBlockIndex.get(blockId)!].text).join("\n\n");
-      const product = insightProduct(source.key, sourceInsight.id, content, quote, privacy);
-      if (product) releaseBlocks[anchors[0]!].insights.push(product);
+      const anchor = releaseBlockIndex.get(content.anchorStoryBlockId);
+      if (anchor === undefined) continue;
+      const product = insightProduct(
+        source.key,
+        sourceInsight.id,
+        content,
+        content.quote.text,
+        privacy,
+        `insight:${sourceInsight.id}:quote`,
+      );
+      if (product) releaseBlocks[anchor].insights.push(product);
     }
 
     for (const [insightId, review] of Object.entries(state.humanInsights)

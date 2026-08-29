@@ -65,7 +65,11 @@ type StoryInsight = {
   id: string;
   title?: string;
   background: string;
-  quote: { storyBlockIds: string[] };
+  anchorStoryBlockId: string;
+  quote: {
+    text: string;
+    evidence: { documentId: string; eventId: string };
+  };
   directlyAcquiredExperience: string;
   principle: string;
   evidence: EvidenceReference[];
@@ -112,7 +116,7 @@ Each Evidence reference has `documentId`, `eventId`, and optional `label`. For a
 
 `evidence.primary` must identify the candidate row that carries the Chapter. `evidence.supporting` contains additional Chapter evidence and must not duplicate the primary reference.
 
-Person, Story-block, and Insight evidence must all belong to the Chapter evidence set. Evidence belonging to an excluded semantic unit cannot support Story copy.
+Person, Story-block, and Insight evidence must all belong to the Chapter evidence set. The Quote Evidence is implicit required Insight grounding even when the broader top-level `evidence` array is empty. Evidence belonging to an excluded semantic unit cannot support Story copy.
 
 ## Chapter, Phase, And Ordering
 
@@ -145,11 +149,23 @@ Each Story block is safe release-draft prose with exact Evidence support. Do not
 `insights` is an array and may be empty. Each existing Insight has exactly these four meanings:
 
 - `background`: minimum Story-grounded context for the judgment moment.
-- `quote`: one or more safe Story-block anchors in the same Chapter.
+- `quote`: exact canonical Privacy-reviewed trajectory text, or one exact nonempty substring of it,
+  bound to one exact current `documentId`/`eventId` Evidence identity.
 - `directlyAcquiredExperience`: what was learned from that actual project moment.
 - `principle`: a reusable rule, question, or guardrail for a genuinely similar future condition.
 
-`title` is optional presentation metadata, not a fifth required meaning. Insight Evidence must be same-Chapter Evidence and must support at least one anchored Story block. Raw/private Evidence does not enter Insight text.
+`anchorStoryBlockId` is placement only and identifies exactly one Story block in the same Chapter.
+The Quote Evidence must belong to that anchored block and to the current approved Story/source
+boundary. The Quote is never reconstructed from Story prose and must not be a Story paraphrase,
+model-generated dialogue, raw/pre-redaction text, Source Privacy row, foreign Evidence, stale
+Evidence, or text inferred from an Evidence ID. Top-level Insight Evidence is optional broader
+multi-record grounding; every reference it contains must remain current and same-Chapter.
+`title` is optional presentation metadata, not a fifth required meaning.
+
+The AI Insight editor keeps `anchorStoryBlockId`, `quote.text`, and Quote Evidence read-only while
+allowing review of explanatory fields. Human-created Insights retain their distinct lifecycle: a
+human may deliberately select an exact current Story substring, and that Human Quote is not
+reinterpreted as an AI trajectory Quote.
 
 ## Coverage Authority
 
@@ -255,7 +271,12 @@ type StoryCandidateSubmissionRow = {
 };
 ```
 
-The server derives document, sequence, timestamp, and project identity from the current reviewed items. It validates candidate size, IDs, source schema, evidence, People, Phase contiguity, Insight grounding, coverage authority, revision transitions, and active digest before activation.
+The server derives document, sequence, timestamp, project identity, and current Privacy-reviewed
+narrative from current server-owned source and Source Privacy authority. It validates candidate
+size, IDs, source schema, evidence, People, Phase contiguity, exact Quote substring identity,
+Quote/anchor grounding, Insight grounding, coverage authority, revision transitions, and active
+digest before activation. Nonempty AI Insights fail when that current reviewed narrative cannot be
+reopened; completed-zero Insights remain valid.
 
 ## Story Review Session
 
@@ -284,26 +305,34 @@ type ReviewedStoryRelease = {
   schema: "oxygen.reviewed-story";
   publication_approved: false;
   chapters: Array<{
-    key: string;
-    phase: { id: string; label: string };
+    phase: string;
     kind?: string;
-    revision: number;
     en: {
       title: string;
       overview: string;
+      transition?: { before: string; after: string };
       people: Array<{ releaseLabel: string; role: string; description: string }>;
-      story: { blocks: string[]; uncertainty?: string };
-      insights: Array<{
-        id: string;
-        title?: string;
-        background: string;
-        quote: string;
-        directlyAcquiredExperience: string;
-        principle: string;
-      }>;
+      story: {
+        blocks: Array<{
+          text: string;
+          insights: Array<{
+            title?: string;
+            background: string;
+            quote: string;
+            directlyAcquiredExperience: string;
+            principle: string;
+          }>;
+        }>;
+        uncertainty?: string;
+      };
     };
   }>;
 };
 ```
 
-Release serialization strips source IDs, Evidence references, Story-block IDs, Insight anchors, coverage metadata, review ledgers, originals, Privacy metadata, CAS metadata, and local editor state. HTML and ZIP use the same safe serialized Story bytes.
+An accepted AI Insight is nested beside the same reviewed Story passage selected by
+`anchorStoryBlockId` and serializes the exact accepted safe `quote.text`. The Quote has its own
+canonical `insight:<id>:quote` Story/Release Privacy target. Release serialization strips source
+IDs, Evidence references, Story-block IDs, Insight anchors, coverage metadata, review ledgers,
+originals, Privacy metadata, CAS metadata, and local editor state. HTML and ZIP use the same safe
+serialized Story bytes and keep `publication_approved=false`.

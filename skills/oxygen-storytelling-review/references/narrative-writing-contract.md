@@ -18,15 +18,25 @@ Write for a technically curious reader. Make the supported arc engaging by quick
 
 ## Story Generation Order
 
+Before any Story writer is dispatched, the workflow-owning parent reviews the complete
+Privacy-safe semantic projection and establishes the global Coverage/Chapter-owner skeleton by
+coherent narrative arc. `ownerId` is never defaulted or mechanically copied from `unitId`.
+Related semantic units may share one owner, one Chapter may cover multiple semantic units, and
+several Chapters may later share one Phase. Chapter count does not follow semantic-unit, source,
+meeting, or prior-run count; Phase count does not follow Chapter count or semantic kind. There is no
+golden Chapter, Phase, block, Insight, or Evidence count. Once selected, every owner stays atomic
+during sharding.
+
 For a Story worker assignment, return complete phase-free Chapter proposals for the exact Coverage
 owners in the generated input. Do not author schema, Chapter keys, Phase, Coverage, exclusions,
 receipts, or authority. The workflow-owning parent orders the complete accepted Chapter set with
-the production comparator and assigns Phase once before global validation.
+the production comparator and assigns the smallest coherent global Phase sequence once, after the
+complete proposal set passes editorial review and before global validation.
 
 Use these conceptual passes inside Build Project Story:
 
 1. Read the complete bounded semantic-unit projection and progressively inspect exact Evidence.
-2. Disposition every semantic unit and determine coherent Chapter narrative arcs.
+2. Reconstruct the coherent narrative arc for each assigned, parent-selected Chapter owner.
 3. Write the complete ordered Chapter and Project Story narrative.
 4. Verify continuity, chronology, attribution, Evidence, causal restraint, Privacy, and uncertainty.
 5. Verify the complete phase-free Chapter proposals for the assigned Coverage owners.
@@ -59,6 +69,19 @@ These are coverage cues, not mandatory headings. Do not fabricate a universal pr
 
 Chapter length follows the Evidence needed for the arc. Remove command-by-command narration, audit-report voice, field enumeration, filler, and repeated status only when those elements add no explanatory meaning.
 
+Story blocks are meaningful paragraphs rather than sentence containers. A paragraph may combine
+multiple related Evidence records. When the approved source contains a multi-turn exchange,
+reconstruct the supported sequence in readable prose: establish the initial situation or
+constraint, distinguish the safe participants or roles, show how a proposal, question, objection,
+correction, confirmation, or agreement responded to what came before, and end with the supported
+consequence, handoff, or genuinely unresolved boundary. Do not mechanically create one block for
+each Evidence row. A one-sentence Chapter is acceptable only when the reviewed source genuinely
+contains no larger supported arc.
+
+Direct quotations in Story prose are permitted only when they exactly reproduce canonical
+Privacy-reviewed source text and retain the supporting Evidence reference. Never create dialogue
+from a paraphrase or from raw, pre-redaction, foreign, or stale source.
+
 ## Title, Overview, And Project Summary
 
 Use a concrete supported title. It may name a constraint, attempt, capability, correction, result, or open boundary.
@@ -87,6 +110,44 @@ Determine the supported semantic relationship before choosing wording.
 
 Prefer clear subjects and direct verbs. Do not validate prose by connector counts or a fixed vocabulary list.
 
+## Parent Editorial Acceptance
+
+Before any Story recorder invocation, the parent reads every proposed Chapter in full as prose and
+determines all of the following for that exact proposal:
+
+1. A new reader can understand the situation at the beginning.
+2. The supported participants or roles remain identifiable and distinct.
+3. The real chronological sequence of contributions is followable.
+4. The prose shows supported response and change rather than merely enumerating facts.
+5. The Chapter forms one coherent arc.
+6. The ending explains what changed or what remains unresolved.
+7. Every claimed interaction is supported by Privacy-reviewed Evidence.
+8. The prose is readable enough that a human could voluntarily continue.
+
+The parent records those eight decisions in the transient proposal-digest-bound editorial review
+input. The batch recorder rejects a missing, stale, foreign, incomplete, or negative review before
+reading Phase assignments and before creating any Story output or receipt. This is a semantic
+editorial decision by the parent, not a prose score, word or paragraph count, keyword detector,
+domain enum, or mandatory Story template.
+
+Reject before receipt when the proposal mechanically creates one Chapter per semantic unit or one
+block per Evidence row; isolates one-sentence facts despite a supported exchange; repeatedly uses
+summary formulations without showing how a conclusion was reached; merely restates semantic kinds
+in titles or Phases; adopts audit, checklist, validation-summary, or field-enumeration voice; leaves
+transitions unexplained; states a decision without its supported proposal, objection, correction,
+or reasoning; collapses distinct safe actors; or repeats the Chapter in its overview instead of
+establishing the arc.
+
+For a dry, fragmented, mechanical, incomplete, or record-by-record proposal, do not invoke the
+recorder. Give the assigned writer a specific proposal-only correction that names the missing
+narrative relationship, reuse the byte-identical immutable Privacy-safe input, and then re-read the
+complete corrected prose. The initial proposal has at most two subagent correction attempts. If
+both corrected proposals remain editorially unacceptable, the Ultra parent may complete only that
+same still-unrecorded assignment from the byte-identical input and write the same canonical
+phase-free proposal shape. This narrow takeover creates no second authority or fallback format and
+still passes the same editorial review, batch recorder, and downstream validators. No takeover may
+rewrite a recorded proposal, receipt, authority, or Viewer state.
+
 ## Insights
 
 Generate zero or more Insights after the complete Story is written and verified. Generate an Insight only when it is an independently warranted learning or judgment moment.
@@ -100,9 +161,19 @@ Directly Acquired Experience
 Principle
 ```
 
-Background is Story-grounded context. Quote is a safe Story-block anchor, not raw/private Evidence. Directly Acquired Experience is what was learned from that actual project moment. Principle is a reusable rule, question, or guardrail for a genuinely similar future condition.
+Background is Story-grounded context. `anchorStoryBlockId` selects only the Story paragraph beside
+which the card appears. Quote is exact canonical Privacy-reviewed trajectory text, or one exact
+nonempty substring, bound to the current supporting Evidence identity for that anchored passage.
+It is not Story prose, a Story paraphrase, generated dialogue, raw/pre-redaction text, foreign or
+stale Evidence, or text inferred from an Evidence ID. Directly Acquired Experience is what was
+learned from that actual project moment. Principle is a reusable rule, question, or guardrail for a
+genuinely similar future condition.
 
 `title` is optional presentation metadata. It is not a fifth meaning.
+
+AI Quote, Quote Evidence, and anchor remain source-owned and read-only during browser review.
+Human-created Insight Quote remains a separate exact user-selected Story substring with its own
+origin and lifecycle; never silently reinterpret it as an AI trajectory Quote.
 
 ## Voice
 

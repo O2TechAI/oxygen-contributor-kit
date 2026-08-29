@@ -50,6 +50,38 @@ function phaseFreeProposal(record) {
   return { ownerId: key, chapter };
 }
 
+const acceptedStoryEditorialCriteria = () => ({
+  beginningIsUnderstandable: true,
+  participantsAreIdentifiable: true,
+  chronologyIsTraceable: true,
+  responsesAndChangesAreExplained: true,
+  arcIsCoherent: true,
+  endingIsClear: true,
+  interactionsAreEvidenceSupported: true,
+  proseIsReadable: true,
+});
+
+function storyEditorialReviews(proposals, inputDigest, criteriaOverrides = {}) {
+  return proposals.map((proposal) => ({
+    ownerId: proposal.ownerId,
+    inputDigest,
+    proposalDigest: digest(proposal),
+    criteria: {
+      ...acceptedStoryEditorialCriteria(),
+      ...(criteriaOverrides[proposal.ownerId] ?? {}),
+    },
+  })).sort((left, right) => Buffer.compare(Buffer.from(left.ownerId), Buffer.from(right.ownerId)));
+}
+
+async function refreshStoryEditorialReview(batch, criteriaOverrides = {}) {
+  const proposals = (await Promise.all(batch.manifest.shards.map((shard) => (
+    readJson(join(batch.proposalDirectory, `${shard.id}.json`))
+  )))).flat();
+  await json(batch.editorialReviewPath, storyEditorialReviews(
+    proposals, batch.manifest.inputDigest, criteriaOverrides,
+  ));
+}
+
 async function recordLane(transport, lane, root, proposalForInput) {
   const directory = laneDirectory[lane];
   const manifest = await readJson(join(transport, directory, "shards.json"));
@@ -57,15 +89,20 @@ async function recordLane(transport, lane, root, proposalForInput) {
     const proposalDirectory = join(root, `story-proposals-${manifest.inputDigest.slice(0, 12)}`);
     await mkdir(proposalDirectory);
     const phases = new Map();
+    const proposals = [];
     for (const shard of manifest.shards) {
       const input = await readJson(join(transport, ...shard.inputPath.split("/")));
       const records = proposalForInput(input);
       for (const record of records) phases.set(record.story.key, record.story.phase);
-      await json(join(proposalDirectory, `${shard.id}.json`), records.map(phaseFreeProposal));
+      const shardProposals = records.map(phaseFreeProposal);
+      proposals.push(...shardProposals);
+      await json(join(proposalDirectory, `${shard.id}.json`), shardProposals);
     }
+    const editorialReviewPath = join(root, `story-editorial-${manifest.inputDigest.slice(0, 12)}.json`);
+    await json(editorialReviewPath, storyEditorialReviews(proposals, manifest.inputDigest));
     const phasePath = join(root, `story-phases-${manifest.inputDigest.slice(0, 12)}.json`);
     await json(phasePath, [...phases].map(([ownerId, phase]) => ({ ownerId, phase })));
-    runOk(process.execPath, [record, transport, "story", proposalDirectory, phasePath,
+    runOk(process.execPath, [record, transport, "story", proposalDirectory, editorialReviewPath, phasePath,
       "--correction-attempt-count", "0"]);
     return manifest;
   }
@@ -83,17 +120,22 @@ async function storyBatchFiles(transport, root, records, tag = "batch") {
   const proposalDirectory = join(root, `${tag}-proposals`);
   await mkdir(proposalDirectory);
   const byOwner = new Map(records.map((record) => [record.story.key, record]));
+  const proposals = [];
   for (const shard of manifest.shards) {
-    await json(join(proposalDirectory, `${shard.id}.json`), shard.unitIds.map((ownerId) => (
+    const shardProposals = shard.unitIds.map((ownerId) => (
       phaseFreeProposal(byOwner.get(ownerId))
-    )));
+    ));
+    proposals.push(...shardProposals);
+    await json(join(proposalDirectory, `${shard.id}.json`), shardProposals);
   }
+  const editorialReviewPath = join(root, `${tag}-editorial.json`);
+  await json(editorialReviewPath, storyEditorialReviews(proposals, manifest.inputDigest));
   const phasePath = join(root, `${tag}-phases.json`);
   await json(phasePath, records.map((record) => ({
     ownerId: record.story.key,
     phase: record.story.phase,
   })));
-  return { manifest, proposalDirectory, phasePath };
+  return { manifest, proposalDirectory, editorialReviewPath, phasePath };
 }
 
 async function reverseLaneManifest(transport, lane) {
@@ -245,16 +287,21 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = null,
 }
 
 function insight(suffix, documentId = "doc-canary", language = "en") {
+  const evidence = { documentId, eventId: `event-${suffix}` };
   return {
     id: `insight-${suffix}`,
     title: language === "es" ? `Lección ${suffix.toUpperCase()}` : `Canary lesson ${suffix.toUpperCase()}`,
     background: language === "es" ? `Contexto revisado ${suffix.toUpperCase()}.` : `Reviewed background ${suffix.toUpperCase()}.`,
-    quote: { storyBlockIds: [`block-${suffix}`] },
+    anchorStoryBlockId: `block-${suffix}`,
+    quote: {
+      text: `${language === "es" ? "observación segura revisada" : "safe reviewed canary"} ${suffix}`,
+      evidence,
+    },
     directlyAcquiredExperience: language === "es"
       ? `Experiencia revisada ${suffix.toUpperCase()}.` : `Reviewed experience ${suffix.toUpperCase()}.`,
     principle: language === "es"
       ? `Principio acotado ${suffix.toUpperCase()}.` : `Bounded principle ${suffix.toUpperCase()}.`,
-    evidence: [{ documentId, eventId: `event-${suffix}` }],
+    evidence: [],
   };
 }
 
@@ -701,7 +748,7 @@ test("multi-owner multi-shard recording accepts one cross-shard Phase and inject
     )))).join("\n");
     assert.doesNotMatch(workerBytes, /event-c|safe reviewed canary c/u);
     runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
-      batch.phasePath, "--correction-attempt-count", "0"]);
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "0"]);
     const recordsRoot = join(value.transport, "story", "records");
     assert.equal((await Promise.all(batch.manifest.shards.map((shard) => (
       readJson(join(recordsRoot, shard.id, "receipt.json"))
@@ -852,7 +899,8 @@ test("Story batch recorder permits pre-receipt correction and makes the complete
     invalidProposal[0].ownerId = "foreign";
     await json(firstProposalPath, invalidProposal);
     const invalid = run(process.execPath, [record, transport, "story",
-      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "0"]);
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", "0"]);
     assert.notEqual(invalid.status, 0);
     assert.match(invalid.stderr, /^STORY_PROPOSAL_OWNER_INVALID\r?\n$/u);
     assert.equal(existsSync(join(transport, "story", "records")), false);
@@ -860,8 +908,8 @@ test("Story batch recorder permits pre-receipt correction and makes the complete
     await json(firstProposalPath, batch.manifest.shards[0].unitIds.map((ownerId) => (
       phaseFreeProposal(validRecords.find((candidate) => candidate.story.key === ownerId))
     )));
-    runOk(process.execPath, [record, transport, "story", batch.proposalDirectory, batch.phasePath,
-      "--correction-attempt-count", "1"]);
+    runOk(process.execPath, [record, transport, "story", batch.proposalDirectory,
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "1"]);
     const recordRoot = join(transport, "story", "records", batch.manifest.shards[0].id);
     const outputPath = join(recordRoot, "output.json");
     const receiptPath = join(recordRoot, "receipt.json");
@@ -871,8 +919,10 @@ test("Story batch recorder permits pre-receipt correction and makes the complete
     const differing = await readJson(firstProposalPath);
     differing[0].chapter.title = "Different but structurally valid";
     await json(firstProposalPath, differing);
+    await refreshStoryEditorialReview(batch);
     const immutable = run(process.execPath, [record, transport, "story",
-      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "1"]);
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", "1"]);
     assert.notEqual(immutable.status, 0);
     assert.match(immutable.stderr, /^AUTHORITY_IMMUTABLE\r?\n$/u);
     assert.deepEqual(await readFile(outputPath), beforeOutput);
@@ -880,7 +930,8 @@ test("Story batch recorder permits pre-receipt correction and makes the complete
 
     await rm(receiptPath);
     const partial = run(process.execPath, [record, transport, "story",
-      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "1"]);
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", "1"]);
     assert.notEqual(partial.status, 0);
     assert.match(partial.stderr, /^PARTIAL_BATCH_REJECTED\r?\n$/u);
     assert.deepEqual(await readFile(outputPath), beforeOutput);
@@ -889,7 +940,7 @@ test("Story batch recorder permits pre-receipt correction and makes the complete
   }
 });
 
-test("Story batch rejects incomplete or parent-authored proposals and shares one correction budget with Phase", async () => {
+test("Story batch rejects incomplete proposals and parent-owned authority fields and shares one correction budget with Phase", async () => {
   const value = await prepareStoryOnly({ suffixes: ["a", "b", "c"] });
   try {
     assert.equal(value.prepared.status, 0, value.prepared.stderr);
@@ -903,7 +954,8 @@ test("Story batch rejects incomplete or parent-authored proposals and shares one
     const validProposalBytes = await readFile(proposalPath);
     const validPhaseBytes = await readFile(batch.phasePath);
     const invoke = (count = 0) => run(process.execPath, [record, value.transport, "story",
-      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", String(count)]);
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", String(count)]);
     const assertNoAuthority = () => assert.equal(existsSync(join(value.transport, "story", "records")), false);
 
     const exhausted = invoke(3);
@@ -932,6 +984,7 @@ test("Story batch rejects incomplete or parent-authored proposals and shares one
     const movedEvidence = JSON.parse(validProposalBytes);
     movedEvidence[0].chapter.evidence.primary = { documentId: "doc-canary", eventId: "event-b" };
     await json(proposalPath, movedEvidence);
+    await refreshStoryEditorialReview(batch);
     const foreignEvidence = invoke(0);
     assert.notEqual(foreignEvidence.status, 0);
     assert.match(foreignEvidence.stderr, /^STORY_PROPOSAL_EVIDENCE_INVALID\r?\n$/u);
@@ -972,6 +1025,7 @@ test("Story batch rejects incomplete or parent-authored proposals and shares one
     assertNoAuthority();
 
     await writeFile(proposalPath, validProposalBytes);
+    await refreshStoryEditorialReview(batch);
     const validPhases = JSON.parse(validPhaseBytes);
     const phaseCases = [
       ["missing", validPhases.slice(0, -1), /^STORY_PHASE_ASSIGNMENT_INVALID\r?\n$/u],
@@ -1007,7 +1061,7 @@ test("Story batch rejects incomplete or parent-authored proposals and shares one
 
     await writeFile(batch.phasePath, validPhaseBytes);
     runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
-      batch.phasePath, "--correction-attempt-count", "2"]);
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "2"]);
     assert.deepEqual(await readFile(proposalPath), validProposalBytes);
     assert.equal(existsSync(join(value.transport, "story", "records")), true);
   } finally {
@@ -1030,14 +1084,15 @@ test("injected filesystem failure leaves the complete Story records directory ab
     const hook = join(value.root, "inject-story-write-failure.mjs");
     await writeFile(hook, `import fs from "node:fs";\nimport { syncBuiltinESMExports } from "node:module";\nconst original = fs.promises.open.bind(fs.promises);\nlet outputs = 0;\nfs.promises.open = async (path, ...args) => {\n  if (String(path).includes(".records.") && String(path).endsWith("output.json")) {\n    outputs += 1;\n    if (outputs === 2) throw new Error("injected");\n  }\n  return original(path, ...args);\n};\nsyncBuiltinESMExports();\n`, "utf8");
     const failed = run(process.execPath, ["--import", pathToFileURL(hook).href, record, value.transport, "story",
-      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "0"]);
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", "0"]);
     assert.notEqual(failed.status, 0);
     assert.match(failed.stderr, /^STORY_PREPARATION_RECORD_FAILED\r?\n$/u);
     assert.equal(existsSync(join(value.transport, "story", "records")), false);
     assert.ok((await readdir(join(value.transport, "story"))).every((name) => !name.startsWith(".records.")));
 
     runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
-      batch.phasePath, "--correction-attempt-count", "1"]);
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "1"]);
     assert.equal(existsSync(join(value.transport, "story", "records")), true);
   } finally {
     await value.cleanup();
@@ -1079,6 +1134,160 @@ function combinedStory(semantic, coverage, collapsed) {
   };
 }
 
+function editorialStory(semantic, coverage, connected) {
+  const references = ["a", "b"].map((suffix) => ({
+    documentId: "doc-canary", eventId: `event-${suffix}`,
+  }));
+  return {
+    ...combinedStory(semantic, coverage, false),
+    title: connected ? "A bounded two-part record" : "Recorded canaries",
+    overview: connected
+      ? "Two safely distinct participants established the reviewed canary in sequence while leaving any stronger relationship unresolved."
+      : "Canary A and Canary B were recorded.",
+    story: {
+      blocks: connected ? [{
+        id: "block-opening",
+        text: "One reviewed participant introduced canary A as the opening boundary, and another participant contributed canary B as the next recorded point.",
+        evidence: references,
+      }, {
+        id: "block-boundary",
+        text: "In that supported order, the two contributions establish the bounded reviewed record; the available Evidence does not establish disagreement or a later resolution.",
+        evidence: references,
+      }] : [{
+        id: "block-a", text: "Canary A was recorded.", evidence: [references[0]],
+      }, {
+        id: "block-b", text: "Canary B was recorded.", evidence: [references[1]],
+      }],
+    },
+  };
+}
+
+test("parent editorial gate rejects three record-by-record proposals before same-input Ultra-parent takeover", async () => {
+  const root = await mkdtemp(join(tmpdir(), "story-editorial-gate-"));
+  try {
+    const semantic = semanticAuthority();
+    const semanticPath = join(root, "semantic.json");
+    const projectMapPath = join(root, "project-map.json");
+    const transport = join(root, "transport");
+    await json(semanticPath, semantic);
+    const projectMap = {
+      primary_project: semantic.projectId, summary: "Synthetic.",
+      projects: [{ name: semantic.projectId, event_count: 2, reason: "One bounded reviewed arc." }],
+      source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: 2 },
+      semantic_units: semantic.units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
+      semantic_manifest: semantic,
+    };
+    await json(projectMapPath, projectMap);
+    const coverageRows = [
+      { unitId: "unit-a", disposition: "represented", ownerId: "story-combined" },
+      { unitId: "unit-b", disposition: "represented", ownerId: "story-combined" },
+    ];
+    const boundary = await reviewedBoundary(root, projectMap, semantic, coverageRows);
+    runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+
+    const manifest = await readJson(join(transport, "story", "shards.json"));
+    assert.equal(manifest.shards.length, 1);
+    assert.deepEqual(manifest.shards[0].unitIds, ["story-combined"]);
+    assert.notEqual(manifest.shards[0].unitIds[0], "unit-a");
+    assert.notEqual(manifest.shards[0].unitIds[0], "unit-b");
+    const inputPath = join(transport, ...manifest.shards[0].inputPath.split("/"));
+    const inputBefore = await readFile(inputPath);
+    const workerInput = JSON.parse(inputBefore.toString("utf8"));
+    assert.equal(workerInput.payload.ownerBundles.length, 1);
+    assert.deepEqual(workerInput.payload.ownerBundles[0].semanticUnits.map((unit) => unit.id), [
+      "unit-a", "unit-b",
+    ]);
+
+    const connectedRecord = {
+      id: "event-a", story: editorialStory(semantic, boundary.coverageAuthority, true),
+    };
+    const batch = await storyBatchFiles(transport, root, [connectedRecord], "editorial");
+    const proposalPath = join(batch.proposalDirectory, manifest.shards[0].id + ".json");
+    const dryRecord = {
+      id: "event-a", story: editorialStory(semantic, boundary.coverageAuthority, false),
+    };
+    const rejectedDrafts = [dryRecord, structuredClone(dryRecord), structuredClone(dryRecord)];
+    rejectedDrafts[1].story.title = "Recorded canaries, first correction";
+    rejectedDrafts[2].story.title = "Recorded canaries, second correction";
+    for (const [correctionAttemptCount, draft] of rejectedDrafts.entries()) {
+      await json(proposalPath, [phaseFreeProposal(draft)]);
+      await refreshStoryEditorialReview(batch, {
+        "story-combined": {
+          responsesAndChangesAreExplained: false,
+          arcIsCoherent: false,
+          proseIsReadable: false,
+        },
+      });
+      const rejected = run(process.execPath, [record, transport, "story",
+        batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+        "--correction-attempt-count", String(correctionAttemptCount)]);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /^STORY_EDITORIAL_REVIEW_REJECTED\r?\n$/u);
+      assert.equal(existsSync(join(transport, "story", "records")), false);
+      assert.deepEqual(await readFile(inputPath), inputBefore);
+    }
+
+    // After the initial proposal and both subagent corrections are rejected, the
+    // Ultra parent may author this same phase-free proposal from the same input.
+    await json(proposalPath, [phaseFreeProposal(connectedRecord)]);
+    const staleReview = run(process.execPath, [record, transport, "story",
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", "2"]);
+    assert.notEqual(staleReview.status, 0);
+    assert.match(staleReview.stderr, /^STORY_EDITORIAL_REVIEW_INVALID\r?\n$/u);
+    assert.equal(existsSync(join(transport, "story", "records")), false);
+    await refreshStoryEditorialReview(batch);
+
+    // The proposal bytes are unchanged, but this fresh input has different
+    // Privacy-reviewed narrative authority. Replaying the old review must fail.
+    const freshRoot = join(root, "fresh-input");
+    const freshBoundary = await reviewedBoundary(freshRoot, projectMap, semantic, coverageRows);
+    const freshEventsPath = join(
+      freshBoundary.review, "trajectories", "doc-canary", "events.jsonl",
+    );
+    const freshEvents = (await readFile(freshEventsPath, "utf8")).trimEnd()
+      .split("\n").map((line) => JSON.parse(line));
+    freshEvents[0].payload.text = "fresh reviewed canary a";
+    await writeFile(freshEventsPath, `${freshEvents.map(JSON.stringify).join("\n")}\n`, "utf8");
+    const freshPrivacy = await readJson(freshBoundary.sourcePrivacy);
+    freshPrivacy.job.source_digest = await computeSourceDigest(freshEvents.map((event) => ({
+      id: event.event_id,
+      document_id: event.trajectory_id,
+      sequence: event.sequence,
+      event_type: event.event_type,
+      actor_type: event.actor.type,
+      timestamp: event.timestamp,
+      content: event.payload.text,
+    })));
+    await json(freshBoundary.sourcePrivacy, freshPrivacy);
+    const freshTransport = join(freshRoot, "transport");
+    runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
+      freshBoundary.coverage, freshBoundary.sourcePrivacy, freshBoundary.review, freshTransport]);
+    const freshManifest = await readJson(join(freshTransport, "story", "shards.json"));
+    assert.notEqual(freshManifest.inputDigest, manifest.inputDigest);
+    const replayedReview = run(process.execPath, [record, freshTransport, "story",
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", "2"]);
+    assert.notEqual(replayedReview.status, 0);
+    assert.match(replayedReview.stderr, /^STORY_EDITORIAL_REVIEW_INVALID\r?\n$/u);
+    assert.equal(existsSync(join(freshTransport, "story", "records")), false);
+
+    runOk(process.execPath, [record, transport, "story", batch.proposalDirectory,
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "2"]);
+    assert.deepEqual(await readFile(inputPath), inputBefore);
+    const output = await readJson(join(
+      transport, "story", "records", manifest.shards[0].id, "output.json",
+    ));
+    assert.equal(output[0].story.story.blocks.length, 2);
+    assert.equal(existsSync(join(
+      transport, "story", "records", manifest.shards[0].id, "receipt.json",
+    )), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("shared Story validation rejects collapsed People before receipt and accepts only corrected proposal", async () => {
   const root = await mkdtemp(join(tmpdir(), "story-people-authority-"));
   try {
@@ -1110,15 +1319,18 @@ test("shared Story validation rejects collapsed People before receipt and accept
     const batch = await storyBatchFiles(transport, root, [correctedRecord], "people");
     const proposal = join(batch.proposalDirectory, "story-0001.json");
     await json(proposal, [phaseFreeProposal(invalidRecord)]);
+    await refreshStoryEditorialReview(batch);
     const rejected = run(process.execPath, [record, transport, "story",
-      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "0"]);
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", "0"]);
     assert.notEqual(rejected.status, 0);
     assert.match(rejected.stderr, /^STORY_PEOPLE_INVALID\r?\n$/u);
     assert.equal(existsSync(join(transport, "story", "records")), false);
 
     await json(proposal, [phaseFreeProposal(correctedRecord)]);
-    runOk(process.execPath, [record, transport, "story", batch.proposalDirectory, batch.phasePath,
-      "--correction-attempt-count", "1"]);
+    await refreshStoryEditorialReview(batch);
+    runOk(process.execPath, [record, transport, "story", batch.proposalDirectory,
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "1"]);
     assert.deepEqual(
       await readFile(join(transport, "story", "inputs", "story-0001.json")), inputBefore,
     );
@@ -1128,8 +1340,10 @@ test("shared Story validation rejects collapsed People before receipt and accept
     const changed = combinedStory(semantic, boundary.coverageAuthority, false);
     changed.title = "A different valid title";
     await json(proposal, [phaseFreeProposal({ id: "event-a", story: changed })]);
+    await refreshStoryEditorialReview(batch);
     const immutable = run(process.execPath, [record, transport, "story",
-      batch.proposalDirectory, batch.phasePath, "--correction-attempt-count", "1"]);
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", "1"]);
     assert.notEqual(immutable.status, 0);
     assert.match(immutable.stderr, /^AUTHORITY_IMMUTABLE\r?\n$/u);
     assert.deepEqual(await readFile(join(recordRoot, "output.json")), outputBefore);
@@ -1144,7 +1358,7 @@ test("shared Story validation rejects collapsed People before receipt and accept
   }
 });
 
-test("Insight grounding fails before receipt, permits proposal-only correction, then becomes immutable", async () => {
+test("Insight source Quote matrix fails before receipt, permits proposal-only correction, then becomes immutable", async () => {
   const root = await mkdtemp(join(tmpdir(), "story-insight-validation-"));
   try {
     const semantic = semanticAuthority();
@@ -1157,13 +1371,19 @@ test("Insight grounding fails before receipt, permits proposal-only correction, 
     };
     const projectMapPath = join(root, "project-map.json");
     await json(projectMapPath, projectMap);
-    const boundary = await reviewedBoundary(root, projectMap, semantic);
+    const boundary = await reviewedBoundary(root, projectMap, semantic, [
+      { unitId: "unit-a", disposition: "represented", ownerId: "story-combined" },
+      { unitId: "unit-b", disposition: "represented", ownerId: "story-combined" },
+    ]);
     const transport = join(root, "transport");
     runOk(process.execPath, [prepare, "prepare", "story", projectMapPath,
       boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
-    const stories = ["a", "b"].map((suffix) => ({
-      id: `event-${suffix}`, story: storySource(suffix, semantic, boundary.coverageAuthority),
-    }));
+    const combined = combinedStory(semantic, boundary.coverageAuthority, false);
+    // Event B belongs to this Chapter and supports its second participant, but it is
+    // intentionally absent from every Story block. The Insight input must therefore
+    // exclude B's reviewed narrative, and B cannot ground the anchored paragraph.
+    combined.story.blocks[0].evidence = [{ documentId: "doc-canary", eventId: "event-a" }];
+    const stories = [{ id: "event-a", story: combined }];
     await recordLane(transport, "story", root, (input) => stories.filter((item) => (
       input.unitIds.includes(item.story.key)
     )));
@@ -1175,27 +1395,76 @@ test("Insight grounding fails before receipt, permits proposal-only correction, 
     const shard = manifest.shards[0];
     const inputPath = join(transport, ...shard.inputPath.split("/"));
     const inputBefore = await readFile(inputPath);
+    const input = JSON.parse(inputBefore.toString("utf8"));
+    assert.deepEqual(Object.keys(input.payload).sort(), [
+      "reviewedNarrative", "storyCandidates", "validationAuthorityDigest", "validationAuthorityPath",
+    ]);
+    assert.deepEqual(input.payload.reviewedNarrative, [{
+      id: "event-a", documentId: "doc-canary", narrative: "safe reviewed canary a",
+    }]);
+    assert.doesNotMatch(inputBefore.toString("utf8"),
+      /safe reviewed canary b|sourcePrivacy|redactions|actorId|provider|model|PRIVATE-SENTINEL/u);
     const recordRoot = join(transport, "insight", "records", shard.id);
+    const validInsight = {
+      ...insight("a"),
+      anchorStoryBlockId: "block-combined",
+    };
     const valid = [
-      { storyKey: "story-a", insights: [insight("a")] },
-      { storyKey: "story-b", insights: [] },
+      { storyKey: "story-combined", insights: [validInsight] },
     ];
     const invalid = [
-      { ...insight("a"), evidence: [{ documentId: "doc-canary", eventId: "event-foreign" }] },
-      { ...insight("a"), evidence: [{ documentId: "doc-canary", eventId: "event-b" }] },
-      { ...insight("a"), quote: { storyBlockIds: ["block-foreign"] } },
+      ["Story paragraph reused as Quote", {
+        ...validInsight,
+        quote: { ...validInsight.quote, text: combined.story.blocks[0].text },
+      }],
+      ["modified source Quote", {
+        ...validInsight,
+        quote: { ...validInsight.quote, text: "safe reviewed canary a." },
+      }],
+      ["foreign Quote Evidence", {
+        ...validInsight,
+        quote: {
+          text: "safe reviewed canary a",
+          evidence: { documentId: "doc-canary", eventId: "event-foreign" },
+        },
+      }],
+      ["stale Quote Evidence", {
+        ...validInsight,
+        quote: {
+          text: "safe reviewed canary a",
+          evidence: { documentId: "doc-canary-old", eventId: "event-a" },
+        },
+      }],
+      ["private or pre-redaction Quote", {
+        ...validInsight,
+        quote: { ...validInsight.quote, text: "PRIVATE-SENTINEL" },
+      }],
+      ["invalid anchor", {
+        ...validInsight,
+        anchorStoryBlockId: "block-foreign",
+      }],
+      ["Quote and anchor Evidence mismatch", {
+        ...validInsight,
+        quote: {
+          text: "safe reviewed canary b",
+          evidence: { documentId: "doc-canary", eventId: "event-b" },
+        },
+      }],
+      ["foreign top-level Insight Evidence", {
+        ...validInsight,
+        evidence: [{ documentId: "doc-canary", eventId: "event-foreign" }],
+      }],
     ];
-    for (const [index, badInsight] of invalid.entries()) {
+    for (const [index, [name, badInsight]] of invalid.entries()) {
       const proposal = join(root, `invalid-insight-${index}.json`);
       await json(proposal, [
-        { storyKey: "story-a", insights: [badInsight] },
-        { storyKey: "story-b", insights: [] },
+        { storyKey: "story-combined", insights: [badInsight] },
       ]);
       const rejected = run(process.execPath, [record, transport, "insight", shard.id, proposal]);
-      assert.notEqual(rejected.status, 0);
-      assert.match(rejected.stderr, /^STORY_INSIGHT_GROUNDING_INVALID\r?\n$/u);
-      assert.equal(existsSync(recordRoot), false);
-      assert.deepEqual(await readFile(inputPath), inputBefore);
+      assert.notEqual(rejected.status, 0, name);
+      assert.match(rejected.stderr, /^STORY_INSIGHT_GROUNDING_INVALID\r?\n$/u, name);
+      assert.equal(existsSync(recordRoot), false, name);
+      assert.deepEqual(await readFile(inputPath), inputBefore, name);
     }
     const corrected = join(root, "corrected-insight.json");
     await json(corrected, valid);
@@ -1207,8 +1476,10 @@ test("Insight grounding fails before receipt, permits proposal-only correction, 
     const receiptBefore = await readFile(receiptPath);
     const differing = join(root, "differing-insight.json");
     await json(differing, [
-      { storyKey: "story-a", insights: [{ ...insight("a"), title: "Different valid title" }] },
-      { storyKey: "story-b", insights: [] },
+      {
+        storyKey: "story-combined",
+        insights: [{ ...validInsight, title: "Different valid title" }],
+      },
     ]);
     const immutable = run(process.execPath, [record, transport, "insight", shard.id, differing]);
     assert.notEqual(immutable.status, 0);
@@ -1217,6 +1488,46 @@ test("Insight grounding fails before receipt, permits proposal-only correction, 
     assert.deepEqual(await readFile(receiptPath), receiptBefore);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("finalizer reopens immutable Insight input and rejects a Story-derived Quote", async () => {
+  const flow = await createFlow();
+  try {
+    const manifest = await readJson(join(flow.transport, "insight", "shards.json"));
+    assert.equal(manifest.shards.length, 1);
+    const shard = manifest.shards[0];
+    const outputPath = join(flow.transport, "insight", "records", shard.id, "output.json");
+    const receiptPath = join(flow.transport, "insight", "records", shard.id, "receipt.json");
+    const output = await readJson(outputPath);
+    const outputRecord = output.find((record) => record.storyKey === "story-a");
+    assert.ok(outputRecord);
+    outputRecord.insights[0].quote.text = "Reviewed canary text A.";
+    await json(outputPath, output);
+    const receipt = await readJson(receiptPath);
+    receipt.outputDigest = digest(output);
+    await json(receiptPath, receipt);
+
+    const candidates = await readJson(flow.candidates);
+    const candidate = candidates.find((row) => parseStorySource(row.summary)?.key === "story-a");
+    assert.ok(candidate);
+    const story = parseStorySource(candidate.summary);
+    assert.ok(story);
+    story.insights[0].quote.text = "Reviewed canary text A.";
+    candidate.summary = `oxygen.story:${canonicalAuthorityJson(story)}`;
+    await json(flow.candidates, candidates);
+
+    const sentinel = Buffer.from("existing-terminal-authority\n");
+    await writeFile(flow.preparationManifest, sentinel);
+    const rejected = run(process.execPath, [finalize,
+      flow.projectMapPath, flow.candidates, flow.transport, flow.preferenceBundle,
+      flow.preparationManifest, "--workflow-run-id", "public-canary-run", "--source-revision", "4",
+    ]);
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /^STORY_INSIGHT_GROUNDING_INVALID\r?\n$/u);
+    assert.deepEqual(await readFile(flow.preparationManifest), sentinel);
+  } finally {
+    await flow.cleanup();
   }
 });
 

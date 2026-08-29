@@ -125,6 +125,7 @@ function targetValues(
         add(source.key, `insight:${insight.id}:title`, insight.content.title);
       }
       add(source.key, `insight:${insight.id}:background`, insight.content.background);
+      add(source.key, `insight:${insight.id}:quote`, insight.content.quote.text);
       add(source.key, `insight:${insight.id}:directlyAcquiredExperience`,
         insight.content.directlyAcquiredExperience);
       add(source.key, `insight:${insight.id}:principle`, insight.content.principle);

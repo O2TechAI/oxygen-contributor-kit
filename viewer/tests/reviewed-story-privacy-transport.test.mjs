@@ -54,7 +54,8 @@ const sourceInsight = {
   id: "source-insight",
   title: "Initial insight title",
   background: "Initial insight background",
-  quote: { storyBlockIds: ["block-two"] },
+  anchorStoryBlockId: "block-two",
+  quote: { text: "exact quotation", evidence },
   directlyAcquiredExperience: "Initial direct experience",
   principle: "Initial principle",
   evidence: [evidence],
@@ -172,7 +173,7 @@ async function insertInitial(db) {
     .bind(RUN_ID, SOURCE_REVISION, activeDigest, NOW, NOW).run();
   await db.prepare(`INSERT INTO items
     (id,document_id,sequence,content,original_json,organization_reason,event_type,actor_id,actor_type)
-    VALUES (?,'doc',0,'PRIVATE_SOURCE_SENTINEL','{}',?,'message','person','human')`)
+    VALUES (?,'doc',0,'PRIVATE_SOURCE_SENTINEL exact quotation','{}',?,'message','person','human')`)
     .bind(evidence.eventId, summary).run();
   const seeded = await seedCoveragePrivacyAuthority(db, {
     workflowRunId: RUN_ID,

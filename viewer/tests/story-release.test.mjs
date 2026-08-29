@@ -36,6 +36,7 @@ import {
   contributionRecordSourceDigest,
   finalizeCoverageManifestAuthority,
   validateSemanticManifestAuthority,
+  validateCurrentStorySourcePackage,
   validateStorySourcePackage,
 } from "../lib/story-readiness.ts";
 import { STORY_PREFIX } from "../lib/timeline.ts";
@@ -71,7 +72,8 @@ function insight(id, blockId = "story-block-safe", overrides = {}) {
     id,
     title: `Title ${id}`,
     background: `Background ${id}`,
-    quote: { storyBlockIds: [blockId] },
+    anchorStoryBlockId: blockId,
+    quote: { text: "supporting evidence", evidence },
     directlyAcquiredExperience: `Experience ${id}`,
     principle: `Principle ${id}`,
     evidence: [evidence],
@@ -200,13 +202,30 @@ test("multiple accepted AI Insights, rejection, optional title, and four-part Qu
   const release = buildReviewedStoryRelease([currentSource], { [currentSource.key]: state });
   const projected = releaseInsights(release);
   assert.deepEqual(projected.map((item) => item.background), ["Background insight-z", "Background insight-a"]);
-  assert.equal(projected[0].quote, "The approved Story text states the safe boundary.");
+  assert.equal(projected[0].quote, "supporting evidence");
   assert.deepEqual(Object.keys(projected[0]).sort(), [
     "background", "directlyAcquiredExperience", "principle", "quote",
   ]);
   assert.equal("title" in projected[0], false);
   assert.equal(projected[1].title, "Title insight-a");
-  assert.doesNotMatch(JSON.stringify(projected), /story-block-|evidence|origin|appliedVersion|revisionHistory/);
+  assert.doesNotMatch(JSON.stringify(projected), /"(?:anchorStoryBlockId|documentId|eventId|evidence|origin|appliedVersion|revisionHistory)"/);
+});
+
+test("AI source Quote has its own release Privacy target and suppression never substitutes Story prose", () => {
+  const currentSource = source([insight("insight-quote-target")]);
+  const quoteTarget = `${currentSource.key}::insight:insight-quote-target:quote`;
+  assert.ok(deriveStoryReleaseTargetCatalog([currentSource]).some((target) => (
+    target.id === quoteTarget && target.target === "insight:insight-quote-target:quote"
+  )));
+
+  const release = buildReviewedStoryRelease(
+    [currentSource],
+    { [currentSource.key]: reviewedState(currentSource) },
+    { redact: (copy) => copy, suppressedTargets: new Set([quoteTarget]) },
+  );
+  assert.deepEqual(releaseInsights(release), []);
+  assert.deepEqual(release.chapters[0].en.story.blocks.map((block) => block.text),
+    currentSource.story.blocks.map((block) => block.text));
 });
 
 test("human-approved Insight releases with stable identity and no review provenance", () => {
@@ -533,6 +552,7 @@ async function serverFixture({
     eventType: item.event_type,
     actorId: item.actor_id,
     actorType: item.actor_type,
+    reviewedNarrative: `${initiallyRedacted ? '<redacted category="sensitive"/>' : storyPrivate} supporting evidence`,
   }];
   const validation = validateStorySourcePackage(candidateRows, evidenceRows);
   assert.equal(validation.ok, true);
@@ -750,6 +770,30 @@ test("server accepts only the canonical contracts and rechecks run, version, sou
     request({ sourceRevision: SOURCE_REVISION - 1 }))).code, RELEASE_ERROR.sourceConflict);
   db.runs.get(RUN_ID).activeStoryDigest = "0".repeat(64);
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request())).code, RELEASE_ERROR.stateInvalid);
+});
+
+test("nonempty AI Insights force current source Quote validation even for a passive caller", async () => {
+  const { db, currentSource } = await serverFixture({
+    sourceInsights: [insight("insight-force-current-source")],
+  });
+  const validation = await validateCurrentStorySourcePackage(
+    db,
+    RUN_ID,
+    [{
+      id: evidence.eventId,
+      documentId: evidence.documentId,
+      summary: `${STORY_PREFIX}${JSON.stringify(currentSource)}`,
+    }],
+    [{
+      id: evidence.eventId,
+      documentId: evidence.documentId,
+      eventType: "message",
+      actorId: "contributor",
+      actorType: "user",
+    }],
+    { verifyCurrentSource: false },
+  );
+  assert.equal(validation.ok, true, validation.code);
 });
 
 test("missing, unknown, or pending Privacy blocks release while confirmed keep and redact are exact", async () => {

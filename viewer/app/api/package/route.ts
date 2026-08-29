@@ -23,6 +23,7 @@ import {
   reconstructReviewedStoryReleaseFromDatabase,
   releaseErrorResponse,
 } from "../../../lib/story-release-server.ts";
+import { renderReviewedStoryHtml } from "../organization/export/route.ts";
 
 function parseStoredJson(value: unknown) {
   if (typeof value !== "string" || !value) throw new Error("stored JSON is missing");
@@ -40,6 +41,13 @@ type ReleaseEvent = {
   organization_confidence?: number | null; organization_reason: string;
 };
 type PackageDatabase = Parameters<typeof capturePackageReleasePrivacySnapshot>[0];
+
+/** Render the same canonical, sanitized reviewed Story used by the standalone
+ * HTML release. Insights remain nested under their accepted Story block; the
+ * release shape contains no anchor, Evidence, authority, CAS, or review IDs. */
+export function renderPackagedLocalViewer(reviewedStoryJson: string) {
+  return renderReviewedStoryHtml(reviewedStoryJson);
+}
 
 export async function buildPackageFromDatabase(
   db: PackageDatabase,
@@ -261,7 +269,7 @@ export async function buildPackageFromDatabase(
     ai_redaction: privacy,
     notice: "Local AI-reviewed package. Nothing was uploaded by the viewer.",
   };
-  const viewer = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Oxygen local review</title><style>body{margin:0;background:#f5f3ed;color:#191b1a;font:14px/1.6 Arial}header{padding:22px 5vw;background:#fffef9;border-bottom:1px solid #dedbd2}main{max-width:920px;margin:auto;padding:30px}.project,.event{background:#fffef9;border:1px solid #dedbd2;border-radius:14px;padding:20px;margin:14px 0}.meta{color:#71766f;font-size:12px}pre{white-space:pre-wrap}</style><header><b>O₂ Oxygen</b> · AI-reviewed release · local only</header><main id="app"></main><script>const P=${JSON.stringify(projectMap).replace(/</g, "\\u003c")};const e=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));document.getElementById('app').innerHTML=P.projects.map(p=>'<section class="project"><div class="meta">'+(p.primary?'PRIMARY PROJECT':'PROJECT')+'</div><h1>'+e(p.name)+'</h1>'+p.timeline.map((x,i)=>'<article class="event"><div class="meta">'+(i+1)+' · '+e(x.timestamp||'Time unavailable')+'</div><h2>'+e(x.summary||'Project event')+'</h2><pre>'+e(x.content||'')+'</pre></article>').join('')+'</section>').join('')</script>`;
+  const viewer = renderPackagedLocalViewer(reviewedStoryJson);
   const entries = [
     { name: "manifest.json", data: JSON.stringify(manifest, null, 2) },
     { name: "data/documents.json", data: JSON.stringify(documents, null, 2) },

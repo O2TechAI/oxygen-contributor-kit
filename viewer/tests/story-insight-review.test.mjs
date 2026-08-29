@@ -37,7 +37,11 @@ function insight(id, blockId = "block-a") {
   return {
     id,
     background: "A bounded synthetic context.",
-    quote: { storyBlockIds: [blockId] },
+    anchorStoryBlockId: blockId,
+    quote: {
+      text: "The reviewer checked the boundary.",
+      evidence: evidenceA,
+    },
     directlyAcquiredExperience: "The checked boundary changed the next action.",
     principle: "Check the relevant boundary before relying on the result.",
     evidence: [evidenceA],
@@ -443,33 +447,55 @@ test("an unrelated Story change after the selected bytes preserves the exact hum
   assert.equal(humanQuoteText(applied.state, currentSource, preserved.content), "reviewer checked");
 });
 
-test("mutable Insights require every Evidence reference to be supported by a declared Story anchor", () => {
+test("AI Insight source Quote, anchor, and grounding remain immutable while explanatory fields can change", () => {
   const currentSource = source(["insight-one"]);
+  currentSource.insights[0].evidence = [{ ...evidenceA, label: "Reviewed source contribution" }];
   const otherChapterEvidence = { documentId: "other-chapter-document", eventId: "other-chapter-event" };
   const base = applyBase(currentSource);
-  const aiContent = (quote, evidence) => {
-    const content = { ...insight("unused"), quote, evidence };
+  const aiContent = (overrides = {}) => {
+    const content = { ...structuredClone(currentSource.insights[0]), ...overrides };
     delete content.id;
     return content;
   };
 
-  assert.notEqual(editAiInsight(
-    base, currentSource, "insight-one", aiContent({ storyBlockIds: ["block-a"] }, [evidenceA]),
-  ), base);
+  const editedExplanation = editAiInsight(
+    base, currentSource, "insight-one", aiContent({ background: "A reviewed explanation." }),
+  );
+  assert.notEqual(editedExplanation, base);
+  assert.deepEqual(
+    editedExplanation.sourceInsightReviews["insight-one"].editedContent.evidence,
+    currentSource.insights[0].evidence,
+  );
+  const parsedEditedSession = parseStoryReviewSession(createStoryReviewSession(
+    "insight-evidence-label-run",
+    { [currentSource.key]: editedExplanation },
+    {},
+  ));
+  assert.deepEqual(
+    parsedEditedSession.chapterReviews[currentSource.key]
+      .sourceInsightReviews["insight-one"].editedContent.evidence,
+    currentSource.insights[0].evidence,
+  );
   assert.equal(editAiInsight(
-    base, currentSource, "insight-one", aiContent({ storyBlockIds: ["block-a"] }, [evidenceA, evidenceB]),
-  ), base);
-  assert.notEqual(editAiInsight(
-    base, currentSource, "insight-one", aiContent({ storyBlockIds: ["block-a", "block-b"] }, [evidenceA, evidenceB]),
+    base, currentSource, "insight-one", aiContent({ anchorStoryBlockId: "block-b" }),
   ), base);
   assert.equal(editAiInsight(
     base,
     currentSource,
     "insight-one",
-    aiContent({ storyBlockIds: ["block-a"] }, [otherChapterEvidence]),
+    aiContent({ quote: { ...currentSource.insights[0].quote, text: "A Story paraphrase." } }),
   ), base);
   assert.equal(editAiInsight(
-    base, currentSource, "insight-one", aiContent({ storyBlockIds: ["missing-block"] }, [evidenceA]),
+    base,
+    currentSource,
+    "insight-one",
+    aiContent({ quote: { ...currentSource.insights[0].quote, evidence: otherChapterEvidence } }),
+  ), base);
+  assert.equal(editAiInsight(
+    base, currentSource, "insight-one", aiContent({ evidence: [evidenceA] }),
+  ), base);
+  assert.equal(editAiInsight(
+    base, currentSource, "insight-one", aiContent({ evidence: [evidenceA, evidenceB] }),
   ), base);
 
   assert.notEqual(editHumanInsight(

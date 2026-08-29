@@ -6,12 +6,17 @@ const chapter = (id, phaseId, people, storyBlockIds, insights = []) => ({
   storyBlockIds,
   insights,
 });
-const insight = (id, storyBlockIds, concepts) => ({
+const insight = (id, supportingStoryBlockIds, concepts) => ({
   id,
-  background: { storyBlockIds, requiredConcepts: concepts.background },
-  quote: { storyBlockIds, source: "safe_reviewed_story" },
+  background: { supportingStoryBlockIds, requiredConcepts: concepts.background },
+  anchorStoryBlockId: supportingStoryBlockIds[0],
+  quote: {
+    source: "privacy_reviewed_trajectory",
+    evidenceStoryBlockId: supportingStoryBlockIds[0],
+    exactSubstringRequired: true,
+  },
   directlyAcquiredExperience: {
-    storyBlockIds,
+    supportingStoryBlockIds,
     requiredConcepts: concepts.experience,
     generalModelKnowledgeAllowed: false,
   },

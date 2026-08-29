@@ -64,6 +64,7 @@ export type StoryReleaseTargetName =
   | "uncertainty"
   | `insight:${string}:title`
   | `insight:${string}:background`
+  | `insight:${string}:quote`
   | `insight:${string}:directlyAcquiredExperience`
   | `insight:${string}:principle`;
 
@@ -105,7 +106,11 @@ export type StoryInsight = {
   id: string;
   title?: string;
   background: string;
-  quote: { storyBlockIds: string[] };
+  anchorStoryBlockId: string;
+  quote: {
+    text: string;
+    evidence: { documentId: string; eventId: string };
+  };
   directlyAcquiredExperience: string;
   principle: string;
   evidence: EvidenceReference[];
@@ -266,22 +271,26 @@ function validStoryBlock(value: unknown): value is StoryBlock {
 function validStoryInsight(value: unknown): value is StoryInsight {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || !onlyKeys(value, [
-      "id", "title", "background", "quote", "directlyAcquiredExperience", "principle", "evidence",
+      "id", "title", "background", "anchorStoryBlockId", "quote",
+      "directlyAcquiredExperience", "principle", "evidence",
     ])) return false;
   const insight = value as Partial<StoryInsight>;
   const quote = insight.quote;
   return validStableId(insight.id)
     && (insight.title === undefined || (typeof insight.title === "string" && insight.title.length <= 500))
     && nonEmptyString(insight.background) && insight.background.length <= 4_000
+    && validStableId(insight.anchorStoryBlockId)
     && Boolean(quote && typeof quote === "object" && !Array.isArray(quote)
-      && onlyKeys(quote, ["storyBlockIds"])
-      && Array.isArray(quote.storyBlockIds) && quote.storyBlockIds.length > 0
-      && quote.storyBlockIds.every(validStableId)
-      && uniqueValues(quote.storyBlockIds))
+      && onlyKeys(quote, ["text", "evidence"])
+      && nonEmptyString(quote.text) && quote.text.length <= 20_000
+      && quote.evidence && typeof quote.evidence === "object" && !Array.isArray(quote.evidence)
+      && onlyKeys(quote.evidence, ["documentId", "eventId"])
+      && validStableId(quote.evidence.documentId)
+      && validStableId(quote.evidence.eventId))
     && nonEmptyString(insight.directlyAcquiredExperience)
     && insight.directlyAcquiredExperience.length <= 4_000
     && nonEmptyString(insight.principle) && insight.principle.length <= 4_000
-    && Array.isArray(insight.evidence) && insight.evidence.length > 0
+    && Array.isArray(insight.evidence)
     && insight.evidence.every(validEvidence)
     && uniqueValues(insight.evidence.map(evidenceKey));
 }

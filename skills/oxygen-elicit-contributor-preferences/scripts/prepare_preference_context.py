@@ -118,30 +118,59 @@ def parse_story(summary: Any) -> dict[str, Any]:
     insights = story["insights"]
     if not isinstance(insights, list):
         raise ValueError("Story is malformed")
+    story_body = story["story"]
+    if not exact_object(story_body, {"blocks"}, {"uncertainty"}) or not isinstance(story_body["blocks"], list):
+        raise ValueError("Story is malformed")
+    block_evidence: dict[str, set[tuple[str, str]]] = {}
+    for block in story_body["blocks"]:
+        if (not exact_object(block, {"id", "text", "evidence"}) or not stable_id(block["id"])
+                or block["id"] in block_evidence or not safe_text(block["text"])
+                or not isinstance(block["evidence"], list)):
+            raise ValueError("Story block is malformed")
+        references: set[tuple[str, str]] = set()
+        for reference in block["evidence"]:
+            if (not exact_object(reference, {"documentId", "eventId"}, {"label"})
+                    or not stable_id(reference["documentId"])
+                    or not stable_id(reference["eventId"], 1_000)):
+                raise ValueError("Story block evidence is malformed")
+            references.add((reference["documentId"], reference["eventId"]))
+        block_evidence[block["id"]] = references
     seen: set[str] = set()
     parsed: list[dict[str, Any]] = []
     for insight in insights:
-        fields = {"id", "background", "quote", "directlyAcquiredExperience", "principle", "evidence"}
+        fields = {
+            "id", "background", "anchorStoryBlockId", "quote",
+            "directlyAcquiredExperience", "principle", "evidence",
+        }
         if not exact_object(insight, fields, {"title"}) or not stable_id(insight["id"]) or insight["id"] in seen:
             raise ValueError("Story Insight is malformed")
         if not all(safe_text(insight[field]) for field in ("background", "directlyAcquiredExperience", "principle")):
             raise ValueError("Story Insight is malformed")
+        anchor = insight["anchorStoryBlockId"]
+        if not stable_id(anchor) or anchor not in block_evidence:
+            raise ValueError("Story Insight is malformed")
         quote = insight["quote"]
-        if not exact_object(quote, {"storyBlockIds"}) or not isinstance(quote["storyBlockIds"], list):
+        if (not exact_object(quote, {"text", "evidence"}) or not safe_text(quote["text"])
+                or not exact_object(quote["evidence"], {"documentId", "eventId"})
+                or not stable_id(quote["evidence"]["documentId"])
+                or not stable_id(quote["evidence"]["eventId"], 1_000)):
             raise ValueError("Story Insight is malformed")
         evidence = insight["evidence"]
-        if not isinstance(evidence, list) or not evidence:
+        if not isinstance(evidence, list):
             raise ValueError("Story Insight is malformed")
         evidence_out = []
         evidence_seen: set[tuple[str, str]] = set()
-        for reference in evidence:
+        quote_identity = (quote["evidence"]["documentId"], quote["evidence"]["eventId"])
+        if quote_identity not in block_evidence[anchor]:
+            raise ValueError("Story Insight Quote is not grounded by its anchor")
+        for reference in [quote["evidence"], *evidence]:
             if not exact_object(reference, {"documentId", "eventId"}, {"label"}):
                 raise ValueError("Story Insight evidence is malformed")
             if not stable_id(reference["documentId"]) or not stable_id(reference["eventId"], 1_000):
                 raise ValueError("Story Insight evidence is malformed")
             identity = (reference["documentId"], reference["eventId"])
             if identity in evidence_seen:
-                raise ValueError("Story Insight evidence is duplicated")
+                continue
             evidence_seen.add(identity)
             evidence_out.append({"documentId": identity[0], "eventId": identity[1]})
         seen.add(insight["id"])

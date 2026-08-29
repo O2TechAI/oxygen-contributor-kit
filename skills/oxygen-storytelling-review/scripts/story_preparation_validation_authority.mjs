@@ -3,9 +3,11 @@ import { resolve } from "node:path";
 import { applyActiveRedactions } from "../../../viewer/lib/release.mjs";
 import { computeSourceDigest } from "../../../viewer/lib/redaction-pass.mjs";
 import {
+  canonicalAuthorityJson,
   MAX_COVERAGE_MANIFEST_BYTES,
   validateCoverageManifestAuthority,
 } from "../../../viewer/lib/story-readiness.ts";
+import { parseStorySource, STORY_PREFIX } from "../../../viewer/lib/timeline.ts";
 import {
   MAX_SOURCE_PRIVACY_AUTHORITY_BYTES,
   deriveCoveragePrivacyAuthority,
@@ -15,6 +17,7 @@ import {
   canonicalDigest,
   canonicalJsonEqual,
   compareUtf8,
+  exactKeys,
   fail,
   isObject,
   readSemanticTransport,
@@ -245,6 +248,112 @@ export function storyEvidenceRows(authority) {
     actorType: row.actorType,
     actorId: row.actorEquivalence,
   }));
+}
+
+function storyInputNarrative(storyInputs) {
+  if (!Array.isArray(storyInputs) || storyInputs.length === 0) fail("STORY_INPUT_STALE");
+  const narrative = new Map();
+  for (const input of storyInputs) {
+    const bundles = input?.payload?.ownerBundles;
+    if (!Array.isArray(bundles) || bundles.length === 0) fail("STORY_INPUT_STALE");
+    for (const bundle of bundles) {
+      if (!Array.isArray(bundle?.reviewedNarrative)) fail("STORY_INPUT_STALE");
+      for (const row of bundle.reviewedNarrative) {
+        if (!isObject(row) || !stableId(row.id) || !stableId(row.documentId)
+          || typeof row.narrative !== "string") fail("STORY_INPUT_STALE");
+        const key = canonicalAuthorityJson([row.documentId, row.id]);
+        const projected = { id: row.id, documentId: row.documentId, narrative: row.narrative };
+        const prior = narrative.get(key);
+        if (prior && !canonicalJsonEqual(prior, projected)) fail("STORY_INPUT_STALE");
+        narrative.set(key, projected);
+      }
+    }
+  }
+  return narrative;
+}
+
+function baseStoryCandidates(storyRecords) {
+  if (!Array.isArray(storyRecords) || storyRecords.length === 0) fail("STORY_OUTPUT_STALE");
+  const candidates = new Map();
+  for (const record of storyRecords) {
+    if (!isObject(record) || !exactKeys(record, ["id", "story"]) || !stableId(record.id)) {
+      fail("STORY_OUTPUT_STALE");
+    }
+    const summary = `${STORY_PREFIX}${canonicalAuthorityJson(record.story)}`;
+    const story = parseStorySource(summary);
+    if (!story || story.insights.length !== 0 || candidates.has(story.key)) fail("STORY_OUTPUT_STALE");
+    candidates.set(story.key, { id: record.id, summary });
+  }
+  return candidates;
+}
+
+export function insightReviewedNarrative(storyInputs, storyCandidates) {
+  if (!Array.isArray(storyCandidates) || storyCandidates.length === 0) fail("INSIGHT_INPUT_STALE");
+  const sourceNarrative = storyInputNarrative(storyInputs);
+  const expected = new Set();
+  for (const candidate of storyCandidates) {
+    if (!isObject(candidate) || !exactKeys(candidate, ["id", "summary"])
+      || !stableId(candidate.id) || typeof candidate.summary !== "string") fail("INSIGHT_INPUT_STALE");
+    const story = parseStorySource(candidate.summary);
+    if (!story || story.insights.length !== 0) fail("INSIGHT_INPUT_STALE");
+    for (const block of story.story.blocks) {
+      for (const reference of block.evidence) {
+        expected.add(canonicalAuthorityJson([reference.documentId, reference.eventId]));
+      }
+    }
+  }
+  return [...expected].sort(compareUtf8).map((key) => {
+    const row = sourceNarrative.get(key);
+    if (!row) fail("INSIGHT_INPUT_STALE");
+    return row;
+  });
+}
+
+/** Reopen the immutable Story and Insight inputs and project only the
+ * Privacy-reviewed narrative authorized for exact source-Quote validation. */
+export function insightStoryEvidenceRows(authority, insightInputs, storyInputs, storyRecords) {
+  const evidenceRows = storyEvidenceRows(authority);
+  const evidenceByKey = new Map(evidenceRows.map((row) => [
+    canonicalAuthorityJson([row.documentId, row.id]), row,
+  ]));
+  const expectedCandidates = baseStoryCandidates(storyRecords);
+  const reviewedNarrative = new Map();
+  const seenStoryKeys = new Set();
+  if (!Array.isArray(insightInputs) || insightInputs.length === 0) fail("INSIGHT_INPUT_STALE");
+  for (const input of insightInputs) {
+    const payload = input?.payload;
+    if (!isObject(payload) || !exactKeys(payload, [
+      "validationAuthorityPath", "validationAuthorityDigest", "storyCandidates", "reviewedNarrative",
+    ]) || payload.validationAuthorityPath !== "story/validation-authority.json"
+      || payload.validationAuthorityDigest !== canonicalDigest(authority)
+      || !Array.isArray(payload.storyCandidates) || !Array.isArray(payload.reviewedNarrative)) {
+      fail("INSIGHT_INPUT_STALE");
+    }
+    const assignedStoryKeys = [];
+    for (const candidate of payload.storyCandidates) {
+      const story = parseStorySource(candidate?.summary);
+      if (!story || seenStoryKeys.has(story.key)
+        || !canonicalJsonEqual(candidate, expectedCandidates.get(story.key))) fail("INSIGHT_INPUT_STALE");
+      seenStoryKeys.add(story.key);
+      assignedStoryKeys.push(story.key);
+    }
+    if (!canonicalJsonEqual([...assignedStoryKeys].sort(compareUtf8), input.unitIds)) {
+      fail("INSIGHT_INPUT_STALE");
+    }
+    const expectedNarrative = insightReviewedNarrative(storyInputs, payload.storyCandidates);
+    if (!canonicalJsonEqual(payload.reviewedNarrative, expectedNarrative)) fail("INSIGHT_INPUT_STALE");
+    for (const row of payload.reviewedNarrative) {
+      const key = canonicalAuthorityJson([row.documentId, row.id]);
+      if (!evidenceByKey.has(key)) fail("INSIGHT_INPUT_STALE");
+      const prior = reviewedNarrative.get(key);
+      if (prior !== undefined && prior !== row.narrative) fail("INSIGHT_INPUT_STALE");
+      reviewedNarrative.set(key, row.narrative);
+    }
+  }
+  return evidenceRows.map((row) => {
+    const narrative = reviewedNarrative.get(canonicalAuthorityJson([row.documentId, row.id]));
+    return narrative === undefined ? row : { ...row, reviewedNarrative: narrative };
+  });
 }
 
 export function storyCompletenessAuthority(authority) {
