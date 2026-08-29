@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end check that a reviewer can edit and delete a redaction decision."""
+"""End-to-end check for explicit Keep and Redact review decisions."""
 import argparse
 import json
 import pathlib
@@ -32,10 +32,6 @@ def call(base_url, path, method="GET", body=None):
         return json.loads(error.read().decode("utf-8") or "{}"), error.code
 
 
-def active_count(base_url):
-    return len(call(base_url, "/api/redactions")[0]["redactions"])
-
-
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=DEFAULT_BASE)
@@ -46,46 +42,38 @@ def main(argv=None):
     configure_utf8_stdio()
     args = build_parser().parse_args(argv)
     base_url = args.base_url.rstrip("/")
-    before = active_count(base_url)
-    target = call(base_url, "/api/redactions")[0]["redactions"][0]
-    print(f"起始 active={before}  样本={target['id'][:8]}  类别={target['category']}")
+    rows, _ = call(base_url, "/api/redactions")
+    pending = [
+        row for row in rows["redactions"]
+        if row.get("review_state") == "needs_confirmation"
+    ]
+    if len(pending) < 2:
+        print("FAIL: explicit decision check requires two needs_confirmation rows")
+        return 1
 
-    new_category = "sensitive" if target["category"] != "sensitive" else "credential"
-    patched, _ = call(
-        base_url, f"/api/redactions/{target['id']}", "PATCH", {"category": new_category}
-    )
-    print(f"PATCH 改类别 -> {patched['category']}  (期望 {new_category})  "
-          f"created_by={patched['created_by']}")
-
-    call(base_url, f"/api/redactions/{target['id']}", "DELETE")
-    after_delete = active_count(base_url)
-    print(f"DELETE 软删 -> active={after_delete}  (期望 {before - 1})")
-
-    call(base_url, f"/api/redactions/{target['id']}", "PATCH", {"status": "active"})
-    restored = active_count(base_url)
-    print(f"PATCH 恢复 -> active={restored}  (期望 {before})")
-
-    call(base_url, f"/api/redactions/{target['id']}", "PATCH", {"category": target["category"]})
-
-    bad, bad_status = call(
+    keep_target, redact_target = pending[:2]
+    kept, keep_status = call(
         base_url,
-        f"/api/redactions/{target['id']}",
+        f"/api/redactions/{keep_target['id']}",
         "PATCH",
-        {"category": "not-a-category"},
+        {"decision": "keep"},
     )
-    print(f"非法类别被拒: HTTP {bad_status} · {bad.get('error')}")
-
-    missing, missing_status = call(
-        base_url, "/api/redactions/does-not-exist", "DELETE"
+    redacted, redact_status = call(
+        base_url,
+        f"/api/redactions/{redact_target['id']}",
+        "PATCH",
+        {"decision": "redact"},
     )
-    print(f"删除不存在的记录: HTTP {missing_status} · {missing.get('error')}")
+    print(f"Keep -> {kept.get('review_state')} / {kept.get('status')}")
+    print(f"Redact -> {redacted.get('review_state')} / {redacted.get('status')}")
 
     passed = (
-        patched["category"] == new_category
-        and after_delete == before - 1
-        and restored == before
-        and bad_status == 400
-        and missing_status == 404
+        keep_status == 200
+        and kept.get("review_state") == "confirmed_keep"
+        and kept.get("status") == "removed"
+        and redact_status == 200
+        and redacted.get("review_state") == "confirmed_redact"
+        and redacted.get("status") == "active"
     )
     print("PASS" if passed else "FAIL")
     return 0 if passed else 1

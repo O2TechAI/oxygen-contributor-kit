@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -45,7 +46,62 @@ def write_jsonl(path: Path, records: list[dict]) -> None:
     )
 
 
+def tree_snapshot(root: Path) -> list[tuple[str, str, bytes | None]]:
+    snapshot = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        snapshot.append((relative, "dir" if path.is_dir() else "file",
+                         None if path.is_dir() else path.read_bytes()))
+    return snapshot
+
+
+def junction_or_symlink(testcase: unittest.TestCase, link: Path, target: Path):
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if result.returncode != 0:
+            testcase.skipTest(f"directory junction unavailable: {result.stderr.strip()}")
+        return lambda: os.rmdir(link)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        testcase.skipTest(f"directory symlink unavailable: {error}")
+    return link.unlink
+
+
+def hard_link_or_skip(testcase: unittest.TestCase, source: Path, target: Path) -> None:
+    try:
+        os.link(source, target)
+    except OSError as error:
+        testcase.skipTest(f"hard links unavailable: {error}")
+
+
 class BoundedMetadataScanTest(unittest.TestCase):
+    def test_codex_container_identity_does_not_collapse_shared_parent_thread(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "first.jsonl"
+            second = root / "second.jsonl"
+            write_jsonl(first, [{
+                "timestamp": "2026-01-02T03:04:05.000Z",
+                "type": "session_meta",
+                "payload": {"id": "container-a", "session_id": "shared-thread", "cwd": EXACT},
+            }])
+            write_jsonl(second, [{
+                "timestamp": "2026-01-02T03:04:06.000Z",
+                "type": "session_meta",
+                "payload": {"id": "container-b", "session_id": "shared-thread", "cwd": EXACT},
+            }])
+            first_id = MODULE.stable_trajectory_id(first, "codex", "synthetic")
+            second_id = MODULE.stable_trajectory_id(second, "codex", "synthetic")
+            self.assertNotEqual(first_id, second_id)
+            self.assertEqual(
+                first_id,
+                MODULE.stable_trajectory_id(first, "codex", "synthetic"),
+            )
+
     def test_cwd_near_beginning_stops_early(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary, "session.jsonl")
@@ -250,7 +306,117 @@ class DiscoveryContractTest(unittest.TestCase):
 
 
 class CollectorMainBoundaryTest(unittest.TestCase):
-    def test_default_cli_keeps_cwd_filtering_and_excludes_global_memory(self):
+    def test_output_root_junction_fails_before_touching_external_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            repo.mkdir()
+            external = root / "external"
+            external.mkdir()
+            (external / "sentinel.bin").write_bytes(b"junction sentinel\x00")
+            before = tree_snapshot(external)
+            redirected_parent = root / "redirected-parent"
+            cleanup = junction_or_symlink(self, redirected_parent, external)
+            requested = redirected_parent / "requested-run"
+            try:
+                with self.assertRaises(SystemExit):
+                    MODULE.main([str(repo), "--out", str(requested)])
+                self.assertEqual(tree_snapshot(external), before)
+            finally:
+                cleanup()
+
+    def test_hard_linked_collector_index_fails_before_any_mutation(self):
+        artifacts = (
+            Path("index.json"),
+            Path("trajectories/traj-hard/events.jsonl"),
+            Path("trajectories/traj-hard/manifest.json"),
+            Path("memory/repo/notes.md"),
+        )
+        for artifact in artifacts:
+            with self.subTest(artifact=artifact), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                repo = root / "repo"
+                repo.mkdir()
+                external = root / "external-artifact"
+                external.write_bytes(b"hard-link sentinel\x00")
+                out = root / "run"
+                target = out / artifact
+                target.parent.mkdir(parents=True)
+                hard_link_or_skip(self, external, target)
+                if artifact != Path("index.json"):
+                    (out / "index.json").write_text(
+                        '{"tool":"collect_repo_trajectories"}\n', encoding="utf-8"
+                    )
+                before_out = tree_snapshot(out)
+                before_external = external.read_bytes()
+
+                with self.assertRaises(SystemExit):
+                    MODULE.main([str(repo), "--out", str(out)])
+
+                self.assertEqual(external.read_bytes(), before_external)
+                self.assertEqual(tree_snapshot(out), before_out)
+
+    def test_writable_historical_shared_location_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            home = root / "home"
+            out = root / "run"
+            repo.mkdir()
+            shared = root.joinpath("srv", "shared", "oxygen", "data", "ingest" + "-staging")
+            (shared / "existing-run").mkdir(parents=True)
+            (shared / "existing-run" / "events.jsonl").write_bytes(b"private\x00trajectory")
+            (shared / "INBOX.md").write_bytes(b"existing inbox\n")
+            before = tree_snapshot(shared)
+
+            with mock.patch("builtins.print"):
+                result = MODULE.main([
+                    str(repo), "--out", str(out), "--home", str(home),
+                    "--agents", "", "--user", "synthetic",
+                ])
+
+            self.assertEqual(result, 0)
+            self.assertTrue((out / "index.json").is_file())
+            self.assertEqual(tree_snapshot(shared), before)
+
+    def test_output_is_required_before_collection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary, "repo")
+            repo.mkdir()
+            with self.assertRaises(SystemExit):
+                MODULE.main([str(repo)])
+
+    def test_rerun_prunes_only_stale_derived_trajectory_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary, "collector-output")
+            trajectories = out / "trajectories"
+            current = trajectories / "traj-current"
+            stale = trajectories / "traj-stale"
+            current.mkdir(parents=True)
+            stale.mkdir()
+            (current / "events.jsonl").write_text("current\n", encoding="utf-8")
+            (stale / "events.jsonl").write_text("stale\n", encoding="utf-8")
+            (out / "index.json").write_text(json.dumps({
+                "tool": "collect_repo_trajectories",
+            }), encoding="utf-8")
+
+            self.assertTrue(MODULE.validate_rerunnable_output(out))
+            self.assertEqual(
+                MODULE.prune_stale_trajectory_outputs(out, {"traj-current"}), 1,
+            )
+            self.assertTrue((current / "events.jsonl").is_file())
+            self.assertFalse(stale.exists())
+
+    def test_nonempty_unidentified_output_is_never_cleaned_as_a_rerun(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary, "unowned-output")
+            out.mkdir()
+            (out / "preserve.txt").write_text("preserve\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not an identified collector run"):
+                MODULE.validate_rerunnable_output(out)
+            self.assertEqual((out / "preserve.txt").read_text(encoding="utf-8"), "preserve\n")
+
+    def test_cli_keeps_cwd_filtering_and_excludes_global_memory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             home = root / "home"
@@ -264,7 +430,7 @@ class CollectorMainBoundaryTest(unittest.TestCase):
             (home / ".codex" / "AGENTS.md").write_text("global", encoding="utf-8")
             (repo / "AGENTS.md").write_text("project", encoding="utf-8")
 
-            def fake_extract(session, system, out_root, source_home, user):
+            def fake_extract(session, system, out_root, source_home, user, semantic_source_registry, claimed_trajectory_ids):
                 return {
                     "trajectory_id": session.stem,
                     "system": system,
@@ -309,7 +475,7 @@ class CollectorMainBoundaryTest(unittest.TestCase):
             session = session_root / "approved.jsonl"
             write_jsonl(session, [codex_session_meta(str(repo), "approved")])
 
-            def fake_extract(session_path, system, out_root, masking_home, user):
+            def fake_extract(session_path, system, out_root, masking_home, user, semantic_source_registry, claimed_trajectory_ids):
                 return {
                     "trajectory_id": session_path.stem,
                     "system": system,

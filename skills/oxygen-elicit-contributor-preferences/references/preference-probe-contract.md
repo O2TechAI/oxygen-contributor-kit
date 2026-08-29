@@ -1,97 +1,98 @@
-# Preference probe contract
+# Preference producer contract
 
-Write UTF-8 JSON at `<run>/preference-probes.json`.
+Preference-question generation is a two-file, local-only handoff. The bounded Agent receives
+`preference-context.json` and writes only `preference-candidates.json`; the deterministic finalizer
+is the sole producer of the Viewer API bundle. There is no HTTP, SQLite, provider client, answer,
+release, or publication action in either script.
+
+## Context preparation
+
+`prepare_preference_context.py` accepts only the existing unversioned workflow artifacts:
+
+```text
+story-candidates.json       [{"id":"existing-imported-item-id","summary":"oxygen.story:{...}"}]
+<redaction>/redacted/*.json exact reviewed bundles produced by merge_and_apply.py
+<redaction>/report.json     exact completed merge report with zero rejects and zero missing workers
+```
+
+Each candidate has exactly `id` and `summary`, matching the sole Story activation contract. Context
+preparation sorts that plain array by the UTF-8 bytes of candidate `id` before projecting lessons,
+Insight identities, or evidence, so input reordering cannot change context bytes or digests.
+`summary` is a valid `oxygen.story:` JSON source. The preparation step projects only
+`documentId`, `documentKind`, and exact imported item identities from the reviewed bundles; source
+text and redacted text never enter the Preference context. The report's per-document counts and
+category aggregate must exactly bind those bundles. Every redaction span must be in the producer's
+deterministic non-overlapping order and use one of its six categories: `credential`,
+`private-personal`, `sensitive`, `internal-metric`, `internal-timeline`, or
+`mosaic-reidentification`. Preparation recomputes `redacted_text` with `merge_and_apply.py`'s sole
+tag transformation and requires a byte-for-byte match. A final Story Insight may cite only one of
+those reviewed records. Missing, foreign, duplicate, cross-document, raw, unreviewed, rejected,
+incomplete, stale, or malformed authority fails closed without replacing the output.
+
+The output has exactly these fields:
 
 ```json
 {
-  "schema_version": "1",
-  "primary_project": "Oxygen",
-  "generated_from": "project-map.json",
-  "auto_removed": {
-    "total": 37,
-    "reversible": true,
-    "categories": [
-      {"kind": "credential", "count": 12},
-      {"kind": "user_path", "count": 19},
-      {"kind": "third_party_contact", "count": 6}
-    ]
-  },
-  "bulk_decisions": [
-    {
-      "id": "bulk-interpersonal",
-      "kind": "interpersonal_criticism",
-      "count": 41,
-      "question": "Found 41 passages criticizing a named person or organization. Remove them?",
-      "default": "keep",
-      "answer": null,
-      "evidence_sample": ["evt-000123", "evt-000188", "evt-000241"]
-    }
-  ],
-  "probes": [
-    {
-      "id": "probe-01",
-      "document_id": "traj-abc123",
-      "document_kind": "trajectory",
-      "event_ids": ["evt-000042", "evt-000045", "evt-000047"],
-      "timestamp": "2026-07-21T09:14:00Z",
-      "signal": "repeated_correction",
-      "score": 87,
-      "turns": 6,
-      "recap": "While adding the login page, the agent edited the production config three times. You reverted it each time and said to stop touching deploy/.",
-      "question": "Anything here you want the agent to remember?",
-      "options": [
-        {"id": "A", "text": "Ask me before changing anything under deploy/"},
-        {"id": "B", "text": "Propose a plan before editing files, don't edit first"},
-        {"id": "C", "text": "Keep infrastructure changes on a separate branch"}
-      ],
-      "allow_other": true,
-      "allow_skip": true,
-      "answer": null
-    }
-  ],
-  "set_aside": 3
+  "schema": "oxygen.preference-context",
+  "reusableLessons": [],
+  "insightIdentities": [],
+  "reviewedEvidence": [],
+  "autoRemoved": {"total": 0, "reversible": true, "categories": []}
 }
 ```
 
-## Field rules
+`reusableLessons` is exactly Core's ordered final Insight lesson projection. `insightIdentities`
+uses Chapter-local `{storyKey, insightId}` pairs. `reviewedEvidence` contains only Insight-cited
+reviewed event identities. `autoRemoved` is derived only from the completed report after its counts
+are recomputed from and matched to the exact reviewed bundles.
 
-- `auto_removed` contains exactly `total`, `reversible`, and `categories`; each category contains
-  exactly `kind` and `count`. Unknown fields are invalid and must never be forwarded or packaged.
-- `total` and every `count` are non-negative integers, `reversible` is a boolean, and `categories`
-  is an array with no duplicate `kind` entries.
-- `kind` is one of `credential`, `private-personal`, `sensitive`, `internal-metric`,
-  `internal-timeline`, `mosaic-reidentification`, `user_path`, or `third_party_contact`.
-- `auto_removed.total` must equal the sum of `categories[].count`. Contributors act on this
-  number; an inconsistent one is a bug, not a rounding difference.
-- `auto_removed` never contains removed content, only counts by kind.
-- `bulk_decisions[].default` is always `"keep"`. Removal requires a deliberate answer.
-- `probes[].event_ids` are source `event_id` values and must exist in the run. Every probe is
-  reopenable at its original moment; a probe without valid evidence is unverifiable and must be
-  dropped rather than shipped.
-- `probes[].document_kind` is `"trajectory"` or `"meeting"`. Both are in scope.
-- `signal` is one of `repeated_correction`, `long_exchange`, `late_rejection`,
-  `decision_reversal`, `explicit_rule`, `sustained_disagreement`.
-- `score` is an integer 0–100, used only for ranking and for choosing what to set aside.
-- `recap` is at most 3 sentences, self-contained, in the contributor's language, and quotes no
-  content removed in Stage 1.
-- `options` holds 2 or 3 entries, each grounded in this probe's evidence, mutually exclusive, and
-  separately actionable. Never emit a generic option to reach three.
-- `allow_other` and `allow_skip` are always `true`.
-- `set_aside` is the number of qualifying moments dropped by the cap. Report it to the
-  contributor; silently truncating reads as "we found ten moments" when there were thirty.
+## Candidate and final bundle
 
-## Answers
+The Agent writes exactly:
 
-The contributor's response is written back into the same file:
+```json
+{"probes": [], "bulkDecisions": [], "setAside": 0}
+```
 
-- `probes[].answer` becomes `{"choice": "A"}`, `{"choice": "other", "text": "..."}`, or
-  `{"choice": "skip"}`.
-- `bulk_decisions[].answer` becomes `"remove"`, `"keep"`, or `"inspect"`.
+Candidate probes use the `/api/probes` camelCase nested shape: all fourteen probe keys, 2–3
+distinct canonical options, valid `en`/`zh` presentations when supplied, `allowOther: true`, and
+`allowSkip: true`. Candidate bulk decisions use the exact six API keys. Candidates cannot supply
+digests, `autoRemoved`, defaults, answers, model/provider information, or publication state.
+Other and Skip are flags, never option rows. A probe's evidence must belong to its document; every
+bulk evidence ID must be in the reviewed authority. The producer binds `documentKind` to the exact
+reviewed bundle that supplied each cited identity; Core POST independently rechecks that kind and
+the item owner against its SQLite document snapshot.
 
-`null` means unanswered. Never coerce `null` into a preference — an unanswered probe carries no
-information, and treating it as agreement silently invents data the contributor never confirmed.
+Stable IDs reject all ASCII controls. Safe display text rejects ASCII controls except tab, LF, and
+CR, matching Core's safe-text boundary. `sourceRevision` is a positive safe integer in
+`1..9007199254740991`; every other integer that crosses into JavaScript is a nonnegative safe
+integer no larger than `9007199254740991`. Canonical-option comparison performs ECMAScript
+whitespace trimming, removes trailing ASCII `.` characters, and folds only ASCII `A`–`Z`;
+non-ASCII characters remain verbatim so Python and JavaScript cannot diverge by Unicode runtime
+tables.
 
-Confirmed answers (`A`/`B`/`C`/`other`) become checklist entries on `document_id`, carrying
-`event_ids` as evidence. Skipped and unanswered probes produce nothing.
+The finalizer emits exactly nine API fields:
 
-Do not change source files, timestamps, event IDs, or `publication_approved`.
+```text
+{
+  "workflowRunId": "run",
+  "sourceRevision": <positive current Viewer source revision>,
+  "inputDigest": "sha256",
+  "outputDigest": "sha256",
+  "outputCount": 0,
+  "setAside": 0,
+  "probes": [],
+  "bulkDecisions": [],
+  "autoRemoved": {"total": 0, "reversible": true, "categories": []}
+}
+```
+
+`inputDigest` is the SHA-256 of Core's canonical reusable-lesson array. `outputDigest` is the
+SHA-256 of Core's canonical `canonicalPreferenceQuestionBatch`, sorted by UTF-8 `type:id`.
+`outputCount` is `probes.length + bulkDecisions.length`. The finalizer sorts outer candidate
+arrays deterministically. Completed-zero requires empty arrays, `setAside: 0`, and output digest
+`4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`.
+
+Invalid finalization never creates or changes its output file.
+Completed-zero describes the empty `probes` and `bulkDecisions` arrays; it never permits a zero
+`sourceRevision`.

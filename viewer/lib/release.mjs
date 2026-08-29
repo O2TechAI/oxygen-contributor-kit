@@ -151,13 +151,11 @@ export function redactionSummary(redactions, job) {
     categories[category] = (categories[category] || 0) + 1;
   }
   return {
-    schema_version: "oxygen.ai-redaction-summary/1",
-    backend: "ai",
-    model: job?.model || null,
+    schema: "oxygen.ai-redaction-summary",
     status: job?.status || "missing",
     active_spans: redactions.length,
     categories,
     rejected: Number(job?.rejected || 0),
-    notice: "Best-effort AI redaction; original-contributor final review is required before release.",
+    notice: "Contributor-reviewed redaction summary for this local release.",
   };
 }

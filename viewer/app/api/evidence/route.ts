@@ -1,4 +1,4 @@
-import { getD1 } from "../../../db";
+import { getLocalDatabase } from "../../../db";
 import {
   reviewStoryEvidence,
   type AdditionEvidenceClaim,
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
   }
 
   const documentIds = [...new Set(body.chapterEvidence.map((reference) => reference.documentId))];
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);

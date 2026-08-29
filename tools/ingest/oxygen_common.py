@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-import getpass
 import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import unicodedata
 from datetime import datetime, timezone
@@ -57,7 +57,7 @@ def safe_slug(value: str) -> str:
 
 
 def progress(pct: float | None, stage: str, detail: str = "") -> None:
-    """Machine-readable progress line consumed by webapp.py; human-readable too."""
+    """Emit a machine-readable, human-readable progress line."""
     record = {"stage": stage, "detail": detail}
     if pct is not None:
         record["pct"] = round(max(0.0, min(100.0, pct)), 1)
@@ -75,23 +75,69 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-STAGING_DIR = Path("/srv/shared/oxygen/data/ingest-staging")
+def _is_link_or_reparse(metadata, *, windows: bool | None = None) -> bool:
+    if stat.S_ISLNK(metadata.st_mode):
+        return True
+    windows = os.name == "nt" if windows is None else windows
+    attributes = getattr(metadata, "st_file_attributes", None)
+    if windows and attributes is None:
+        raise ValueError("cannot prove output path reparse-point safety")
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return attributes is not None and bool(attributes & reparse_flag)
 
 
-def publish_to_staging(src: Path, name: str) -> str | None:
-    """Copy a finished output dir into the shared oxygen_collab staging area.
+def validate_output_root(requested: Path) -> Path:
+    """Validate a literal output boundary before resolving or mutating it."""
+    literal = requested.expanduser()
+    if not literal.is_absolute():
+        literal = Path.cwd() / literal
 
-    Returns the destination path, or None when staging is unavailable (e.g. the
-    tools run on a user's own machine). Files inherit the oxygen_collab group
-    via the setgid staging dir, so the public dropbox guard keeps them hidden.
-    """
-    import shutil
+    current = Path(literal.anchor)
+    for component in literal.parts[1:]:
+        if component in ("", "."):
+            continue
+        if component == "..":
+            current = current.parent
+            continue
+        current /= component
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ValueError(f"cannot inspect output path component: {current}") from error
+        if _is_link_or_reparse(metadata):
+            raise ValueError("output path must not contain links or reparse points")
 
-    if not STAGING_DIR.is_dir() or not os.access(STAGING_DIR, os.W_OK):
-        return None
-    dest = STAGING_DIR / safe_slug(name)
-    shutil.copytree(src, dest, dirs_exist_ok=True)
-    with (STAGING_DIR / "INBOX.md").open("a", encoding="utf-8") as handle:
-        handle.write(f"- [{utc_now()}] {getpass.getuser()} staged `{dest.name}` "
-                     f"(from {src}) — pending Inline import, unredacted, do not publish\n")
-    return str(dest)
+    out = current
+    if not out.exists():
+        return out.resolve()
+    try:
+        root_metadata = out.lstat()
+    except OSError as error:
+        raise ValueError("cannot inspect output path") from error
+    if _is_link_or_reparse(root_metadata) or not stat.S_ISDIR(root_metadata.st_mode):
+        raise ValueError("output path must be a real directory")
+
+    pending = [out]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = list(directory.iterdir())
+        except OSError as error:
+            raise ValueError(f"cannot inspect output directory: {directory}") from error
+        for entry in entries:
+            try:
+                metadata = entry.lstat()
+            except OSError as error:
+                raise ValueError(f"cannot inspect output entry: {entry}") from error
+            if _is_link_or_reparse(metadata):
+                raise ValueError("output directory must not contain links or reparse points")
+            if stat.S_ISDIR(metadata.st_mode):
+                pending.append(entry)
+            elif stat.S_ISREG(metadata.st_mode):
+                if getattr(metadata, "st_nlink", None) != 1:
+                    raise ValueError("output directory must not contain hard-linked files")
+            else:
+                raise ValueError("output directory must not contain special entries")
+    return out.resolve(strict=True)

@@ -1,7 +1,7 @@
-import { env } from "cloudflare:workers";
-
-let initialized = false;
-let initialization: Promise<void> | null = null;
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const statements = [
   `CREATE TABLE IF NOT EXISTS documents (
@@ -27,6 +27,45 @@ const statements = [
     warnings_json TEXT NOT NULL DEFAULT '[]', started_at TEXT NOT NULL,
     updated_at TEXT NOT NULL, completed_at TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS finalized_corpus_manifests (
+    workflow_run_id TEXT PRIMARY KEY, corpus_revision INTEGER NOT NULL,
+    corpus_digest TEXT NOT NULL, document_count INTEGER NOT NULL,
+    item_count INTEGER NOT NULL, finalized_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS semantic_manifests (
+    workflow_run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+    revision INTEGER NOT NULL, source_revision INTEGER NOT NULL,
+    source_digest TEXT NOT NULL, universe_digest TEXT NOT NULL,
+    manifest_digest TEXT NOT NULL, unit_count INTEGER NOT NULL,
+    serialized_bytes INTEGER NOT NULL, story_projection_bytes INTEGER NOT NULL,
+    corpus_revision INTEGER NOT NULL, corpus_digest TEXT NOT NULL,
+    corpus_document_count INTEGER NOT NULL, corpus_item_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS semantic_units (
+    id TEXT PRIMARY KEY, workflow_run_id TEXT NOT NULL,
+    revision INTEGER NOT NULL, project_id TEXT NOT NULL, kind TEXT NOT NULL,
+    member_count INTEGER NOT NULL, membership_digest TEXT NOT NULL,
+    duplicate_of_unit_id TEXT, story_projection_json TEXT NOT NULL DEFAULT '{}'
+  )`,
+  `CREATE TABLE IF NOT EXISTS semantic_unit_members (
+    item_id TEXT PRIMARY KEY, workflow_run_id TEXT NOT NULL, unit_id TEXT NOT NULL,
+    source_digest TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS semantic_unit_members_unit_idx
+     ON semantic_unit_members(unit_id)`,
+  `CREATE TABLE IF NOT EXISTS story_coverage_manifests (
+    workflow_run_id TEXT PRIMARY KEY, revision INTEGER NOT NULL,
+    semantic_manifest_revision INTEGER NOT NULL,
+    semantic_manifest_digest TEXT NOT NULL, coverage_digest TEXT NOT NULL,
+    privacy_authority_digest TEXT NOT NULL,
+    unit_count INTEGER NOT NULL, serialized_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS story_coverage_rows (
+    unit_id TEXT PRIMARY KEY, workflow_run_id TEXT NOT NULL,
+    disposition TEXT NOT NULL, owner_id TEXT NOT NULL, exclusion_reason TEXT
+  )`,
   // This is the only pre-collection persistence surface. Keep it operational
   // and allowlisted: no target path, reasoning, payload, or free-form status.
   `CREATE TABLE IF NOT EXISTS workflow_runs (
@@ -49,12 +88,15 @@ const statements = [
     updated_at TEXT NOT NULL, server_version INTEGER NOT NULL DEFAULT 0
   )`,
   // One row per redacted span. Offsets address items.content, which stays the
-  // untouched original -- the tag is applied at render time so a reviewer can
-  // still edit or delete the decision.
+  // untouched original -- the tag is applied at render time. Only pending
+  // model spans can receive one contributor Keep or Redact decision.
   `CREATE TABLE IF NOT EXISTS redactions (
     id TEXT PRIMARY KEY, item_id TEXT NOT NULL, document_id TEXT NOT NULL,
     start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL,
     category TEXT NOT NULL, confidence TEXT, reason TEXT,
+    review_state TEXT NOT NULL
+      CHECK(review_state IN ('deterministic','needs_confirmation','confirmed_keep','confirmed_redact')),
+    uncertainty_reason TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     created_by TEXT NOT NULL DEFAULT 'llm', created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -91,59 +133,187 @@ const statements = [
     created_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS probe_runs (
-    id TEXT PRIMARY KEY, status TEXT NOT NULL, stage TEXT NOT NULL, model TEXT,
+    workflow_run_id TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE,
+    source_revision INTEGER NOT NULL,
+    input_digest TEXT NOT NULL, output_digest TEXT NOT NULL,
+    output_count INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status='complete'), stage TEXT NOT NULL,
+    model TEXT CHECK(model IS NULL),
     generated INTEGER NOT NULL DEFAULT 0, set_aside INTEGER NOT NULL DEFAULT 0,
     auto_removed_json TEXT NOT NULL DEFAULT '{}',
     started_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS story_preparation_receipts (
+    workflow_run_id TEXT NOT NULL, lane TEXT NOT NULL,
+    source_revision INTEGER NOT NULL, input_digest TEXT NOT NULL,
+    scope_digest TEXT NOT NULL, scope_count INTEGER NOT NULL,
+    output_digest TEXT NOT NULL, output_count INTEGER NOT NULL,
+    completed_at TEXT NOT NULL,
+    PRIMARY KEY (workflow_run_id, lane)
+  )`,
+  `CREATE TABLE IF NOT EXISTS story_privacy_candidates (
+    workflow_run_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
+    candidate_json TEXT NOT NULL,
+    decision TEXT CHECK(decision IN ('keep','redact')),
+    decision_version INTEGER NOT NULL DEFAULT 0 CHECK(decision_version IN (0,1)),
+    decided_at TEXT,
+    CHECK (
+      (decision IS NULL AND decision_version=0 AND decided_at IS NULL)
+      OR
+      (decision IS NOT NULL AND decision_version=1 AND decided_at IS NOT NULL)
+    ),
+    PRIMARY KEY (workflow_run_id, candidate_id)
+  )`,
+  // One unversioned Story Privacy contract covers both activation (review
+  // session version 0) and every reviewed-Story replacement. Candidate rows
+  // remain the globally decided projection; this row binds the whole set.
+  `CREATE TABLE IF NOT EXISTS story_privacy_authorities (
+    workflow_run_id TEXT PRIMARY KEY,
+    source_revision INTEGER NOT NULL CHECK(source_revision > 0),
+    active_story_digest TEXT NOT NULL,
+    server_version INTEGER NOT NULL CHECK(server_version >= 0),
+    reviewed_story_digest TEXT NOT NULL,
+    target_catalog_json TEXT NOT NULL,
+    target_catalog_digest TEXT NOT NULL,
+    changed_target_digest TEXT NOT NULL,
+    changed_target_count INTEGER NOT NULL CHECK(changed_target_count >= 0),
+    receipt_digest TEXT NOT NULL,
+    batch_digest TEXT NOT NULL,
+    candidate_digest TEXT NOT NULL,
+    candidate_count INTEGER NOT NULL CHECK(candidate_count >= 0),
+    imported_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS project_release_confirmations (
+    workflow_run_id TEXT PRIMARY KEY,
+    review_gate_digest TEXT NOT NULL,
+    confirmed_at TEXT NOT NULL
+  )`,
 ];
 
-export async function getD1() {
-  if (!env.DB) throw new Error("D1 binding DB is unavailable");
-  if (!initialized) {
-    initialization ??= (async () => {
-      await env.DB.batch(statements.map((sql) => env.DB.prepare(sql)));
-      const columns = await env.DB.prepare("PRAGMA table_info(redaction_jobs)")
-        .all<{ name: string }>();
-      if (!columns.results.some((column: { name: string }) => column.name === "source_digest")) {
-        await env.DB.prepare("ALTER TABLE redaction_jobs ADD COLUMN source_digest TEXT").run();
-      }
-      const probeColumns = await env.DB.prepare("PRAGMA table_info(probes)")
-        .all<{ name: string }>();
-      if (!probeColumns.results.some((column: { name: string }) => column.name === "presentations_json")) {
-        await env.DB.prepare("ALTER TABLE probes ADD COLUMN presentations_json TEXT NOT NULL DEFAULT '{}'").run();
-      }
-      const bulkColumns = await env.DB.prepare("PRAGMA table_info(probe_bulk_decisions)")
-        .all<{ name: string }>();
-      if (!bulkColumns.results.some((column: { name: string }) => column.name === "presentations_json")) {
-        await env.DB.prepare("ALTER TABLE probe_bulk_decisions ADD COLUMN presentations_json TEXT NOT NULL DEFAULT '{}'").run();
-      }
-      const workflowColumns = await env.DB.prepare("PRAGMA table_info(workflow_runs)")
-        .all<{ name: string }>();
-      const workflowNames = new Set(workflowColumns.results.map((column: { name: string }) => column.name));
-      const workflowMigrations = [
-        ["story_generation_status", "ALTER TABLE workflow_runs ADD COLUMN story_generation_status TEXT NOT NULL DEFAULT 'not_started'"],
-        ["story_generation_completed", "ALTER TABLE workflow_runs ADD COLUMN story_generation_completed INTEGER NOT NULL DEFAULT 0"],
-        ["story_generation_total", "ALTER TABLE workflow_runs ADD COLUMN story_generation_total INTEGER NOT NULL DEFAULT 0"],
-        ["story_source_revision", "ALTER TABLE workflow_runs ADD COLUMN story_source_revision INTEGER NOT NULL DEFAULT 0"],
-        ["active_story_digest", "ALTER TABLE workflow_runs ADD COLUMN active_story_digest TEXT"],
-      ] as const;
-      for (const [name, sql] of workflowMigrations) {
-        if (!workflowNames.has(name)) await env.DB.prepare(sql).run();
-      }
-      const sessionColumns = await env.DB.prepare("PRAGMA table_info(story_review_sessions)")
-        .all<{ name: string }>();
-      if (!sessionColumns.results.some((column: { name: string }) => column.name === "server_version")) {
-        await env.DB.prepare(
-          "ALTER TABLE story_review_sessions ADD COLUMN server_version INTEGER NOT NULL DEFAULT 0",
-        ).run();
-      }
-      initialized = true;
-    })().catch((error) => {
-      initialization = null;
-      throw error;
-    });
-    await initialization;
+type Row = Record<string, unknown>;
+type StatementResult = { success: true; meta: { changes: number }; results?: Row[] };
+
+const ordinaryRow = <T>(row: Row): T => ({ ...row }) as T;
+
+class LocalStatement {
+  private values: unknown[] = [];
+  private readonly statement: StatementSync;
+  private readonly schedule: <T>(operation: () => T) => Promise<T>;
+
+  constructor(statement: StatementSync, schedule: <T>(operation: () => T) => Promise<T>) {
+    this.statement = statement;
+    this.schedule = schedule;
   }
-  return env.DB;
+
+  bind(...values: unknown[]) {
+    this.values = values;
+    return this;
+  }
+
+  async first<T = Row>(): Promise<T | null> {
+    return this.schedule(() => {
+      const row = this.statement.get(...(this.values as never[])) as Row | undefined;
+      return row ? ordinaryRow<T>(row) : null;
+    });
+  }
+
+  async all<T = Row>(): Promise<{ results: T[] }> {
+    return this.schedule(() => ({
+      results: this.statement.all(...(this.values as never[])).map(ordinaryRow<T>),
+    }));
+  }
+
+  async run() {
+    return this.schedule(() => this.runSync());
+  }
+
+  execute(): StatementResult {
+    return this.statement.columns().length
+      ? {
+        success: true as const,
+        meta: { changes: 0 },
+        results: this.statement.all(...(this.values as never[])).map(ordinaryRow<Row>),
+      }
+      : this.runSync();
+  }
+
+  private runSync() {
+    const { changes } = this.statement.run(...(this.values as never[]));
+    return { success: true as const, meta: { changes: Number(changes) } };
+  }
+}
+
+class LocalDatabase {
+  private readonly database: DatabaseSync;
+  private readonly transactionContext = new AsyncLocalStorage<boolean>();
+  private transactionTail: Promise<void> = Promise.resolve();
+
+  constructor(database: DatabaseSync) {
+    this.database = database;
+  }
+
+  prepare(sql: string) {
+    return new LocalStatement(this.database.prepare(sql), (operation) => this.serialized(operation));
+  }
+
+  async batch(statements: LocalStatement[]) {
+    if (this.transactionContext.getStore()) {
+      return statements.map((statement) => statement.execute());
+    }
+    return this.exclusive(async () => {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        const results = statements.map((statement) => statement.execute());
+        this.database.exec("COMMIT");
+        return results;
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
+  async transaction<T>(operation: () => Promise<T> | T): Promise<T> {
+    if (this.transactionContext.getStore()) return operation();
+    return this.exclusive(async () => {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        const value = await this.transactionContext.run(true, operation);
+        this.database.exec("COMMIT");
+        return value;
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
+  private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.transactionTail;
+    let release = () => {};
+    this.transactionTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await operation(); } finally { release(); }
+  }
+
+  private serialized<T>(operation: () => T): Promise<T> {
+    if (this.transactionContext.getStore()) return Promise.resolve(operation());
+    return this.exclusive(async () => operation());
+  }
+}
+
+type LocalSqliteGlobal = typeof globalThis & { __oxygenLocalSqlite?: LocalDatabase };
+
+export async function getLocalDatabase() {
+  const runtime = globalThis as LocalSqliteGlobal;
+  if (runtime.__oxygenLocalSqlite) return runtime.__oxygenLocalSqlite;
+
+  const stateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
+  const databasePath = stateDir === undefined ? ":memory:" : join(stateDir, "oxygen.sqlite");
+  if (stateDir !== undefined) mkdirSync(stateDir, { recursive: true });
+
+  const database = new DatabaseSync(databasePath);
+  database.exec(statements.join(";\n"));
+  runtime.__oxygenLocalSqlite = new LocalDatabase(database);
+  return runtime.__oxygenLocalSqlite;
 }

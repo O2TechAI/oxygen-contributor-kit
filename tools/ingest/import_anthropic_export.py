@@ -7,7 +7,7 @@ The schema is not publicly guaranteed, so parsing is deliberately tolerant:
 unknown fields are ignored, missing ones defaulted, and every parse problem is
 reported instead of crashing.
 
-Each conversation becomes one v0.2-style trajectory (message events only — web
+Each conversation becomes one canonical trajectory (message events only — web
 exports carry no tool calls). `projects.json` documents are stored under
 memory/ since they act as persistent context, similar to agent memory.
 """
@@ -21,16 +21,19 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "vendor"))
+INGEST_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(INGEST_DIR))
+sys.path.insert(0, str(INGEST_DIR / "vendor"))
 import extract_codex_trajectory as vendor_common  # noqa: E402  (secret masking, hashing)
+from human_source_projection import digest_value, project_trajectory  # noqa: E402
 
 from oxygen_common import (  # noqa: E402
     configure_utf8_stdio,
     fail,
     progress,
-    run_stamp,
     safe_slug,
     utc_now,
+    validate_output_root,
     write_json,
 )
 
@@ -80,7 +83,15 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
             continue
         text = message_text(message)
         sender = message.get("sender")
-        actor_type = "human" if sender == "human" else "ai"
+        if sender == "human":
+            actor_type = "human"
+        elif sender == "assistant":
+            actor_type = "ai"
+        else:
+            warnings.append(
+                f"conversation {conv_id or title!r}: skipped message with ambiguous sender"
+            )
+            continue
         attachments = []
         for kind in ("attachments", "files"):
             for item in message.get(kind) or []:
@@ -97,7 +108,7 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
         sequence += 1
         events.append(
             {
-                "schema_version": "0.2",
+                "schema": vendor_common.TRAJECTORY_EVENT_SCHEMA,
                 "event_id": f"evt-{sequence:06d}",
                 "trajectory_id": trajectory_id,
                 "conversation_id": f"conv-{conv_id or 'unknown'}",
@@ -121,6 +132,10 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
                     "session_id": conv_id or None,
                     "record_id": message.get("uuid"),
                     "record_type": "chat_message",
+                    "origin": "top_level",
+                    "interaction_direction": (
+                        "human_to_agent" if actor_type == "human" else "agent_to_human"
+                    ),
                     "locator": "conversations.json",
                     "line": None,
                     "sha256": None,
@@ -129,6 +144,7 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
                     "role": "user" if actor_type == "human" else "assistant",
                     "text": vendor_common.redact_text(text, home),
                     "attachments": attachments,
+                    "has_attachments": bool(attachments),
                     "phase": None,
                 },
                 "outcome": None,
@@ -141,7 +157,7 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
         for event in events:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
     manifest = {
-        "schema_version": "0.2",
+        "schema": vendor_common.TRAJECTORY_SCHEMA,
         "trajectory_id": trajectory_id,
         "title": vendor_common.redact_text(title, home),
         "source_system": "claude-ai-export",
@@ -163,9 +179,22 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
     write_json(trajectory_dir / "manifest.json", manifest)
     write_json(
         trajectory_dir / "redaction.json",
-        {"review_status": "pending", "publication_approved": False, "reviewed_by": None},
+        {
+            "schema": vendor_common.TRAJECTORY_REDACTION_SCHEMA,
+            "review_status": "pending",
+            "publication_approved": False,
+            "reviewed_by": None,
+        },
     )
-    return {"trajectory_id": trajectory_id, "title": title, "event_count": len(events)}
+    projection = project_trajectory(
+        trajectory_dir,
+        raw_source_digest=digest_value(conv),
+    )
+    return {
+        "trajectory_id": trajectory_id,
+        "title": title,
+        "event_count": projection["kept_event_count"],
+    }
 
 
 def load_projects(export_dir: Path) -> list[dict]:
@@ -281,10 +310,16 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
         if not text:
             continue
         role = message.get("role") or (inner.get("role") if isinstance(inner, dict) else None)
-        actor_type = "human" if role == "user" else "ai"
+        if role == "user":
+            actor_type = "human"
+        elif role == "assistant":
+            actor_type = "ai"
+        else:
+            warnings.append(f"design chat {path.name}: skipped message with ambiguous role")
+            continue
         sequence += 1
         events.append({
-            "schema_version": "0.2",
+            "schema": vendor_common.TRAJECTORY_EVENT_SCHEMA,
             "event_id": f"evt-{sequence:06d}",
             "trajectory_id": trajectory_id,
             "conversation_id": f"conv-{chat_id}",
@@ -298,6 +333,10 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
             "executor": None, "relations": [],
             "source": {"system": "claude-ai-export", "session_id": chat_id,
                        "record_id": message.get("uuid"), "record_type": "design_chat_message",
+                       "origin": "top_level",
+                       "interaction_direction": (
+                           "human_to_agent" if actor_type == "human" else "agent_to_human"
+                       ),
                        "locator": f"design_chats/{path.name}", "line": None, "sha256": None},
             "payload": {"role": "user" if actor_type == "human" else "assistant",
                         "text": vendor_common.redact_text(text, home), "attachments": [], "phase": None},
@@ -309,7 +348,7 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
         for event in events:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
     write_json(trajectory_dir / "manifest.json", {
-        "schema_version": "0.2", "trajectory_id": trajectory_id,
+        "schema": vendor_common.TRAJECTORY_SCHEMA, "trajectory_id": trajectory_id,
         "title": vendor_common.redact_text(title, home),
         "source_system": "claude-ai-export", "source_session_id": chat_id,
         "source_locator": f"design_chats/{path.name}", "snapshot_at": utc_now(),
@@ -320,9 +359,18 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
         "event_count": len(events), "artifact_count": 0,
         "redaction_status": "automatic_only", "warnings": [],
     })
-    write_json(trajectory_dir / "redaction.json",
-               {"review_status": "pending", "publication_approved": False, "reviewed_by": None})
-    return {"trajectory_id": trajectory_id, "title": title, "event_count": len(events),
+    write_json(trajectory_dir / "redaction.json", {
+        "schema": vendor_common.TRAJECTORY_REDACTION_SCHEMA,
+        "review_status": "pending",
+        "publication_approved": False,
+        "reviewed_by": None,
+    })
+    projection = project_trajectory(
+        trajectory_dir,
+        raw_source_digest=digest_value(chat),
+    )
+    return {"trajectory_id": trajectory_id, "title": title,
+            "event_count": projection["kept_event_count"],
             "kind": "design_chat"}
 
 
@@ -330,20 +378,18 @@ def main(argv=None) -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="export zip, conversations.json, or folder")
-    parser.add_argument("--out", type=Path, help="output dir (default tools/out/claudeai-<ts>)")
+    parser.add_argument("--out", type=Path, required=True,
+                        help="explicit local run output directory")
     parser.add_argument("--home", type=Path, default=Path.home(), help="home path to mask in text")
-    parser.add_argument("--publish", action="store_true",
-                        help="copy the result into the shared ingest-staging area")
     args = parser.parse_args(argv)
 
     source = args.source.expanduser().resolve()
     if not source.exists():
         raise fail(f"source not found: {source}")
-    out = (
-        args.out.expanduser().resolve()
-        if args.out
-        else Path(__file__).resolve().parent / "out" / f"claudeai-{run_stamp()}"
-    )
+    try:
+        out = validate_output_root(args.out)
+    except ValueError as error:
+        raise fail(str(error)) from error
     out.mkdir(parents=True, exist_ok=True)
     home = args.home.expanduser().resolve()
 
@@ -387,7 +433,7 @@ def main(argv=None) -> int:
     write_json(
         out / "index.json",
         {
-            "schema_version": "0.2",
+            "schema": vendor_common.INGEST_RUN_SCHEMA,
             "tool": "import_anthropic_export",
             "generated_at": utc_now(),
             "source": str(source),
@@ -399,11 +445,6 @@ def main(argv=None) -> int:
             "trajectories": converted,
         },
     )
-    if args.publish:
-        from oxygen_common import publish_to_staging
-        staged = publish_to_staging(out, out.name)
-        if staged:
-            progress(98, "publish", f"staged: {staged}")
     progress(100, "done", f"{len(converted)} conversations, {memory_count} memory docs -> {out}")
     print(json.dumps({"output": str(out)}, ensure_ascii=False))
     return 0

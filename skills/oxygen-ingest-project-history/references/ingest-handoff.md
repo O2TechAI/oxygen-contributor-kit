@@ -4,8 +4,7 @@ The bundled tools support three stable outputs:
 
 1. `collect_repo_trajectories.py`: `index.json`, `trajectories/`, and `memory/`.
 2. `import_anthropic_export.py`: `index.json`, `trajectories/`, and imported memory/project documents.
-3. `import_meeting.py`: one source keeps the compatible root `meeting.json`, `raw.md`, and
-   `timestamped.txt`; multiple sources place the same unchanged per-meeting files under
+3. `import_meeting.py`: every source keeps `meeting.json`, `raw.md`, and `timestamped.txt` under
    `meetings/<meeting-id>/` in one run.
 
 Repo collection matches sessions whose recorded working directory falls inside the resolved
@@ -26,7 +25,7 @@ The normal workflow starts the canonical Viewer before collection. The repo coll
 events with nonnegative counts to that exact loopback Viewer. It never sends the working-folder
 path, matched session names, messages, prompts, reasoning, tool data, or extracted content. Hand
 the resulting ingest directory, Viewer origin, and stable run ID to the organizer so it can attach
-the run to the same launch-owned D1 state.
+the run to the same process-owned Viewer state.
 
 The Claude importer supports `conversations.json`, `memories.json`, `projects/*.json`, and
 `design_chats/*.json`. It deliberately excludes `users.json` because it is pure account PII.
@@ -35,8 +34,8 @@ Meeting audio uses faster-whisper locally. Speaker diarization is optional and r
 current user's accepted access to the gated pyannote model. Without a token, the tool still
 produces a single-speaker transcript and records a warning.
 
-Multi-meeting import requires an explicit shared `--out`. Each source keeps its own meeting ID and
-records; transcript contents are never concatenated. `--meeting-id` and `--title` remain available
-for compatible single-meeting imports only.
+Every ingest command requires an explicit local `--out`. For meetings, each source keeps its own
+stable meeting ID and records; transcript contents are never concatenated. With exactly one source,
+`--meeting-id` and `--title` can override its generated identity and source-derived title.
 
 All outputs default to `review_status=pending` and `publication_approved=false`.

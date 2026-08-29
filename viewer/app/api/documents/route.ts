@@ -1,13 +1,270 @@
-import { getD1 } from "../../../db";
-import { sourceImportMatchesExisting } from "../../../lib/redaction-pass.mjs";
+import { getLocalDatabase } from "../../../db";
 import {
   WORKFLOW_RUN_AUTHORITY,
   requireEstablishedWorkflowRun,
   workflowRunErrorResponse,
 } from "../../../lib/workflow-run-server";
+import {
+  STORY_SOURCE_WRITE_STATUS,
+  abortStorySourceMutation,
+  beginStorySourceMutation,
+  publishFinalizedCorpusSourceMutation,
+} from "../../../lib/story-source-publication";
+
+type NormalizedItem = {
+  id: string;
+  documentId: string;
+  sequence: number;
+  eventType: string | null;
+  actorId: string | null;
+  actorType: string | null;
+  timestamp: string | null;
+  content: string;
+  originalJson: string;
+};
+
+type NormalizedDocument = {
+  id: string;
+  kind: "meeting" | "trajectory";
+  title: string;
+  sourceUser: string | null;
+  sourceSystem: string | null;
+  sourceTimestamp: string | null;
+  itemCount: number;
+  metadataJson: string;
+  originalEnvelopeJson: string;
+  items: NormalizedItem[];
+};
+
+export type NormalizedFinalizedCorpus = {
+  documents: NormalizedDocument[];
+  itemCount: number;
+  canonicalPayload: string;
+};
+
+const DOCUMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
+const ITEM_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,299}$/;
+const encoder = new TextEncoder();
+
+const TOP_LEVEL_KEYS = new Set(["documents"]);
+const CORPUS_DOCUMENT_KEYS = new Set(["document", "items"]);
+const DOCUMENT_KEYS = new Set([
+  "id", "kind", "title", "sourceUser", "sourceSystem", "sourceTimestamp",
+  "metadata", "envelope", "itemCount",
+]);
+const ITEM_KEYS = new Set([
+  "id", "sequence", "eventType", "actorId", "actorType", "timestamp", "content",
+  "original",
+]);
+
+export class CorpusValidationError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(code);
+    this.name = "CorpusValidationError";
+    this.code = code;
+  }
+}
+
+function compareIdentity(left: string, right: string) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function requireExactObject(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  required: readonly string[],
+  code: string,
+) {
+  if (!isRecord(value)
+    || Object.keys(value).some((key) => !allowed.has(key))
+    || required.some((key) => !Object.hasOwn(value, key))) {
+    throw new CorpusValidationError(code);
+  }
+  return value;
+}
+
+export function canonicalCorpusJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new CorpusValidationError("CORPUS_JSON_INVALID");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalCorpusJson).join(",")}]`;
+  if (!isRecord(value)) throw new CorpusValidationError("CORPUS_JSON_INVALID");
+  return `{${Object.keys(value).sort().map((key) => (
+    `${JSON.stringify(key)}:${canonicalCorpusJson(value[key])}`
+  )).join(",")}}`;
+}
+
+function requiredString(value: unknown, code: string) {
+  if (typeof value !== "string" || !value.length || value.includes("\0")) {
+    throw new CorpusValidationError(code);
+  }
+  return value;
+}
+
+function optionalString(value: unknown, code: string) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || value.includes("\0")) {
+    throw new CorpusValidationError(code);
+  }
+  return value;
+}
+
+function validDocumentId(value: unknown, code: string) {
+  const id = requiredString(value, code);
+  if (!DOCUMENT_ID_PATTERN.test(id) || id !== id.trim()) throw new CorpusValidationError(code);
+  return id;
+}
+
+function validItemId(value: unknown, code: string) {
+  const id = requiredString(value, code);
+  if (!ITEM_ID_PATTERN.test(id) || id !== id.trim()) throw new CorpusValidationError(code);
+  return id;
+}
+
+function normalizedDocumentJson(value: unknown, code: string) {
+  if (value === undefined || value === null) return "{}";
+  if (!isRecord(value)) throw new CorpusValidationError(code);
+  return canonicalCorpusJson(value);
+}
+
+function normalizeItem(
+  value: unknown,
+  documentId: string,
+  itemIds: Set<string>,
+  sequences: Set<number>,
+): NormalizedItem {
+  const item = requireExactObject(
+    value,
+    ITEM_KEYS,
+    ["id", "sequence", "content", "original"],
+    "CORPUS_ITEM_INVALID",
+  );
+  const id = validItemId(item.id, "CORPUS_ITEM_ID_INVALID");
+  if (itemIds.has(id)) throw new CorpusValidationError("CORPUS_ITEM_ID_DUPLICATE");
+  itemIds.add(id);
+  const sequence = item.sequence;
+  if (!Number.isSafeInteger(sequence) || Number(sequence) < 1) {
+    throw new CorpusValidationError("CORPUS_ITEM_SEQUENCE_INVALID");
+  }
+  if (sequences.has(Number(sequence))) {
+    throw new CorpusValidationError("CORPUS_ITEM_SEQUENCE_AMBIGUOUS");
+  }
+  sequences.add(Number(sequence));
+  const content = typeof item.content === "string" ? item.content : null;
+  if (content === null) throw new CorpusValidationError("CORPUS_ITEM_CONTENT_INVALID");
+  const originalJson = canonicalCorpusJson(item.original);
+  const original = item.original;
+  const originalEventId = isRecord(original) ? original.event_id : undefined;
+  const originalTrajectoryId = isRecord(original) ? original.trajectory_id : undefined;
+  const eventOwned = typeof originalEventId === "string"
+    && originalEventId === id
+    && typeof originalTrajectoryId === "string"
+    && originalTrajectoryId === documentId;
+  const qualifiedRecordOwned = originalEventId === undefined
+    && (originalTrajectoryId === undefined || originalTrajectoryId === documentId)
+    && id.startsWith(`${documentId}:`);
+  if (!eventOwned && !qualifiedRecordOwned) {
+    throw new CorpusValidationError("CORPUS_ITEM_OWNERSHIP_INVALID");
+  }
+  return {
+    id,
+    documentId,
+    sequence: Number(sequence),
+    eventType: optionalString(item.eventType, "CORPUS_ITEM_EVENT_TYPE_INVALID"),
+    actorId: optionalString(item.actorId, "CORPUS_ITEM_ACTOR_INVALID"),
+    actorType: optionalString(item.actorType, "CORPUS_ITEM_ACTOR_INVALID"),
+    timestamp: optionalString(item.timestamp, "CORPUS_ITEM_TIMESTAMP_INVALID"),
+    content,
+    originalJson,
+  };
+}
+
+export function normalizeFinalizedCorpus(value: unknown): NormalizedFinalizedCorpus {
+  const body = requireExactObject(
+    value,
+    TOP_LEVEL_KEYS,
+    ["documents"],
+    "CORPUS_PAYLOAD_INVALID",
+  );
+  if (!Array.isArray(body.documents) || body.documents.length < 1) {
+    throw new CorpusValidationError("CORPUS_DOCUMENTS_REQUIRED");
+  }
+  const documentIds = new Set<string>();
+  const itemIds = new Set<string>();
+  let itemCount = 0;
+  const documents = body.documents.map((entryValue) => {
+    const entry = requireExactObject(
+      entryValue,
+      CORPUS_DOCUMENT_KEYS,
+      ["document", "items"],
+      "CORPUS_DOCUMENT_ENTRY_INVALID",
+    );
+    const document = requireExactObject(
+      entry.document,
+      DOCUMENT_KEYS,
+      ["id", "kind", "title", "itemCount"],
+      "CORPUS_DOCUMENT_INVALID",
+    );
+    const id = validDocumentId(document.id, "CORPUS_DOCUMENT_ID_INVALID");
+    if (documentIds.has(id)) throw new CorpusValidationError("CORPUS_DOCUMENT_ID_DUPLICATE");
+    documentIds.add(id);
+    if (document.kind !== "meeting" && document.kind !== "trajectory") {
+      throw new CorpusValidationError("CORPUS_DOCUMENT_KIND_INVALID");
+    }
+    if (!Array.isArray(entry.items)) throw new CorpusValidationError("CORPUS_ITEMS_INVALID");
+    if (!Number.isSafeInteger(document.itemCount)
+      || Number(document.itemCount) !== entry.items.length) {
+      throw new CorpusValidationError("CORPUS_DOCUMENT_ITEM_COUNT_MISMATCH");
+    }
+    itemCount += entry.items.length;
+    const sequences = new Set<number>();
+    const items = entry.items.map((item) => normalizeItem(item, id, itemIds, sequences));
+    items.sort((left, right) => left.sequence - right.sequence || compareIdentity(left.id, right.id));
+    return {
+      id,
+      kind: document.kind,
+      title: requiredString(document.title, "CORPUS_DOCUMENT_TITLE_INVALID"),
+      sourceUser: optionalString(document.sourceUser, "CORPUS_DOCUMENT_SOURCE_INVALID"),
+      sourceSystem: optionalString(document.sourceSystem, "CORPUS_DOCUMENT_SOURCE_INVALID"),
+      sourceTimestamp: optionalString(document.sourceTimestamp, "CORPUS_DOCUMENT_SOURCE_INVALID"),
+      itemCount: items.length,
+      metadataJson: normalizedDocumentJson(document.metadata, "CORPUS_DOCUMENT_METADATA_INVALID"),
+      originalEnvelopeJson: normalizedDocumentJson(
+        document.envelope,
+        "CORPUS_DOCUMENT_ENVELOPE_INVALID",
+      ),
+      items,
+    } satisfies NormalizedDocument;
+  });
+  documents.sort((left, right) => compareIdentity(left.id, right.id));
+  const canonicalPayload = canonicalCorpusJson({ documents });
+  return { documents, itemCount, canonicalPayload };
+}
+
+export async function finalizedCorpusDigest(corpus: NormalizedFinalizedCorpus) {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(corpus.canonicalPayload));
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function corpusErrorResponse(error: unknown) {
+  if (error instanceof CorpusValidationError) {
+    return Response.json({ error: "Invalid finalized corpus", code: error.code }, { status: 400 });
+  }
+  return null;
+}
 
 export async function GET() {
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
@@ -17,7 +274,7 @@ export async function GET() {
             updated_at,organization_status,formatted_summary_json
        FROM documents ORDER BY source_timestamp,title`
   ).all();
-  return Response.json({ documents: results.map((document) => ({
+  return Response.json({ documents: results.map((document: Record<string, unknown>) => ({
     ...document,
     formatted_summary: JSON.parse(String(document.formatted_summary_json || "{}")),
     formatted_summary_json: undefined,
@@ -25,100 +282,128 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const db = await getD1();
+  let corpus: NormalizedFinalizedCorpus;
+  try {
+    corpus = normalizeFinalizedCorpus(await request.json());
+  } catch (error) {
+    return corpusErrorResponse(error) || Response.json({
+      error: "Invalid finalized corpus",
+      code: "CORPUS_PAYLOAD_INVALID",
+    }, { status: 400 });
+  }
+  const documentPayload = JSON.stringify(corpus.documents.map((document) => ({
+    id: document.id,
+    kind: document.kind,
+    title: document.title,
+    sourceUser: document.sourceUser,
+    sourceSystem: document.sourceSystem,
+    sourceTimestamp: document.sourceTimestamp,
+    itemCount: document.itemCount,
+    metadataJson: document.metadataJson,
+    originalEnvelopeJson: document.originalEnvelopeJson,
+  })));
+  const itemPayload = JSON.stringify(corpus.documents.flatMap((document) => document.items));
+  const corpusDigest = await finalizedCorpusDigest(corpus);
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
   }
-  const body = await request.json() as {
-    document: {
-      id: string; kind: "meeting" | "trajectory"; title: string;
-      sourceUser?: string; sourceSystem?: string; sourceTimestamp?: string;
-      metadata?: unknown; envelope?: unknown; itemCount?: number;
-    };
-    items: Array<{
-      id: string; sequence: number; eventType?: string; actorId?: string;
-      actorType?: string; timestamp?: string; content: string; original: unknown;
-      organizationCategory?: string; organizationConfidence?: number;
-      organizationReason?: string;
-    }>;
-  };
-  const document = body.document;
-  if (!document?.id || !["meeting", "trajectory"].includes(document.kind) || !Array.isArray(body.items)) {
-    return Response.json({ error: "Invalid import payload" }, { status: 400 });
-  }
   const now = new Date().toISOString();
-  const latestRedaction = await db.prepare(
-    "SELECT status FROM redaction_jobs ORDER BY started_at DESC LIMIT 1",
-  ).first<{ status: string }>();
-  let sourceChanged = false;
-  if (latestRedaction && latestRedaction.status !== "stale" && body.items.length > 0) {
-    const existing = await db.batch(body.items.map((item) => db.prepare(
-      `SELECT document_id,id,sequence,event_type,actor_id,actor_type,timestamp,content
-         FROM items WHERE id=?`,
-    ).bind(item.id)));
-    sourceChanged = !sourceImportMatchesExisting(
-      existing.map((result) => result.results?.[0]).filter(Boolean),
-      document.id,
-      body.items,
-    );
+  if (!await beginStorySourceMutation(db, authority.workflowRunId, now)) {
+    return Response.json({ error: "Another Story source mutation is already running" }, { status: 409 });
   }
-  await db.batch([
-    db.prepare(
-      `INSERT INTO documents
-      (id,kind,title,source_user,source_system,source_timestamp,item_count,metadata_json,
-       original_envelope_json,imported_at,updated_at,organization_status,formatted_summary_json)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending','{}')
-     ON CONFLICT(id) DO UPDATE SET
-       kind=excluded.kind,title=excluded.title,source_user=excluded.source_user,
-       source_system=excluded.source_system,source_timestamp=excluded.source_timestamp,
-       item_count=excluded.item_count,metadata_json=excluded.metadata_json,
-       original_envelope_json=excluded.original_envelope_json,updated_at=excluded.updated_at,
-       organization_status='pending',formatted_summary_json='{}'`
-    ).bind(
-      document.id, document.kind, document.title, document.sourceUser || null,
-      document.sourceSystem || null, document.sourceTimestamp || null,
-      document.itemCount ?? body.items.length, JSON.stringify(document.metadata || {}),
-      JSON.stringify(document.envelope || {}), now, now,
-    ),
-    // Any import invalidates derived organization state before item writes.
-    db.prepare("DELETE FROM organization_jobs"),
-    // Preserve a completed Privacy pass for a source-equivalent Story or
-    // organization reattach. Any source-bearing change fails closed as stale.
-    ...(sourceChanged ? [db.prepare(
-      `UPDATE redaction_jobs
+  let leasedRevision: number | undefined;
+  try {
+    const sourceAuthority = await db.prepare(`SELECT r.story_source_revision,
+        COALESCE(m.corpus_revision,0) AS corpus_revision
+      FROM workflow_runs r LEFT JOIN finalized_corpus_manifests m ON m.workflow_run_id=r.id
+      WHERE r.id=? AND r.story_generation_status IN (?,?)`)
+      .bind(
+        authority.workflowRunId,
+        STORY_SOURCE_WRITE_STATUS.idle,
+        STORY_SOURCE_WRITE_STATUS.resumeGeneration,
+      ).first<{ story_source_revision: number; corpus_revision: number }>();
+    if (!sourceAuthority
+      || !Number.isSafeInteger(Number(sourceAuthority.story_source_revision))
+      || !Number.isSafeInteger(Number(sourceAuthority.corpus_revision))) {
+      throw new Error("Finalized corpus lease authority is unavailable");
+    }
+    leasedRevision = Number(sourceAuthority.story_source_revision);
+    const corpusRevision = Number(sourceAuthority.corpus_revision) + 1;
+    const leaseSql = `EXISTS (SELECT 1 FROM workflow_runs
+      WHERE id=? AND story_source_revision=? AND story_generation_status IN (?,?))`;
+    const leaseBindings = [
+      authority.workflowRunId,
+      leasedRevision,
+      STORY_SOURCE_WRITE_STATUS.idle,
+      STORY_SOURCE_WRITE_STATUS.resumeGeneration,
+    ];
+    const statements: ReturnType<typeof db.prepare>[] = [
+      db.prepare(`DELETE FROM items WHERE ${leaseSql}`).bind(...leaseBindings),
+      db.prepare(`DELETE FROM documents WHERE ${leaseSql}`).bind(...leaseBindings),
+      db.prepare(`INSERT INTO documents
+        (id,kind,title,source_user,source_system,source_timestamp,item_count,metadata_json,
+         original_envelope_json,imported_at,updated_at,organization_status,formatted_summary_json)
+        SELECT json_extract(value,'$.id'),json_extract(value,'$.kind'),
+          json_extract(value,'$.title'),json_extract(value,'$.sourceUser'),
+          json_extract(value,'$.sourceSystem'),json_extract(value,'$.sourceTimestamp'),
+          json_extract(value,'$.itemCount'),json_extract(value,'$.metadataJson'),
+          json_extract(value,'$.originalEnvelopeJson'),?,?,'pending','{}'
+        FROM json_each(?) WHERE ${leaseSql}`)
+        .bind(now, now, documentPayload, ...leaseBindings),
+      db.prepare(`INSERT INTO items
+        (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,original_json)
+        SELECT json_extract(value,'$.id'),json_extract(value,'$.documentId'),
+          json_extract(value,'$.sequence'),json_extract(value,'$.eventType'),
+          json_extract(value,'$.actorId'),json_extract(value,'$.actorType'),
+          json_extract(value,'$.timestamp'),json_extract(value,'$.content'),
+          json_extract(value,'$.originalJson')
+        FROM json_each(?) WHERE ${leaseSql}`)
+        .bind(itemPayload, ...leaseBindings),
+    ];
+    statements.push(
+      db.prepare(`DELETE FROM organization_jobs WHERE ${leaseSql}`).bind(...leaseBindings),
+      db.prepare(`UPDATE redaction_jobs
           SET status='stale',stage='source_changed',completed_at=NULL,updated_at=?
-        WHERE status!='stale'`
-    ).bind(now)] : []),
-    // Imports stage new organization/Story data. Invalidate any activated Story
-    // before item writes so the shell returns to persisted Workflow Progress.
-    db.prepare(`UPDATE workflow_runs
-      SET story_generation_status=CASE WHEN story_generation_status='running' THEN 'running' ELSE 'not_started' END,
-          story_generation_completed=0,
-          story_generation_total=0,story_source_revision=story_source_revision+1,
-          active_story_digest=NULL,updated_at=?
-      WHERE id=?`).bind(now, authority.workflowRunId),
-  ]);
-
-  for (let start = 0; start < body.items.length; start += 75) {
-    await db.batch(body.items.slice(start, start + 75).map((item) => db.prepare(
-      `INSERT INTO items
-        (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,original_json,
-         organization_category,organization_confidence,organization_reason)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-       ON CONFLICT(id) DO UPDATE SET
-         sequence=excluded.sequence,event_type=excluded.event_type,actor_id=excluded.actor_id,
-         actor_type=excluded.actor_type,timestamp=excluded.timestamp,content=excluded.content,
-         original_json=excluded.original_json,
-         organization_category=excluded.organization_category,
-         organization_confidence=excluded.organization_confidence,
-         organization_reason=excluded.organization_reason`
-    ).bind(
-      item.id, document.id, item.sequence, item.eventType || null, item.actorId || null,
-      item.actorType || null, item.timestamp || null, item.content || "",
-      JSON.stringify(item.original), item.organizationCategory || null,
-      item.organizationConfidence ?? null, item.organizationReason || null,
-    )));
+        WHERE status!='stale' AND ${leaseSql}`).bind(now, ...leaseBindings),
+      db.prepare(`DELETE FROM finalized_corpus_manifests
+        WHERE workflow_run_id=? AND ${leaseSql}`)
+        .bind(authority.workflowRunId, ...leaseBindings),
+      db.prepare(`INSERT INTO finalized_corpus_manifests
+        (workflow_run_id,corpus_revision,corpus_digest,document_count,item_count,finalized_at)
+        SELECT ?,?,?,?,?,? WHERE ${leaseSql}`).bind(
+        authority.workflowRunId,
+        corpusRevision,
+        corpusDigest,
+        corpus.documents.length,
+        corpus.itemCount,
+        now,
+        ...leaseBindings,
+      ),
+    );
+    if (!await publishFinalizedCorpusSourceMutation(
+      db,
+      statements,
+      authority.workflowRunId,
+      leasedRevision,
+      corpusRevision,
+      corpusDigest,
+      corpus.documents.length,
+      corpus.itemCount,
+      now,
+    )) {
+      throw new Error("Finalized corpus publication boundary changed during replacement");
+    }
+    return Response.json({
+      finalized: true,
+      corpusRevision,
+      corpusDigest,
+      documentCount: corpus.documents.length,
+      itemCount: corpus.itemCount,
+    });
+  } catch (error) {
+    await abortStorySourceMutation(db, authority.workflowRunId, now, leasedRevision);
+    throw error;
   }
-  return Response.json({ id: document.id, imported: body.items.length });
 }

@@ -1,6 +1,6 @@
-import type { getD1 } from "../db";
+import type { getLocalDatabase } from "../db";
 
-type WorkflowDatabase = Awaited<ReturnType<typeof getD1>>;
+type WorkflowDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
 export const WORKFLOW_RUN_AUTHORITY = {
   noRun: "NO_RUN_ESTABLISHED",

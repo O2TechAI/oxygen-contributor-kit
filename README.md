@@ -72,7 +72,7 @@ startup context for every Agent run.
 ```
 
 `All set`, producing or downloading a ZIP, and answering a preference question are each separate
-from publication. `publication_approved` remains `false` unless a separate future workflow exists.
+from publication. `publication_approved` remains `false` throughout this local-only workflow.
 
 ---
 
@@ -307,17 +307,18 @@ until the AI pass is complete, every bundle has worker output, and every rejecte
 resolved. `push_redactions.py` reads `work/my-redaction/report.json` automatically and refuses to
 mark the pass complete when coverage is missing.
 
-Each official launch uses a fresh process-owned D1 runtime and binds Vinext directly to IPv4
-loopback. By default the OS reserves an arbitrary free port and the launcher announces it only
-after that exact port becomes healthy. Existing `viewer/.wrangler` data is never reused or deleted.
-Use `--port <number>` for a specific isolated port; an occupied port fails immediately with a clear
+Each official launcher invocation uses native Next with one fresh process-owned temporary local
+SQLite database and binds directly to IPv4 loopback. The Viewer owns cleanup when it stops; no
+database state is reused. By default the OS reserves an arbitrary free port and the launcher
+announces it only after that exact port becomes healthy. There is no online deployment path. Use
+`--port <number>` for a specific isolated port; an occupied port fails immediately with a clear
 diagnostic and no unrelated process is stopped.
 
 ---
 
 ## What this does not promise
 
-> **Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review is
+> **Best-effort redaction; no formal anonymity guarantee. Original-contributor final review is
 > required before release.**
 
 This kit reduces risk. It does not eliminate it, and it cannot tell you that a release candidate

@@ -77,7 +77,28 @@ export function partitionPersistableRedactions(spans) {
   return { persistable, duplicates };
 }
 
-export function redactionReleaseError(job, currentSourceDigest) {
+const persistedReviewStates = new Set([
+  "deterministic", "needs_confirmation", "confirmed_keep", "confirmed_redact",
+]);
+
+function redactionReviewReleaseError(redactions) {
+  let pending = false;
+  for (const row of redactions || []) {
+    const reviewState = row?.review_state == null ? "" : String(row.review_state);
+    const status = String(row?.status || "");
+    if (!persistedReviewStates.has(reviewState)) {
+      return "AI redaction review state is missing or invalid; rerun Privacy before release";
+    }
+    const expectedStatus = reviewState === "confirmed_keep" ? "removed" : "active";
+    if (status !== expectedStatus) return "AI redaction review state is inconsistent";
+    if (reviewState === "needs_confirmation") pending = true;
+  }
+  return pending
+    ? "AI redaction requires contributor confirmation before release"
+    : null;
+}
+
+export function redactionReleaseError(job, currentSourceDigest, redactions = []) {
   if (!job) return "AI redaction must complete before the contribution ZIP can be built";
   if (Number(job.rejected || 0) > 0) {
     return "AI redaction contains rejected spans; resolve or rerun it before export";
@@ -97,5 +118,5 @@ export function redactionReleaseError(job, currentSourceDigest) {
   if (job.source_digest !== currentSourceDigest) {
     return "AI redaction source changed after review; rerun redaction before export";
   }
-  return null;
+  return redactionReviewReleaseError(redactions);
 }

@@ -13,14 +13,7 @@ run/
         └── artifacts/
 ```
 
-Supported compatible single-meeting directory:
-
-```text
-run/
-└── meeting.json
-```
-
-Supported multi-meeting directory:
+Supported meeting directory for both one-meeting and multi-meeting runs:
 
 ```text
 run/
@@ -31,12 +24,12 @@ run/
         └── meeting.json
 ```
 
-The root `meeting.json`, plural `meetings/` directory, and `trajectories/` directory may coexist in
-one run. Every meeting dataset retains a distinct `meeting_id`; each imported record ID remains
-qualified as `<meeting-id>:<record-id>`. Transcript contents are not concatenated, and source
-document count does not determine Story or Chapter count.
+The plural `meetings/` directory and `trajectories/` directory may coexist in one run. A root
+`meeting.json` is invalid. Every meeting dataset retains a distinct `meeting_id`; each imported
+record ID remains qualified as `<meeting-id>:<record-id>`. Transcript contents are not
+concatenated, and source document count does not determine Story or Chapter count.
 
-Each trajectory event follows Oxygen v0.2 and should include `event_id`, `sequence`,
+Each trajectory event follows the canonical unversioned Oxygen trajectory contract and should include `event_id`, `sequence`,
 `event_type`, actor fields, timestamps, and a payload. The importer preserves the original
 event JSON while deriving display content.
 

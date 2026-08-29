@@ -3,14 +3,14 @@
 
 Given a repo path, this scans the current user's ~/.claude and ~/.codex session
 stores, keeps only sessions whose recorded cwd is inside the repo, converts each
-one to Oxygen trajectory v0.2 via the vendored extractors, and copies the
+one to the canonical Oxygen trajectory contract via the vendored extractors, and copies the
 related memory files (Claude project memory, CLAUDE.md, AGENTS.md).
 
 Output layout:
 
     <out>/
     ├── index.json
-    ├── trajectories/traj-<user>-<agent>-<hash>/   (v0.2: manifest/events/redaction/artifacts)
+    ├── trajectories/traj-<user>-<agent>-<hash>/   (manifest/events/redaction/artifacts)
     └── memory/{claude,codex}/...
 
 Everything starts as review_status=pending / publication_approved=false.
@@ -22,12 +22,14 @@ import argparse
 import atexit
 from dataclasses import dataclass, field
 import getpass
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -38,14 +40,15 @@ from oxygen_common import (
     fail,
     is_sensitive_name,
     progress,
-    run_stamp,
     safe_slug,
     sha256_file,
     configure_utf8_stdio,
     text_subprocess_options,
     utc_now,
+    validate_output_root,
     write_json,
 )
+from human_source_projection import INGEST_RUN_SCHEMA, POLICY_ID, project_trajectory
 
 
 SESSION_SCAN_MAX_RECORDS = 2048
@@ -469,40 +472,270 @@ def is_codex_session_file(path: Path) -> bool:
     return False
 
 
-def extract(session: Path, system: str, out_root: Path, home: Path, user: str) -> dict:
-    digest = sha256_file(session)[:16]
-    trajectory_id = f"traj-{safe_slug(user)}-{system}-{digest}"
+def stable_trajectory_id(session: Path, system: str, user: str) -> str:
+    """Name one raw container from its provider-owned structured identity.
+
+    Codex ``session_id`` is the logical parent thread and is intentionally
+    shared by top-level, subagent, and compaction rollout containers. The
+    ``session_meta.payload.id`` field identifies the individual recorded
+    container, so it must take precedence or distinct source files overwrite
+    one another downstream.
+    """
+    source_identity = session.stem
+    try:
+        with session.open("rb") as handle:
+            records = 0
+            bytes_scanned = 0
+            while records < SESSION_SCAN_MAX_RECORDS and bytes_scanned < SESSION_SCAN_MAX_BYTES:
+                raw = handle.readline(SESSION_SCAN_MAX_BYTES - bytes_scanned)
+                if not raw:
+                    break
+                records += 1
+                bytes_scanned += len(raw)
+                try:
+                    record = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                if system == "codex" and record.get("type") == "session_meta":
+                    payload = record.get("payload")
+                    if isinstance(payload, dict):
+                        value = payload.get("id") or payload.get("session_id")
+                        if isinstance(value, str) and value:
+                            source_identity = value
+                            break
+                if system == "claude":
+                    value = record.get("sessionId")
+                    if isinstance(value, str) and value:
+                        source_identity = value
+                        break
+    except OSError:
+        pass
+    locator_digest = hashlib.sha256(
+        f"{system}\0{source_identity}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"traj-{safe_slug(user)}-{system}-{locator_digest}"
+
+
+def validate_rerunnable_output(out: Path) -> bool:
+    """Allow replacement cleanup only for an identified prior collector run."""
+    if not out.exists():
+        return False
+    if out.is_symlink() or not out.is_dir():
+        raise ValueError("output path must be a real directory")
+    entries = list(out.iterdir())
+    if not entries:
+        return False
+    index_path = out / "index.json"
+    if index_path.is_symlink() or not index_path.is_file():
+        raise ValueError("nonempty output is not an identified collector run")
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise ValueError("existing collector index is invalid") from None
+    if not isinstance(index, dict) or index.get("tool") != "collect_repo_trajectories":
+        raise ValueError("nonempty output is not an identified collector run")
+    return True
+
+
+def prune_stale_trajectory_outputs(out: Path, successful_ids: set[str]) -> int:
+    """Remove only obsolete derived trajectory directories from a proven run."""
+    root = out / "trajectories"
+    if not root.exists():
+        return 0
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("trajectory output root is invalid")
+    resolved_out = out.resolve(strict=True)
+    resolved_root = root.resolve(strict=True)
+    if not resolved_root.is_relative_to(resolved_out):
+        raise ValueError("trajectory output root leaves the collector run")
+    removed = 0
+    for entry in root.iterdir():
+        if entry.is_symlink() or not entry.is_dir():
+            raise ValueError("trajectory output contains an unsupported entry")
+        resolved_entry = entry.resolve(strict=True)
+        if not resolved_entry.is_relative_to(resolved_root):
+            raise ValueError("trajectory output entry leaves the collector run")
+        if entry.name not in successful_ids:
+            shutil.rmtree(resolved_entry)
+            removed += 1
+    return removed
+
+
+def extract(
+    session: Path,
+    system: str,
+    out_root: Path,
+    home: Path,
+    user: str,
+    semantic_source_registry: dict[tuple[str, str, str, str, str], str],
+    claimed_trajectory_ids: set[str],
+) -> dict:
+    source_digest = sha256_file(session)
+    digest = source_digest[:16]
+    trajectory_id = stable_trajectory_id(session, system, user)
+    if trajectory_id in claimed_trajectory_ids:
+        return {
+            "trajectory_id": trajectory_id,
+            "system": system,
+            "source_session": str(session),
+            "source_sha256_prefix": digest,
+            "ok": False,
+            "error": "duplicate structured raw session identity",
+        }
     script = VENDOR_DIR / (
         "extract_claude_trajectory.py" if system == "claude" else "extract_codex_trajectory.py"
     )
-    cmd = [
-        sys.executable,
-        str(script),
-        "--session",
-        str(session),
-        "--output-root",
-        str(out_root),
-        "--trajectory-id",
-        trajectory_id,
-        "--source-home",
-        str(home),
-        "--source-user",
-        user,
-        "--overwrite",
+    out_root.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="oxygen-extraction-",
+        dir=out_root.parent,
+    ) as staging_directory:
+        staging_root = Path(staging_directory)
+        cmd = [
+            sys.executable,
+            str(script),
+            "--session",
+            str(session),
+            "--output-root",
+            str(staging_root),
+            "--trajectory-id",
+            trajectory_id,
+            "--source-home",
+            str(home),
+            "--source-user",
+            user,
+            "--overwrite",
+        ]
+        result = subprocess.run(
+            cmd, capture_output=True, cwd=str(VENDOR_DIR), **text_subprocess_options()
+        )
+        entry = {
+            "trajectory_id": trajectory_id,
+            "system": system,
+            "source_session": str(session),
+            "source_sha256_prefix": digest,
+            "ok": result.returncode == 0,
+        }
+        if result.returncode != 0:
+            entry["error"] = (result.stderr or result.stdout).strip()[-2000:]
+            return entry
+        try:
+            staged_trajectory = staging_root / trajectory_id
+            staged_semantic_registry = dict(semantic_source_registry)
+            entry["contribution_projection"] = project_trajectory(
+                staged_trajectory,
+                raw_source_digest=source_digest,
+                semantic_source_registry=staged_semantic_registry,
+            )
+            out_root.mkdir(parents=True, exist_ok=True)
+            final_trajectory = out_root / trajectory_id
+            if final_trajectory.exists():
+                shutil.rmtree(final_trajectory)
+            shutil.move(str(staged_trajectory), str(final_trajectory))
+            semantic_source_registry.clear()
+            semantic_source_registry.update(staged_semantic_registry)
+            claimed_trajectory_ids.add(trajectory_id)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            entry["ok"] = False
+            entry["error"] = f"human-source projection failed: {error}"
+        return entry
+
+
+def aggregate_projection(trajectories: list[dict]) -> dict:
+    projections = [
+        item["contribution_projection"] for item in trajectories
+        if item.get("ok") and isinstance(item.get("contribution_projection"), dict)
     ]
-    result = subprocess.run(
-        cmd, capture_output=True, cwd=str(VENDOR_DIR), **text_subprocess_options()
-    )
-    entry = {
-        "trajectory_id": trajectory_id,
-        "system": system,
-        "source_session": str(session),
-        "source_sha256_prefix": digest,
-        "ok": result.returncode == 0,
+    by_family: dict[str, dict[str, int]] = {}
+    kept_by_reason: dict[str, int] = {}
+    dropped_by_reason: dict[str, int] = {}
+    for projection in projections:
+        for family, counts in projection.get("by_event_family", {}).items():
+            target = by_family.setdefault(family, {
+                "raw": 0, "normalized": 0, "kept": 0, "dropped": 0,
+                "source_replays": 0,
+            })
+            for key in target:
+                target[key] += int(counts.get(key, 0))
+        for reason, count in projection.get("kept_by_reason", {}).items():
+            kept_by_reason[reason] = kept_by_reason.get(reason, 0) + int(count)
+        for reason, count in projection.get("dropped_by_reason", {}).items():
+            dropped_by_reason[reason] = dropped_by_reason.get(reason, 0) + int(count)
+    raw_source_digest = hashlib.sha256()
+    projected_digest = hashlib.sha256()
+    for item in sorted(
+        (
+            trajectory["trajectory_id"],
+            trajectory["contribution_projection"]["raw_source_digest"],
+            trajectory["contribution_projection"]["projected_universe_digest"],
+        )
+        for trajectory in trajectories
+        if trajectory.get("ok") and isinstance(trajectory.get("contribution_projection"), dict)
+    ):
+        raw_source_digest.update(f"{item[0]}\t{item[1]}\n".encode("utf-8"))
+        projected_digest.update(f"{item[0]}\t{item[2]}\n".encode("utf-8"))
+    return {
+        "policy_id": POLICY_ID,
+        "trajectory_count": len(projections),
+        "raw_event_count": sum(int(item.get("raw_event_count", 0)) for item in projections),
+        "extracted_event_count": sum(
+            int(item.get("extracted_event_count", item.get("raw_event_count", 0)))
+            for item in projections
+        ),
+        "normalized_event_count": sum(
+            int(item.get("normalized_event_count", item.get("raw_event_count", 0)))
+            for item in projections
+        ),
+        "kept_event_count": sum(int(item.get("kept_event_count", 0)) for item in projections),
+        "dropped_event_count": sum(int(item.get("dropped_event_count", 0)) for item in projections),
+        "mechanical_drop_count": sum(
+            int(item.get("mechanical_drop_count", item.get("dropped_event_count", 0)))
+            for item in projections
+        ),
+        "projection_removed_event_count": sum(
+            int(item.get("projection_removed_event_count", item.get("dropped_event_count", 0)))
+            for item in projections
+        ),
+        "cross_trajectory_semantic_replay_count": sum(
+            int(item.get("cross_trajectory_semantic_replay_count", 0)) for item in projections
+        ),
+        "extractor_semantic_replay_count": sum(
+            int(item.get("extractor_semantic_replay_count", 0)) for item in projections
+        ),
+        "source_duplicate_semantic_replay_count": sum(
+            int(item.get("source_duplicate_semantic_replay_count", 0)) for item in projections
+        ),
+        "kept_by_reason": dict(sorted(kept_by_reason.items())),
+        "dropped_by_reason": dict(sorted(dropped_by_reason.items())),
+        "by_event_family": dict(sorted(by_family.items())),
+        "raw_artifact_count": sum(int(item.get("raw_artifact_count", 0)) for item in projections),
+        "kept_human_source_artifact_count": sum(
+            int(item.get("kept_human_source_artifact_count", 0)) for item in projections
+        ),
+        "dropped_machine_artifact_count": sum(
+            int(item.get("dropped_machine_artifact_count", 0)) for item in projections
+        ),
+        "projected_serialized_bytes": sum(
+            int(item.get("projected_serialized_bytes", 0)) for item in projections
+        ),
+        "raw_serialized_bytes": sum(
+            int(item.get("raw_serialized_bytes", 0)) for item in projections
+        ),
+        "normalized_serialized_bytes": sum(
+            int(item.get("normalized_serialized_bytes", item.get("raw_serialized_bytes", 0)))
+            for item in projections
+        ),
+        "mechanical_serialized_byte_reduction": sum(
+            int(item.get("mechanical_serialized_byte_reduction", 0)) for item in projections
+        ),
+        "serialized_byte_reduction": sum(
+            int(item.get("serialized_byte_reduction", 0)) for item in projections
+        ),
+        "raw_source_digest": raw_source_digest.hexdigest(),
+        "projected_universe_digest": projected_digest.hexdigest(),
     }
-    if result.returncode != 0:
-        entry["error"] = (result.stderr or result.stdout).strip()[-2000:]
-    return entry
 
 
 def copy_memory(
@@ -561,7 +794,8 @@ def main(argv=None) -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", type=Path, help="repo the trajectories should relate to")
-    parser.add_argument("--out", type=Path, help="output dir (default tools/out/repo-<name>-<ts>)")
+    parser.add_argument("--out", type=Path, required=True,
+                        help="explicit local run output directory")
     parser.add_argument("--home", type=Path, default=Path.home())
     parser.add_argument(
         "--source-home",
@@ -600,8 +834,6 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--agents", default="claude,codex", help="comma list among: claude,codex"
     )
-    parser.add_argument("--publish", action="store_true",
-                        help="copy the result into the shared ingest-staging area")
     args = parser.parse_args(argv)
     if bool(args.progress_url) != bool(args.workflow_run_id):
         parser.error("--progress-url and --workflow-run-id must be supplied together")
@@ -610,11 +842,11 @@ def main(argv=None) -> int:
     if not repo.is_dir():
         raise fail(f"repo not found: {repo}")
     agents = {a.strip() for a in args.agents.split(",") if a.strip()}
-    out = (
-        args.out.expanduser().resolve()
-        if args.out
-        else Path(__file__).resolve().parent / "out" / f"repo-{safe_slug(repo.name)}-{run_stamp()}"
-    )
+    try:
+        out = validate_output_root(args.out)
+        replacing_existing_output = validate_rerunnable_output(out)
+    except ValueError as error:
+        raise fail(str(error)) from error
     out.mkdir(parents=True, exist_ok=True)
     home = args.home.expanduser().resolve()
     source_home = (args.source_home or home).expanduser().resolve()
@@ -657,10 +889,20 @@ def main(argv=None) -> int:
         reporter.update(0, total)
 
     trajectories: list[dict] = []
+    semantic_source_registry: dict[tuple[str, str, str, str, str], str] = {}
+    claimed_trajectory_ids: set[str] = set()
     done = 0
     for system, sessions in (("claude", claude_sessions), ("codex", codex_sessions)):
         for session in sessions:
-            entry = extract(session, system, out / "trajectories", source_home, args.user)
+            entry = extract(
+                session,
+                system,
+                out / "trajectories",
+                source_home,
+                args.user,
+                semantic_source_registry,
+                claimed_trajectory_ids,
+            )
             trajectories.append(entry)
             done += 1
             pct = 10 + 75 * done / max(1, total)
@@ -668,6 +910,15 @@ def main(argv=None) -> int:
             progress(pct, "extract", f"[{done}/{total}] {entry['trajectory_id']} {status}")
             if reporter:
                 reporter.update(done, total)
+
+    if replacing_existing_output:
+        try:
+            prune_stale_trajectory_outputs(
+                out,
+                {entry["trajectory_id"] for entry in trajectories},
+            )
+        except ValueError as error:
+            raise fail(str(error)) from error
 
     progress(88, "memory", "collecting memory files")
     memory: list[dict] = []
@@ -697,7 +948,7 @@ def main(argv=None) -> int:
             copy_memory(source, memory_root / "codex", "repo", memory, repo)
 
     index = {
-        "schema_version": "0.2",
+        "schema": INGEST_RUN_SCHEMA,
         "tool": "collect_repo_trajectories",
         "generated_at": utc_now(),
         "repo": str(repo),
@@ -710,13 +961,9 @@ def main(argv=None) -> int:
         "trajectories": trajectories,
         "memory": memory,
         "session_discovery": {name: stats.as_dict() for name, stats in discovery.items()},
+        "contribution_projection": aggregate_projection(trajectories),
     }
     write_json(out / "index.json", index)
-    if args.publish:
-        from oxygen_common import publish_to_staging
-        staged = publish_to_staging(out, out.name)
-        if staged:
-            progress(98, "publish", f"staged: {staged}")
     progress(
         100,
         "done",
@@ -726,7 +973,7 @@ def main(argv=None) -> int:
     if reporter:
         reporter.finish(failed=index["trajectory_failures"] > 0)
     print(json.dumps({"output": str(out), "index": str(out / 'index.json')}, ensure_ascii=False))
-    return 0
+    return 1 if index["trajectory_failures"] else 0
 
 
 if __name__ == "__main__":

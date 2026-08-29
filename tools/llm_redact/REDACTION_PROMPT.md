@@ -8,7 +8,7 @@ rewrite, summarise, or paraphrase the source.
 
 ## Mandatory notice
 
-Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor
+Best-effort redaction; no formal anonymity guarantee. Original-contributor
 final review is required before release. Do not claim a transcript is safe.
 
 ## What to mark
@@ -71,7 +71,9 @@ Return **only** a JSON object, no prose before or after, no markdown fence:
       "end": 76,
       "category": "private-personal",
       "confidence": "high",
-      "reason": "names an individual and describes their performance"
+      "reason": "names an individual and describes their performance",
+      "review_state": "needs_confirmation",
+      "uncertainty_reason": "context is insufficient to distinguish a private identity from a public attribution"
     }
   ],
   "reviewed_turns": 183,
@@ -86,6 +88,18 @@ Rules for spans:
 - Spans within one `event_id` must not overlap. Merge them if they would.
 - Prefer one span covering a whole sentence over several fragments inside it.
 - `confidence` is `high`, `medium`, or `low`.
+- `review_state` is required and is exactly `deterministic` or
+  `needs_confirmation`. Use `deterministic` when the Privacy classification can
+  be applied without a contributor decision. Use `needs_confirmation` only
+  when human context is necessary to decide whether the span should remain or
+  be redacted.
+- `uncertainty_reason` is omitted or `null` for `deterministic`. For
+  `needs_confirmation`, it is a nonempty explanation of why human context is
+  necessary. It must not quote or reconstruct the span, expose a credential,
+  private identity, private path, or other suppressed content, or recommend
+  Keep or Redact.
+- `confidence` is informational only. Never infer `review_state` from high,
+  medium, or low confidence; assess the need for human confirmation directly.
 - `reason` explains why the span is unsafe **without quoting the span** and
   without restating its content. "mentions a named colleague and their salary"
   is fine; "mentions that Zhang earns 40k" is a leak and is not acceptable.

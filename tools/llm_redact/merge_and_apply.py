@@ -30,6 +30,7 @@ ALLOWED = {
     "internal-timeline",
     "mosaic-reidentification",
 }
+REVIEW_STATES = {"deterministic", "needs_confirmation"}
 TAG = '<redacted category="{}"/>'
 
 
@@ -51,6 +52,18 @@ def validate(findings, turns_by_id, traj, rejects):
         if category not in ALLOWED:
             drop("category not in allowlist")
             continue
+        review_state = f.get("review_state")
+        uncertainty_reason = f.get("uncertainty_reason")
+        if not isinstance(review_state, str) or review_state not in REVIEW_STATES:
+            drop("review_state is missing or invalid")
+            continue
+        if review_state == "needs_confirmation":
+            if not isinstance(uncertainty_reason, str) or not uncertainty_reason.strip():
+                drop("needs_confirmation requires a nonempty uncertainty_reason")
+                continue
+        elif uncertainty_reason is not None:
+            drop("deterministic requires uncertainty_reason to be omitted or null")
+            continue
         try:
             start, end = int(f["start"]), int(f["end"])
         except (KeyError, TypeError, ValueError):
@@ -61,7 +74,9 @@ def validate(findings, turns_by_id, traj, rejects):
             continue
         by_event.setdefault(event_id, []).append(
             {"start": start, "end": end, "category": category,
-             "confidence": f.get("confidence"), "reason": f.get("reason")})
+             "confidence": f.get("confidence"), "reason": f.get("reason"),
+             "review_state": review_state,
+             "uncertainty_reason": uncertainty_reason})
 
     # Drop overlaps within an event, keeping the earlier/longer span.
     for event_id, spans in by_event.items():

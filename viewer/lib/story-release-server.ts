@@ -1,26 +1,37 @@
-import type { getD1 } from "../db";
+import type { getLocalDatabase } from "../db";
 import { computeSourceDigest, redactionReleaseError } from "./redaction-pass.mjs";
+import { activeRedactionFragments, redactKnownFragments } from "./release.mjs";
 import {
   buildReviewedStoryRelease,
   sanitizeReviewedStoryRelease,
   serializeReviewedStoryRelease,
 } from "./story-release.ts";
-import { hydrateStoryReviewSession } from "./story-review-session.ts";
-import { readStoryReviewSessionRecord } from "./story-review-session-server.ts";
 import {
-  selectReviewableStoryTimeline,
-  validateStoryCandidatePackage,
+  STORY_REVIEW_SESSION_SCHEMA,
+  hydrateStoryReviewSession,
+} from "./story-review-session.ts";
+import { parseStoredStoryReviewSession } from "./story-review-session-server.ts";
+import {
+  selectReservedStorySourceItems,
+  validateCurrentStorySourcePackage,
   type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
-import { LEGACY_STORY_PREFIX, STORY_PREFIX } from "./timeline.ts";
+import { parseStorySource } from "./timeline.ts";
 import { isWorkflowRunId } from "./workflow-progress.ts";
 import {
-  WORKFLOW_RUN_AUTHORITY,
-  requireExactWorkflowRun,
-} from "./workflow-run-server.ts";
+  captureStoryReleasePrivacySnapshot,
+  capturePackageReleasePrivacySnapshot,
+  computeReviewGateDigest,
+  type ReleaseSnapshotTestOptions,
+} from "./release-privacy-snapshot.ts";
+import type { StoryReleaseTarget } from "./timeline.ts";
+import {
+  readStoryPrivacyAuthority,
+  type StoryPrivacyCandidateResponse,
+} from "./story-privacy-authority.ts";
 
-type ReleaseDatabase = Awaited<ReturnType<typeof getD1>>;
+type ReleaseDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
 type ReleaseRunRow = {
   id?: string;
@@ -41,6 +52,27 @@ type ReleaseItemRow = {
   organization_reason?: string;
 };
 
+type ReleaseRedactionRow = {
+  item_id?: string;
+  start_offset?: number;
+  end_offset?: number;
+  category?: string;
+  status?: string;
+};
+
+type ReleaseSessionRow = {
+  state_json?: string;
+  updated_at?: string;
+  server_version?: number;
+};
+
+type ReleaseSessionRecord = {
+  session: ReturnType<typeof parseStoredStoryReviewSession>["session"];
+  serverVersion: number;
+  sourceRevision: number | null;
+  persistedAt: string | null;
+};
+
 export type ServerOwnedReleaseRequest = {
   workflowRunId: string;
   serverVersion: number;
@@ -56,6 +88,11 @@ export const RELEASE_ERROR = {
   sessionMissing: "RELEASE_SESSION_MISSING",
   reviewIncomplete: "RELEASE_REVIEW_INCOMPLETE",
   stateInvalid: "RELEASE_STATE_INVALID",
+  privacyConflict: "RELEASE_PRIVACY_CONFLICT",
+  preparationInvalid: "RELEASE_PREPARATION_INVALID",
+  storyPrivacyPending: "RELEASE_STORY_PRIVACY_PENDING",
+  preferencePending: "RELEASE_PREFERENCE_PENDING",
+  releaseConfirmationRequired: "RELEASE_CONFIRMATION_REQUIRED",
 } as const;
 
 export type ReleaseErrorCode = typeof RELEASE_ERROR[keyof typeof RELEASE_ERROR];
@@ -71,9 +108,20 @@ type ReleaseSuccess = {
   ok: true;
   story: NonNullable<ReturnType<typeof sanitizeReviewedStoryRelease>>;
   serializedStory: string;
+  binding: {
+    workflowRunId: string;
+    activeStoryDigest: string;
+    sourceRevision: number;
+    serverVersion: number;
+    reviewGateDigest: string;
+  };
 };
 
 export type ServerOwnedReleaseResult = ReleaseSuccess | ReleaseFailure;
+
+type ReleaseReconstructionOptions = ReleaseSnapshotTestOptions & {
+  allowUnsetReleaseConfirmation?: boolean;
+};
 
 const REQUEST_KEYS = new Set(["workflowRunId", "serverVersion", "sourceRevision"]);
 const validRevision = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
@@ -82,7 +130,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function parseRequest(value: unknown): ServerOwnedReleaseRequest | null {
+export function parseServerOwnedReleaseRequest(value: unknown): ServerOwnedReleaseRequest | null {
   if (!isRecord(value)
     || Object.keys(value).length !== REQUEST_KEYS.size
     || Object.keys(value).some((key) => !REQUEST_KEYS.has(key))
@@ -113,29 +161,106 @@ async function sha256(value: string) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+const digestPattern = /^[0-9a-f]{64}$/;
+const preparationLanes = ["insight", "preference", "story", "story_privacy"];
+
+function exactTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !value) return false;
+  try { return new Date(value).toISOString() === value; } catch { return false; }
+}
+
+function validPreparationAndPreference(
+  snapshot: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
+  workflowRunId: string,
+  sourceRevision: number,
+  privacyCandidates: StoryPrivacyCandidateResponse[],
+) {
+  const receipts = snapshot.preparationReceiptRows;
+  if (receipts.length !== 4
+    || receipts.map((row) => String(row.lane)).sort().join("|") !== preparationLanes.join("|")) {
+    return false;
+  }
+  for (const receipt of receipts) {
+    if (receipt.workflow_run_id !== workflowRunId
+      || !preparationLanes.includes(String(receipt.lane))
+      || Number(receipt.source_revision) !== sourceRevision
+      || !digestPattern.test(String(receipt.input_digest || ""))
+      || !digestPattern.test(String(receipt.scope_digest || ""))
+      || !digestPattern.test(String(receipt.output_digest || ""))
+      || !validRevision(Number(receipt.scope_count))
+      || !validRevision(Number(receipt.output_count))
+      || !exactTimestamp(receipt.completed_at)) return false;
+  }
+  void privacyCandidates;
+
+  const preferenceReceipt = receipts.find((row) => row.lane === "preference")!;
+  const probeRun = snapshot.probeRun;
+  if (!probeRun || probeRun.workflow_run_id !== workflowRunId || probeRun.id !== workflowRunId
+    || Number(probeRun.source_revision) !== sourceRevision
+    || probeRun.status !== "complete" || probeRun.stage !== "preference" || probeRun.model !== null
+    || probeRun.input_digest !== preferenceReceipt.input_digest
+    || probeRun.output_digest !== preferenceReceipt.output_digest
+    || Number(probeRun.output_count) !== Number(preferenceReceipt.output_count)
+    || !validRevision(Number(probeRun.output_count))
+    || Number(probeRun.output_count) !== snapshot.probeRows.length + snapshot.bulkRows.length
+    || snapshot.probeRows.some((row) => row.answer_choice === null || row.answer_choice === undefined
+      || !exactTimestamp(row.answered_at))
+    || snapshot.bulkRows.some((row) => row.answer === null || row.answer === undefined
+      || !exactTimestamp(row.answered_at))) return false;
+  return true;
+}
+
+function exactReleaseConfirmationBinding(
+  snapshot: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
+  request: ServerOwnedReleaseRequest,
+  reviewGateDigest: string,
+) {
+  const row = snapshot.releaseConfirmation;
+  return snapshot.releaseConfirmationRows.length === 1
+    && row?.workflow_run_id === request.workflowRunId
+    && row.review_gate_digest === reviewGateDigest
+    && exactTimestamp(row.confirmed_at);
+}
+
+function readReleaseSessionRecord(row: ReleaseSessionRow | null): ReleaseSessionRecord {
+  if (!row) return { session: null, serverVersion: 0, sourceRevision: null, persistedAt: null };
+  let session: ReleaseSessionRecord["session"] = null;
+  let sourceRevision: number | null = null;
+  try {
+    const stored = JSON.parse(String(row.state_json || ""));
+    const parsed = parseStoredStoryReviewSession(stored);
+    sourceRevision = parsed.sourceRevision;
+    session = parsed.session;
+  } catch {
+    // Malformed state remains fail-closed while bounded CAS metadata is retained.
+  }
+  return {
+    session,
+    serverVersion: validRevision(row.server_version) ? row.server_version : 0,
+    sourceRevision,
+    persistedAt: typeof row.updated_at === "string" && row.updated_at ? row.updated_at : null,
+  };
+}
+
 /** Reconstruct the only POST-eligible reviewed Story from the exact activated
  * candidate, current Privacy source, and source-bound durable review session. */
 export async function reconstructReviewedStoryReleaseFromDatabase(
   db: ReleaseDatabase,
   input: unknown,
+  options: ReleaseReconstructionOptions = {},
 ): Promise<ServerOwnedReleaseResult> {
-  const request = parseRequest(input);
+  const request = parseServerOwnedReleaseRequest(input);
   if (!request) return failure(RELEASE_ERROR.requestInvalid);
 
-  const authority = await requireExactWorkflowRun(db, request.workflowRunId);
-  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+  const initialSnapshot = await captureStoryReleasePrivacySnapshot(db, request.workflowRunId);
+  if (initialSnapshot.authorityRows.length !== 1
+    || initialSnapshot.authorityRows[0]?.id !== request.workflowRunId) {
     return failure(RELEASE_ERROR.runConflict);
   }
 
-  const [run, record, redactionJob, itemResult] = await Promise.all([
-    db.prepare(`SELECT id,story_generation_status,story_source_revision,active_story_digest
-      FROM workflow_runs WHERE id=?`).bind(request.workflowRunId).first<ReleaseRunRow>(),
-    readStoryReviewSessionRecord(db, request.workflowRunId),
-    db.prepare("SELECT * FROM redaction_jobs ORDER BY started_at DESC LIMIT 1")
-      .first<Record<string, unknown>>(),
-    db.prepare(`SELECT id,document_id,sequence,event_type,actor_id,actor_type,timestamp,
-      content,organization_reason FROM items ORDER BY document_id,sequence`).all<ReleaseItemRow>(),
-  ]);
+  const run = initialSnapshot.run as ReleaseRunRow | null;
+  const record = readReleaseSessionRecord(initialSnapshot.session as ReleaseSessionRow | null);
+  const redactionJob = initialSnapshot.redactionJob;
 
   const activeSourceRevision = validRevision(run?.story_source_revision)
     ? run.story_source_revision
@@ -152,7 +277,9 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     return failure(RELEASE_ERROR.sourceConflict, boundedMetadata);
   }
   if (!record.persistedAt) return failure(RELEASE_ERROR.sessionMissing, boundedMetadata);
-  if (!record.session) return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  if (!record.session || record.session.schema !== STORY_REVIEW_SESSION_SCHEMA) {
+    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  }
   if (request.serverVersion !== record.serverVersion) {
     return failure(RELEASE_ERROR.versionConflict, boundedMetadata);
   }
@@ -160,20 +287,22 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     return failure(RELEASE_ERROR.sourceConflict, boundedMetadata);
   }
 
-  const items = itemResult.results || [];
+  const items = initialSnapshot.itemRows as ReleaseItemRow[];
   const currentSourceDigest = await computeSourceDigest(items);
-  if (redactionReleaseError(redactionJob, currentSourceDigest)) {
+  if (redactionReleaseError(
+    redactionJob,
+    currentSourceDigest,
+    initialSnapshot.redactionReviewRows,
+  )) {
     return failure(RELEASE_ERROR.storyNotReady, boundedMetadata);
   }
 
-  const candidateItems = items.filter((item) => String(item.organization_reason || "").startsWith(STORY_PREFIX)
-    || String(item.organization_reason || "").startsWith(LEGACY_STORY_PREFIX))
-    .sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || ""))
-      || left.document_id.localeCompare(right.document_id)
-      || Number(left.sequence || 0) - Number(right.sequence || 0));
+  const candidateItems = selectReservedStorySourceItems(items);
   const candidateRows: StoryCandidateRow[] = candidateItems.map((item) => ({
     id: item.id,
     documentId: item.document_id,
+    sequence: item.sequence,
+    timestamp: item.timestamp,
     summary: String(item.organization_reason || ""),
   }));
   const evidenceRows: StoryEvidenceRow[] = items.map((item) => ({
@@ -183,44 +312,118 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     actorId: item.actor_id,
     actorType: item.actor_type,
   }));
-  const validation = validateStoryCandidatePackage(candidateRows, evidenceRows);
+  const validation = await validateCurrentStorySourcePackage(
+    db,
+    request.workflowRunId,
+    candidateRows,
+    evidenceRows,
+  );
   if (!validation.ok || !run.active_story_digest
     || await sha256(validation.canonicalCandidate) !== run.active_story_digest) {
     return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
   }
 
-  const milestones = selectReviewableStoryTimeline(candidateItems.map((item) => ({
-    id: item.id,
-    documentId: item.document_id,
-    sequence: item.sequence,
-    timestamp: item.timestamp || undefined,
-    summary: String(item.organization_reason || ""),
-  })));
-  const expectedKeys = milestones.map((milestone) => milestone.story.key);
-  if (!expectedKeys.length || expectedKeys.length !== validation.chapterCount
+  const sources = candidateRows.map((row) => parseStorySource(row.summary));
+  if (sources.some((source) => !source)) return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  const exactSources = sources.flatMap((source) => source ? [source] : []);
+  const expectedKeys = exactSources.map((source) => source.key);
+  if (expectedKeys.length !== validation.chapterCount
     || !sameKeys(expectedKeys, Object.keys(record.session.chapterReviews))) {
     return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
   }
 
-  const hydrated = hydrateStoryReviewSession(record.session, request.workflowRunId, milestones);
+  const hydrated = hydrateStoryReviewSession(
+    record.session,
+    request.workflowRunId,
+    exactSources,
+  );
   if (!sameKeys(expectedKeys, Object.keys(hydrated.chapterReviews))
     || expectedKeys.some((key) => hydrated.chapterReviews[key]?.stage !== "human_confirmed")) {
     return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
   }
+  const storyPrivacy = await readStoryPrivacyAuthority(db, request.workflowRunId);
+  if (!storyPrivacy.ok || storyPrivacy.authority.sourceRevision !== activeSourceRevision
+    || storyPrivacy.authority.activeStoryDigest !== run.active_story_digest
+    || storyPrivacy.authority.status === "preparation_required") {
+    return failure(RELEASE_ERROR.preparationInvalid, boundedMetadata);
+  }
+  const privacyCandidates = storyPrivacy.authority.candidates;
+  if (privacyCandidates.some((candidate) => (
+    candidate.reviewState === "needs_confirmation" && candidate.decision === null
+  ))) return failure(RELEASE_ERROR.storyPrivacyPending, boundedMetadata);
+  if (!validPreparationAndPreference(
+    initialSnapshot,
+    request.workflowRunId,
+    activeSourceRevision,
+    privacyCandidates,
+  )) return failure(RELEASE_ERROR.preferencePending, boundedMetadata);
+  const suppressedTargets = new Set<StoryReleaseTarget>();
+  for (const candidate of privacyCandidates) {
+    if (candidate.reviewState === "deterministic" || candidate.decision === "redact") {
+      for (const target of candidate.releaseTargets) suppressedTargets.add(target);
+    }
+  }
 
-  const built = buildReviewedStoryRelease(milestones, hydrated.chapterReviews);
+  const redactionsByItem = new Map<string, ReleaseRedactionRow[]>();
+  for (const span of initialSnapshot.redactionRows as ReleaseRedactionRow[]) {
+    const itemId = String(span.item_id || "");
+    redactionsByItem.set(itemId, [...(redactionsByItem.get(itemId) || []), span]);
+  }
+  let fragments: Array<{ text: string; category: string }> = [];
+  try {
+    fragments = items.flatMap((item) => activeRedactionFragments(
+      String(item.content || ""),
+      redactionsByItem.get(item.id) || [],
+    ));
+  } catch {
+    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
+  }
+  const built = buildReviewedStoryRelease(exactSources, hydrated.chapterReviews, {
+    redact: (copy) => redactKnownFragments(copy, fragments),
+    suppressedTargets,
+  });
   const story = sanitizeReviewedStoryRelease(built);
   const serializedStory = serializeReviewedStoryRelease(story);
-  if (!story || !serializedStory
-    || !sameKeys(expectedKeys, story.chapters.map((chapter) => chapter.key))) {
+  if (!story || !serializedStory || story.chapters.length !== expectedKeys.length) {
     return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
   }
-  return { ok: true, story, serializedStory };
+  const initialPackageSnapshot = await capturePackageReleasePrivacySnapshot(db);
+  const reviewGateDigest = await computeReviewGateDigest(
+    initialSnapshot,
+    initialPackageSnapshot.digest,
+    storyPrivacy.authority,
+    serializedStory,
+  );
+  if (!options.allowUnsetReleaseConfirmation
+    && !exactReleaseConfirmationBinding(initialSnapshot, request, reviewGateDigest)) {
+    return failure(RELEASE_ERROR.releaseConfirmationRequired, boundedMetadata);
+  }
+  await options.beforeFinalPrivacyCheck?.();
+  const finalSnapshot = await captureStoryReleasePrivacySnapshot(db, request.workflowRunId);
+  const finalPackageSnapshot = await capturePackageReleasePrivacySnapshot(db);
+  if (finalSnapshot.digest !== initialSnapshot.digest
+    || finalPackageSnapshot.digest !== initialPackageSnapshot.digest
+    || (!options.allowUnsetReleaseConfirmation
+      && !exactReleaseConfirmationBinding(finalSnapshot, request, reviewGateDigest))) {
+    return failure(RELEASE_ERROR.privacyConflict, boundedMetadata);
+  }
+  return {
+    ok: true,
+    story,
+    serializedStory,
+    binding: {
+      workflowRunId: request.workflowRunId,
+      activeStoryDigest: String(run.active_story_digest),
+      sourceRevision: request.sourceRevision,
+      serverVersion: request.serverVersion,
+      reviewGateDigest,
+    },
+  };
 }
 
 export async function reconstructReviewedStoryRelease(input: unknown) {
-  const { getD1: getRuntimeD1 } = await import("../db/index.ts");
-  return reconstructReviewedStoryReleaseFromDatabase(await getRuntimeD1(), input);
+  const { getLocalDatabase: getRuntimeDatabase } = await import("../db/index.ts");
+  return reconstructReviewedStoryReleaseFromDatabase(await getRuntimeDatabase(), input);
 }
 
 const messages: Record<ReleaseErrorCode, string> = {
@@ -232,6 +435,11 @@ const messages: Record<ReleaseErrorCode, string> = {
   [RELEASE_ERROR.sessionMissing]: "Reviewed Story session is missing",
   [RELEASE_ERROR.reviewIncomplete]: "Reviewed Story review is incomplete",
   [RELEASE_ERROR.stateInvalid]: "Reviewed Story release state is invalid",
+  [RELEASE_ERROR.privacyConflict]: "Release Privacy state changed during assembly",
+  [RELEASE_ERROR.preparationInvalid]: "Story preparation authority is invalid",
+  [RELEASE_ERROR.storyPrivacyPending]: "Story Privacy decisions are incomplete",
+  [RELEASE_ERROR.preferencePending]: "Preference answers are incomplete",
+  [RELEASE_ERROR.releaseConfirmationRequired]: "Final release confirmation is required",
 };
 
 export function releaseErrorResponse(result: ReleaseFailure) {

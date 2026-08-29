@@ -15,10 +15,11 @@ Each project has one combined timeline across all source trajectories, distilled
 evidence-supported meaningful milestones without a numeric quota. Drag the divider to resize the
 project/source panel horizontally on desktop or vertically on narrow screens.
 
-SQLite/D1 is temporary local runtime state. **Download HTML** exports a read-only snapshot;
+Native Next uses one fresh process-owned temporary local SQLite database for every official launcher
+invocation. The Viewer owns cleanup when it stops. **Download HTML** exports a read-only snapshot;
 **Download ZIP** applies every active AI-redaction span and exports the normalized package without
 raw event envelopes. ZIP export is blocked until the AI pass completes with zero rejected spans.
-Neither action uploads data.
+Neither action uploads data, and there is no online deployment path.
 
 One Viewer state directory owns at most one established workflow run for its lifetime. Start a new
 Viewer through the launcher, with a fresh state directory, for another project or workflow; reusing

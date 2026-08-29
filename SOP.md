@@ -2,22 +2,52 @@
 
 ## Goal
 
-Collect only the contributor's in-scope project history, separate mixed-project content, prepare a
-best-effort privacy-reviewed candidate, build and human-review Project Story, then review
-Preferences and Release Preview before finishing with one downloadable ZIP. Nothing is uploaded
-automatically.
+Collect only the contributor's in-scope project history, separate mixed-project content, prepare the
+upstream source Privacy boundary, build and human-review Project Story, prepare Story/Release
+Privacy candidates and Preferences, then finish with one local reviewed release ZIP. Nothing is
+uploaded automatically.
 
-## Completion criteria
+## Desired completion criteria
 
 The workflow is complete only when all of the following are true:
 
 1. The contributor has been shown the local Viewer whenever a browser-visible frontend is
    available. The exact localhost URL is also provided, and no password is required.
-2. The contributor has completed the human Project Story review, then seen the redaction summary,
-   preference questions, Release Preview, exclusions, and unresolved warnings.
+2. The contributor has completed Project Story human review, Privacy Keep/Redact decisions, and
+   Preference answers, then seen the redaction summary, Release Preview, exclusions, and unresolved
+   warnings.
 3. The contributor can download one verified `oxygen-contribution.zip`.
 4. `publication_approved` remains `false` unless the contributor separately and explicitly
    approves publication.
+
+Current runtime status: the canonical Viewer implements activation-time preparation receipts,
+Preference readiness binding, server-owned Story Privacy decisions, final decision-only Chapter
+Privacy and Release Preview, session hydration, Chapter All set, final release confirmation, and
+reviewed HTML/ZIP transformation. A specific run becomes release-ready only after its current human
+decisions and final confirmation; none of those actions changes `publication_approved=false`.
+
+## Final public order
+
+Execute the workflow in this order:
+
+```text
+Collect
+Organize
+upstream source Privacy preparation
+build Project Story using bounded semantic workers
+independent global sparse Insight pass
+Story/Release Privacy candidate preparation
+Preference-question generation
+Project Story human review
+Privacy Keep/Redact decisions
+Preference answers
+All set
+local reviewed release
+```
+
+Upstream source Privacy prepares the reviewed input boundary before Story generation. Story/Release
+Privacy reviews release-safe Chapter/Release targets after the Story exists. Do not call both steps
+only "Privacy"; report which boundary is active.
 
 ## Stable six-stage index
 
@@ -32,19 +62,19 @@ Continue at [§2 Collect](#2-collect).
 
 Continue at [§3 Organize by project](#3-organize-by-project).
 
-### Stage 3: Check privacy
+### Stage 3: Prepare upstream source Privacy
 
-Continue at [§4 Prepare privacy review](#4-prepare-privacy-review).
+Continue at [§4 Prepare upstream source Privacy review](#4-prepare-upstream-source-privacy-review).
 
-### Stage 4: Build Project Story
-
-Continue at [§5 Build Project Story and Review Story](#5-build-project-story-and-review-story).
-
-### Stage 5: Review Story
+### Stage 4: Build Project Story and candidate review artifacts
 
 Continue at [§5 Build Project Story and Review Story](#5-build-project-story-and-review-story).
 
-### Stage 6: Release handoff
+### Stage 5: Human Story, Privacy, and Preference review
+
+Continue at [§5 Build Project Story and Review Story](#5-build-project-story-and-review-story).
+
+### Stage 6: All set and release handoff
 
 Continue at [§7 Prepare Preferences and Release Preview](#7-prepare-preferences-and-release-preview),
 then complete §§8–9.
@@ -64,7 +94,8 @@ collection**:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
-  --target /path/to/repo
+  --target /path/to/repo \
+  --save-state /external/private/.old/oxygen-session-<fresh-id>
 ```
 
 The launcher reserves an arbitrary free loopback port, opens the sanitized Workflow Progress UI,
@@ -73,6 +104,12 @@ the remaining stages. Do not begin collection until this surface is healthy. It 
 target-confirmed flag, fixed stage/status/blocker codes, justified counts, timestamps, and human-
 action state—never the target path, session names, reasoning, prompts, raw model/tool data,
 private messages, Story/Evidence payloads, or removed content.
+
+Select a fresh external private `.old` session directory for every owned launch; an existing
+destination is never replaced. After the Viewer stops and releases its port, the launcher verifies
+SQLite integrity, saves the complete Viewer-owned state, and prints the exact resumable session
+path. Pending, blocked, partially reviewed, and complete states are all saveable. If the Viewer or
+database was never created, do not claim that a state was saved.
 
 ## 2. Collect
 
@@ -135,10 +172,12 @@ finally {
 
 Do not pass `--publish` and do not stage, upload, or submit the result.
 
-Check `work/<run>/index.json` and, when present, `work/<run>/meeting.json`. Report exact source,
-trajectory, meeting-record, warning, and failure counts. A newly cloned repository may correctly
-have zero matching historical sessions. Confirm that credentials, caches, databases, unrelated
-users, and unrelated repositories were excluded.
+Check `work/<run>/index.json` for repository/Claude imports or
+`work/<run>/meetings/<meeting-id>/meeting.json` for every meeting import. A single meeting uses the
+same plural topology as a multi-meeting run; root `meeting.json` is not a supported input. Report
+exact source, trajectory, meeting-record, warning, and failure counts. A newly cloned repository may
+correctly have zero matching historical sessions. Confirm that credentials, caches, databases,
+unrelated users, and unrelated repositories were excluded.
 
 ## 3. Organize by project
 
@@ -158,7 +197,7 @@ Report how many source records and events were assigned to each project, what wa
 which classification decisions remain uncertain.
 
 Attach the organized run to the already-running progress Viewer so organization advances in the
-same D1 workflow run:
+same workflow run:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/repo-run \
@@ -168,12 +207,16 @@ python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/re
 Do not start a second Viewer. When the prepared reviewed boundary or validated Story metadata
 changes later, reattach that updated run to the same origin/run ID.
 
-## 4. Prepare privacy review
+## 4. Prepare upstream source Privacy review
 
 Use the contributor's configured AI model for redaction. The mandatory notice is:
 
-> Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review is
+> Best-effort redaction; no formal anonymity guarantee. Original-contributor final review is
 > required before release.
+
+This is the upstream source Privacy boundary. Its output is the reviewed input boundary used by
+Story generation. It is distinct from later Story/Release Privacy candidates shown beside Chapter
+or Release Preview content.
 
 Use the canonical worker contract at `tools/llm_redact/REDACTION_PROMPT.md`; do not search for a
 prompt by basename.
@@ -240,16 +283,99 @@ Important boundaries:
 Once `work/<run>-review` is organized and has passed the required privacy preparation, read and
 follow `skills/oxygen-storytelling-review/SKILL.md`. Derive project-specific Story data only from
 that reviewed boundary and bind the validated result to the canonical Storytelling capability in
-the existing Viewer (`InlineWorkspace`, `StoryChapterEditor`, and their `viewer/lib/story-*`
-contracts). Do not build a separate Storytelling application or copy project prose into reusable
-source.
+the existing Viewer and `viewer/lib/story-*` contracts. Do not build a separate Storytelling
+application or copy project prose into reusable source.
 
-The contributor reviews the Project Story, Chapters, inline insight, Privacy candidates, and exact
-evidence through the iterative direct edit → Apply review loop. Compatible imported
-Delete/Revise/Add records remain reviewable legacy provenance, not the primary current UI. `All set` creates a human-confirmed
-Final Release Memory; it does not publish, package automatically, or set
-`publication_approved=true`. The Agent pauses as soon as Stage 5 Review Story activates and waits
-for the contributor before continuing to Preferences, Release Preview, or ZIP handoff.
+Build the complete Project Story with bounded semantic workers, then run an independent global
+sparse Insight pass. Prepare Story/Release Privacy candidates only through implemented candidate
+authority; do not claim `oxygen.story` contains them. Generate Preference questions from reusable
+lessons represented by generated Insight candidates before opening human review; questions remain
+unanswered until explicit contributor action. If no valid question exists, validate a completed-zero
+probe batch before review.
+
+Opening Project Story for human review requires terminal results for Story generation, global
+Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation.
+Completed-zero is a valid terminal result for the Insight and Preference lanes when no warranted
+Insight or valid question exists. The composed launcher transport now requires the deterministic
+Preference bundle and the `oxygen.story-preparation` manifest with coverage and Story candidates.
+It imports the exact bundle before it requests Review Story activation, and fails closed on missing,
+foreign, stale, malformed, or digest/count-mismatched authority. The tracked Story preparer,
+recorder, existing Preference producer, and preparation finalizer create and bind those files.
+
+Parent-owned semantic work starts with the public deterministic preparer. It accepts the canonical
+Organization project map or bare semantic manifest through one bounded parser, freezes the exact
+assigned identities and input digest, and installs immutable provider-safe worker input before a
+proposal exists. Story, Insight, and Story Privacy remain multi-shard lanes, and the
+workflow-owning parent enumerates every nonempty manifest shard for them. Preference intentionally
+uses exactly one global bounded worker because it produces one deduplicated questionnaire
+authority, capped at 12 probes by default and 20 maximum; never fan Preference out. When host
+subagents are available, assignments run automatically with at most three live at once. Each
+assignment reads exactly one Privacy-safe immutable `inputPath` and writes only its proposal.
+Workers never write receipts, final manifests, SQLite, Viewer APIs, revisions, activation state,
+release state, or publication state. Internal host subagents are not product provider/API calls,
+require no separate API key, and receive no raw/private source beyond the prepared input.
+
+Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
+
+1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
+2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
+3. Then read exactly the assignment's one generated Privacy-safe `inputPath`.
+4. Write only that assignment's proposal.
+
+Do not dispatch a Story worker until the assignment names both contract paths, the actual generated
+`inputPath`, and the proposal-only write boundary. No other data input is part of that assignment.
+
+Before Coverage finalization, the parent selects Chapter owners by coherent narrative arc across
+the complete Privacy-safe semantic projection; it never defaults or mechanically copies `ownerId`
+from `unitId`, and no source, semantic-unit, Chapter, or Phase count is golden. Finalized Coverage
+`ownerId` is then the sole Story Chapter-ownership source. The Story preparer keeps
+every owner's represented units in one complete, Privacy-safe, self-contained bundle and balances
+shards only by whole-bundle bytes. Story workers return phase-free proposals. On a subagent-capable
+host the parent does not initially write Story prose, People, Evidence choices, titles, overviews,
+or blocks. It waits for every proposal, reads each Chapter in full, binds all eight editorial
+decisions to the exact proposal digest, and rejects negative or stale review before Phase or
+receipt. After the initial proposal and two editorially rejected subagent corrections, the Ultra
+parent may complete that same still-unrecorded assignment from the byte-identical input through the
+same phase-free proposal shape, editorial gate, recorder, and validators. It then orders complete
+accepted Chapters with the production comparator, assigns only the smallest coherent global Phase
+IDs and labels, injects canonical Coverage and exclusions, and invokes one complete Story batch
+recorder. No Story receipt exists before editorial and full-package validation; all outputs and
+exactly one receipt per shard install together. Insight remains a separate later pass.
+
+Each assignment gets one initial proposal plus at most two automatic proposal-only correction attempts. `correctionAttemptCount` is
+assignment-local, counts corrections only, excludes the initial proposal, and is always `0..2`;
+never sum it across a multi-shard lane. Every correction uses the byte-identical immutable input,
+and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed
+safe pre-receipt authoring-validation code is correctable. If the second correction fails, stop the
+lane safely, report correction exhaustion and the last safe validation code, and do not continue
+downstream, except for the narrow Story-editorial parent takeover above. Authority, immutability,
+containment, path, I/O, infrastructure, and corrupt-state failures stop immediately and are never
+correctable. This is not a contributor pause and may never
+rewrite durable output. If host subagents are genuinely unavailable, the parent processes the same
+assignments serially, reports
+`executionMode=serial_capability_limited`, and uses the identical recorder/finalizer authority.
+`PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal orchestration boundary. Revision authority and
+all Viewer mutations remain with the parent/server lane; no worker may silently expand scope or
+repair another lane.
+
+Story uses at most two lane-wide correction waves. Replacing a rejected Story proposal or replacing
+only the transient parent Phase assignment consumes the same wave; there is no separate Phase retry
+budget. Every failed Story wave leaves all Story outputs and receipts absent. Static tests prove the
+contract and batch boundary, while later E2E evidence proves actual host-subagent spawning.
+
+Coverage draft rows use only `{unitId, disposition, ownerId}` for represented units or
+`{unitId, disposition, exclusionReason}` for excluded units. After successful activation, the exact
+submitted coverage manifest becomes the prior accepted authority for regeneration. Rejected output
+never becomes prior authority.
+
+The contributor reviews the Project Story, Chapters, Insights, Story/Release Privacy candidates
+when present, Preference questions, and exact evidence through the iterative direct edit -> Apply
+review loop. Direct editing is the current canonical edit path. Already-existing Delete/Revise/Add
+records may be rendered only after exact validation and resolve through the same review ledger.
+`All set` creates a human-confirmed Final Release Memory; it does not publish, package
+automatically, or set `publication_approved=true`. The Agent pauses as soon as Stage 5 Review Story
+activates, again for unresolved Privacy decisions and Preference answers, again for All set, and
+again for release handoff.
 
 Use the Viewer workflow-progress surface for user-facing execution status. Update it only at safe
 workflow boundaries with sanitized stage/state, real counts where a denominator exists, blocker
@@ -264,34 +390,53 @@ origin and workflow run ID:
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
   work/<run>-review --attach-url <viewer-url> --workflow-run-id <run-id>
-```
 
-The initial launcher validates Node/npm, resolves the platform-native npm command, repairs missing
-or cross-OS `node_modules` with lockfile-preserving `npm ci`, and creates fresh launch-owned D1
-state. It reserves an OS-selected free `127.0.0.1` port by default and announces only the exact
-healthy URL. Do not move or delete `.wrangler`; the official launcher never reuses it. An explicit
-occupied `--port` fails immediately without killing the owning process or silently falling back.
-
-After the server is healthy, push the validated AI spans from another terminal:
-
-```bash
+# Import only the validated spans produced by merge_and_apply.py.
 python3 tools/llm_redact/push_redactions.py \
   --redacted work/<run>-redaction/redacted --base-url <viewer-url>
 ```
 
+The initial launcher validates Node/npm, resolves the platform-native npm command, repairs missing
+or cross-OS `node_modules` with lockfile-preserving `npm ci`, and starts native Next with one fresh
+process-owned temporary local state directory. Every owned launch must pass `--save-state` with a
+fresh external private `.old` session destination. After stop and port release, the complete state
+directory is saved there and the temporary runtime is cleaned. It reserves an OS-selected free
+`127.0.0.1` port by default and announces only the exact healthy URL. There is no online deployment
+path. An explicit occupied `--port` fails immediately without killing the owning process or
+silently falling back.
+
 ### Native Windows PowerShell sequence
 
-Run this from the contributor-kit root. It uses an arbitrary free port and the canonical IPv4
-loopback URL; it does not require `python -X utf8`, `chcp`, WSL, or persistent environment edits.
+Run Terminal A from the contributor-kit root. It uses a fixed local port and workflow run ID so
+Terminal B can attach without hidden state. Start PowerShell in the contributor-kit root and change
+only `$Target` to the contributor-approved project path.
 
 ```powershell
+$Kit = (Get-Location).Path
+$Target = "D:\Coding Projects\my-project"
+$Viewer = "http://127.0.0.1:3210"
+$WorkflowRun = "oxygen-local-review-001"
+$SavedSession = "D:\private\.old\oxygen-session-<fresh-id>"
+Set-Location -LiteralPath $Kit
+
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --target "$Target" --workflow-run-id "$WorkflowRun" --port 3210 `
+  --save-state "$SavedSession" --no-browser
+```
+
+Keep Terminal A running. Run Terminal B from the same contributor-kit root after Collect,
+Organize, and upstream source Privacy preparation have produced the reviewed boundary:
+
+```powershell
+$Kit = (Get-Location).Path
 $Run = "work\repo-run"
 $Review = "work\repo-run-review"
 $Dialogue = "work\repo-run-dialogue"
 $Findings = "work\repo-run-findings"
 $Redaction = "work\repo-run-redaction"
-$Viewer = "http://127.0.0.1:<port>" # exact value printed by §1
-$WorkflowRun = "<run-id>"           # exact value printed by §1
+$Viewer = "http://127.0.0.1:3210"
+$WorkflowRun = "oxygen-local-review-001"
+Set-Location -LiteralPath $Kit
 
 python .\tools\llm_redact\prepare_ai_review_run.py `
   --run "$Run" --out "$Review"
@@ -308,10 +453,181 @@ python .\tools\llm_redact\merge_and_apply.py `
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
-# Push only validated findings to that exact Viewer.
+# Push only the validated spans produced by merge_and_apply.py.
 python .\tools\llm_redact\push_redactions.py `
   --redacted "$Redaction\redacted" `
   --base-url "$Viewer"
+
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --story-event started
+
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --story-event progress `
+  --story-completed 4 --story-total 4
+
+node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
+  "$Review\project-map.json" `
+  "$Review\story-coverage-draft.json" `
+  "$Review\story-coverage-manifest.json" `
+  --source-privacy "$Review\current-public-source-privacy.json"
+```
+
+When Bruce later says `resume`, use the exact saved path printed by the prior launcher:
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --resume-state "D:\private\.old\oxygen-session-<exact-id>"
+```
+
+Resume starts the Viewer on that same saved state. Do not rerun collection, import, Story
+preparation, or infer completion. Preserve any existing blocker and allow later human Review,
+Privacy, Preference, `All set`, and release progress to remain durable in that session. The saved
+session remains private/local and does not change `publication_approved=false`.
+
+## Composition sequence (implemented transport)
+
+Use one transport root and the current Viewer source revision. For each prepared lane, the parent
+performs this lifecycle without contributor intervention:
+
+1. For Story, Insight, and Story Privacy, read the lane's `shards.json` and enumerate every
+   deterministic shard. For Preference, require exactly one global shard and one bounded worker;
+   do not fan the questionnaire authority out.
+2. Dispatch available host subagents with at most three live at once. Each receives exactly one
+   `inputPath` and may write only its proposal. If subagents are unavailable, process those same
+   assignments serially and set `executionMode=serial_capability_limited`.
+   For every `story`-lane assignment, first convey the complete-read requirements for
+   `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` and
+   `skills/oxygen-storytelling-review/references/story-data-contract.md`; only after both reads may
+   the worker read its named generated `inputPath` and write its proposal.
+3. Wait for every Story proposal, place exactly one `<shard-id>.json` file in the proposal-only
+   directory, order all complete Chapters with the production comparator, create one transient
+   unversioned Phase assignment, and invoke the Story batch recorder once. For other lanes, run the
+   recorder with that manifest shard ID and proposal path.
+4. If the recorder returns a fixed safe pre-receipt authoring-validation code while output and
+   receipt are both absent, return it automatically to the same assignment for at most two
+   proposal-only corrections. Preserve the byte-identical input and allow only the proposal to
+   change. Count only corrections, so assignment-local `correctionAttemptCount` is `0..2` and does
+   not include the initial proposal.
+   For Story, replacing only the non-authoritative parent Phase assignment is also allowed and
+   consumes the same lane-wide correction wave.
+5. If the second correction fails, stop the lane safely, report correction exhaustion and the last
+   safe validation code, and do not continue downstream. Stop immediately without correction for
+   authority, immutability, containment, path, I/O, infrastructure, or corrupt-state failures.
+6. For Story, require the atomically installed complete records directory with exactly one terminal
+   receipt per expected shard. For other lanes, require one terminal subordinate receipt per
+   assignment. Verify exact union and no overlap, then compose/finalize.
+7. Continue automatically to the next dependent lane or to the next genuine human-review boundary.
+
+For each reached lane, retain E2E evidence for `executionMode`, `lane`, `shardCount`,
+`spawnedSubagentCount`, `maxConcurrentSubagents`, `correctionAttemptCount`, and
+`terminalReceiptCount`. The parent owns all recorder/finalizer commands and every Viewer mutation.
+The non-Story commands containing `<manifest-shard-id>` and `<proposal-path>` below are executed
+once for each enumerated shard, not typed or scheduled by the contributor.
+
+```powershell
+$Organization = $null
+try {
+  $Organization = Invoke-RestMethod -Method Get -Uri "$Viewer/api/organization"
+  if ($Organization.status -cne "complete" -or $null -eq $Organization.semanticManifest) {
+    throw "current Organization authority is unavailable"
+  }
+  $SourceRevision = $Organization.semanticManifest.sourceRevision
+  if ($SourceRevision -isnot [ValueType] -or $SourceRevision -is [bool]) {
+    throw "current Organization source revision is invalid"
+  }
+  $SourceRevisionDecimal = [decimal]$SourceRevision
+  if ($SourceRevisionDecimal -ne [decimal]::Truncate($SourceRevisionDecimal) -or
+      $SourceRevisionDecimal -lt 1 -or
+      $SourceRevisionDecimal -gt 9007199254740991) {
+    throw "current Organization source revision is invalid"
+  }
+}
+catch {
+  [Console]::Error.WriteLine("CURRENT_SOURCE_REVISION_UNAVAILABLE")
+  return
+}
+
+$Transport = "$Review\story-preparation"
+$StoryProposals = "$Review\story-proposals"
+$StoryEditorialReview = "$Review\story-editorial-review.json"
+$StoryPhases = "$Review\story-phases.json"
+
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare story "$Review\project-map.json" `
+  "$Review\story-coverage-manifest.json" `
+  "$Review\current-public-source-privacy.json" `
+  "$Review" "$Transport"
+# Parent dispatches every Story shard (maximum three live), collects one phase-free
+# <shard-id>.json proposal per shard, reads every Chapter, writes the exact proposal-digest-bound
+# editorial review, then orders all accepted Chapters and writes one coherent Phase assignment.
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" story "$StoryProposals" "$StoryEditorialReview" "$StoryPhases" `
+  --correction-attempt-count 0
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  compose story "$Transport" "$Review\story-base-candidates.json"
+
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare insight "$Review\story-base-candidates.json" "$Transport"
+# Parent dispatches every Insight manifest shard (maximum three live), waits, then records each proposal.
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" insight "<manifest-shard-id>" "<proposal-path>"
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  compose final "$Transport" "$Review\story-candidates.json"
+
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare story_privacy "$Review\story-candidates.json" "$Transport"
+# Parent dispatches every Story Privacy manifest shard (maximum three live), waits, then records each proposal.
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" story_privacy "<manifest-shard-id>" "<proposal-path>"
+
+python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference_context.py `
+  --story-candidates "$Review\story-candidates.json" `
+  --redacted "$Redaction\redacted" --privacy-report "$Redaction\report.json" `
+  --output "$Review\preference-context.json"
+node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
+  prepare preference "$Review\story-candidates.json" `
+  "$Review\preference-context.json" "$Transport"
+# Parent dispatches the one global Preference worker, waits, then validates and records its proposal.
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
+  --context "$Review\preference-context.json" `
+  --candidates "<proposal-path>" `
+  --workflow-run-id "$WorkflowRun" --source-revision $SourceRevision `
+  --output "$Review\preference-bundle.json"
+node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
+  "$Transport" preference "<manifest-shard-id>" "$Review\preference-bundle.json"
+
+node .\skills\oxygen-storytelling-review\scripts\finalize_story_preparation.mjs `
+  "$Review\project-map.json" "$Review\story-candidates.json" "$Transport" `
+  "$Review\preference-bundle.json" "$Review\story-preparation-manifest.json" `
+  --workflow-run-id "$WorkflowRun" --source-revision $SourceRevision
+```
+
+The Story and Insight passes are dependent. Story Privacy and Preference become sibling-ready only
+after final Story composition and may then run in either order. Workers never write receipts or
+digests; the recorder owns those fields. See the Story Skill transport reference for the exact
+lane proposal shapes.
+
+Story preparation freezes one minimal validation-authority bundle from the exact reviewed source
+generation, current semantic manifest, and current Coverage manifest. It projects private actor
+identity to equality-only tokens and applies current final Source Privacy redactions before any
+narrative reaches a worker input. The Story recorder and preparation finalizer both call the
+unchanged Viewer `validateStorySourcePackage`; a complete Story failure creates no receipt, and a
+forged or stale pair cannot create terminal preparation authority.
+
+With those four artifacts produced and validated, launcher ready is:
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --story-event ready `
+  --coverage-manifest "$Review\story-coverage-manifest.json" `
+  --story-candidates "$Review\story-candidates.json" `
+  --preference-bundle "$Review\preference-bundle.json" `
+  --preparation-manifest "$Review\story-preparation-manifest.json"
+
+if ($LASTEXITCODE -eq 0) {
+  Copy-Item -LiteralPath "$Review\story-coverage-manifest.json" `
+    -Destination "$Review\story-coverage-manifest.accepted.json" -Force
+}
 ```
 
 The push command automatically reads the adjacent `report.json`. It refuses incomplete worker
@@ -334,17 +650,22 @@ validation the correct terminal state is `WAITING_FOR_HUMAN_STORY_REVIEW`, not a
 handoff. Resume release/package work only after the contributor says the review is complete.
 
 The Viewer must show organization progress, project groups, the primary project, one combined
-timeline per project, evidence-derived primary-project milestones, source-event evidence, and
-visible HTML/ZIP download actions. Do not describe unsupported annotation controls as available.
+timeline per project, evidence-derived primary-project Chapters, source-event evidence, and visible
+HTML/ZIP download actions. Do not describe unsupported annotation controls as available.
 
-Two further tabs are available once their passes have run:
+Required final surfaces, with current runtime status:
 
-- `Redaction review` lists **every** event that would ship, not only the changed ones, so the tab
-  is a release preview rather than a diff. Events with a hit show the original beside the release
-  version; the rest show the single text that would be published. Each span carries its category,
-  the reason it was marked, and controls to change the category or delete the decision. Deleting is
-  a soft delete: the span stops applying but the record stays auditable.
-- `Preferences` presents the probe batch and records answers (§7).
+- Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer.
+  Contributor actions are exactly Keep/Redact for current `needs_confirmation` candidates; there is
+  no category, reason, delete, or soft-delete mutation surface.
+- Required Privacy review and Release Preview expose only the release-safe projection for
+  deterministic or contributor-confirmed safe content. Only `needs_confirmation` rows are
+  decision-editable. Those rows show the minimum locally permitted original when present, the
+  current safe projection, a safe uncertainty explanation, and exactly two actions: Keep or Redact.
+  Unavailable original content is never reconstructed. Pending confirmation blocks Story/package
+  release. Do not expose Raw Evidence or suppressed content through Insight review.
+- `Preferences` presents generated probes and records explicit answers (§7). Generated questions
+  are not confirmed preferences.
 
 Both tabs report `running` with live progress while their pass is in flight, so an empty result is
 never mistaken for a finished one. Redactions are stored as offsets and applied at render time —
@@ -354,9 +675,11 @@ localhost without an authenticating proxy in front.
 
 ## 7. Prepare Preferences and Release Preview
 
-After the contributor completes Story review, read and follow
+After reusable lessons and Insights exist, read and follow
 `skills/oxygen-elicit-contributor-preferences/SKILL.md` on the same privacy-prepared reviewed input.
-Do not reopen raw project history or independently run another redaction workflow.
+This question-generation step must run before human review opens. Do not reopen raw project history
+or independently run another redaction workflow. If no valid questions exist, record a validated
+completed-zero batch before review.
 
 1. Work on the primary-project events unless the contributor asks to include other projects.
 2. Reuse the validated privacy summary and reviewed exclusions already attached to the input.
@@ -368,25 +691,30 @@ Do not reopen raw project history or independently run another redaction workflo
    mutually exclusive, evidence-grounded choices, plus “Something else” and “Nothing worth
    recording here.”
 6. Present all probes as one batch. Do not interrupt the contributor once per event.
-7. Write `work/<run>-review/preference-probes.json` and validate it:
+7. Write the exact three-field `preference-candidates.json`, then use the existing Preference
+   producer to create the nine-field bundle. The full copyable commands are in the implemented
+   composition sequence above.
 
-```bash
-python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py \
-  work/<run>-review
+Reuse the exact `$SourceRevision` bound from the complete `GET $Viewer/api/organization` gate in
+the composition sequence above:
+
+```powershell
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
+  --context "$Review\preference-context.json" `
+  --candidates "$Review\preference-candidates.json" `
+  --workflow-run-id "$WorkflowRun" --source-revision $SourceRevision `
+  --output "$Review\preference-bundle.json"
 ```
 
 Only explicit answers become checklist preferences. Unanswered and skipped probes produce no
-preference. Every confirmed preference retains its source evidence IDs. A preference answer is
-not publication approval.
+preference. Questions and answers are Preference authority, not Story review-session state. Every
+confirmed preference retains its source evidence IDs. A preference answer is not publication
+approval. If no valid probe exists, record a validated completed-zero result; do not infer that the
+contributor has no preferences.
 
-The Viewer implements probe-answer controls in its `Preferences` tab. Generate the batch, push it
-with `tools/llm_redact/push_probes.py`, and let the contributor answer in the browser:
-
-```bash
-python3 tools/llm_redact/push_probes.py \
-  --probes work/<run>-probes --dialogue work/<run>-dialogue \
-  --summary work/<run>-review/preference-probes.json --limit 12
-```
+The Viewer implements probe-answer controls in its `Preferences` tab. The launcher imports the
+validated deterministic Preference bundle during the four-file ready transport; the contributor then
+answers in the browser.
 
 Each probe shows its recap, its offered options, `Nothing worth recording here`, a free-text
 `Something else`, and its source evidence IDs. Every recorded answer displays what was stored and
@@ -399,8 +727,8 @@ no answer produces no preference. Answers live in the `probes` table and are exp
 Ask the contributor to inspect:
 
 - included sources and project assignments;
-- primary-project milestones against source evidence;
-- Project Story Chapters, inline insight, required Privacy decisions, exact evidence, and any
+- primary-project Chapters against source evidence;
+- Project Story Chapters, Insights, required Privacy decisions, exact evidence, and any
   unresolved Story annotations;
 - AI-redaction counts, rejected-span count, and semantic review decisions;
 - bulk judgement-call decisions;
@@ -429,7 +757,8 @@ Requirements:
   original secrets.
 - Block ZIP generation if the AI pass is absent, incomplete, or reports any rejected span.
 - Exclude `.env*`, auth files, tokens, cookies, private keys, browser profiles, `node_modules`,
-  caches, `.wrangler`, databases, logs, model scratch output, and local virtual environments.
+  local databases and logs, private review artifacts, model scratch output, and local virtual
+  environments.
 - Inspect the ZIP member list after creation and reject unexpected absolute paths, `..` entries,
   symlinks, or excluded files.
 - Open the packaged HTML locally and verify that it states nothing was uploaded.
@@ -437,12 +766,30 @@ Requirements:
   available, provide an immediately usable clickable local file/download link.
 - Do not finish with only a filesystem path the contributor cannot access.
 
+Before final handoff, run:
+
+```powershell
+python .\skills\oxygen-organize-review-export\tests\test_run_local_review.py
+python -m py_compile .\skills\oxygen-organize-review-export\tests\test_run_local_review.py
+Push-Location -LiteralPath ".\viewer"
+node --test .\tests\workflow-contracts.test.mjs
+npm test
+npm run lint
+npx tsc --noEmit --strict
+npm run build
+Pop-Location
+git diff --check
+git status --short
+```
+
 ## 9. Handoff and stop
 
 Tell the contributor:
 
 - the exact Viewer URL and that it has no password;
-- included inputs, project groups, primary project, and milestone count;
+- after the Viewer stops, the exact saved-session path printed by the launcher, or explicitly that
+  no session was saved when no Viewer/database was created;
+- included inputs, project groups, primary project, and Chapter count;
 - exact privacy-removal counts and any unresolved privacy review;
 - probe count, confirmed preference count, and set-aside count;
 - exclusions and uncertainties;

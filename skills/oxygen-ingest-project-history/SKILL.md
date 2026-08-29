@@ -1,6 +1,6 @@
 ---
 name: oxygen-ingest-project-history
-description: Collect local Codex or Claude Code sessions and allowed memory related to a repository, import a claude.ai data export, or convert meeting text/audio into Oxygen trajectory v0.2 inputs. Use when a contributor asks to gather project history before local organization and review.
+description: Collect local Codex or Claude Code sessions and allowed memory related to a repository, import a claude.ai data export, or convert meeting text/audio into canonical Oxygen trajectory inputs. Use when a contributor asks to gather project history before local organization and review.
 ---
 
 # Ingest project history
@@ -37,9 +37,9 @@ python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/repo-
   --progress-url http://127.0.0.1:<port> --workflow-run-id <run-id>
 python3 tools/ingest/import_anthropic_export.py export.zip --out work/claude-run
 python3 tools/ingest/import_meeting.py meeting.txt --out work/meeting-run \
-  --title "Project meeting" --no-publish
+  --title "Project meeting"
 python3 tools/ingest/import_meeting.py meeting-a.txt meeting-b.txt \
-  --out work/meeting-run --no-publish
+  --out work/meeting-run
 ```
 
 On native Windows PowerShell:
@@ -52,10 +52,10 @@ python .\tools\ingest\import_anthropic_export.py `
   "D:\Downloads\export.zip" --out "work\claude-run"
 python .\tools\ingest\import_meeting.py `
   "D:\Meetings\meeting.txt" --out "work\meeting-run" `
-  --title "Project meeting" --no-publish
+  --title "Project meeting"
 python .\tools\ingest\import_meeting.py `
   "D:\Meetings\meeting-a.txt" "D:\Meetings\meeting-b.txt" `
-  --out "work\meeting-run" --no-publish
+  --out "work\meeting-run"
 ```
 
 Codex discovery defaults to the contributor's global
@@ -87,7 +87,7 @@ user and pass it at runtime; never store it:
 
 ```bash
 HF_TOKEN="<current-user-token>" python3 tools/ingest/import_meeting.py meeting.m4a \
-  --out work/meeting-run --language en --no-publish
+  --out work/meeting-run --language en
 ```
 
 Windows audio remains optional and project-local. The importer recognizes
@@ -99,20 +99,21 @@ $AudioPython = ".\tools\ingest\.venv-audio\Scripts\python.exe"
 $env:HF_TOKEN = "<current-user-token>"
 try {
   python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.m4a" `
-    --out "work\meeting-run" --language en --no-publish
+    --out "work\meeting-run" --language en
 }
 finally {
   Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue
 }
 ```
 
-Do not use `--publish`. Do not copy outputs to staging or any network location.
+All three ingestion commands require an explicit local `--out` and expose no staging,
+publication, or upload option. Do not copy outputs to any shared or network location.
 
 ## Verify
 
 - Repo/Claude export: inspect `index.json`; report counts, failures, and warnings.
-- One meeting: inspect `meeting.json`. Multiple meetings: inspect each
-  `meetings/<meeting-id>/meeting.json`. Report meeting, record, speaker, and warning counts.
+- Meeting import: inspect every `work/<run>/meetings/<meeting-id>/meeting.json`, including for a
+  one-meeting run. Report meeting, record, speaker, and warning counts.
 - Treat zero histories for a newly cloned repo as a valid result.
 - Confirm `publication_approved=false`.
 

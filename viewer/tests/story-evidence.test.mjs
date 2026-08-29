@@ -45,7 +45,7 @@ test("Add support cannot cite evidence outside the Chapter or an ambiguous item"
 
   const ambiguousItems = [
     ...items,
-    { documentId: "doc-a", id: "legacy:event-2", content: "A second reviewed source confirmed the same boundary." },
+    { documentId: "doc-a", id: "qualified:event-2", content: "A second reviewed source confirmed the same boundary." },
   ];
   const ambiguous = reviewStoryEvidence(ambiguousItems, [{ documentId: "doc-a", eventId: "event-2" }], []);
   assert.equal(ambiguous.evidenceResolved, false);

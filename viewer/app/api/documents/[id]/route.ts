@@ -1,4 +1,4 @@
-import { getD1 } from "../../../../db";
+import { getLocalDatabase } from "../../../../db";
 import {
   WORKFLOW_RUN_AUTHORITY,
   requireEstablishedWorkflowRun,
@@ -7,7 +7,7 @@ import {
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);

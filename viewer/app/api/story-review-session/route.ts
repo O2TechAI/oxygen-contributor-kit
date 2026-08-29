@@ -1,12 +1,13 @@
-import { getD1 } from "../../../db";
+import { getLocalDatabase } from "../../../db";
 import {
   MAX_STORY_REVIEW_SESSION_BYTES,
-  canonicalizeStoryReviewSession,
+  parseStoryReviewSession,
+  STORY_REVIEW_SESSION_SCHEMA,
 } from "../../../lib/story-review-session";
 import {
   STORY_SESSION_ERROR,
   persistStoryReviewSessionCas,
-  readActiveStoryReviewSource,
+  readActiveStoryReviewContract,
   readStoryReviewSessionRecord,
   type StorySessionErrorCode,
 } from "../../../lib/story-review-session-server";
@@ -49,26 +50,36 @@ export async function GET(request: Request) {
   if (!isWorkflowRunId(workflowRunId)) {
     return Response.json({ error: "A valid workflow run is required" }, { status: 400 });
   }
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireExactWorkflowRun(db, workflowRunId);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
   }
   const [active, record] = await Promise.all([
-    readActiveStoryReviewSource(db, workflowRunId),
+    readActiveStoryReviewContract(db, workflowRunId),
     readStoryReviewSessionRecord(db, workflowRunId),
   ]);
   if (!active.ready || active.sourceRevision === null) {
     return sessionErrorResponse(STORY_SESSION_ERROR.notReady);
   }
-  const session = record.sourceRevision === null || record.sourceRevision === active.sourceRevision
+  if (active.storySourceSchema !== "oxygen.story"
+    || active.storySessionSchema !== STORY_REVIEW_SESSION_SCHEMA) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
+  }
+  const revisionMatches = record.sourceRevision === active.sourceRevision;
+  const session = revisionMatches
     ? record.session
     : null;
+  if (session && session.schema !== active.storySessionSchema) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
+  }
   return Response.json({
     session,
     serverVersion: record.serverVersion,
     sourceRevision: active.sourceRevision,
     persistedAt: record.persistedAt,
+    storySourceSchema: active.storySourceSchema,
+    storySessionSchema: active.storySessionSchema,
   }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }
 
@@ -83,7 +94,10 @@ export async function POST(request: Request) {
   } catch {
     return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
-  if (!isRecord(body)) return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
+  if (!isRecord(body)
+    || Object.keys(body).some((key) => ![
+      "workflowRunId", "expectedVersion", "sourceRevision", "session",
+    ].includes(key))) return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   if (!("expectedVersion" in body)) {
     return sessionErrorResponse(STORY_SESSION_ERROR.versionRequired);
   }
@@ -95,20 +109,30 @@ export async function POST(request: Request) {
     || !Number.isSafeInteger(body.sourceRevision) || Number(body.sourceRevision) < 0) {
     return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
-  const session = canonicalizeStoryReviewSession(body.session);
+  const session = parseStoryReviewSession(body.session);
   if (!session || session.workflowRunId !== workflowRunId) {
     return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
 
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = await requireExactWorkflowRun(db, workflowRunId);
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
+  }
+  const active = await readActiveStoryReviewContract(db, workflowRunId);
+  if (!active.ready || active.sourceRevision === null) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.notReady);
+  }
+  if (active.storySourceSchema !== "oxygen.story"
+    || active.storySessionSchema !== STORY_REVIEW_SESSION_SCHEMA
+    || session.schema !== active.storySessionSchema) {
+    return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
   const result = await persistStoryReviewSessionCas(db, {
     workflowRunId,
     expectedVersion: Number(body.expectedVersion),
     sourceRevision: Number(body.sourceRevision),
+    storySessionSchema: active.storySessionSchema,
     session,
   }, new Date().toISOString());
   if (!result.ok) {

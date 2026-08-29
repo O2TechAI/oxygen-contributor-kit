@@ -7,15 +7,26 @@ skipped, this prints the share of shipped bytes nobody reviewed.
 """
 import argparse
 import collections
-import json
 import pathlib
 import sys
 
 TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
+LLM_REDACT_ROOT = pathlib.Path(__file__).resolve().parent
+if str(LLM_REDACT_ROOT) not in sys.path:
+    sys.path.insert(0, str(LLM_REDACT_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
+from prepare_ai_review_run import (
+    AI_REVIEW_EVENT_SCHEMA,
+    AI_REVIEW_MEETING_SCHEMA,
+    AI_REVIEW_TRAJECTORY_SCHEMA,
+    POLICY_ID,
+    digest_events,
+    discover_meetings,
+    validated_trajectory,
+)
 
 CONVERSATIONAL = {"message", "user", "assistant", "agent"}
 
@@ -30,10 +41,12 @@ def main() -> int:
     counts = collections.Counter()
     for events_path in sorted((args.run / "trajectories").glob("*/events.jsonl")):
         trajectory_dir = events_path.parent
-        for line in events_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            event = json.loads(line)
+        _, events, _ = validated_trajectory(
+            events_path,
+            manifest_schema=AI_REVIEW_TRAJECTORY_SCHEMA,
+            event_schema=AI_REVIEW_EVENT_SCHEMA,
+        )
+        for event in events:
             # Mirror run_local_review.event_content: an artifact event carries a
             # path, and the importer inlines that file's bytes. Counting only
             # the payload text understates the shipped size by orders of
@@ -65,7 +78,16 @@ def main() -> int:
             chars[event_type] += len(text)
             counts[event_type] += 1
 
+    for meeting in discover_meetings(args.run, expected_schema=AI_REVIEW_MEETING_SCHEMA):
+        for record in meeting["dataset"]["records"]:
+            text = record.get("text")
+            if isinstance(text, str) and text.strip():
+                chars["message"] += len(text)
+                counts["message"] += 1
+
     total = sum(chars.values())
+    if not total:
+        raise SystemExit("NO_REVIEWABLE_TEXT")
     reviewed = sum(v for k, v in chars.items() if k in CONVERSATIONAL)
     print(f"{'event_type':<14}{'events':>8}{'chars':>12}{'share':>9}")
     for event_type, value in chars.most_common():

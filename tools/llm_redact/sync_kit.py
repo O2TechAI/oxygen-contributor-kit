@@ -2,9 +2,8 @@
 """Copy the kit to a destination, skipping local build and review artefacts.
 
 rsync is not installed on every host, and a plain `cp -a` would replace the
-destination's `node_modules` / `.wrangler` symlinks -- on a shared box those
-point at a prepull cache every contributor uses, so clobbering them costs
-everyone a reinstall. This walks the tree, skips the excluded names, and never
+destination's `node_modules` symlinks. This walks the tree, skips the excluded
+names, and never
 follows or overwrites a symlink at the destination.
 """
 import argparse
@@ -12,14 +11,17 @@ import pathlib
 import shutil
 
 EXCLUDE_NAMES = {
-    "work", ".venv", "node_modules", ".wrangler", "__pycache__",
-    "dist", ".vinext", "outputs", ".git",
+    "work", ".venv", "node_modules", ".next", "__pycache__",
+    "outputs", ".git", ".oxygen-local.json",
 }
 EXCLUDE_FILES = {"redaction-diff.html"}
+LOCAL_STATE_SUFFIXES = (".db", ".sqlite", ".sqlite3", ".log")
 
 
 def should_skip(path: pathlib.Path) -> bool:
     if path.name in EXCLUDE_NAMES or path.name in EXCLUDE_FILES:
+        return True
+    if path.suffix.lower() in LOCAL_STATE_SUFFIXES:
         return True
     return any(part in EXCLUDE_NAMES for part in path.parts)
 

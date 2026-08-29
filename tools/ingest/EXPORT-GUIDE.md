@@ -38,11 +38,11 @@ zip 里包含(已用真实导出验证,2026-07-29):
 拿到 zip 后(不用解压也行):
 
 ```bash
-python3 tools/import_anthropic_export.py ~/Downloads/data-export.zip
+python3 tools/ingest/import_anthropic_export.py ~/Downloads/data-export.zip \
+  --out work/claude-export-run
 ```
 
-或在内网前端(`http://127.0.0.1:8899`)的「② claude.ai 导出」卡片直接上传 zip,看进度条。
-产出在 `tools/out/claudeai-<时间>/`:每个对话一条 trajectory,Projects 文档进 `memory/`,解析不了的对话会列在 `index.json` 的 `warnings` 里(不会中断)。
+工具只读取这个本机文件并写入显式 `--out` 目录；每个对话一条 trajectory，Projects 文档进入 `memory/`，解析不了的对话会列在 `index.json` 的 `warnings` 里(不会中断)。工作流 UI 只使用 canonical Viewer。
 
 ## 四、录音转写要说话人分离?(可选)
 
@@ -51,7 +51,7 @@ python3 tools/import_anthropic_export.py ~/Downloads/data-export.zip
 1. 注册 [huggingface.co](https://huggingface.co);
 2. 在 [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) 与 [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) 页面接受使用条款;
 3. Settings → Access Tokens → 新建 **read** token;
-4. `python3 tools/import_meeting.py 会议.m4a --hf-token hf_xxx`(或 `export HF_TOKEN=hf_xxx`)。
+4. `python3 tools/ingest/import_meeting.py 会议.m4a --out work/meeting-run --hf-token hf_xxx`(或 `export HF_TOKEN=hf_xxx`)。
 
 没有 token 也能转写,只是所有句子都标成 Speaker A。
 

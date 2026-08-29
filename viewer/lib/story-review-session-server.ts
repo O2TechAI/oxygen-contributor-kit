@@ -1,11 +1,19 @@
-import type { getD1 } from "../db";
+import type { getLocalDatabase } from "../db";
 import {
-  canonicalizeStoryReviewSession,
+  hydrateStoryReviewSession,
+  parseStoryReviewSession,
   storyReviewSessionSemanticJson,
+  STORY_REVIEW_SESSION_SCHEMA,
   type StoryReviewSession,
 } from "./story-review-session.ts";
+import {
+  readReservedStoryCandidateRows,
+  validateCurrentStorySourcePackage,
+  type StoryEvidenceRow,
+} from "./story-readiness.ts";
+import { parseStorySource } from "./timeline.ts";
 
-type ReviewSessionDatabase = Awaited<ReturnType<typeof getD1>>;
+type ReviewSessionDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
 type SessionRow = {
   state_json?: string;
@@ -47,18 +55,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Read both legacy direct schema-1 rows and the source-bound internal storage
- * envelope. The public Story session schema itself remains unchanged. */
+/** Read only the source-bound internal storage envelope. */
 export function parseStoredStoryReviewSession(value: unknown): {
   session: StoryReviewSession | null;
   sourceRevision: number | null;
 } {
-  const legacy = canonicalizeStoryReviewSession(value);
-  if (legacy) return { session: legacy, sourceRevision: null };
-  if (!isRecord(value) || !validRevision(value.sourceRevision)) {
+  if (!isRecord(value)
+    || Object.keys(value).some((key) => key !== "sourceRevision" && key !== "session")
+    || !validRevision(value.sourceRevision)) {
     return { session: null, sourceRevision: null };
   }
-  const session = canonicalizeStoryReviewSession(value.session);
+  const session = parseStoryReviewSession(value.session);
   return session
     ? { session, sourceRevision: value.sourceRevision }
     : { session: null, sourceRevision: value.sourceRevision };
@@ -103,10 +110,73 @@ export async function readActiveStoryReviewSource(
   };
 }
 
+/** Derive the active source/session contract from the complete recognized
+ * package. The version is never selected by the browser or persisted twice. */
+export async function readActiveStoryReviewPackage(
+  db: ReviewSessionDatabase,
+  workflowRunId: string,
+  options: { verifyCurrentSource?: boolean } = {},
+) {
+  const active = await readActiveStoryReviewSource(db, workflowRunId);
+  if (!active.ready || active.sourceRevision === null) {
+    return { active, candidateRows: [], validation: null };
+  }
+  const [candidateRows, evidenceResult] = await Promise.all([
+    readReservedStoryCandidateRows(db),
+    db.prepare(`SELECT id,document_id AS documentId,event_type AS eventType,
+      actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`)
+      .all<StoryEvidenceRow>(),
+  ]);
+  const validation = await validateCurrentStorySourcePackage(
+    db,
+    workflowRunId,
+    candidateRows,
+    evidenceResult.results || [],
+    options,
+  );
+  return { active, candidateRows, validation: validation.ok ? validation : null };
+}
+
+export async function readActiveStoryReviewContract(
+  db: ReviewSessionDatabase,
+  workflowRunId: string,
+) {
+  const { active, validation } = await readActiveStoryReviewPackage(db, workflowRunId);
+  return validation
+    ? {
+        ...active,
+        storySourceSchema: "oxygen.story" as const,
+        storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
+      }
+    : { ...active, storySourceSchema: null, storySessionSchema: null };
+}
+
+/** Sanitized polling projection. It consumes the same persisted semantic,
+ * coverage, and source-Privacy rows without selecting or hashing source text;
+ * every Story-bearing hydration re-runs the deep contract above. */
+export async function readPassiveActiveStoryReviewContract(
+  db: ReviewSessionDatabase,
+  workflowRunId: string,
+) {
+  const { active, validation } = await readActiveStoryReviewPackage(
+    db,
+    workflowRunId,
+    { verifyCurrentSource: false },
+  );
+  return validation
+    ? {
+        ...active,
+        storySourceSchema: "oxygen.story" as const,
+        storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
+      }
+    : { ...active, storySourceSchema: null, storySessionSchema: null };
+}
+
 type CasRequest = {
   workflowRunId: string;
   expectedVersion: number;
   sourceRevision: number;
+  storySessionSchema: typeof STORY_REVIEW_SESSION_SCHEMA;
   session: StoryReviewSession;
 };
 
@@ -127,6 +197,11 @@ type CasFailure = {
 };
 
 const changes = (result: { meta?: { changes?: number } }) => Number(result.meta?.changes || 0);
+
+function reviewSessionSemanticJson(value: unknown) {
+  const session = parseStoryReviewSession(value);
+  return session ? storyReviewSessionSemanticJson(session) : null;
+}
 
 function failure(
   code: StorySessionErrorCode,
@@ -159,7 +234,7 @@ async function resolveZeroChange(
     && request.expectedVersion === 0 && current.serverVersion === 1;
   if ((exactVersion || concurrentFirstCreate)
     && current.sourceRevision === request.sourceRevision
-    && storyReviewSessionSemanticJson(current.session) === storyReviewSessionSemanticJson(request.session)) {
+    && reviewSessionSemanticJson(current.session) === reviewSessionSemanticJson(request.session)) {
     return {
       ok: true,
       saved: false,
@@ -185,25 +260,39 @@ export async function persistStoryReviewSessionCas(
   if (!validRevision(request.sourceRevision)) {
     return { ok: false, code: STORY_SESSION_ERROR.sourceConflict };
   }
-  const canonical = canonicalizeStoryReviewSession(request.session);
-  if (!canonical || canonical.workflowRunId !== request.workflowRunId) {
+  const canonical = parseStoryReviewSession(request.session);
+  if (!canonical || canonical.workflowRunId !== request.workflowRunId
+    || canonical.schema !== request.storySessionSchema) {
     return { ok: false, code: STORY_SESSION_ERROR.stateInvalid };
   }
-  const [active, current] = await Promise.all([
-    readActiveStoryReviewSource(db, request.workflowRunId),
+  const [activePackage, current] = await Promise.all([
+    readActiveStoryReviewPackage(db, request.workflowRunId),
     readStoryReviewSessionRecord(db, request.workflowRunId),
   ]);
+  const { active, candidateRows, validation } = activePackage;
   if (!active.ready || active.sourceRevision === null) {
     return failure(STORY_SESSION_ERROR.notReady, current, active.sourceRevision);
   }
   if (active.sourceRevision !== request.sourceRevision) {
     return failure(STORY_SESSION_ERROR.sourceConflict, current, active.sourceRevision);
   }
+  if (!validation || request.storySessionSchema !== STORY_REVIEW_SESSION_SCHEMA) {
+    return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
+  }
   if (request.expectedVersion !== current.serverVersion) {
     return failure(STORY_SESSION_ERROR.versionConflict, current, active.sourceRevision);
   }
+  const sources = candidateRows.map((row) => parseStorySource(row.summary));
+  if (sources.some((source) => !source)) {
+    return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
+  }
+  const exactSources = sources.flatMap((source) => source ? [source] : []);
+  const hydrated = hydrateStoryReviewSession(canonical, request.workflowRunId, exactSources);
+  if (Object.keys(hydrated.chapterReviews).length !== exactSources.length) {
+    return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
+  }
 
-  const persistedSession = canonicalizeStoryReviewSession({ ...canonical, updatedAt: serverNow });
+  const persistedSession = parseStoryReviewSession({ ...canonical, updatedAt: serverNow });
   if (!persistedSession) return { ok: false, code: STORY_SESSION_ERROR.stateInvalid };
   const stateJson = serializeStoredStoryReviewSession(request.sourceRevision, persistedSession);
 
@@ -226,7 +315,7 @@ export async function persistStoryReviewSessionCas(
   }
 
   const sameMeaning = current.sourceRevision === request.sourceRevision
-    && storyReviewSessionSemanticJson(current.session) === storyReviewSessionSemanticJson(canonical);
+    && reviewSessionSemanticJson(current.session) === reviewSessionSemanticJson(canonical);
   if (sameMeaning) {
     const row = await db.prepare(`SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?`)
       .bind(request.workflowRunId).first<{ state_json?: string }>();

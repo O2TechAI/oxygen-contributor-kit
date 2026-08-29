@@ -1,266 +1,318 @@
-import type { ChapterReviewState } from "./story-review.ts";
-import { applyStoryReviewToBlock, validateChapterReviewCompletion } from "./story-review.ts";
+import type {
+  ChapterReviewState,
+  InsightExplanatoryContent,
+} from "./story-review.ts";
 import {
-  LEGACY_STORY_PREFIX,
+  applyStoryReviewToBlock,
+  humanQuoteText,
+  storyBlocks,
+  validateChapterReviewCompletion,
+} from "./story-review.ts";
+import {
   STORY_PREFIX,
-  storyReleaseTargetCatalog,
-  type StoryLanguage,
+  parseStorySource,
   type StoryReleaseTarget,
-  type StoryReleaseTargetCatalog,
-  type StoryReleaseTargetDescriptor,
-  type TimelineMilestone,
+  type StoryReleaseTargetName,
+  type StorySource,
 } from "./timeline.ts";
+import { isReservedStoryOrganizationReason } from "./story-readiness.ts";
+import { compareUtf8 } from "./story-preparation.ts";
+
+export const REVIEWED_STORY_SCHEMA = "oxygen.reviewed-story" as const;
+const FIXED_REDACTION = "[Redacted]";
 
 type ReleasePerson = { releaseLabel: string; role: string; description: string };
-type ReleaseInsight = { id: string; title: string; noticed: string; lesson: string };
+
+export type ReleaseInsight = {
+  title?: string;
+  background: string;
+  quote: string;
+  directlyAcquiredExperience: string;
+  principle: string;
+};
+
+export type ReleaseStoryBlock = { text: string; insights: ReleaseInsight[] };
+
 type ReleaseLocale = {
-  phase: string;
   title: string;
   overview: string;
-  before: string;
-  after: string;
+  transition?: { before: string; after: string };
   people: ReleasePerson[];
-  story: {
-    scene: string;
-    reconstruction: string[];
-    importantDetails: string[];
-    decisionOutcome: string;
-    uncertainty?: string;
-  };
-  insights: ReleaseInsight[];
+  story: { blocks: ReleaseStoryBlock[]; uncertainty?: string };
 };
 
-function sourceBlocks(milestone: TimelineMilestone) {
-  return (["en", "zh"] as const).reduce<Record<StoryLanguage, Record<string, string>>>((result, language) => {
-    const presentation = milestone.story.reviewPresentation?.[language];
-    if (!presentation) return result;
-    result[language] = {
-      scene: presentation.story.scene,
-      ...Object.fromEntries(presentation.story.reconstruction.map((copy, index) => [`reconstruction-${index}`, copy])),
-      ...Object.fromEntries(presentation.story.importantDetails.map((copy, index) => [`detail-${index}`, copy])),
-      outcome: presentation.story.decisionOutcome,
-      ...(presentation.story.uncertainty ? { uncertainty: presentation.story.uncertainty } : {}),
-    };
-    return result;
-  }, { en: {}, zh: {} });
-}
-
-export type ReviewedReleaseChapter = {
-  key: string;
-  kind: string;
-  revision: number;
-  en: ReleaseLocale;
-  /** Optional non-canonical localization. It is omitted whenever unavailable
-   * or carrying unresolved cross-language review debt. */
-  zh?: ReleaseLocale;
-};
+export type ReviewedReleaseChapter = { phase: string; kind?: string; en: ReleaseLocale };
 
 export type ReviewedStoryRelease = {
-  schema_version: "oxygen.reviewed-story/1";
+  schema: typeof REVIEWED_STORY_SCHEMA;
   publication_approved: false;
   chapters: ReviewedReleaseChapter[];
 };
 
-type ScalarReleaseField = Extract<StoryReleaseTargetDescriptor, { kind: "scalar" }>["field"];
-type ReleaseTargetSelection = {
-  scalars: Set<ScalarReleaseField>;
-  reconstruction: Set<number>;
-  details: Set<number>;
-  people: Set<string>;
-  insights: Set<string>;
+export type ReleasePrivacy = {
+  redact: (copy: string) => string;
+  suppressedTargets?: ReadonlySet<StoryReleaseTarget>;
 };
 
-function releaseTargetSelection(
-  catalog: StoryReleaseTargetCatalog,
-  targets: string[],
-): ReleaseTargetSelection | null {
-  const selection: ReleaseTargetSelection = {
-    scalars: new Set(),
-    reconstruction: new Set(),
-    details: new Set(),
-    people: new Set(),
-    insights: new Set(),
-  };
-  for (const target of targets) {
-    const descriptor = catalog.get(target as StoryReleaseTarget);
-    if (!descriptor) return null;
-    if (descriptor.kind === "scalar") selection.scalars.add(descriptor.field);
-    else if (descriptor.kind === "reconstruction") selection.reconstruction.add(descriptor.index);
-    else if (descriptor.kind === "detail") selection.details.add(descriptor.index);
-    else if (descriptor.kind === "person") selection.people.add(descriptor.id);
-    else selection.insights.add(descriptor.id);
-  }
-  return selection;
-}
+const noReleaseRedaction: ReleasePrivacy = { redact: (copy) => copy };
 
-const blockCopy = (
-  source: string,
-  blockId: string,
-  redacted: boolean,
-  language: StoryLanguage,
-  state: ChapterReviewState,
-) => redacted
-  ? ""
-  : applyStoryReviewToBlock(source, blockId, language, state);
-
-function localeProjection(
-  milestone: TimelineMilestone,
-  state: ChapterReviewState,
-  language: StoryLanguage,
-  selection: ReleaseTargetSelection,
-): ReleaseLocale | null {
-  const presentation = milestone.story.reviewPresentation?.[language];
-  if (!presentation || presentation.highlights.length !== 1) return null;
-  const insightReviews = state.insightReviews;
+function reviewContext(source: StorySource, state: ChapterReviewState) {
+  const sourceCollection = storyBlocks(source);
   return {
-    phase: blockCopy(presentation.phase, "phase", selection.scalars.has("phase"), language, state),
-    title: blockCopy(presentation.title, "title", selection.scalars.has("title"), language, state),
-    overview: blockCopy(presentation.overview, "overview", selection.scalars.has("overview"), language, state),
-    before: blockCopy(presentation.before, "before", selection.scalars.has("before"), language, state),
-    after: blockCopy(presentation.after, "after", selection.scalars.has("after"), language, state),
-    people: presentation.people.filter((person) => !selection.people.has(person.id)).map((person) => ({
-      releaseLabel: person.releaseLabel,
-      role: person.role,
-      description: person.description,
-    })),
-    story: {
-      scene: blockCopy(presentation.story.scene, "scene", selection.scalars.has("scene"), language, state),
-      reconstruction: presentation.story.reconstruction
-        .map((copy, index) => blockCopy(copy, `reconstruction-${index}`, selection.reconstruction.has(index), language, state))
-        .filter(Boolean),
-      importantDetails: presentation.story.importantDetails
-        .map((copy, index) => blockCopy(copy, `detail-${index}`, selection.details.has(index), language, state))
-        .filter(Boolean),
-      decisionOutcome: blockCopy(presentation.story.decisionOutcome, "outcome", selection.scalars.has("decisionOutcome"), language, state),
-      ...(presentation.story.uncertainty
-        ? { uncertainty: blockCopy(presentation.story.uncertainty, "uncertainty", selection.scalars.has("uncertainty"), language, state) }
-        : {}),
+    source,
+    privacyCandidates: [],
+    privacyDecisions: {},
+    targetCatalog: new Map(),
+    evidenceResolved: true,
+    supportedAddIds: [],
+    supportedEditIds: [],
+    sourceBlocks: sourceCollection,
+    reviewedBlocks: {
+      en: Object.fromEntries(source.story.blocks.map((block) => [
+        block.id,
+        applyStoryReviewToBlock(block.text, block.id, "en", state),
+      ])),
+      zh: {},
     },
-    insights: presentation.highlights.flatMap((highlight) => {
-      const review = insightReviews[highlight.id];
-      if (selection.insights.has(highlight.id)
-        || (review?.status === "rejected" && review.resolution === "applied")) return [];
-      const localized = review?.localized[language] || highlight;
-      return [{ id: localized.id, title: localized.title, noticed: localized.noticed, lesson: localized.lesson }];
-    }),
   };
 }
 
-/** Build the only Story representation eligible for download. It includes only
- * human-confirmed Chapter copy and intentionally omits annotations, instructions,
- * exact evidence, Privacy originals, local identities, and review metadata. */
+function targetId(storyKey: string, target: StoryReleaseTargetName) {
+  return `${storyKey}::${target}` as StoryReleaseTarget;
+}
+
+function targetSuppressed(privacy: ReleasePrivacy, storyKey: string, target: StoryReleaseTargetName) {
+  return privacy.suppressedTargets?.has(targetId(storyKey, target)) ?? false;
+}
+
+function requiredCopy(
+  privacy: ReleasePrivacy,
+  storyKey: string,
+  target: StoryReleaseTargetName,
+  copy: string,
+) {
+  if (targetSuppressed(privacy, storyKey, target)) return FIXED_REDACTION;
+  return privacy.redact(copy) === copy ? copy : FIXED_REDACTION;
+}
+
+function optionalCopy(
+  privacy: ReleasePrivacy,
+  storyKey: string,
+  target: StoryReleaseTargetName,
+  copy: string,
+) {
+  if (targetSuppressed(privacy, storyKey, target)) return null;
+  return privacy.redact(copy) === copy ? copy : null;
+}
+
+function insightProduct(
+  storyKey: string,
+  insightId: string,
+  content: InsightExplanatoryContent,
+  quote: string,
+  privacy: ReleasePrivacy,
+  quoteTarget?: StoryReleaseTargetName,
+): ReleaseInsight | null {
+  const required: Array<[StoryReleaseTargetName, string]> = [
+    [`insight:${insightId}:background`, content.background],
+    [`insight:${insightId}:directlyAcquiredExperience`, content.directlyAcquiredExperience],
+    [`insight:${insightId}:principle`, content.principle],
+  ];
+  if ((quoteTarget && targetSuppressed(privacy, storyKey, quoteTarget))
+    || required.some(([target, copy]) => (
+    targetSuppressed(privacy, storyKey, target) || privacy.redact(copy) !== copy
+  )) || privacy.redact(quote) !== quote) return null;
+  const title = content.title === undefined
+    ? null
+    : optionalCopy(privacy, storyKey, `insight:${insightId}:title`, content.title);
+  return {
+    ...(title === null ? {} : { title }),
+    background: content.background,
+    quote,
+    directlyAcquiredExperience: content.directlyAcquiredExperience,
+    principle: content.principle,
+  };
+}
+
+/** Build the only reviewed Story product. Privacy is applied once from exact
+ * target IDs, then internal IDs, anchors, Evidence and revision ledgers are
+ * removed. Each Insight is nested under its exact safe anchor paragraph. */
 export function buildReviewedStoryRelease(
-  milestones: TimelineMilestone[],
+  sources: StorySource[],
   reviews: Record<string, ChapterReviewState>,
+  privacy: ReleasePrivacy = noReleaseRedaction,
 ): ReviewedStoryRelease {
-  const chapters = milestones.flatMap((milestone) => {
-    const state = reviews[milestone.story.key];
-    const enPresentation = milestone.story.reviewPresentation?.en;
-    const sources = sourceBlocks(milestone);
-    const targetCatalog = enPresentation ? storyReleaseTargetCatalog(enPresentation) : null;
-    const selection = targetCatalog && state ? releaseTargetSelection(targetCatalog, state.redactedBlocks) : null;
-    if (!state || state.stage !== "human_confirmed" || !enPresentation
-      || !targetCatalog || !selection
-      || !validateChapterReviewCompletion(state, {
-        storyKey: milestone.story.key,
-        privacyCandidates: enPresentation.privacy.candidates,
-        privacyDecisions: state.appliedPrivacyDecisions,
-        targetCatalog,
-        reviewableInsightIds: enPresentation.highlights.map((highlight) => highlight.id),
-        sourceBlocks: sources,
-        reviewedBlocks: sources,
-      })) return [];
-    const en = localeProjection(milestone, state, "en", selection);
-    if (!en) return [];
-    const zh = state.staleTranslations.length > 0 ? null : localeProjection(milestone, state, "zh", selection);
+  const seen = new Set<string>();
+  const chapters = sources.flatMap((source) => {
+    const state = reviews[source.key];
+    if (seen.has(source.key) || !state || state.stage !== "human_confirmed") return [];
+    seen.add(source.key);
+    if (!validateChapterReviewCompletion(state, reviewContext(source, state))) return [];
+
+    const releaseBlocks: ReleaseStoryBlock[] = [];
+    const releaseBlockIndex = new Map<string, number>();
+    for (const block of source.story.blocks) {
+      const reviewed = applyStoryReviewToBlock(block.text, block.id, "en", state);
+      if (targetSuppressed(privacy, source.key, `story:${block.id}`)
+        || privacy.redact(reviewed) !== reviewed) continue;
+      releaseBlockIndex.set(block.id, releaseBlocks.length);
+      releaseBlocks.push({ text: reviewed, insights: [] });
+    }
+
+    for (const sourceInsight of source.insights) {
+      const review = state.sourceInsightReviews[sourceInsight.id];
+      if (review?.decision === "rejected") continue;
+      if (!review || review.decision !== "accepted" || review.resolution !== "applied"
+        || review.appliedVersion !== review.version) return [];
+      const content = review.editedContent || sourceInsight;
+      const anchor = releaseBlockIndex.get(content.anchorStoryBlockId);
+      if (anchor === undefined) continue;
+      const product = insightProduct(
+        source.key,
+        sourceInsight.id,
+        content,
+        content.quote.text,
+        privacy,
+        `insight:${sourceInsight.id}:quote`,
+      );
+      if (product) releaseBlocks[anchor].insights.push(product);
+    }
+
+    for (const [insightId, review] of Object.entries(state.humanInsights)
+      .sort(([left], [right]) => compareUtf8(left, right))) {
+      if (review.decision !== "human_approved" || review.resolution !== "applied"
+        || review.appliedVersion !== review.version) return [];
+      const anchorIndex = releaseBlockIndex.get(review.content.quote.storyBlockId);
+      if (anchorIndex === undefined) continue;
+      const quote = humanQuoteText(state, source, review.content);
+      if (quote === null) continue;
+      const product = insightProduct(source.key, insightId, review.content, quote, privacy);
+      if (product) releaseBlocks[anchorIndex].insights.push(product);
+    }
+
+    const people = source.people.flatMap((person) => {
+      const fields: Array<[StoryReleaseTargetName, string]> = [
+        [`people:${person.id}:releaseLabel`, person.releaseLabel],
+        [`people:${person.id}:role`, person.role],
+        [`people:${person.id}:description`, person.description],
+      ];
+      if (fields.some(([target, copy]) => (
+        targetSuppressed(privacy, source.key, target) || privacy.redact(copy) !== copy
+      ))) return [];
+      return [{
+        releaseLabel: person.releaseLabel,
+        role: person.role,
+        description: person.description,
+      }];
+    });
+
+    let transition: ReleaseLocale["transition"];
+    if (source.transition) {
+      const before = optionalCopy(privacy, source.key, "transition:before", source.transition.before);
+      const after = optionalCopy(privacy, source.key, "transition:after", source.transition.after);
+      if (before !== null && after !== null) transition = { before, after };
+    }
+    const uncertainty = source.story.uncertainty === undefined
+      ? null
+      : optionalCopy(privacy, source.key, "uncertainty", source.story.uncertainty);
+
     return [{
-      key: milestone.story.key,
-      kind: milestone.story.kind,
-      revision: state.revision,
-      en,
-      ...(zh ? { zh } : {}),
+      phase: requiredCopy(privacy, source.key, "phase", source.phase.label),
+      ...(source.kind === undefined ? {} : { kind: source.kind }),
+      en: {
+        title: requiredCopy(privacy, source.key, "title", source.title),
+        overview: requiredCopy(privacy, source.key, "overview", source.overview),
+        ...(transition ? { transition } : {}),
+        people,
+        story: {
+          blocks: releaseBlocks,
+          ...(uncertainty === null ? {} : { uncertainty }),
+        },
+      },
     }];
   });
-  return { schema_version: "oxygen.reviewed-story/1", publication_approved: false, chapters };
+  return { schema: REVIEWED_STORY_SCHEMA, publication_approved: false, chapters };
 }
 
 const requiredString = (value: unknown, maximum = 20_000) => typeof value === "string"
-  && value.length > 0
+  && value.length > 0 && value.length <= maximum;
+const boundedString = (value: unknown, maximum = 20_000) => typeof value === "string"
   && value.length <= maximum;
-const boundedString = (value: unknown, maximum = 20_000) => typeof value === "string" && value.length <= maximum;
-const stringArray = (value: unknown) => Array.isArray(value)
-  && value.length <= 200
-  && value.every((item) => requiredString(item));
+
+function sanitizeInsight(value: unknown): ReleaseInsight | null {
+  if (!value || typeof value !== "object") return null;
+  const input = value as Partial<ReleaseInsight>;
+  if ((input.title !== undefined && !boundedString(input.title, 500))
+    || !requiredString(input.background, 4_000) || !requiredString(input.quote, 1_000_000)
+    || !requiredString(input.directlyAcquiredExperience, 4_000)
+    || !requiredString(input.principle, 4_000)) return null;
+  return {
+    ...(input.title === undefined ? {} : { title: input.title }),
+    background: input.background!,
+    quote: input.quote!,
+    directlyAcquiredExperience: input.directlyAcquiredExperience!,
+    principle: input.principle!,
+  };
+}
 
 function sanitizeLocale(value: unknown): ReleaseLocale | null {
   if (!value || typeof value !== "object") return null;
   const input = value as Partial<ReleaseLocale>;
-  if (![input.phase, input.title, input.overview, input.before, input.after].every((copy) => boundedString(copy))) return null;
+  if (!requiredString(input.title, 500) || !requiredString(input.overview)) return null;
+  if (input.transition !== undefined && (!requiredString(input.transition?.before, 4_000)
+    || !requiredString(input.transition?.after, 4_000))) return null;
   if (!Array.isArray(input.people) || input.people.length > 100 || !input.people.every((person) => (
-    requiredString(person?.releaseLabel, 100) && requiredString(person?.role, 500) && requiredString(person?.description)
+    requiredString(person?.releaseLabel, 100) && requiredString(person?.role, 500)
+    && requiredString(person?.description)
   ))) return null;
-  if (!input.story || !boundedString(input.story.scene)
-    || !stringArray(input.story.reconstruction) || !stringArray(input.story.importantDetails)
-    || !boundedString(input.story.decisionOutcome)
-    || (input.story.uncertainty !== undefined && !boundedString(input.story.uncertainty))) return null;
-  if (!Array.isArray(input.insights) || input.insights.length > 1 || !input.insights.every((insight) => (
-    requiredString(insight?.id, 200) && requiredString(insight?.title)
-    && requiredString(insight?.noticed) && requiredString(insight?.lesson)
-  ))) return null;
+  if (!input.story || !Array.isArray(input.story.blocks) || input.story.blocks.length > 200
+    || (input.story.uncertainty !== undefined && !requiredString(input.story.uncertainty, 4_000))) return null;
+  const blocks: ReleaseStoryBlock[] = [];
+  for (const block of input.story.blocks) {
+    if (!block || !requiredString(block.text) || !Array.isArray(block.insights)
+      || block.insights.length > 500) return null;
+    const insights = block.insights.map(sanitizeInsight);
+    if (insights.some((insight) => !insight)) return null;
+    blocks.push({ text: block.text, insights: insights as ReleaseInsight[] });
+  }
   return {
-    phase: input.phase!, title: input.title!, overview: input.overview!, before: input.before!, after: input.after!,
+    title: input.title!,
+    overview: input.overview!,
+    ...(input.transition === undefined ? {} : {
+      transition: { before: input.transition.before, after: input.transition.after },
+    }),
     people: input.people.map((person) => ({
       releaseLabel: person.releaseLabel,
       role: person.role,
       description: person.description,
     })),
     story: {
-      scene: input.story.scene,
-      reconstruction: [...input.story.reconstruction],
-      importantDetails: [...input.story.importantDetails],
-      decisionOutcome: input.story.decisionOutcome,
-      ...(input.story.uncertainty ? { uncertainty: input.story.uncertainty } : {}),
+      blocks,
+      ...(input.story.uncertainty === undefined ? {} : { uncertainty: input.story.uncertainty }),
     },
-    insights: input.insights.map((insight) => ({
-      id: insight.id, title: insight.title, noticed: insight.noticed, lesson: insight.lesson,
-    })),
   };
 }
 
-/** Treat browser input as untrusted and recreate it from an explicit allowlist. */
 export function sanitizeReviewedStoryRelease(value: unknown): ReviewedStoryRelease | null {
   if (!value || typeof value !== "object") return null;
   const input = value as Partial<ReviewedStoryRelease>;
-  if (input.schema_version !== "oxygen.reviewed-story/1" || input.publication_approved !== false
-    || !Array.isArray(input.chapters) || input.chapters.length > 100) return null;
-  const seen = new Set<string>();
+  if (input.schema !== REVIEWED_STORY_SCHEMA || input.publication_approved !== false
+    || !Array.isArray(input.chapters) || input.chapters.length > 500) return null;
   const chapters: ReviewedReleaseChapter[] = [];
   for (const chapter of input.chapters) {
-    if (!requiredString(chapter?.key, 300) || !requiredString(chapter?.kind, 100)
-      || !Number.isInteger(chapter?.revision) || chapter.revision < 2 || seen.has(chapter.key)) return null;
+    if (!requiredString(chapter?.phase, 500)
+      || (chapter.kind !== undefined && !requiredString(chapter.kind, 100))) return null;
     const en = sanitizeLocale(chapter.en);
-    const zh = chapter.zh === undefined ? null : sanitizeLocale(chapter.zh);
-    if (!en || (chapter.zh !== undefined && !zh)) return null;
-    if (zh && (en.people.length !== zh.people.length
-      || en.people.some((person, index) => person.releaseLabel !== zh.people[index].releaseLabel)
-      || en.story.reconstruction.length !== zh.story.reconstruction.length
-      || en.story.importantDetails.length !== zh.story.importantDetails.length
-      || Boolean(en.story.uncertainty) !== Boolean(zh.story.uncertainty)
-      || en.insights.length !== zh.insights.length
-      || en.insights.some((insight, index) => insight.id !== zh.insights[index].id))) return null;
-    seen.add(chapter.key);
+    if (!en) return null;
     chapters.push({
-      key: chapter.key,
-      kind: chapter.kind,
-      revision: chapter.revision,
+      phase: chapter.phase,
+      ...(chapter.kind === undefined ? {} : { kind: chapter.kind }),
       en,
-      ...(zh ? { zh } : {}),
     });
   }
-  return { schema_version: "oxygen.reviewed-story/1", publication_approved: false, chapters };
+  return { schema: REVIEWED_STORY_SCHEMA, publication_approved: false, chapters };
 }
 
-/** Produce the exact allowlisted Story entry used by the ZIP builder. */
 export function reviewedStoryPackageEntry(value: unknown) {
   const story = sanitizeReviewedStoryRelease(value);
   return story?.chapters.length ? {
@@ -269,26 +321,15 @@ export function reviewedStoryPackageEntry(value: unknown) {
   } : null;
 }
 
-/** One deterministic public Story serialization shared by HTML and ZIP POST. */
 export function serializeReviewedStoryRelease(value: unknown) {
   const story = sanitizeReviewedStoryRelease(value);
   return story ? JSON.stringify(story, null, 2) : null;
 }
 
-/** Strip local Story annotation JSON before organization summaries reach a
- * contribution package. Only the concise release-facing Timeline sentence is
- * retained; reviewPresentation and exact evidence never cross this boundary. */
 export function releaseOrganizationReason(value: unknown) {
   const source = String(value ?? "");
-  const prefix = source.startsWith(STORY_PREFIX)
-    ? STORY_PREFIX
-    : source.startsWith(LEGACY_STORY_PREFIX) ? LEGACY_STORY_PREFIX : "";
-  if (!prefix) return source;
-  try {
-    const parsed = JSON.parse(source.slice(prefix.length)) as Record<string, unknown>;
-    const summary = parsed.timelineSummary ?? parsed.narrative ?? parsed.title;
-    return typeof summary === "string" ? summary : "Reviewed project milestone";
-  } catch {
-    return "Reviewed project milestone";
-  }
+  if (!source.startsWith(STORY_PREFIX)) return isReservedStoryOrganizationReason(source)
+    ? "Reviewed project Story" : source;
+  const story = parseStorySource(source);
+  return story?.overview || story?.title || "Reviewed project Story";
 }

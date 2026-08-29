@@ -1,5 +1,5 @@
 import {
-  canonicalizeStoryReviewSession,
+  parseStoryReviewSession,
   storyReviewSessionSemanticJson,
   type StoryReviewSession,
 } from "./story-review-session.ts";
@@ -65,6 +65,11 @@ const defaultScheduler: Scheduler = {
   clearTimeout: (timer) => clearTimeout(timer),
 };
 
+function reviewSessionSemanticJson(value: unknown) {
+  const session = parseStoryReviewSession(value);
+  return session ? storyReviewSessionSemanticJson(session) : null;
+}
+
 /** Debounced single-flight persistence. An acknowledgement advances only the
  * exact snapshot captured by its request; a later dirty snapshot is then sent
  * with the newly acknowledged server version. */
@@ -108,7 +113,7 @@ export class StoryReviewSessionPersistenceQueue {
     this.serverVersion = value.serverVersion;
     this.sourceRevision = value.sourceRevision;
     this.persistedAt = value.persistedAt || null;
-    this.acknowledgedSemantic = storyReviewSessionSemanticJson(value.session);
+    this.acknowledgedSemantic = reviewSessionSemanticJson(value.session);
     this.latest = value.session ? this.snapshot(value.session) : null;
     this.terminalError = null;
     this.errorCode = null;
@@ -123,11 +128,12 @@ export class StoryReviewSessionPersistenceQueue {
     this.sourceRevision = null;
     this.latest = null;
     this.acknowledgedSemantic = null;
-    this.terminalError = new StoryReviewSessionPersistenceError(
+    const conflict = new StoryReviewSessionPersistenceError(
       "STORY_SESSION_SOURCE_CONFLICT",
       "Story review source changed before persistence completed",
     );
-    this.errorCode = this.terminalError.code;
+    this.terminalError = conflict;
+    this.errorCode = conflict.code;
     this.status = "conflict";
     this.rejectWaiters(this.terminalError);
     this.notify();
@@ -170,7 +176,7 @@ export class StoryReviewSessionPersistenceQueue {
 
   isDurable(value: StoryReviewSession) {
     return !this.terminalError
-      && storyReviewSessionSemanticJson(value) === this.acknowledgedSemantic;
+      && reviewSessionSemanticJson(value) === this.acknowledgedSemantic;
   }
 
   getState(): StoryReviewSessionPersistenceState {
@@ -184,8 +190,8 @@ export class StoryReviewSessionPersistenceQueue {
   }
 
   private snapshot(value: StoryReviewSession): Snapshot {
-    const session = canonicalizeStoryReviewSession(value);
-    const semantic = storyReviewSessionSemanticJson(session);
+    const session = parseStoryReviewSession(value);
+    const semantic = reviewSessionSemanticJson(session);
     if (!session || !semantic) throw new StoryReviewSessionPersistenceError("STORY_SESSION_STATE_INVALID");
     return { session, semantic };
   }

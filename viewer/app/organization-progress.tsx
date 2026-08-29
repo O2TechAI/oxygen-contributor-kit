@@ -78,6 +78,8 @@ const fallbackProgress = (status: OrganizationStatus | null): WorkflowProgressSt
   updatedAt: null,
   requiresHumanAction: false,
   storyGenerationStatus: "not_started",
+  storySourceSchema: null,
+  storySessionSchema: null,
 });
 
 export function WorkflowProgress({

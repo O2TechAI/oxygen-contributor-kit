@@ -158,10 +158,11 @@ test("workflow, Story session, source invalidation, and POST handoff are exact-r
   assert.doesNotMatch(workflow, /INSERT INTO workflow_runs[\s\S]+ON CONFLICT/);
   assert.doesNotMatch(loader, /FROM workflow_runs ORDER BY updated_at|JSON\.stringify\(\[organization/);
   assert.match(loader, /if \(authority\.state === WORKFLOW_RUN_AUTHORITY\.noRun[\s\S]+return deriveWorkflowProgress/);
-  assert.match(documents, /WHERE id=\?`\)\.bind\(now, authority\.workflowRunId\)/);
-  assert.match(organization, /WHERE id=\?`\)\.bind\(now, authority\.workflowRunId\)/);
+  assert.match(documents, /beginStorySourceMutation\(db, authority\.workflowRunId, now\)/);
+  assert.match(organization, /beginStorySourceMutation\(db, authority\.workflowRunId, now\)/);
   assert.equal(session.match(/await requireExactWorkflowRun\(db, /g)?.length, 2);
-  assert.match(releaseServer, /await requireExactWorkflowRun\(db, request\.workflowRunId\)/);
+  assert.match(releaseServer, /await captureStoryReleasePrivacySnapshot\(db, request\.workflowRunId\)/);
+  assert.match(releaseServer, /initialSnapshot\.authorityRows\.length !== 1/);
   for (const [name, source] of [["HTML", html], ["ZIP", packageRoute]]) {
     const post = source.slice(source.indexOf("export async function POST"));
     assert.match(post, /await reconstructReviewedStoryRelease\(/, `${name} POST must use the exact-run release owner`);

@@ -1,6 +1,6 @@
 ---
 name: oxygen-elicit-contributor-preferences
-description: Turn a privacy-prepared reviewed Oxygen run into a small set of answerable questions that recover the contributor's transferable preferences. Reuse validated privacy counts and reviewed exclusions, find the high-signal moments where preferences surfaced, reconstruct each situation, and offer three evidence-grounded candidate preferences plus an escape hatch. Use after human Story review during reviewed handoff.
+description: Turn a privacy-prepared reviewed Oxygen run into a small set of answerable questions that recover the contributor's transferable preferences. Reuse validated privacy counts, reviewed exclusions, and reusable lessons represented by generated Insight candidates; find high-signal moments where preferences surfaced; reconstruct each situation; and offer evidence-grounded candidate answers plus an escape hatch. Generate questions after reusable lessons/Insight candidates exist and before Project Story human review opens. Answers remain explicit contributor actions during reviewed handoff.
 ---
 
 # Elicit contributor preferences
@@ -8,8 +8,9 @@ description: Turn a privacy-prepared reviewed Oxygen run into a small set of ans
 The goal is a **cheap** annotation pass. A contributor will not read 400 events and write
 freeform notes. They will answer roughly ten well-posed multiple-choice questions.
 
-Everything here runs on the contributor's own machine and their own model key. Nothing is
-uploaded. `publication_approved` stays `false`.
+Everything here runs on the contributor's own machine. Internal host subagents are not product
+provider/API calls and require no separate API key. Nothing is uploaded. `publication_approved`
+stays `false`.
 
 ## Vocabulary warning
 
@@ -26,19 +27,53 @@ sensitive" destroys the exact thing this workflow exists to capture.
 
 ## Input
 
-A privacy-prepared reviewed run: `work/<run>-review/` containing `index.json`, `trajectories/`,
-optionally `meeting.json`, and `project-map.json` from `$oxygen-organize-review-export`.
+Prepare a bounded privacy-prepared reviewed run context from the final ordered unversioned
+`story-candidates.json`, the exact reviewed redaction bundles, and their completed merge report.
+Do not reopen the raw organized run or independently apply or rerun redaction.
+- do not independently apply or rerun redaction from any other source.
 
-Do not reopen the raw organized run and do not independently apply or rerun redaction. Generate or
-validate probes only from this reviewed boundary.
+```powershell
+python .\skills\oxygen-elicit-contributor-preferences\scripts\prepare_preference_context.py `
+  --story-candidates "$Review\story-candidates.json" `
+  --redacted "$Redaction\redacted" `
+  --privacy-report "$Redaction\report.json" `
+  --output "$Review\preference-context.json"
+```
+
+Preference intentionally uses exactly one global bounded worker because it produces one
+deduplicated questionnaire authority. The workflow-owning parent assigns its one immutable
+Preference `inputPath` to one bounded host subagent when that capability exists; Preference never
+fans out across multiple shards or workers. The subagent reads only that one Privacy-safe context
+and writes `preference-candidates.json` with exactly `probes`, `bulkDecisions`, and `setAside`,
+capped at 12 probes by default and 20 maximum.
+It never writes answers, receipts, final manifests, SQLite, Viewer APIs, Privacy aggregates,
+digests, provider metadata, revisions, activation state, release state, or publication state. The
+parent runs validation and recording, owns the immutable output/receipt pair, and continues without
+asking the contributor to create a worker. If subagents are unavailable, the parent uses the same
+input and authority serially with `executionMode=serial_capability_limited`.
+
+The global Preference assignment gets one initial proposal plus at most two automatic
+proposal-only correction attempts. `correctionAttemptCount` counts corrections only, excludes the
+initial proposal, and is always `0..2`. Every correction uses the byte-identical immutable input,
+and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed
+safe pre-receipt authoring-validation code is correctable. If the second correction fails, stop the
+Preference lane safely, report correction exhaustion and the last safe validation code, and do not
+continue downstream. Authority, immutability, containment, path, I/O, infrastructure, and
+corrupt-state failures stop immediately and are never correctable.
 
 Work only on events whose project label is the primary project unless the contributor asks
 otherwise. Off-project events are noise and spending the contributor's attention on them is the
 main way this pass fails.
 
+Generated probes are questions, not confirmed preferences. They must be prepared before Project
+Story human review opens by using reusable lessons represented by generated Insight candidates, and
+they remain unanswered until the contributor acts. If no valid question is warranted, write and
+validate a completed-zero probe batch rather than inventing a preference.
+
 ## Stage 1 — Verify the reviewed boundary and report prior removals
 
-Read the validated Privacy summary already attached to the reviewed input. Report its aggregate,
+Read the aggregate from the exact completed Privacy merge report bound to the reviewed redaction
+bundles. Report that aggregate,
 never removed content and never a new mutation:
 
 ```text
@@ -127,21 +162,29 @@ Rules that decide whether this works:
 
 ## Stage 5 — Write the results
 
-Write `work/<run>/preference-probes.json` per
-[references/preference-probe-contract.md](references/preference-probe-contract.md).
+Write `preference-candidates.json` per
+[references/preference-probe-contract.md](references/preference-probe-contract.md), then finalize
+the only API-shaped output before handing off:
 
-Validate before handing off:
-
-```bash
-python3 skills/oxygen-elicit-contributor-preferences/scripts/validate_probes.py work/<run>
-```
-
-Native Windows PowerShell equivalent:
+The workflow-owning parent must already have bound `$SourceRevision` exactly once from the current
+complete local `GET $Viewer/api/organization` projection's non-null
+`semanticManifest.sourceRevision`, before any Story-preparation worker receipt exists. That value
+must be a positive JavaScript-safe integer and is reused unchanged here and by final Story
+preparation. It never comes from `/api/workflow`, a manifest `revision`, saved state, SQLite, a
+default, a sentinel, or an inferred count. If it is unavailable, stop with
+`CURRENT_SOURCE_REVISION_UNAVAILABLE` before worker output or receipt creation.
 
 ```powershell
 python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py `
-  "work\<run>"
+  --context "$Review\preference-context.json" `
+  --candidates "$Review\preference-candidates.json" `
+  --workflow-run-id "$WorkflowRun" `
+  --source-revision $SourceRevision `
+  --output "$Review\preference-bundle.json"
 ```
+
+The final bundle uses only the exact `/api/probes` camelCase contract. A failed preparation or
+finalization preserves an existing output byte-for-byte.
 
 Each confirmed preference becomes a checklist entry attached to its source document, carrying the
 evidence event IDs so the contributor can always reopen the original moment.

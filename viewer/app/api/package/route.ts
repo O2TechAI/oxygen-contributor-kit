@@ -1,29 +1,34 @@
-import { getD1 } from "../../../db";
-import { createZip } from "../../../lib/zip";
-import { selectProjectTimeline } from "../../../lib/timeline";
+import { createZip } from "../../../lib/zip.ts";
 import {
   activeRedactionFragments,
   redactKnownFragments,
-  redactKnownValue,
   releaseDocument,
   releaseItem,
   redactionSummary,
 } from "../../../lib/release.mjs";
 import { computeSourceDigest, redactionReleaseError } from "../../../lib/redaction-pass.mjs";
-import { canonicalizeStoredAutoRemoved } from "../../../lib/auto-removed.mjs";
+import {
+  capturePackageReleasePrivacySnapshot,
+  captureStoryReleasePrivacySnapshot,
+  type ReleaseSnapshotTestOptions,
+} from "../../../lib/release-privacy-snapshot.ts";
 import {
   releaseOrganizationReason,
-} from "../../../lib/story-release";
+  sanitizeReviewedStoryRelease,
+} from "../../../lib/story-release.ts";
 import {
   RELEASE_ERROR,
+  parseServerOwnedReleaseRequest,
   reconstructReviewedStoryRelease,
   reconstructReviewedStoryReleaseFromDatabase,
   releaseErrorResponse,
-} from "../../../lib/story-release-server";
+} from "../../../lib/story-release-server.ts";
+import { renderReviewedStoryHtml } from "../organization/export/route.ts";
 
-const clean = <T,>(value: string, fallback: T): T => {
-  try { return JSON.parse(value) as T; } catch { return fallback; }
-};
+function parseStoredJson(value: unknown) {
+  if (typeof value !== "string" || !value) throw new Error("stored JSON is missing");
+  return JSON.parse(value) as unknown;
+}
 const canonicalId = (prefix: string, index: number) => `${prefix}-${String(index + 1).padStart(6, "0")}`;
 
 type Summary = { primary_project?: string; project_summary?: string };
@@ -35,40 +40,60 @@ type ReleaseEvent = {
   timestamp?: string | null; content: string; organization_category: string;
   organization_confidence?: number | null; organization_reason: string;
 };
+type PackageDatabase = Parameters<typeof capturePackageReleasePrivacySnapshot>[0];
 
-async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown) {
-  const db = await getD1();
-  const redactionJob = await db.prepare(
-    "SELECT * FROM redaction_jobs ORDER BY started_at DESC LIMIT 1"
-  ).first<Record<string, unknown>>();
+/** Render the same canonical, sanitized reviewed Story used by the standalone
+ * HTML release. Insights remain nested under their accepted Story block; the
+ * release shape contains no anchor, Evidence, authority, CAS, or review IDs. */
+export function renderPackagedLocalViewer(reviewedStoryJson: string) {
+  return renderReviewedStoryHtml(reviewedStoryJson);
+}
+
+export async function buildPackageFromDatabase(
+  db: PackageDatabase,
+  reviewedStoryJson: string,
+  releaseRequest: unknown,
+  options: ReleaseSnapshotTestOptions = {},
+) {
+  const parsedReleaseRequest = parseServerOwnedReleaseRequest(releaseRequest);
+  if (!parsedReleaseRequest) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.requestInvalid });
+  }
+  const initialStorySnapshot = await captureStoryReleasePrivacySnapshot(
+    db,
+    parsedReleaseRequest.workflowRunId,
+  );
+  const initialReconstruction = await reconstructReviewedStoryReleaseFromDatabase(
+    db,
+    parsedReleaseRequest,
+  );
+  if (!initialReconstruction.ok) return releaseErrorResponse(initialReconstruction);
+  if (initialReconstruction.serializedStory !== reviewedStoryJson) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
+  }
+  const privacySnapshot = await capturePackageReleasePrivacySnapshot(db);
+  const redactionJob = privacySnapshot.redactionJob;
   const preliminaryError = redactionReleaseError(
     redactionJob,
     redactionJob?.source_digest,
+    privacySnapshot.redactionReviewRows,
   );
   if (preliminaryError) {
     return Response.json({ error: preliminaryError }, { status: 409 });
   }
 
-  const [documentResult, itemResult, redactionResult, probeResult, bulkResult, probeRun] = await Promise.all([
-    db.prepare(
-      `SELECT id,kind,source_system,item_count,metadata_json,formatted_summary_json
-         FROM documents ORDER BY source_timestamp,title`
-    ).all<Record<string, unknown>>(),
-    db.prepare(
-      `SELECT id,document_id,sequence,event_type,actor_type,timestamp,content,
-              organization_category,organization_confidence,organization_reason
-         FROM items ORDER BY document_id,sequence`
-    ).all<Record<string, unknown>>(),
-    db.prepare(
-      `SELECT id,item_id,document_id,start_offset,end_offset,category,status
-         FROM redactions WHERE status='active' ORDER BY item_id,start_offset`
-    ).all<Record<string, unknown>>(),
-    db.prepare("SELECT * FROM probes ORDER BY score DESC,created_at").all<Record<string, unknown>>(),
-    db.prepare("SELECT * FROM probe_bulk_decisions ORDER BY count DESC").all<Record<string, unknown>>(),
-    db.prepare("SELECT * FROM probe_runs ORDER BY started_at DESC LIMIT 1").first<Record<string, unknown>>(),
-  ]);
+  const documentResult = { results: privacySnapshot.documentRows };
+  const itemResult = { results: privacySnapshot.itemRows };
+  const redactionResult = { results: privacySnapshot.redactionRows };
+  const probeResult = { results: privacySnapshot.probeRows };
+  const bulkResult = { results: privacySnapshot.bulkRows };
+  const probeRun = privacySnapshot.probeRun;
   const currentSourceDigest = await computeSourceDigest(itemResult.results);
-  const sourceError = redactionReleaseError(redactionJob, currentSourceDigest);
+  const sourceError = redactionReleaseError(
+    redactionJob,
+    currentSourceDigest,
+    privacySnapshot.redactionReviewRows,
+  );
   if (sourceError) {
     return Response.json({ error: sourceError }, { status: 409 });
   }
@@ -76,38 +101,43 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
   const documentIds = new Map<string, string>();
   const summaries = new Map<string, Summary>();
   let sourceWarningCount = 0;
-  const sourceDocuments: ReleaseDocument[] = documentResult.results.map((row: Record<string, unknown>, index: number) => {
-    const id = canonicalId("document", index);
-    documentIds.set(String(row.id), id);
-    summaries.set(String(row.id), clean<Summary>(String(row.formatted_summary_json || "{}"), {}));
-    const metadata = clean<Record<string, unknown>>(String(row.metadata_json || "{}"), {});
-    const manifest = metadata.manifest && typeof metadata.manifest === "object"
-      ? metadata.manifest as Record<string, unknown>
-      : {};
-    const warnings = Number(metadata.source_warning_count ?? manifest.source_warning_count ?? 0);
-    if (Number.isInteger(warnings) && warnings >= 0) sourceWarningCount += warnings;
-    return releaseDocument(row, id) as ReleaseDocument;
-  });
+  const sourceDocuments: ReleaseDocument[] = [];
+  try {
+    for (const [index, row] of documentResult.results.entries()) {
+      const id = canonicalId("document", index);
+      documentIds.set(String(row.id), id);
+      const summary = parseStoredJson(row.formatted_summary_json);
+      const metadata = parseStoredJson(row.metadata_json);
+      if (!summary || typeof summary !== "object" || Array.isArray(summary)
+        || !metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+        throw new Error("stored document JSON has invalid shape");
+      }
+      summaries.set(String(row.id), summary as Summary);
+      const metadataRecord = metadata as Record<string, unknown>;
+      const manifest = metadataRecord.manifest && typeof metadataRecord.manifest === "object"
+        && !Array.isArray(metadataRecord.manifest)
+        ? metadataRecord.manifest as Record<string, unknown>
+        : {};
+      const warnings = Number(metadataRecord.source_warning_count ?? manifest.source_warning_count ?? 0);
+      if (!Number.isInteger(warnings) || warnings < 0) throw new Error("invalid source warning count");
+      sourceWarningCount += warnings;
+      sourceDocuments.push(releaseDocument(row, id) as ReleaseDocument);
+    }
+  } catch {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
+  }
   const redactionsByItem = new Map<string, Record<string, unknown>[]>();
   for (const span of redactionResult.results as Record<string, unknown>[]) {
     const itemId = String(span.item_id);
     redactionsByItem.set(itemId, [...(redactionsByItem.get(itemId) || []), span]);
   }
 
-  const evidenceIds = new Map<string, string>();
-  const unqualifiedEvidenceIds = new Map<string, string | null>();
   const sensitiveFragments: Array<{ text: string; category: string }> = [];
   let releaseError = "";
   const items = itemResult.results.map((row: Record<string, unknown>, index: number) => {
     const id = canonicalId("event", index);
     const originalId = String(row.id);
     const originalDocumentId = String(row.document_id);
-    const separator = originalId.indexOf(":");
-    const bareId = separator >= 0 ? originalId.slice(separator + 1) : originalId;
-    evidenceIds.set(`${originalDocumentId}:${bareId}`, id);
-    const existingEvidenceId = unqualifiedEvidenceIds.get(bareId);
-    if (existingEvidenceId === undefined) unqualifiedEvidenceIds.set(bareId, id);
-    else if (existingEvidenceId !== id) unqualifiedEvidenceIds.set(bareId, null);
     try {
       const spans = redactionsByItem.get(originalId) || [];
       sensitiveFragments.push(...activeRedactionFragments(String(row.content || ""), spans));
@@ -154,22 +184,26 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
     Array.from(summaries.values()).find((summary) => summary.project_summary)
       ?.project_summary || ""
   );
+  let reviewedStory: ReturnType<typeof sanitizeReviewedStoryRelease> = null;
+  try {
+    reviewedStory = sanitizeReviewedStoryRelease(parseStoredJson(reviewedStoryJson));
+  } catch {
+    reviewedStory = null;
+  }
+  if (!reviewedStory) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
+  }
+  const reviewedTimeline = reviewedStory.chapters.map((chapter, index) => ({
+    id: canonicalId("chapter", index),
+    summary: chapter.en.title,
+    content: [chapter.en.overview, ...chapter.en.story.blocks.map((block) => block.text)].join("\n\n"),
+  }));
   const projectNames = Array.from(new Set(releaseItems.map((item) => item.organization_category)));
   const projects = projectNames.map((name) => ({
     name,
     primary: name === primaryProject,
     event_count: releaseItems.filter((item) => item.organization_category === name).length,
-    timeline: selectProjectTimeline(releaseItems
-      .filter((item) => item.organization_category === name && ["message", "record"].includes(item.event_type))
-      .map((item) => ({
-        id: item.id,
-        sequence: item.sequence,
-        timestamp: item.timestamp || undefined,
-        project: item.organization_category,
-        summary: item.organization_reason,
-        content: item.content,
-        document_id: item.document_id,
-      }))),
+    timeline: name === primaryProject ? reviewedTimeline : [],
   }));
   const projectEvents = Object.fromEntries(releaseItems.map((item) => [
     `${item.document_id}:${item.id}`,
@@ -180,7 +214,6 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
     },
   ]));
   const projectMap = {
-    schema_version: "1",
     primary_project: primaryProject,
     summary: projectSummary,
     projects,
@@ -188,66 +221,26 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
   };
   const privacy = redactionSummary(redactionResult.results, redactionJob);
 
-  let autoRemoved = { total: 0, reversible: true, categories: [] as Array<{ kind: string; count: number }> };
-  if (probeRun) {
-    try {
-      autoRemoved = canonicalizeStoredAutoRemoved(String(probeRun.auto_removed_json || ""));
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "invalid aggregate";
-      return Response.json(
-        { error: `ZIP export blocked: invalid stored auto_removed: ${detail}` },
-        { status: 409 },
-      );
-    }
-  }
-
   const probes = probeResult.results.map((row: Record<string, unknown>, index: number) => {
-    const originalDocumentId = String(row.document_id);
-    const eventIds = clean<string[]>(String(row.event_ids_json || "[]"), [])
-      .map((eventId) => evidenceIds.get(`${originalDocumentId}:${eventId}`))
-      .filter((eventId): eventId is string => Boolean(eventId));
     const choice = row.answer_choice ? String(row.answer_choice) : null;
     return {
       id: canonicalId("probe", index),
-      document_id: documentIds.get(originalDocumentId) || "document-unknown",
-      document_kind: row.document_kind || "trajectory",
-      event_ids: eventIds,
-      timestamp: row.timestamp || null,
-      signal: row.signal,
-      score: Number(row.score || 0),
-      turns: Number(row.turns || 0),
-      recap: safeText(row.recap),
       question: safeText(row.question),
-      options: redactKnownValue(clean(String(row.options_json || "[]"), []), sensitiveFragments),
-      allow_other: true,
-      allow_skip: true,
       answer: choice
         ? { choice: choice === "none" ? "skip" : choice, ...(choice === "other" ? { text: safeText(row.answer_text) } : {}) }
         : null,
     };
   });
   const preferenceProbes = {
-    schema_version: "1",
-    primary_project: primaryProject,
-    generated_from: "project-map.json",
-    auto_removed: autoRemoved,
-    bulk_decisions: bulkResult.results.map((row: Record<string, unknown>, index: number) => ({
+    bulkDecisions: bulkResult.results.map((row: Record<string, unknown>, index: number) => ({
       id: canonicalId("bulk-decision", index),
-      kind: safeText(row.kind),
-      count: Number(row.count || 0),
       question: safeText(row.question),
-      default: "keep",
       answer: row.answer ? safeText(row.answer) : null,
-      evidence_sample: clean<string[]>(String(row.evidence_sample_json || "[]"), [])
-        .map((eventId) => evidenceIds.get(String(eventId))
-          ?? unqualifiedEvidenceIds.get(String(eventId)))
-        .filter((eventId): eventId is string => Boolean(eventId)),
     })),
     probes,
-    set_aside: Number(probeRun?.set_aside || 0),
   };
 
-  const exportedAt = new Date().toISOString();
+  const exportedAt = options.exportedAt ?? new Date().toISOString();
   const sourceTypes = Array.from(new Set(documents.map((document) => document.source_system))).sort();
   const counts = {
     documents: documents.length,
@@ -260,7 +253,6 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
   };
   const manifest = {
     format: "oxygen-contribution",
-    version: 1,
     exported_at: exportedAt,
     publication_approved: false,
     document_count: documents.length,
@@ -277,7 +269,7 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
     ai_redaction: privacy,
     notice: "Local AI-reviewed package. Nothing was uploaded by the viewer.",
   };
-  const viewer = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Oxygen local review</title><style>body{margin:0;background:#f5f3ed;color:#191b1a;font:14px/1.6 Arial}header{padding:22px 5vw;background:#fffef9;border-bottom:1px solid #dedbd2}main{max-width:920px;margin:auto;padding:30px}.project,.event{background:#fffef9;border:1px solid #dedbd2;border-radius:14px;padding:20px;margin:14px 0}.meta{color:#71766f;font-size:12px}pre{white-space:pre-wrap}</style><header><b>O₂ Oxygen</b> · AI-reviewed release · local only</header><main id="app"></main><script>const P=${JSON.stringify(projectMap).replace(/</g, "\\u003c")};const e=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));document.getElementById('app').innerHTML=P.projects.map(p=>'<section class="project"><div class="meta">'+(p.primary?'PRIMARY PROJECT':'PROJECT')+'</div><h1>'+e(p.name)+'</h1>'+p.timeline.map((x,i)=>'<article class="event"><div class="meta">'+(i+1)+' · '+e(x.timestamp||'Time unavailable')+'</div><h2>'+e(x.summary||'Project event')+'</h2><pre>'+e(x.content||'')+'</pre></article>').join('')+'</section>').join('')</script>`;
+  const viewer = renderPackagedLocalViewer(reviewedStoryJson);
   const entries = [
     { name: "manifest.json", data: JSON.stringify(manifest, null, 2) },
     { name: "data/documents.json", data: JSON.stringify(documents, null, 2) },
@@ -292,18 +284,26 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
       data: JSON.stringify(preferenceProbes, null, 2),
     });
   }
-  if (reviewedStoryJson) entries.push({
+  entries.push({
     name: "story/reviewed-project-story.json",
     data: reviewedStoryJson,
   });
-  if (reviewedStoryJson && releaseRequest !== undefined) {
-    const finalReconstruction = await reconstructReviewedStoryReleaseFromDatabase(db, releaseRequest);
-    if (!finalReconstruction.ok) return releaseErrorResponse(finalReconstruction);
-    if (finalReconstruction.serializedStory !== reviewedStoryJson) {
-      return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
-    }
-  }
   const zip = createZip(entries);
+  await options.beforeFinalPrivacyCheck?.();
+  const finalReconstruction = await reconstructReviewedStoryReleaseFromDatabase(db, parsedReleaseRequest);
+  if (!finalReconstruction.ok) return releaseErrorResponse(finalReconstruction);
+  if (finalReconstruction.serializedStory !== reviewedStoryJson) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
+  }
+  const finalPrivacySnapshot = await capturePackageReleasePrivacySnapshot(db);
+  const finalStorySnapshot = await captureStoryReleasePrivacySnapshot(
+    db,
+    parsedReleaseRequest.workflowRunId,
+  );
+  if (finalPrivacySnapshot.digest !== privacySnapshot.digest
+    || finalStorySnapshot.digest !== initialStorySnapshot.digest) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.privacyConflict });
+  }
   return new Response(zip, { headers: {
     "content-type": "application/zip",
     "content-disposition": 'attachment; filename="oxygen-contribution.zip"',
@@ -311,8 +311,16 @@ async function buildPackage(reviewedStoryJson?: string, releaseRequest?: unknown
   } });
 }
 
+async function buildPackage(reviewedStoryJson: string, releaseRequest: unknown) {
+  const { getLocalDatabase } = await import("../../../db/index.ts");
+  return buildPackageFromDatabase(await getLocalDatabase(), reviewedStoryJson, releaseRequest);
+}
+
 export async function GET() {
-  return buildPackage();
+  return Response.json({ error: "Method not allowed" }, {
+    status: 405,
+    headers: { allow: "POST" },
+  });
 }
 
 export async function POST(request: Request) {

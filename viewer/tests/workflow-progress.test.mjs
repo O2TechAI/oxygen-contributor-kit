@@ -5,6 +5,7 @@ import { parseWorkspaceStatus } from "../lib/workspace-types.ts";
 import {
   WORKFLOW_STAGE_IDS,
   deriveWorkflowProgress,
+  startWorkflowPolling,
   withHumanReviewProgress,
 } from "../lib/workflow-progress.ts";
 
@@ -89,14 +90,17 @@ test("workflow progress derives completed, current, next, waiting, and blocked s
   const reviewing = deriveWorkflowProgress(facts({
     organizedItemCount: 10, organizationStatus: "complete", redactionStatus: "complete",
     storyGenerationStatus: "ready_for_human_review", storyGenerationCompleted: 14,
-    storyGenerationTotal: 14,
+    storyGenerationTotal: 14, storySourceSchema: "oxygen.story",
+    storySessionSchema: "oxygen.story-review-session",
   }));
   assert.equal(reviewing.currentStageId, "review");
   assert.equal(reviewing.status, "waiting");
   assert.equal(reviewing.requiresHumanAction, true);
   assert.deepEqual(reviewing.stages.map((stage) => stage.id), WORKFLOW_STAGE_IDS);
 
-  const handoff = withHumanReviewProgress(reviewing, 14, 14);
+  assert.equal(withHumanReviewProgress(reviewing, 14, 14).currentStageId, "review",
+    "Chapter count alone is not project release-confirmation authority");
+  const handoff = withHumanReviewProgress(reviewing, 14, 14, true);
   assert.equal(handoff.currentStageId, "handoff");
   assert.equal(handoff.safeStatusCode, "release_handoff_ready");
   assert.equal(handoff.completedStages, 5);
@@ -106,11 +110,22 @@ test("workflow progress is a strict sanitized operational projection", () => {
   const state = deriveWorkflowProgress(facts({
     organizedItemCount: 10, organizationStatus: "complete", redactionStatus: "complete",
     storyGenerationStatus: "ready_for_human_review",
+    storySourceSchema: "oxygen.story", storySessionSchema: "oxygen.story-review-session",
   }));
   assert.deepEqual(Object.keys(state).sort(), [
-    "completedStages", "currentStageId", "requiresHumanAction", "safeStatusCode", "stages",
-    "status", "storyGenerationStatus", "totalStages", "updatedAt", "workflowRunId",
+    "completedStages", "currentStageId", "releaseConfirmed", "requiresHumanAction", "safeStatusCode", "stages",
+    "status", "storyGenerationStatus", "storySessionSchema", "storySourceSchema",
+    "totalStages", "updatedAt", "workflowRunId",
   ]);
+  assert.equal(state.storySourceSchema, "oxygen.story");
+  assert.equal(state.storySessionSchema, "oxygen.story-review-session");
+  const mixed = deriveWorkflowProgress(facts({
+    organizedItemCount: 10, organizationStatus: "complete", redactionStatus: "complete",
+    storyGenerationStatus: "ready_for_human_review",
+    storySourceSchema: "oxygen.story", storySessionSchema: "wrong-session-schema",
+  }));
+  assert.equal(mixed.storySourceSchema, null);
+  assert.equal(mixed.storySessionSchema, null);
   const serialized = JSON.stringify(state);
   assert.doesNotMatch(serialized, /reasoning|chain.of.thought|prompt|tool.?arg|private.?message|story.?payload|evidence.?payload|removed.?content/i);
   assert.ok(state.stages.every((stage) => Object.keys(stage).every((key) => ["id", "status", "progress"].includes(key))));
@@ -131,11 +146,16 @@ test("workflow route hydrates count-only persistent state and the shell can reop
   assert.match(loader, /SELECT COUNT\(\*\)/);
   assert.match(route, /export async function POST/);
   assert.match(route, /workflow_runs/);
-  assert.match(route, /validateStoryCandidatePackage/);
+  assert.match(route, /validateStoryActivationAuthority/);
+  assert.match(route, /readSemanticManifestAuthority/);
+  assert.match(route, /coverageManifest/);
+  assert.match(route, /preparationManifest/);
+  assert.match(route, /readPreferenceBatchAuthority/);
+  assert.match(route, /validateStoryPreparationManifest/);
   assert.match(route, /story_source_revision/);
   assert.match(route, /BODY_KEYS/);
   assert.doesNotMatch(`${route}\n${loader}`, /original_json|SELECT\s+content|safeStatusMessage|reasoning|prompt/i);
-  assert.doesNotMatch(route, /target_path|working_folder|session_name|story_payload|evidence_payload/i);
+  assert.doesNotMatch(route, /target_path|working_folder|session_name|story_payload|evidence_payload|memberIds|sourceBodies|excludedEvents/i);
   assert.match(db, /CREATE TABLE IF NOT EXISTS workflow_runs/);
   assert.doesNotMatch(db, /target_path|working_folder|session_name|free_form|payload_json/i);
   assert.match(workspace, /fetch\(`\/api\/workflow\$\{query\}`/);
@@ -145,11 +165,11 @@ test("workflow route hydrates count-only persistent state and the shell can reop
   assert.match(loader, /if \(!isStoryReviewReady\(workflow\)\)/);
   assert.match(workspace, /fetch\(`\/api\/story-review-session\?workflowRunId=/);
   assert.match(workspace, /hydrateStoryReviewSession/);
-  assert.match(workspace, /buildReviewedStoryRelease\(highlights,chapterReviews\)\.chapters\.length/);
+  assert.match(workspace, /runDurableStoryReviewHandoff/);
   assert.match(workspace, /setWorkflowOpen\(true\)/);
   assert.match(workspace, /<WorkflowProgress/);
   assert.match(workspace, /isStoryReviewReady\(workflow\)/);
-  assert.match(workspace, /selectReviewableStoryTimeline/);
+  assert.match(workspace, /selectViewerChapters/);
   assert.match(component, /data-safe-status/);
   assert.match(component, /Nothing is uploaded/);
   assert.match(component, /Collect project history/);
@@ -157,4 +177,81 @@ test("workflow route hydrates count-only persistent state and the shell can reop
   assert.match(component, /const determinate = Boolean\(currentProgress && currentProgress\.total > 0\)/);
   assert.doesNotMatch(component, /completedPercent|state\.completedStages \/ state\.totalStages/);
   assert.match(css, /@media\(prefers-reduced-motion:reduce\)[\s\S]*\.progressTrack\.indeterminate div\{width:100%;animation:none/);
+});
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((next) => { resolve = next; });
+  return { promise, resolve };
+}
+
+test("workflow polling remains single-flight after a response exceeds two seconds", async () => {
+  const scheduled = [];
+  const response = deferred();
+  let elapsedMs = 0;
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  let completed = 0;
+  const lifecycle = startWorkflowPolling(async ({ signal }) => {
+    inFlight += 1;
+    maximumInFlight = Math.max(maximumInFlight, inFlight);
+    try {
+      await response.promise;
+      if (!signal.aborted) completed += 1;
+    } finally {
+      inFlight -= 1;
+    }
+  }, {
+    intervalMs: 2_000,
+    schedule: (callback, delay) => {
+      assert.equal(delay, 2_000);
+      scheduled.push(callback);
+      return callback;
+    },
+    cancel: (handle) => {
+      const index = scheduled.indexOf(handle);
+      if (index >= 0) scheduled.splice(index, 1);
+    },
+  });
+
+  assert.equal(scheduled.length, 1);
+  scheduled.shift()();
+  await Promise.resolve();
+  elapsedMs = 2_500;
+  assert.ok(elapsedMs > 2_000);
+  assert.equal(inFlight, 1);
+  assert.equal(scheduled.length, 0, "no next timeout exists while the delayed poll is active");
+  response.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completed, 1);
+  assert.equal(maximumInFlight, 1);
+  assert.equal(scheduled.length, 1, "the next poll is scheduled only after completion");
+  lifecycle.retire();
+  assert.equal(scheduled.length, 0);
+});
+
+test("workflow polling retirement aborts the active epoch and prevents stale updates", async () => {
+  const scheduled = [];
+  const response = deferred();
+  let staleUpdates = 0;
+  let activeSignal = null;
+  const lifecycle = startWorkflowPolling(async ({ signal }) => {
+    activeSignal = signal;
+    await response.promise;
+    if (!signal.aborted) staleUpdates += 1;
+  }, {
+    schedule: (callback) => { scheduled.push(callback); return callback; },
+    cancel: (handle) => {
+      const index = scheduled.indexOf(handle);
+      if (index >= 0) scheduled.splice(index, 1);
+    },
+  });
+  scheduled.shift()();
+  await Promise.resolve();
+  lifecycle.retire();
+  assert.equal(activeSignal.aborted, true);
+  response.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(staleUpdates, 0);
+  assert.equal(scheduled.length, 0);
 });

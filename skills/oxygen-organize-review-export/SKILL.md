@@ -1,58 +1,142 @@
 ---
 name: oxygen-organize-review-export
-description: Continue the progress-first local Viewer after collection, separate mixed-project content across one or many Oxygen trajectories, identify the dominant project, synthesize one chronological main-project timeline, and export one final ZIP. Use after project histories or meetings have been collected and before any upload or publication decision.
+description: Continue the progress-first local Viewer after deterministic source projection, organize the complete contribution universe into bounded semantic units, identify the dominant project, build the reviewed Story, and export one final ZIP. Use after project histories or meetings have been collected and before any upload or publication decision.
 ---
 
 # Organize, review, and export
 
 ## Organize projects first
 
-Read every human/assistant conversation in the ingest run. Tool events are supporting evidence,
-not standalone projects. Then write `<run>/project-map.json` using
+Read every projected contribution record in the ingest run. The early deterministic projection
+keeps recorded human dialogue, Agent reasoning/dialogue, agent/subagent coordination and findings,
+meaningful progress, meetings, feedback, and human-supplied sources. Tool envelopes/results, raw
+commands/output, generic execution markers, telemetry, and other mechanics are already absent; do
+not recreate or request them. Use the current transport in
 [references/project-map-contract.md](references/project-map-contract.md).
+
+On POSIX, create the canonical skeleton and immutable worker handoff:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/build_project_map.py work/<run> \
+  --primary-project "<project>" --summary "<summary>"
+python3 skills/oxygen-organize-review-export/scripts/prepare_semantic_units.py \
+  work/<run> work/<run>-organization
+```
+
+On Windows PowerShell:
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\build_project_map.py `
+  "work\<run>" --primary-project "<project>" --summary "<summary>"
+python .\skills\oxygen-organize-review-export\scripts\prepare_semantic_units.py `
+  "work\<run>" "work\<run>-organization"
+```
+
+Preparation validates only current ingest projections and the exact current skeleton. If a
+projection is absent or an old project map is present, stop and re-collect through current ingest;
+never read or upgrade a historical map. The command ends with the exact internal handoff marker
+`PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS`. This is an internal orchestration boundary, not a human-review
+pause and not a request for the contributor to create workers.
 
 1. Find topic changes both within a conversation and across conversations.
 2. Group events by the actual product, repository, or workstream being discussed.
 3. Choose `primary_project` by sustained user intent, substantive turns, artifacts, and
    continuity over time—not merely by the most repeated token.
-4. Give every event a project label. Attach tool/system events to the nearest substantive
-   project context; use `Unrelated / uncertain` when evidence is weak.
-5. For primary-project human/assistant events, use AI to rewrite a compact timeline description
-   of what changed, was decided, was questioned, or was produced. Preserve timestamps and
-   evidence IDs, but never paste or lightly paraphrase the full source message.
-6. Build exactly one chronological timeline per project across all trajectories.
+4. Group the complete filtered contribution universe into semantic units by meaning, not by
+   filename, session, timestamp, record count, or future Chapter shape.
+5. Give every contribution record exactly one unit owner. Use a bounded `routine` unit when
+   semantic narration is retained but later may be explicitly dispositioned as non-narrative.
+6. Finalize the manifest provider-free so exact disjoint membership and digests are proved before
+   the Viewer accepts Organization as complete.
 
-## Project timeline is the unit of organization
+## Semantic unit is the authority of organization
 
-- A trajectory is evidence, not a timeline. Never create one timeline per trajectory.
-- Merge events from every matching trajectory into the timeline for their assigned project.
-- A project appears once in the Viewer, even when it spans many conversations or source systems.
-- Keep trajectory/document IDs on every timeline event so **Open source event** can return to
-  the exact evidence.
-- Order each project timeline globally by source timestamp, then source sequence for ties.
-- Distill each project into evidence-supported meaningful milestones without using a numeric quota.
-  Never show hundreds of raw conversation turns as timeline cards; retain every omitted turn in
-  source evidence.
-- Cover the project's full time range. Include consequential decisions and changes, durable
-  progress, substantive iterations, failures or diagnostic cases that affected later work,
-  validations, handoffs, and the current state. Exclude greetings, repeated status updates, routine
-  tool narration, and reruns that add no new result or understanding.
-- The default Viewer selection is the primary project's combined timeline.
-- Source trajectories may be listed for evidence inspection, but they must not look like
-  separate project timelines.
+- A trajectory is source provenance, not a semantic boundary.
+- A unit may span trajectories when the recorded meaning belongs to one episode.
+- Every filtered contribution belongs to exactly one unit; omission is never an exclusion signal.
+- Exact member IDs remain in the local manifest and server tables. Story receives only stable unit
+  IDs, revisions, counts, digests, kind, and an optional privacy-safe projection.
+- Keep chronology, causal continuity, ordinary setup that later matters, failures, corrections,
+  decisions, validation, handoffs, and current unresolved state. Do not discard recorded semantic
+  narration merely because its raw family was Agent reasoning, delegation, or status/progress.
+- Do not create one unit per raw record, one unit per session, or a second coverage ledger.
+- Use progressive exact Evidence access by unit when Story needs member bodies.
 
-Parallelize per-trajectory summaries when there are many conversations, then reconcile project
-aliases globally. Use the user's configured model/key; never require a bundled Oxygen key.
+The workflow-owning parent automatically enumerates every manifest shard. When host subagents are
+available, it must dispatch them in waves of at most three live subagents. Each assignment reads
+exactly one Privacy-safe immutable `inputs/<shard-id>.json` and writes only its strict proposal
+array at `handoffs/<shard-id>.proposals.json`. Workers never write receipts, final manifests,
+SQLite, Viewer APIs, revisions, activation state, release state, or publication state. Internal
+host subagents are not product provider/API calls, need no separate API key, and receive no
+raw/private source beyond that bounded input. Silently performing all semantic reasoning in the
+parent while subagents are available is invalid.
 
-Timeline descriptions must be glanceable:
+If the host genuinely lacks subagent capability, the parent processes the same immutable shards
+serially, reports `executionMode=serial_capability_limited`, and continues without asking the
+contributor to create workers. This uses the identical recorder and finalizer authority and is not
+a fallback contract. In either execution mode, the parent exclusively invokes recorders, installs
+immutable output/receipt pairs, checks exact union and no overlap, waits for every terminal receipt,
+finalizes authority, and performs later Viewer mutations.
 
-- one sentence and one idea;
-- at most 18 English words or 32 Chinese characters;
-- start with a concrete action, decision, question, or outcome;
-- remove greetings, setup narration, repeated context, implementation detail, and filler;
-- do not include timestamps, project names, confidence, or source quotations because the UI
-  presents those separately;
-- when a source event is long, summarize its project significance rather than its contents.
+Each proposal requires `unitId`, `kind`, and the shard's UTF-8-ordered `contributionIds`.
+`kind` is an open machine label matching exactly `^[a-z][a-z0-9_]{0,63}$`; labels such as
+`direction_change`, `root_cause`, and domain-specific lower-snake-case values need no product-code
+registration. Never map an unrecognized label to a fallback. The reserved `duplicate` kind alone
+permits `duplicateOfUnitId`, which must name one direct non-duplicate unit. The reserved `routine`
+kind alone can later authorize the `routine_non_narrative` Coverage disposition.
+
+Record each terminal worker result without hand-editing generated authority:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/record_semantic_worker.py \
+  work/<run>-organization <shard-id> \
+  work/<run>-organization/handoffs/<shard-id>.proposals.json
+```
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\record_semantic_worker.py `
+  "work\<run>-organization" "<shard-id>" `
+  "work\<run>-organization\handoffs\<shard-id>.proposals.json"
+```
+
+A recorder validation failure is pre-receipt authoring feedback only when both
+`outputs/<shard-id>.json` and `receipts/<shard-id>.json` are absent. The parent automatically
+returns only the fixed safe validation code as authoring feedback. Each shard assignment gets one
+initial proposal plus at most two automatic proposal-only correction attempts.
+`correctionAttemptCount` is assignment-local, counts corrections only, excludes the initial
+proposal, and is always `0..2`; never sum it across the multi-shard Organization lane. Every
+correction uses the byte-identical immutable shard input, and every invalid initial or correction
+attempt leaves both output and receipt absent. If the second correction fails, stop the lane safely,
+report correction exhaustion and the last safe validation code, and do not continue downstream.
+Authority, immutability, containment, path, I/O, infrastructure, and corrupt-state failures stop
+immediately and are never correctable. The assigned worker may replace only its non-authoritative
+handoff proposal. This is not a contributor pause. The recorder never rewrites, maps, or repairs a
+proposal, and correction may never replace durable output. Once an output or receipt exists, that
+durable authority is immutable; a differing resubmission fails closed and must not replace or
+repair either artifact.
+
+Workers may use the same stable `unitId` across shards. The deterministic composition stage merges
+those proposals, rejects conflicting metadata, and proves the exact global union. After every
+receipt is complete, finalize and install atomically:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/finalize_semantic_units.py \
+  work/<run> work/<run>-organization
+```
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\finalize_semantic_units.py `
+  "work\<run>" "work\<run>-organization"
+```
+
+The finalizer rejects missing, foreign, duplicate, stale, overlapping, or tampered worker
+authority before replacing `project-map.json`. The existing project-map builder remains the sole
+digest and revision authority. The optional Story-facing unit projection is one privacy-safe label
+and summary, not a substitute for exact local membership.
+
+For later E2E evidence, report `executionMode`, `lane`, `shardCount`, `spawnedSubagentCount`,
+`maxConcurrentSubagents`, `correctionAttemptCount`, and `terminalReceiptCount` from observed parent
+execution. Do not infer these values from manifest size alone.
 
 ## Delegate Storytelling after the reviewed boundary
 
@@ -77,9 +161,22 @@ package, publish, or change `publication_approved`.
 
 ## Continue the same progress-first Viewer
 
-The normal workflow already launched Workflow Progress before collection and retained its exact
-Viewer origin and stable workflow run ID. After `project-map.json` exists, attach the ingest run to
-that same process-owned D1 state:
+Every owned E2E/local-review launch that reaches a usable Viewer must select a fresh, external,
+private `.old` session directory and pass `--save-state`. The directory must not already exist.
+For example, the progress-first launch before collection is:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --target /path/to/repo --save-state /external/private/.old/oxygen-session-<fresh-id>
+```
+
+Keep the exact selected session path. The launcher saves blocked, pending, partially reviewed, or
+complete Viewer state only after the owned Viewer stops and releases its port. The final Agent
+report must repeat the exact path printed by the launcher. If no Viewer/database was created, do
+not claim that a session was saved.
+
+The normal workflow retains the exact Viewer origin and stable workflow run ID while it is running.
+After `project-map.json` exists, attach the ingest run to that same process-owned Viewer state:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run> \
@@ -94,30 +191,48 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --workflow-run-id "<run-id>"
 ```
 
-Attach mode verifies ownership of the exact workflow run, imports the project map and source
-records, and advances organization in the existing Viewer. Reattach the prepared reviewed run
+Attach mode verifies ownership of the exact workflow run, requires a finalized semantic manifest,
+imports the project map and source records, and atomically publishes Organization authority in the
+existing Viewer. Reattach the prepared reviewed run
 after privacy-boundary preparation, and reattach again when validated Story metadata changes;
 these are idempotent updates to the same canonical runtime, not new Viewers.
 When the reattach changes only organization or staged Story metadata, the Viewer preserves the
 completed Privacy pass because its reviewed source identity is unchanged. Any source-bearing item
 change marks that pass stale and requires Privacy to complete again before Story activation.
 
-For a downstream reviewed-artifact resume or a compatibility-only manual review, the launcher
-still accepts a run directly and starts a fresh Viewer:
+For a downstream reviewed artifact that already satisfies the same canonical plural meeting
+contract, the launcher accepts the run directly and starts a fresh Viewer. This is also an owned
+launch and therefore requires a new external session destination:
 
 ```bash
-python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run>
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run> \
+  --save-state /external/private/.old/oxygen-session-<fresh-id>
 ```
 
-That compatibility path starts after collection and therefore must not be claimed as a complete
-progress-first Toolkit run.
+This direct reviewed-artifact launch starts after collection and therefore must not be claimed as
+a complete progress-first Toolkit run or as an alternate input contract.
 
 On native Windows and Linux/WSL it also verifies Node/npm and the platform-specific dependency
 installation, rebuilding incompatible modules with `npm ci`. Windows resolution uses the real
-`npm.cmd` command and rejects POSIX-only shims. Every launch receives fresh process-owned D1 state.
+`npm.cmd` command and rejects POSIX-only shims. A new owned launch uses native Next and a fresh
+process-owned temporary state directory. With `--save-state`, the launcher stops the Viewer,
+releases the port, verifies SQLite integrity, and copies the complete Viewer-owned state into the
+selected session before temporary cleanup. There is no online deployment path.
 Without `--port`, the launcher reserves an OS-selected free `127.0.0.1` port and announces only
 the exact port that becomes healthy. Use `--port <number>` when a specific isolated port is
 required. An occupied port fails without killing its owner or choosing a fallback port.
+
+When Bruce later says `resume`, use only the exact previously reported path:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --resume-state /external/private/.old/oxygen-session-<exact-id>
+```
+
+Resume uses that same local state directly, so later human Review, Privacy, Preference, `All set`, or
+release progress remains durable there. Do not rerun collection, import, or Story preparation; do
+not infer completion or bypass an existing blocker. A saved session is a private local convenience,
+not an immutable archive or product authority, and it never changes `publication_approved=false`.
 
 ## Browser handoff is required
 
@@ -127,6 +242,8 @@ After the Viewer becomes ready:
 2. Tell the user the URL and that no password is required.
 3. If automatic opening fails, surface the exact URL clearly.
 4. Keep the process alive until the user finishes or asks to stop.
+5. After stop, report the exact saved-session path printed by the launcher. If saving did not occur,
+   report that fact without claiming a saved state.
 
 The atomic transition to Stage 5 Review Story is an immediate human handoff, not permission for an
 Agent or evaluator to review the Story first. The same Agent must surface the exact URL, state that
@@ -139,11 +256,10 @@ Do not use `--no-browser` except for automated tests or headless environments.
 
 ## Review
 
-- Confirm every event has the correct project label, confidence, and explanation.
+- Confirm every projected contribution has exactly one semantic-unit owner.
 - Confirm the selected main project reflects sustained user intent.
-- Read the cross-trajectory timeline for missing, duplicated, or out-of-order milestones.
-- Inspect `Unrelated / uncertain` events and revise the project map when needed.
-- Use **Source events** to compare the concise timeline against complete original content.
+- Reject missing, double-owned, foreign, duplicated, or stale membership.
+- Inspect units progressively against exact Evidence; do not expose the full member ledger to Story.
 - Never treat organization as publication approval.
 
 ## Export
@@ -152,8 +268,8 @@ Use **Download ZIP** to create `oxygen-contribution.zip`, then inspect its membe
 contain `manifest.json`, normalized documents and events, `project-map.json`, and the offline
 HTML review file. The exporter must apply every active AI-redaction span, omit original event
 envelopes, include a safe aggregate redaction summary, and block when the model pass is incomplete
-or has rejected spans. The local SQLite/D1 database is temporary runtime state and must not enter
-the ZIP. Preserve `publication_approved=false`.
+or has rejected spans. The temporary local SQLite database is runtime state and must not enter the
+HTML or ZIP. Preserve `publication_approved=false`.
 
 Read [references/data-contract.md](references/data-contract.md) when the ingest directory is
 unrecognized or a new source format needs adapting.

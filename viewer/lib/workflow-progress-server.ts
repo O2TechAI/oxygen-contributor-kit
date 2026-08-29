@@ -1,18 +1,32 @@
-import { getD1 } from "../db";
-import { selectReviewableStoryTimeline } from "./story-readiness";
-import { hydrateStoryReviewSession } from "./story-review-session";
+import { getLocalDatabase } from "../db/index.ts";
 import {
-  readActiveStoryReviewSource,
+  hydrateStoryReviewSession,
+  STORY_REVIEW_SESSION_SCHEMA,
+} from "./story-review-session.ts";
+import {
+  emptyChapterReview,
+  type ChapterReviewState,
+  type PrivacyDecision,
+} from "./story-review.ts";
+import {
+  readActiveStoryReviewContract,
+  readPassiveActiveStoryReviewContract,
   readStoryReviewSessionRecord,
-} from "./story-review-session-server";
-import { deriveWorkflowProgress, isStoryReviewReady } from "./workflow-progress";
+} from "./story-review-session-server.ts";
+import {
+  STORY_PREFIX,
+  compareStorySourceIdentity,
+  parseStorySource,
+} from "./timeline.ts";
+import { deriveWorkflowProgress, isStoryReviewReady } from "./workflow-progress.ts";
 import {
   WORKFLOW_RUN_AUTHORITY,
   WorkflowRunAuthorityError,
   requireEstablishedWorkflowRun,
   requireExactWorkflowRun,
-} from "./workflow-run-server";
-import type { WorkspaceDocument, WorkspaceStatus } from "./workspace-types";
+} from "./workflow-run-server.ts";
+import type { WorkspaceDocument, WorkspaceStatus } from "./workspace-types.ts";
+import { readProjectReleaseConfirmation } from "./project-release-confirmation.ts";
 
 type CountRow = { total: number; completed: number };
 type JobRow = { id?: string; status?: string; updated_at?: string };
@@ -25,14 +39,18 @@ type WorkflowRunRow = {
   story_generation_status: string;
   story_generation_completed: number;
   story_generation_total: number;
+  story_source_revision: number;
+  active_story_digest?: string;
   updated_at: string;
 };
+
+type SessionBindingRow = { server_version?: number; state_json?: string };
 
 /** Read the one sanitized persisted workflow projection used by both the
  * initial server render and the polling API. No Story or Evidence payload is
  * selected or serialized across the Server/Client boundary. */
 export async function loadWorkflowProgress(workflowRunId?: string) {
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const authority = workflowRunId
     ? await requireExactWorkflowRun(db, workflowRunId)
     : await requireEstablishedWorkflowRun(db);
@@ -49,9 +67,9 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
   }
   const runQuery = db.prepare(`SELECT id,target_confirmed,collection_status,collection_completed,
       collection_total,story_generation_status,story_generation_completed,
-      story_generation_total,updated_at
+      story_generation_total,story_source_revision,active_story_digest,updated_at
       FROM workflow_runs WHERE id=?`).bind(authority.workflowRunId).first<WorkflowRunRow>();
-  const [items, documents, organization, redaction, run] = await Promise.all([
+  const [items, documents, organization, redaction, run, sessionBinding] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN organization_category IS NOT NULL THEN 1 ELSE 0 END) AS completed
       FROM items`).first<CountRow>(),
@@ -59,11 +77,35 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     db.prepare("SELECT id,status,updated_at FROM organization_jobs ORDER BY updated_at DESC LIMIT 1").first<JobRow>(),
     db.prepare("SELECT id,status,updated_at FROM redaction_jobs ORDER BY started_at DESC LIMIT 1").first<JobRow>(),
     runQuery,
+    db.prepare(`SELECT server_version,state_json FROM story_review_sessions WHERE workflow_run_id=?`)
+      .bind(authority.workflowRunId).first<SessionBindingRow>(),
   ]);
   const updatedAt = [run?.updated_at, organization?.updated_at, redaction?.updated_at]
     .filter((value): value is string => Boolean(value))
     .sort()
     .at(-1) || null;
+  const activeContract = run?.story_generation_status === "ready_for_human_review"
+    ? await readPassiveActiveStoryReviewContract(db, authority.workflowRunId)
+    : null;
+  let storedSourceRevision: number | null = null;
+  try {
+    const stored = JSON.parse(String(sessionBinding?.state_json || ""));
+    storedSourceRevision = Number.isSafeInteger(stored?.sourceRevision)
+      ? Number(stored.sourceRevision) : null;
+  } catch {
+    storedSourceRevision = null;
+  }
+  const currentServerVersion = Number(sessionBinding?.server_version);
+  const currentSourceRevision = Number(run?.story_source_revision);
+  const releaseConfirmed = Boolean(run?.active_story_digest
+    && Number.isSafeInteger(currentServerVersion) && currentServerVersion >= 0
+    && Number.isSafeInteger(currentSourceRevision) && currentSourceRevision >= 0
+    && storedSourceRevision === currentSourceRevision
+    && await readProjectReleaseConfirmation(db, {
+      workflowRunId: authority.workflowRunId,
+      serverVersion: currentServerVersion,
+      sourceRevision: currentSourceRevision,
+    }));
   return deriveWorkflowProgress({
     workflowRunId: run?.id || authority.workflowRunId,
     targetConfirmed: Boolean(run?.target_confirmed),
@@ -78,6 +120,9 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     storyGenerationStatus: run?.story_generation_status || "not_started",
     storyGenerationCompleted: Number(run?.story_generation_completed || 0),
     storyGenerationTotal: Number(run?.story_generation_total || 0),
+    storySourceSchema: activeContract?.storySourceSchema || null,
+    storySessionSchema: activeContract?.storySessionSchema || null,
+    releaseConfirmed,
     updatedAt,
   });
 }
@@ -116,7 +161,7 @@ export async function loadWorkspaceBootstrap() {
     };
   }
 
-  const db = await getD1();
+  const db = await getLocalDatabase();
   const [items, documentCount, organization, documentRows, session, activeSource] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN organization_category IS NOT NULL THEN 1 ELSE 0 END) AS completed
@@ -128,7 +173,7 @@ export async function loadWorkspaceBootstrap() {
       updated_at,organization_status,formatted_summary_json
       FROM documents ORDER BY source_timestamp,title`).all<WorkspaceDocumentRow>(),
     readStoryReviewSessionRecord(db, workflow.workflowRunId),
-    readActiveStoryReviewSource(db, workflow.workflowRunId),
+    readActiveStoryReviewContract(db, workflow.workflowRunId),
   ]);
   const total = Number(items?.total || 0);
   const completed = Number(items?.completed || 0);
@@ -150,22 +195,55 @@ export async function loadWorkspaceBootstrap() {
   };
   const events = documents.flatMap((document) => (document.formatted_summary?.highlights || [])
     .map((event) => ({ ...event, documentId: document.id })))
-    .sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || "")));
-  const milestones = selectReviewableStoryTimeline(events);
-  const persistedSession = session.sourceRevision === null
-    || session.sourceRevision === activeSource.sourceRevision
+    .sort(compareStorySourceIdentity);
+  const recognizedEvents = events.filter((event) => (
+    String(event.summary || "").startsWith(STORY_PREFIX)
+  ));
+  const contractMatches = Boolean(workflow.storySourceSchema
+    && workflow.storySessionSchema
+    && activeSource.storySourceSchema === workflow.storySourceSchema
+    && activeSource.storySessionSchema === workflow.storySessionSchema);
+  const revisionMatches = session.sourceRevision === activeSource.sourceRevision;
+  const persistedSession = revisionMatches && session.session?.schema === workflow.storySessionSchema
     ? session.session
     : null;
-  const hydrated = hydrateStoryReviewSession(persistedSession, workflow.workflowRunId, milestones);
+  const storedStateValid = session.persistedAt === null
+    || !revisionMatches || Boolean(persistedSession);
+  let chapterReviews: Record<string, ChapterReviewState> = {};
+  let privacyDecisions: Record<string, PrivacyDecision> = {};
+  const parsedSources = recognizedEvents.map((event) => parseStorySource(event.summary));
+  let projectionReady = workflow.storySourceSchema === "oxygen.story"
+    && workflow.storySessionSchema === STORY_REVIEW_SESSION_SCHEMA
+    && recognizedEvents.length > 0
+    && parsedSources.every((source) => source !== null);
+  const sources = parsedSources.flatMap((source) => source ? [source] : []);
+  if (persistedSession) {
+    const hydrated = hydrateStoryReviewSession(
+      persistedSession,
+      workflow.workflowRunId,
+      sources,
+    );
+    chapterReviews = hydrated.chapterReviews;
+    privacyDecisions = hydrated.privacyDecisions;
+    projectionReady = projectionReady
+      && Object.keys(hydrated.chapterReviews).length === sources.length;
+  } else {
+    chapterReviews = Object.fromEntries(sources.map((source) => [
+      source.key,
+      emptyChapterReview(source),
+    ]));
+  }
   const ready = documents.length > 0
     && status.status === "complete"
-    && milestones.length > 0;
+    && contractMatches
+    && projectionReady
+    && storedStateValid;
   return {
     workflow,
     status,
     documents,
-    chapterReviews: hydrated.chapterReviews,
-    privacyDecisions: hydrated.privacyDecisions,
+    chapterReviews,
+    privacyDecisions,
     storySessionReadyRunId: ready ? workflow.workflowRunId : "",
   };
 }

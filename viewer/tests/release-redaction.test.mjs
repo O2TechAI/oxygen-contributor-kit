@@ -183,6 +183,36 @@ test("only internally consistent completed redaction passes are releasable", () 
     status: "complete", completed: 0, total: 0, rejected: 0,
     source_digest: digest,
   }, digest), null);
+  const completeJob = {
+    status: "complete", completed: 1, total: 1, rejected: 0,
+    source_digest: digest,
+  };
+  const legacyStateError = "AI redaction review state is missing or invalid; rerun Privacy before release";
+  for (const confidence of ["low", "medium", "high"]) {
+    assert.equal(redactionReleaseError(completeJob, digest, [{
+      status: "active", confidence,
+    }]), legacyStateError);
+    assert.equal(redactionReleaseError(completeJob, digest, [{
+      review_state: null, status: "removed", confidence,
+    }]), legacyStateError);
+  }
+  assert.match(redactionReleaseError(completeJob, digest, [{
+    review_state: "needs_confirmation", status: "active", confidence: "high",
+  }]), /requires contributor confirmation/);
+  assert.equal(redactionReleaseError(completeJob, digest, [{
+    review_state: "deterministic", status: "active", confidence: "low",
+  }]), null);
+  assert.equal(redactionReleaseError(completeJob, digest, [{
+    review_state: "confirmed_redact", status: "active",
+  }, {
+    review_state: "confirmed_keep", status: "removed",
+  }]), null);
+  assert.match(redactionReleaseError(completeJob, digest, [{
+    review_state: "needs_confirmation", status: "removed",
+  }]), /inconsistent/);
+  assert.equal(redactionReleaseError(completeJob, digest, [{
+    review_state: "invented", status: "active",
+  }]), legacyStateError);
 });
 
 test("duplicate span ids cannot inflate the persisted completion count", () => {
@@ -235,25 +265,30 @@ test("confirmed fragments are removed from derived ZIP text too", () => {
 
 test("package route is gated and never selects original event JSON", async () => {
   const route = await readFile(new URL("../app/api/package/route.ts", import.meta.url), "utf8");
+  const snapshot = await readFile(new URL("../lib/release-privacy-snapshot.ts", import.meta.url), "utf8");
   const redactions = await readFile(new URL("../app/api/redactions/route.ts", import.meta.url), "utf8");
   const documents = await readFile(new URL("../app/api/documents/route.ts", import.meta.url), "utf8");
   const compare = await readFile(new URL("../app/redaction-compare.tsx", import.meta.url), "utf8");
   assert.match(route, /redactionReleaseError/);
   assert.match(route, /computeSourceDigest/);
-  assert.match(route, /WHERE status='active'/);
+  assert.match(snapshot, /WHERE status='active'/);
+  assert.match(snapshot, /review_state/);
+  assert.match(snapshot, /redactionReviewRows/);
+  assert.match(route, /capturePackageReleasePrivacySnapshot/);
   assert.match(route, /privacy\/redaction-summary\.json/);
   assert.match(route, /preference-probes\.json/);
   assert.match(route, /safeTextCache\.has\(source\)/);
-  assert.match(route, /turns: Number\(row\.turns/);
+  assert.doesNotMatch(route, /turns: Number\(row\.turns|event_ids|evidence_sample/);
+  assert.match(route, /question: safeText\(row\.question\)/);
   assert.match(route, /events: projectEvents/);
   assert.match(route, /source_types: sourceTypes/);
   assert.match(route, /details_omitted_for_privacy/);
   assert.doesNotMatch(route, /original_json/);
   assert.match(redactions, /'running','validating'/);
   assert.match(redactions, /source_digest/);
-  assert.match(documents, /sourceImportMatchesExisting/);
-  assert.match(documents, /\.\.\.\(sourceChanged/);
-  assert.match(documents, /source_changed/);
+  assert.doesNotMatch(documents, /sourceImportMatchesExisting|sourceChanged/);
+  assert.match(documents, /publishFinalizedCorpusSourceMutation/);
+  assert.match(documents, /UPDATE redaction_jobs[\s\S]*source_changed/);
   assert.match(compare, /const items = allItems/);
   assert.match(compare, /Redaction pass is not releasable/);
 });
