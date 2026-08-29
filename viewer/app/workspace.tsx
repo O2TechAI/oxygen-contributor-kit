@@ -91,6 +91,7 @@ type TimelineChapter = {
   title: string;
   overview: string;
   timestamp?: string;
+  dateLabel?: string;
   evidenceCount: number;
   readingMinutes: number;
   before?: string;
@@ -185,9 +186,12 @@ const fmt = (value: string | undefined, language: StoryLanguage = "en") => value
   ? new Date(value).toLocaleString(language === "zh" ? "zh-CN" : "en-US", { dateStyle:"medium", timeStyle:"short" })
   : language === "zh" ? "时间不可用" : "Time unavailable";
 
-const fmtTimelineDate = (value: string | undefined, language: StoryLanguage = "en") => value
-  ? new Date(value).toLocaleDateString(language === "zh" ? "zh-CN" : "en-US", { dateStyle:"medium" })
-  : language === "zh" ? "日期不可用" : "Date unavailable";
+const fmtTimelineDate = (value: string, language: StoryLanguage = "en") => {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf())
+    ? undefined
+    : date.toLocaleDateString(language === "zh" ? "zh-CN" : "en-US", { dateStyle:"medium" });
+};
 
 function updateStoryNavigationUrl(navigation: StoryNavigation, historyMode: "push"|"replace") {
   if (typeof window === "undefined") return;
@@ -794,6 +798,7 @@ export function InlineWorkspace({
   const projectStorySummary = summary.project_summary;
   const viewerChapters:TimelineChapter[] = projectChapters.map((chapter) => {
     const timeline = timelinePresentation(chapter.source);
+    const dateLabel = chapter.timestamp ? fmtTimelineDate(chapter.timestamp,storyLanguage) : undefined;
     return {
       key:chapter.source.key,
       project:chapter.project,
@@ -802,6 +807,7 @@ export function InlineWorkspace({
       title:chapter.source.title,
       overview:chapter.source.overview,
       timestamp:chapter.timestamp,
+      dateLabel,
       evidenceCount:1+chapter.source.evidence.supporting.length,
       readingMinutes:Math.max(1,Math.ceil(chapter.source.story.blocks.reduce((count,block) => count+block.text.trim().split(/\s+/u).length,0)/220)),
       before:timeline.before,
@@ -1142,8 +1148,8 @@ export function InlineWorkspace({
                 <p className="storyNextStep" data-story-stream-instruction>↘ {labels.nextStep}</p>
                 {phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
                   <header className="phaseHeading"><span>{String(phaseIndex+1).padStart(2,"0")}</span><div><h2>{group.name}</h2><p>{group.events.length} {storyLanguage==="zh"?"个章节":`chapter${group.events.length===1?"":"s"}`}</p></div></header>
-                  <div className="storyChapterList">{group.events.map((event) => <article className="storyChapterCard" data-kind={event.kind} data-story-key={event.key} key={event.key} aria-labelledby={`story-chapter-${event.key}`}>
-                    <div className="storyChapterMeta"><time dateTime={event.timestamp}>{fmtTimelineDate(event.timestamp,storyLanguage)}</time>{event.kind && <span>{storyKindLabel(event.kind,storyLanguage)}</span>}{event.timelineMarker === "ai_insight" && <strong>{labels.timelineAiInsight}</strong>}</div>
+                  <div className="storyChapterList">{group.events.map((event) => <article className="storyChapter" data-kind={event.kind} data-story-key={event.key} key={event.key} aria-labelledby={`story-chapter-${event.key}`}>
+                    <div className="storyChapterMeta">{event.dateLabel && <time dateTime={event.timestamp}>{event.dateLabel}</time>}{event.kind && <span>{storyKindLabel(event.kind,storyLanguage)}</span>}{event.timelineMarker === "ai_insight" && <strong>{labels.timelineAiInsight}</strong>}</div>
                     <h3 id={`story-chapter-${event.key}`}>{event.title}</h3>
                     {event.before && event.after && <div className="transition" aria-label={`${labels.before} to ${labels.after}`}>
                       <div><small>{labels.before}</small><p>{event.before}</p></div><b aria-hidden="true">→</b><div><small>{labels.after}</small><p>{event.after}</p></div>

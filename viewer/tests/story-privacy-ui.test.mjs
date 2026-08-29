@@ -179,8 +179,8 @@ test("Chapter completion consumes safe global references while Insight cards ret
   assert.match(editor, /Open global Release Preview/);
   assert.match(editor, /disabled=\{applying \|\| !storyPrivacyReady\}/);
   assert.match(editor, /disabled=\{!storyPrivacyReady \|\| !canMarkChapterReady/);
-  assert.match(css, /\.storyNarrativeRow\{display:grid;grid-template-columns:minmax\(0,720px\) minmax\(280px,360px\)/);
-  assert.match(css, /@media\(max-width:1050px\)\{\.storyNarrativeRow\{grid-template-columns:minmax\(0,720px\)\}/);
+  assert.match(css, /\.storyNarrativeRow\{display:grid;grid-template-columns:minmax\(0,720px\) minmax\(480px,620px\)/);
+  assert.match(css, /@media\(max-width:1500px\)\{\.storyNarrativeRow\{grid-template-columns:minmax\(0,720px\);row-gap:16px\}/);
   assert.match(css, /\.sourcePrivacyComparison\{display:grid;grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/);
   assert.match(css, /@media\(max-width:760px\)[^\n]*\.sourcePrivacyComparison\{grid-template-columns:minmax\(0,1fr\)\}/);
 });

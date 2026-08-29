@@ -185,9 +185,10 @@ test("the rendered editor keeps paragraph-owned Insight cards in a separate resp
   assert.doesNotMatch(html.slice(secondRowEnd), /storyInsightCard|storyAnchoredInsights/);
 
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(css, /\.storyNarrativeRow\{display:grid;grid-template-columns:minmax\(0,720px\) minmax\(280px,360px\)/);
+  assert.match(css, /\.storyNarrativeRow\{display:grid;grid-template-columns:minmax\(0,720px\) minmax\(480px,620px\)/);
   assert.match(css, /\.storyAnchoredInsights\{display:grid;gap:16px;min-width:0;align-self:start\}/);
-  assert.match(css, /@media\(max-width:1050px\)\{\.storyNarrativeRow\{grid-template-columns:minmax\(0,720px\)\}\.storyAnchoredInsights\{margin:0 0 14px 8px\}/);
+  assert.match(css, /\.storyInsightCard dl\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+  assert.match(css, /@media\(max-width:1500px\)\{\.storyNarrativeRow\{grid-template-columns:minmax\(0,720px\);row-gap:16px\}\.storyAnchoredInsights\{margin:0 0 14px 8px\}/);
   assert.match(css, /@media\(max-width:760px\)\{\.storyNarrativeRow\{grid-template-columns:1fr\}/);
   assert.ok(secondRow.indexOf('class="storyBlock"') < secondRow.indexOf('class="storyAnchoredInsights"'),
     "desktop and narrow layouts preserve a separate prose component followed by its owned card component");
@@ -307,10 +308,13 @@ test("story Timeline executes the exact source mapping without manufacturing fie
   );
   assert.match(workspace, /timelineAiInsight:"AI Insight"/);
   assert.match(workspace, /timelineAiInsight:"AI 洞察"/);
+  assert.match(timelineRows, /<article className="storyChapter"/);
+  assert.match(timelineRows, /event\.dateLabel && <time dateTime=\{event\.timestamp\}>\{event\.dateLabel\}<\/time>/);
   assert.match(timelineRows, /event\.timelineMarker === "ai_insight" && <strong>\{labels\.timelineAiInsight\}<\/strong>/);
   assert.match(timelineRows, /event\.kind && <span>\{storyKindLabel\(event\.kind,storyLanguage\)\}<\/span>/);
   assert.match(timelineRows, /event\.before && event\.after/);
   assert.match(timelineRows, /event\.chips && event\.chips\.length > 0/);
+  assert.doesNotMatch(timelineRows, /Date unavailable|日期不可用/);
 });
 
 test("story handoff progress uses the canonical completion evaluator", () => {
