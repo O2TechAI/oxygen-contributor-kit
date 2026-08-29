@@ -1,6 +1,6 @@
 # Oxygen Ingest Tools
 
-三个本地数据接入工具。目标:把「repo 相关的 agent 会话」「claude.ai 导出的聊天记录」「会议记录/录音」整理到用户明确指定的 Oxygen run 目录(trajectory v0.2 / canonical meeting records)。所有产出保持 `review_status=pending` / `publication_approved=false`，不会复制到共享目录。
+三个本地数据接入工具。目标:把「repo 相关的 agent 会话」「claude.ai 导出的聊天记录」「会议记录/录音」整理到用户明确指定的 Oxygen run 目录(canonical trajectory / meeting records)。所有产出保持 `review_status=pending` / `publication_approved=false`，不会复制到共享目录。
 
 Agent 对接说明见 [oxygen-ingest-project-history](../../skills/oxygen-ingest-project-history/SKILL.md)；给最终用户的导出/导入指南见 [EXPORT-GUIDE.md](EXPORT-GUIDE.md)。
 
@@ -8,12 +8,12 @@ Agent 对接说明见 [oxygen-ingest-project-history](../../skills/oxygen-ingest
 
 ```text
 tools/
-├── collect_repo_trajectories.py   # ① repo → 相关 Claude/Codex 会话 + memory → trajectory v0.2
+├── collect_repo_trajectories.py   # ① repo → 相关 Claude/Codex 会话 + memory → canonical trajectory
 ├── import_anthropic_export.py     # ② claude.ai 导出(zip/conversations.json)→ trajectory + memory
 ├── import_meeting.py              # ③ 会议 txt/md/m4a → meeting.json + raw.md + timestamped.txt
 ├── transcribe_diarize.py          #    本机 CPU 语音转写(faster-whisper)+ 可选说话人分离(pyannote)
 ├── oxygen_common.py               # 公共:进度协议 / 凭据文件黑名单 / hash
-├── vendor/                        # Oxygen v0.2 提取器(从 oxygen/scripts 复制,勿改动)
+├── vendor/                        # canonical Oxygen trajectory 提取器
 ├── .venv-audio/                   # ASR 依赖(faster-whisper)
 └── out/                           # 所有产出(未脱敏,内部)
 ```
@@ -81,7 +81,7 @@ finally {
 
 ## 格式对接
 
-- trajectory 输出与 `oxygen/data/team/trajectories/` 完全同构(直接用 Oxygen v0.2 提取器);
+- trajectory 输出遵守唯一的 unversioned Oxygen contract;
 - 会议输出的 `timestamped.txt`(`M:SSSpeaker A 文本`)就是 `oxygen/scripts/import_timestamped_meeting.py` 的输入格式,可直接入库 Inline;
 - claude.ai 导出的 schema 无官方保证,解析器是容错的,坏结构会记进 `index.json.warnings` 而不是崩;拿到真实导出后请再验证一轮。
 

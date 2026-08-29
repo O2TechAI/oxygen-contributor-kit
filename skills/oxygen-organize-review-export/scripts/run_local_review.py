@@ -35,7 +35,16 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 from ingest.human_source_projection import (
+    AI_REVIEW_EVENT_SCHEMA,
+    AI_REVIEW_MEETING_SCHEMA,
+    AI_REVIEW_RUN_SCHEMA,
+    AI_REVIEW_TRAJECTORY_SCHEMA,
+    INGEST_RUN_SCHEMA,
+    MEETING_SCHEMA,
     POLICY_ID as HUMAN_SOURCE_POLICY_ID,
+    TRAJECTORY_EVENT_SCHEMA,
+    TRAJECTORY_REDACTION_SCHEMA,
+    TRAJECTORY_SCHEMA,
     meeting_contribution_ids,
     projected_event_content,
     projected_contribution_id,
@@ -944,11 +953,23 @@ def _read_json_object(path: Path) -> dict:
 def _prepare_trajectory(directory: Path, approved_run: Path) -> dict:
     manifest_path, redaction_path, events_path = _trajectory_files(directory, approved_run)
     manifest = _read_json_object(manifest_path)
+    manifest_schema = manifest.get("schema")
+    event_schema = {
+        TRAJECTORY_SCHEMA: TRAJECTORY_EVENT_SCHEMA,
+        AI_REVIEW_TRAJECTORY_SCHEMA: AI_REVIEW_EVENT_SCHEMA,
+    }.get(manifest_schema)
+    if event_schema is None or "schema_version" in manifest:
+        raise SystemExit(INPUT_FILE_INVALID)
     if manifest.get("trajectory_id") is not None:
         _validated_trajectory_id(manifest["trajectory_id"])
     redaction = _read_json_object(redaction_path) if redaction_path else {
         "review_status": "pending", "publication_approved": False,
     }
+    if redaction_path and (
+        redaction.get("schema") != TRAJECTORY_REDACTION_SCHEMA
+        or "schema_version" in redaction
+    ):
+        raise SystemExit(INPUT_FILE_INVALID)
     try:
         events = [
             json.loads(line)
@@ -957,7 +978,12 @@ def _prepare_trajectory(directory: Path, approved_run: Path) -> dict:
         ]
     except (OSError, UnicodeError, json.JSONDecodeError):
         raise SystemExit(INPUT_FILE_INVALID) from None
-    if not all(isinstance(event, dict) for event in events):
+    if not all(
+        isinstance(event, dict)
+        and event.get("schema") == event_schema
+        and "schema_version" not in event
+        for event in events
+    ):
         raise SystemExit(INPUT_FILE_INVALID)
     projection = manifest.get("contribution_projection")
     if not isinstance(projection, dict):
@@ -997,6 +1023,11 @@ def _prepare_trajectory(directory: Path, approved_run: Path) -> dict:
 
 def _prepare_meeting(path: Path) -> dict:
     dataset = _read_json_object(path)
+    if (
+        dataset.get("schema") not in {MEETING_SCHEMA, AI_REVIEW_MEETING_SCHEMA}
+        or "schema_version" in dataset
+    ):
+        raise SystemExit(INPUT_FILE_INVALID)
     records = dataset.get("records")
     if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
         raise SystemExit(INPUT_FILE_INVALID)
@@ -1029,6 +1060,11 @@ def locate_inputs(run: Path):
         except (OSError, UnicodeError, json.JSONDecodeError):
             raise SystemExit(INPUT_INDEX_INVALID) from None
         if not isinstance(index, dict):
+            raise SystemExit(INPUT_INDEX_INVALID)
+        if (
+            index.get("schema") not in {INGEST_RUN_SCHEMA, AI_REVIEW_RUN_SCHEMA}
+            or "schema_version" in index
+        ):
             raise SystemExit(INPUT_INDEX_INVALID)
         entries = index.get("trajectories") or []
         trajectory_failures = index.get("trajectory_failures", 0)

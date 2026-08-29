@@ -65,12 +65,14 @@ class UnicodeWorkflowTest(unittest.TestCase):
             trajectory.mkdir(parents=True)
             events = [
                 {
+                    "schema": "oxygen.trajectory-event",
                     "event_id": f"evt-{hashlib.sha256(b'unicode-1').hexdigest()}",
                     "event_type": "message",
                     "actor": {"type": "human"},
                     "payload": {"text": "中文问题 😀"},
                 },
                 {
+                    "schema": "oxygen.trajectory-event",
                     "event_id": f"evt-{hashlib.sha256(b'unicode-2').hexdigest()}",
                     "event_type": "message",
                     "actor": {"type": "assistant"},
@@ -84,6 +86,7 @@ class UnicodeWorkflowTest(unittest.TestCase):
             (trajectory / "events.jsonl").write_text(serialized_events, encoding="utf-8")
             projected_digest = hashlib.sha256(serialized_events.encode("utf-8")).hexdigest()
             (trajectory / "manifest.json").write_text(json.dumps({
+                "schema": "oxygen.trajectory",
                 "trajectory_id": "traj-unicode",
                 "event_count": 2,
                 "contribution_projection": {
@@ -146,6 +149,7 @@ class UnicodeWorkflowTest(unittest.TestCase):
             texts = ["你好 Windows 😀", "Exact emoji 🚀 and 中文"]
             events = [
                 {
+                    "schema": "oxygen.ai-review-event",
                     "event_id": f"event-{index}",
                     "event_type": "message",
                     "actor": {"type": "human" if index == 1 else "assistant"},
@@ -153,10 +157,26 @@ class UnicodeWorkflowTest(unittest.TestCase):
                 }
                 for index, text in enumerate(texts, 1)
             ]
-            (trajectory / "events.jsonl").write_text(
-                "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
-                encoding="utf-8",
+            serialized = "".join(
+                json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+                for event in events
             )
+            (trajectory / "events.jsonl").write_text(serialized, encoding="utf-8")
+            (trajectory / "manifest.json").write_text(json.dumps({
+                "schema": "oxygen.ai-review-trajectory",
+                "trajectory_id": "traj-unicode",
+                "event_count": len(events),
+                "contribution_projection": {
+                    "policy_id": "oxygen-human-semantic-source-boundary-2026-08-26",
+                    "raw_source_digest": "a" * 64,
+                    "projected_universe_digest": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+                    "raw_event_count": len(events),
+                    "normalized_event_count": len(events),
+                    "kept_event_count": len(events),
+                    "dropped_event_count": 0,
+                    "cross_trajectory_semantic_replay_count": 0,
+                },
+            }), encoding="utf-8")
             dialogue = Path(temporary, "dialogue output")
             extract = run_python("tools/llm_redact/extract_dialogue.py", run, "--out", dialogue)
             self.assertEqual(extract.returncode, 0, extract.stderr)

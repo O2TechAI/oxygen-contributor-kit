@@ -2,7 +2,7 @@
 """Project extracted Oxygen events into the human-semantic contribution universe.
 
 The original session file remains the reproducibility authority. This module runs
-after an extractor has produced structured v0.2 events and before the run is made
+after an extractor has produced canonical trajectory events and before the run is made
 available to Organization. It retains recorded natural-language cognition,
 coordination, decisions, and meaningful progress while removing execution
 mechanics. It persists aggregate counts and digests, never dropped bodies or a
@@ -24,6 +24,15 @@ from typing import Any
 
 
 POLICY_ID = "oxygen-human-semantic-source-boundary-2026-08-26"
+TRAJECTORY_EVENT_SCHEMA = "oxygen.trajectory-event"
+TRAJECTORY_SCHEMA = "oxygen.trajectory"
+TRAJECTORY_REDACTION_SCHEMA = "oxygen.trajectory-redaction"
+INGEST_RUN_SCHEMA = "oxygen.ingest-run"
+MEETING_SCHEMA = "oxygen.meeting"
+AI_REVIEW_EVENT_SCHEMA = "oxygen.ai-review-event"
+AI_REVIEW_TRAJECTORY_SCHEMA = "oxygen.ai-review-trajectory"
+AI_REVIEW_MEETING_SCHEMA = "oxygen.ai-review-meeting"
+AI_REVIEW_RUN_SCHEMA = "oxygen.ai-review-run"
 
 KEEP_HUMAN_DIALOGUE = "KEEP_HUMAN_DIALOGUE"
 KEEP_HUMAN_FEEDBACK = "KEEP_HUMAN_FEEDBACK"
@@ -178,7 +187,7 @@ def contribution_authority(value: Any) -> Any:
         }
     authority = {
         key: copy.deepcopy(value[key]) for key in (
-            "schema_version", "event_id", "trajectory_id", "event_type", "timestamp",
+            "schema", "event_id", "trajectory_id", "event_type", "timestamp",
             "started_at", "turn_id", "actor", "relations",
         ) if key in value
     } | {"source": authority_source}
@@ -656,6 +665,18 @@ def project_trajectory(
     manifest_path = trajectory_dir / "manifest.json"
     events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line]
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema") != TRAJECTORY_SCHEMA
+        or "schema_version" in manifest
+        or any(
+            not isinstance(event, dict)
+            or event.get("schema") != TRAJECTORY_EVENT_SCHEMA
+            or "schema_version" in event
+            for event in events
+        )
+    ):
+        raise ValueError("trajectory uses a non-canonical contract")
     normalized_events, cross_trajectory_replays = deduplicate_semantic_source_records(
         events,
         semantic_source_registry if semantic_source_registry is not None else {},

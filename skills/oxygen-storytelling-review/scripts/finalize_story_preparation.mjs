@@ -16,7 +16,11 @@ import {
   canonicalAuthorityJson,
   validateStorySourcePackage,
 } from "../../../viewer/lib/story-readiness.ts";
-import { compareStorySourceIdentity, parseStorySource } from "../../../viewer/lib/timeline.ts";
+import {
+  compareStorySourceIdentity,
+  parseStorySource,
+  STORY_PREFIX,
+} from "../../../viewer/lib/timeline.ts";
 import {
   StoryPreparationTransportError,
   MAX_STORY_PREPARATION_FILE_BYTES,
@@ -28,6 +32,7 @@ import {
   insightStoryEvidenceRows,
   readStoryValidationAuthority,
   storyCompletenessAuthority,
+  storyEvidenceRows,
 } from "./story_preparation_validation_authority.mjs";
 const hex = /^[0-9a-f]{64}$/;
 const metadataKeys = new Set([
@@ -368,6 +373,16 @@ async function finalize(args) {
   );
   composeStory([storyAuthority.output], base, "STORY");
   if (storyAuthority.outputCount !== base.length) fail("STORY_RECEIPT_STALE");
+  const baseStoryValidation = validateStorySourcePackage(
+    base.map(({ id, story }) => ({
+      id,
+      documentId: story.evidence.primary.documentId,
+      summary: `${STORY_PREFIX}${canonicalAuthorityJson(story)}`,
+    })),
+    storyEvidenceRows(validationAuthority),
+    storyCompletenessAuthority(validationAuthority),
+  );
+  if (!baseStoryValidation.ok) fail(baseStoryValidation.code);
   const baseDigest = await storyPreparationDigest(base);
   const insightAuthority = await readLaneAuthority(shardRootInput, "insight");
   if (insightAuthority.manifest.inputDigest !== baseDigest) fail("INSIGHT_INPUT_STALE");

@@ -20,23 +20,41 @@ def write_trajectory(run: Path, text: str, action_text: str | None = None) -> No
     directory = run / "trajectories" / "traj-safe"
     directory.mkdir(parents=True)
     events = [{
+        "schema": MODULE.AI_REVIEW_EVENT_SCHEMA,
         "event_type": "message",
         "payload": {"text": text},
     }]
     if action_text is not None:
         events.append({
+            "schema": MODULE.AI_REVIEW_EVENT_SCHEMA,
             "event_type": "action_label",
             "payload": {"text": action_text},
         })
     (directory / "events.jsonl").write_text(
         "".join(json.dumps(event) + "\n" for event in events), encoding="utf-8"
     )
+    (directory / "manifest.json").write_text(json.dumps({
+        "schema": MODULE.AI_REVIEW_TRAJECTORY_SCHEMA,
+        "trajectory_id": "traj-safe",
+        "event_count": len(events),
+        "contribution_projection": {
+            "policy_id": MODULE.POLICY_ID,
+            "raw_source_digest": "a" * 64,
+            "projected_universe_digest": MODULE.digest_events(events),
+            "raw_event_count": len(events),
+            "normalized_event_count": len(events),
+            "kept_event_count": len(events),
+            "dropped_event_count": 0,
+            "cross_trajectory_semantic_replay_count": 0,
+        },
+    }), encoding="utf-8")
 
 
 def write_meeting(run: Path, meeting_id: str, text: str) -> None:
     directory = run / "meetings" / meeting_id
     directory.mkdir(parents=True)
     (directory / "meeting.json").write_text(json.dumps({
+        "schema": MODULE.AI_REVIEW_MEETING_SCHEMA,
         "meeting_id": meeting_id,
         "records": [{"record_id": "record-000001", "text": text}],
     }), encoding="utf-8")

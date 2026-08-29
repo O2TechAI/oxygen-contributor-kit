@@ -115,7 +115,7 @@ function reviewCorpus(version, unitCount = 203) {
       timestamp: "2039-01-01T00:00:00.000Z",
       content: `Review-normalized content ${version} for unit ${index + 1}.`,
       original: {
-        schema_version: "0.2",
+        schema: "oxygen.trajectory-event",
         event_id: id,
         trajectory_id: documentId,
         payload: { text: `Review-normalized source ${version} for unit ${index + 1}.` },
@@ -316,7 +316,7 @@ test("Python Organization finalizer and Viewer validator share one digest contra
     const trajectory = join(root, "trajectories", "traj-parity");
     mkdirSync(trajectory, { recursive: true });
     const rawEvent = {
-      schema_version: "0.2",
+      schema: "oxygen.trajectory-event",
       event_id: "raw-event",
       trajectory_id: "traj-parity",
       event_type: "message",
@@ -342,6 +342,7 @@ test("Python Organization finalizer and Viewer validator share one digest contra
     writeFileSync(join(trajectory, "events.jsonl"), `${eventLine}\n`, "utf8");
     const projectedDigest = createHash("sha256").update(`${eventLine}\n`).digest("hex");
     writeFileSync(join(trajectory, "manifest.json"), JSON.stringify({
+      schema: "oxygen.trajectory",
       trajectory_id: "traj-parity",
       event_count: 1,
       contribution_projection: {
@@ -409,7 +410,7 @@ test("Python Organization finalizer and Viewer validator share one digest contra
 test("attachment source digest ignores staging paths in both runtimes", async () => {
   const repository = fileURLToPath(new URL("../..", import.meta.url));
   const attachment = {
-    schema_version: "0.2",
+    schema: "oxygen.trajectory-event",
     event_id: `evt-${"a".repeat(64)}`,
     trajectory_id: "traj-stable",
     event_type: "artifact",
@@ -450,7 +451,7 @@ test("attachment source digest ignores staging paths in both runtimes", async ()
 
 test("semantic source digest binds the exact normalized Evidence Story consumes", async () => {
   const original = {
-    schema_version: "0.2",
+    schema: "oxygen.trajectory-event",
     event_id: `evt-${"b".repeat(64)}`,
     trajectory_id: "traj-bound",
     event_type: "message",

@@ -404,9 +404,6 @@ async function storyBatchProposal(rootInput, proposalDirectory, editorialReviewP
 async function validateInsight(value, input, prepared) {
   if (!Array.isArray(value) || !Array.isArray(input.payload?.storyCandidates)) fail("INSIGHT_OUTPUT_INVALID");
   const storyAuthority = await readLaneAuthority(prepared.root, "story");
-  if (prepared.manifest.inputDigest !== canonicalDigest(storyAuthority.output)) {
-    fail("INSIGHT_INPUT_STALE");
-  }
   const authority = await readStoryValidationAuthority(storyAuthority);
   const insightEvidenceRows = insightStoryEvidenceRows(
     authority,
@@ -414,6 +411,16 @@ async function validateInsight(value, input, prepared) {
     storyAuthority.inputs,
     storyAuthority.output,
   );
+  const sourceEvidence = new Map(authority.evidence.map((row) => [row.id, row]));
+  const orderedStoryOutput = [...storyAuthority.output].sort((left, right) => {
+    const a = sourceEvidence.get(left.story.evidence.primary.eventId);
+    const b = sourceEvidence.get(right.story.evidence.primary.eventId);
+    if (!a || !b) fail("INSIGHT_INPUT_STALE");
+    return compareStorySourceIdentity(a, b);
+  });
+  if (prepared.manifest.inputDigest !== canonicalDigest(orderedStoryOutput)) {
+    fail("INSIGHT_INPUT_STALE");
+  }
   const baseByKey = new Map();
   for (const row of input.payload.storyCandidates) {
     const story = parseStorySource(row?.summary);

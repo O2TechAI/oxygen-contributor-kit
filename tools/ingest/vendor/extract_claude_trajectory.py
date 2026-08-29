@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert one Claude Code transcript JSONL into Oxygen trajectory v0.2."""
+"""Convert one Claude Code transcript JSONL into a canonical Oxygen trajectory."""
 
 from __future__ import annotations
 
@@ -154,7 +154,7 @@ class ClaudeExtractor:
         event_id = self.next_id()
         self.events.append(
             {
-                "schema_version": common.SCHEMA_VERSION,
+                "schema": common.TRAJECTORY_EVENT_SCHEMA,
                 "event_id": event_id,
                 "trajectory_id": self.trajectory_id,
                 "conversation_id": f"conv-{self.session_id}",
@@ -685,7 +685,7 @@ class ClaudeExtractor:
             for event in self.events:
                 handle.write(common.canonical_json(event) + "\n")
         manifest = {
-            "schema_version": common.SCHEMA_VERSION,
+            "schema": common.TRAJECTORY_SCHEMA,
             "trajectory_id": self.trajectory_id,
             "title": self.title or f"Claude Code session {self.session_id}",
             "source_system": "claude-code",
@@ -716,7 +716,7 @@ class ClaudeExtractor:
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         redaction = {
-            "schema_version": common.SCHEMA_VERSION,
+            "schema": common.TRAJECTORY_REDACTION_SCHEMA,
             "trajectory_id": self.trajectory_id,
             "automatic_redaction": True,
             "excluded_record_types": [

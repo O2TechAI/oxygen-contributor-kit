@@ -10,7 +10,7 @@ export const MAX_PROJECT_MAP_BYTES = 3 * MAX_SEMANTIC_MANIFEST_BYTES;
 export const MAX_STORY_PREPARATION_FILE_BYTES = 25_000_000;
 
 const PROJECT_MAP_MARKERS = [
-  "schema_version", "primary_project", "semantic_units", "source_authority",
+  "schema", "primary_project", "semantic_units", "source_authority",
 ];
 const hex = /^[0-9a-f]{64}$/u;
 const encoder = new TextEncoder();

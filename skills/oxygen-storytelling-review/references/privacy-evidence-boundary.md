@@ -44,9 +44,8 @@ Evidence content stays in its original source language. Do not translate it and 
 
 ## Release Preview Contract
 
-Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base.
-Production still exposes obsolete category/delete controls, so clean-room product completion is
-blocked. The required Release Preview shows what would be released, not a raw-source browser:
+Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer. It
+shows what would be released, not a raw-source browser:
 
 - Deterministic or contributor-confirmed safe content shows only the current release-safe projection.
 - A `needs_confirmation` source Privacy item shows the minimum permitted local original beside the current safe projection, a safe uncertainty reason, and Keep/Redact.
@@ -68,7 +67,7 @@ the required release contract and readiness gate, not as an already verified UI.
 
 ## Story/Release Candidate Shape
 
-When implemented candidate authority exists, a candidate must have a stable ID, safe title/explanation, original availability, safe why-flagged reason, and explicit release targets. An empty target set means local-only or already absent from release copy and must be explicit.
+When current candidate authority exists, a candidate must have a stable ID, safe title/explanation, original availability, safe why-flagged reason, and explicit release targets. An empty target set means local-only or already absent from release copy and must be explicit.
 
 The visible decision is:
 

@@ -329,7 +329,7 @@ test("coverage CLI accepts a generic large project map and matches the bare mani
       members: unit.members,
     }));
     const projectMap = {
-      schema_version: "1",
+      schema: "oxygen.project-map",
       primary_project: semantic.projectId,
       summary: "A safe synthetic multi-source project used only for byte-bound validation.",
       projects: [{
@@ -430,9 +430,9 @@ test("coverage CLI byte and parse failures are fixed, closed, and output-atomic"
     }), "SEMANTIC_MANIFEST_TOO_LARGE");
     reject(Uint8Array.from([0xc3, 0x28]), "STORY_COVERAGE_JSON_INVALID");
     reject("{\"semantic_manifest\":", "STORY_COVERAGE_JSON_INVALID");
-    reject(JSON.stringify({ schema_version: "1", semantic_units: [] }),
+    reject(JSON.stringify({ schema: "oxygen.project-map", semantic_units: [] }),
       "PROJECT_MAP_SEMANTIC_MANIFEST_INVALID");
-    reject(JSON.stringify({ schema_version: "1", semantic_units: [], semantic_manifest: null }),
+    reject(JSON.stringify({ schema: "oxygen.project-map", semantic_units: [], semantic_manifest: null }),
       "PROJECT_MAP_SEMANTIC_MANIFEST_INVALID");
 
     writeFileSync(semanticPath, JSON.stringify(semantic), "utf8");

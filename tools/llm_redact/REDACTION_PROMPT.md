@@ -8,7 +8,7 @@ rewrite, summarise, or paraphrase the source.
 
 ## Mandatory notice
 
-Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor
+Best-effort redaction; no formal anonymity guarantee. Original-contributor
 final review is required before release. Do not claim a transcript is safe.
 
 ## What to mark

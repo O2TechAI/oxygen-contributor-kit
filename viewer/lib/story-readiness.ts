@@ -352,7 +352,7 @@ function contributionAuthority(value: unknown): unknown {
   }
   const authority: Record<string, unknown> = {};
   for (const key of [
-    "schema_version", "event_id", "trajectory_id", "event_type", "timestamp",
+    "schema", "event_id", "trajectory_id", "event_type", "timestamp",
     "started_at", "turn_id", "actor", "relations",
   ]) {
     if (key in event) authority[key] = event[key];
@@ -1327,8 +1327,8 @@ export async function validateCurrentStorySourcePackage(
   const privacyAuthority = verifyCurrentSource
     ? await readCoveragePrivacyAuthority(db, workflowRunId, semanticManifest)
     : null;
-  if (verifyCurrentSource && (!privacyAuthority?.ok
-    || !privacyAuthority.authority.reviewedNarrativeByItemId)) {
+  const currentPrivacyAuthority = privacyAuthority?.ok ? privacyAuthority.authority : null;
+  if (verifyCurrentSource && !currentPrivacyAuthority?.reviewedNarrativeByItemId) {
     return storySourceFailure("STORY_INSIGHT_GROUNDING_INVALID");
   }
   const coverageManifest = await readCoverageManifestAuthority(
@@ -1338,8 +1338,8 @@ export async function validateCurrentStorySourcePackage(
     {
       ...options,
       verifyCurrentSource,
-      ...(privacyAuthority?.ok ? {
-        expectedPrivacyAuthorityDigest: privacyAuthority.authority.snapshotDigest,
+      ...(currentPrivacyAuthority ? {
+        expectedPrivacyAuthorityDigest: currentPrivacyAuthority.snapshotDigest,
       } : {}),
     },
   );
@@ -1347,7 +1347,7 @@ export async function validateCurrentStorySourcePackage(
   const currentEvidenceRows = verifyCurrentSource
     ? evidenceRows.map((row) => ({
         ...row,
-        reviewedNarrative: privacyAuthority!.authority.reviewedNarrativeByItemId!.get(row.id),
+        reviewedNarrative: currentPrivacyAuthority!.reviewedNarrativeByItemId!.get(row.id),
       }))
     : evidenceRows;
   return validateStorySourcePackage(candidateRows, currentEvidenceRows, {

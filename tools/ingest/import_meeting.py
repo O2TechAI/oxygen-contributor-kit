@@ -30,6 +30,7 @@ from pathlib import Path
 
 from oxygen_common import (configure_utf8_stdio, fail, progress, safe_slug, sha256_file,
                            text_subprocess_options, utc_now, validate_output_root, write_json)
+from human_source_projection import MEETING_SCHEMA
 
 AUDIO_SUFFIXES = {".m4a", ".wav", ".mp3", ".flac", ".ogg", ".aac", ".mp4"}
 TIMESTAMPED_RE = re.compile(r"^(\d{1,3}:\d{2})Speaker\s+([A-Z])\s*(.*)$")
@@ -203,7 +204,7 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
     progress(85, "write", f"format={detected}, {len(records)} records, {len(speakers)} speakers")
 
     write_json(out / "meeting.json", {
-        "schema_version": "0.2",
+        "schema": MEETING_SCHEMA,
         "tool": "import_meeting",
         "meeting_id": meeting_id,
         "date": date,

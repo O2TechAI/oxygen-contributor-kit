@@ -20,6 +20,7 @@ def write_meeting(run: Path, meeting_id: str, *, root=False, records=None) -> Pa
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "meeting.json"
     path.write_text(json.dumps({
+        "schema": MODULE.AI_REVIEW_MEETING_SCHEMA,
         "meeting_id": meeting_id,
         "records": records if records is not None else [{
             "record_id": "record-000001",
@@ -32,11 +33,28 @@ def write_meeting(run: Path, meeting_id: str, *, root=False, records=None) -> Pa
 def write_trajectory(run: Path) -> None:
     directory = run / "trajectories" / "traj-safe"
     directory.mkdir(parents=True)
-    (directory / "events.jsonl").write_text(json.dumps({
+    event = {
+        "schema": MODULE.AI_REVIEW_EVENT_SCHEMA,
         "event_id": "evt-" + "a" * 64,
         "event_type": "message",
         "payload": {"role": "user", "text": "safe trajectory text"},
-    }) + "\n", encoding="utf-8")
+    }
+    (directory / "events.jsonl").write_text(json.dumps(event) + "\n", encoding="utf-8")
+    (directory / "manifest.json").write_text(json.dumps({
+        "schema": MODULE.AI_REVIEW_TRAJECTORY_SCHEMA,
+        "trajectory_id": "traj-safe",
+        "event_count": 1,
+        "contribution_projection": {
+            "policy_id": MODULE.POLICY_ID,
+            "raw_source_digest": "a" * 64,
+            "projected_universe_digest": MODULE.digest_events([event]),
+            "raw_event_count": 1,
+            "normalized_event_count": 1,
+            "kept_event_count": 1,
+            "dropped_event_count": 0,
+            "cross_trajectory_semantic_replay_count": 0,
+        },
+    }), encoding="utf-8")
 
 
 def directory_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path) -> None:

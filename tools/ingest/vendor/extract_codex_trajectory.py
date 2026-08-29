@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a Codex rollout JSONL session into Oxygen trajectory v0.2.
+"""Convert a Codex rollout JSONL session into a canonical Oxygen trajectory.
 
 The extractor retains recorded plaintext reasoning summaries, dialogue, Agent
 coordination, and meaningful progress. It omits encrypted reasoning bodies,
@@ -28,10 +28,15 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
+from ingest.human_source_projection import (
+    INGEST_RUN_SCHEMA,
+    TRAJECTORY_EVENT_SCHEMA,
+    TRAJECTORY_REDACTION_SCHEMA,
+    TRAJECTORY_SCHEMA,
+)
 from ingest.secret_safety import redact_secret_like_text
 
 
-SCHEMA_VERSION = "0.2"
 DEFAULT_SESSION_ROOT = Path.home() / ".codex" / "sessions"
 SENSITIVE_BASENAMES = {
     "auth.json",
@@ -698,7 +703,7 @@ class Extractor:
     ) -> str:
         event_id = self.next_id()
         event = {
-            "schema_version": SCHEMA_VERSION,
+            "schema": TRAJECTORY_EVENT_SCHEMA,
             "event_id": event_id,
             "trajectory_id": self.trajectory_id,
             "conversation_id": f"conv-{self.session_id}",
@@ -1809,7 +1814,7 @@ class Extractor:
             for event in self.events:
                 handle.write(canonical_json(event) + "\n")
         manifest = {
-            "schema_version": SCHEMA_VERSION,
+            "schema": TRAJECTORY_SCHEMA,
             "trajectory_id": self.trajectory_id,
             "title": f"Codex session {self.session_id}",
             "source_system": "codex",
@@ -1833,7 +1838,7 @@ class Extractor:
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         redaction = {
-            "schema_version": SCHEMA_VERSION,
+            "schema": TRAJECTORY_REDACTION_SCHEMA,
             "trajectory_id": self.trajectory_id,
             "automatic_redaction": True,
             "excluded_record_types": [

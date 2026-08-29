@@ -22,6 +22,7 @@ def write_trajectory(run: Path, trajectory_id: str) -> Path:
     directory.mkdir(parents=True)
     contribution_id = f"evt-{hashlib.sha256(trajectory_id.encode('utf-8')).hexdigest()}"
     event = {
+        "schema": MODULE.TRAJECTORY_EVENT_SCHEMA,
         "event_id": contribution_id,
         "event_type": "message",
         "actor": {"type": "human"},
@@ -31,6 +32,7 @@ def write_trajectory(run: Path, trajectory_id: str) -> Path:
     (directory / "events.jsonl").write_text(serialized, encoding="utf-8")
     projected_digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
     (directory / "manifest.json").write_text(json.dumps({
+        "schema": MODULE.TRAJECTORY_SCHEMA,
         "trajectory_id": trajectory_id,
         "event_count": 1,
         "contribution_projection": {
@@ -52,6 +54,7 @@ def write_meeting(run: Path, directory_id: str, meeting_id: str | None = None) -
     directory.mkdir(parents=True)
     path = directory / "meeting.json"
     path.write_text(json.dumps({
+        "schema": MODULE.MEETING_SCHEMA,
         **({"meeting_id": meeting_id} if meeting_id is not None else {}),
         "records": [{"record_id": "record-1", "text": f"Review in {directory_id}."}],
     }), encoding="utf-8")
@@ -365,6 +368,7 @@ class BuildProjectMapTests(unittest.TestCase):
             self.assertEqual(first["semantic_manifest"]["units"][0]["revision"], 1)
 
             event = {
+                "schema": MODULE.TRAJECTORY_EVENT_SCHEMA,
                 "event_id": f"evt-{hashlib.sha256(b'traj-one').hexdigest()}",
                 "event_type": "message",
                 "actor": {"type": "human"},

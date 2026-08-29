@@ -44,7 +44,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 
 ## Release Preview And Package
 
-- [ ] Final decision-only Chapter Privacy/Release Preview is marked NOT YET IMPLEMENTED on this base, and clean-room product completion is blocked until it exists.
+- [ ] Final decision-only Chapter Privacy/Release Preview uses the canonical current candidate authority and exposes only Keep/Redact decisions.
 - [ ] Required Release Preview shows only the release-safe projection for deterministic/confirmed safe content.
 - [ ] `needs_confirmation` source Privacy items show only the minimum permitted local original, current safe projection, safe uncertainty reason, and Keep/Redact.
 - [ ] Only `needs_confirmation` rows are decision-editable; category/status/reason mutation, deletion, and soft deletion are not final contributor actions.
@@ -72,9 +72,9 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Narrow Chapter screenshot with no horizontal overflow.
 - [ ] Desktop Chapter screenshot showing right-side separate Insight companion cards aligned to Story paragraphs when Insights exist.
 - [ ] Story Edit Mode screenshot with notes and Undo/Redo.
-- [ ] Privacy screenshots only after candidate authority and the final surface exist.
+- [ ] Privacy screenshots use current candidate authority and the canonical final surface.
 - [ ] Preferences screenshot with unanswered and answered states.
-- [ ] Final Release Preview screenshot after implementation.
+- [ ] Final Release Preview screenshot.
 - [ ] Reviewed HTML and ZIP safe-content equivalence evidence.
 - [ ] Console errors checked.
 - [ ] Keyboard focus and Back navigation checked.

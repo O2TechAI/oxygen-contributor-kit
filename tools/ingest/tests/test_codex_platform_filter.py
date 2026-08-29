@@ -268,7 +268,7 @@ class PlatformFilterTest(unittest.TestCase):
 
     def test_secret_sanitization_changes_only_projected_content_authority(self):
         raw = {
-            "schema_version": "0.2",
+            "schema": PROJECTION.TRAJECTORY_EVENT_SCHEMA,
             "event_id": "raw-event",
             "trajectory_id": "traj-synthetic",
             "event_type": "message",

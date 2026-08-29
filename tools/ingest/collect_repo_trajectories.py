@@ -3,14 +3,14 @@
 
 Given a repo path, this scans the current user's ~/.claude and ~/.codex session
 stores, keeps only sessions whose recorded cwd is inside the repo, converts each
-one to Oxygen trajectory v0.2 via the vendored extractors, and copies the
+one to the canonical Oxygen trajectory contract via the vendored extractors, and copies the
 related memory files (Claude project memory, CLAUDE.md, AGENTS.md).
 
 Output layout:
 
     <out>/
     ├── index.json
-    ├── trajectories/traj-<user>-<agent>-<hash>/   (v0.2: manifest/events/redaction/artifacts)
+    ├── trajectories/traj-<user>-<agent>-<hash>/   (manifest/events/redaction/artifacts)
     └── memory/{claude,codex}/...
 
 Everything starts as review_status=pending / publication_approved=false.
@@ -48,7 +48,7 @@ from oxygen_common import (
     validate_output_root,
     write_json,
 )
-from human_source_projection import POLICY_ID, project_trajectory
+from human_source_projection import INGEST_RUN_SCHEMA, POLICY_ID, project_trajectory
 
 
 SESSION_SCAN_MAX_RECORDS = 2048
@@ -948,7 +948,7 @@ def main(argv=None) -> int:
             copy_memory(source, memory_root / "codex", "repo", memory, repo)
 
     index = {
-        "schema_version": "0.2",
+        "schema": INGEST_RUN_SCHEMA,
         "tool": "collect_repo_trajectories",
         "generated_at": utc_now(),
         "repo": str(repo),

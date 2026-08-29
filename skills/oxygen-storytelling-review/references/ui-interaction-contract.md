@@ -4,7 +4,9 @@
 
 Reuse the existing local Viewer shell. The required final shell keeps top navigation, one left project/source rail, main canvas, Project Story Timeline, final decision-only Release Preview, Preferences, Evidence review, and download actions.
 
-Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base; production still exposes obsolete category/delete controls. Do not present that final surface as implemented during clean-room validation.
+Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer. The
+only candidate decisions are Keep/Redact; category, reason, deletion, and soft deletion are not
+contributor actions.
 
 Do not create a parallel page, second shell, project-bound renderer, replacement Privacy implementation, or standalone release tool.
 
@@ -127,8 +129,8 @@ Verify desktop and narrow layouts with the actual local Viewer. Capture final pr
 - Project Story Timeline;
 - Chapter with rail, People, and Story read mode;
 - Story Edit Mode with notes and Undo/Redo;
-- Privacy states after candidate authority and the final surface exist;
-- final Release Preview after implementation;
+- Privacy states from current candidate authority;
+- final Release Preview;
 - Preferences;
 - reviewed release HTML/ZIP output.
 
@@ -142,10 +144,10 @@ An implementation is materially equivalent only when it preserves:
 - Story table-of-contents hierarchy;
 - readable centered Chapter article;
 - controlled direct editing and provenance;
-- one-at-a-time Privacy decisions when candidate authority and final surface exist;
+- one-at-a-time Privacy decisions when current candidate authority exists;
 - evidence navigation and original-language Evidence;
 - Preferences as their own authority;
-- Release Preview safe projection when implemented;
+- Release Preview safe projection;
 - HTML/ZIP release projection from the same serialized Story;
 - `publication_approved=false`.
 

@@ -296,7 +296,8 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
   assert.match(productContract, /bounded[\s\S]{0,40}worker input/i);
   assert.match(productContract, /dependent passes for Story writing and Insight reasoning[\s\S]{0,100}sibling Story Privacy and Preference-question passes/i);
   assert.match(productContract, /recorder validates[\s\S]{0,160}input digest/);
-  assert.match(productContract, /one Story batch[\s\S]{0,160}unchanged Viewer `validateStorySourcePackage`[\s\S]{0,180}atomic records-directory rename/i);
+  assert.match(productContract, /one Story batch recorder directly calls the unchanged Viewer\s+`validateStorySourcePackage` on the complete package/i);
+  assert.match(productContract, /installs every output[\s\S]{0,100}one atomic records-directory rename/i);
   assert.match(productContract, /composed launcher requires coverage, Story candidates, a deterministic Preference bundle/i);
   assert.match(productContract, /Exact union,[\s\S]{0,80}no foreign identities[\s\S]{0,100}executable checks/);
   assert.match(productContract, /No worker may silently expand scope[\s\S]{0,80}repair another lane/i);
@@ -325,8 +326,8 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
   assert.match(uiContract, /Do not insert Insights inline[\s\S]{0,120}generic Chapter-end list/i);
 
   assert.match(privacyContract, /Only `needs_confirmation` rows are decision-editable/);
-  assert.match(privacyContract, /NOT YET IMPLEMENTED[\s\S]{0,120}obsolete category\/delete controls/);
-  assert.match(privacyContract, /clean-room product completion is[\s\S]{0,80}blocked/);
+  assert.match(privacyContract, /Chapter Privacy\/Release Preview is implemented in the canonical Viewer/);
+  assert.doesNotMatch(privacyContract, /NOT YET IMPLEMENTED|obsolete category\/delete controls/);
   assert.match(privacyContract, /Keep[\s\S]{0,20}Redact/);
   assert.match(privacyContract, /Pending confirmation blocks Story\/package release/);
   assert.match(privacyContract, /Raw Evidence and suppressed content are not exposed through Insight review/);

@@ -43,12 +43,14 @@ LAUNCHER_SPEC.loader.exec_module(LAUNCHER)
 def write_source_trajectory(run: Path, trajectory_id: str, events: list[dict]) -> Path:
     directory = run / "trajectories" / trajectory_id
     directory.mkdir(parents=True)
+    events = [{"schema": MODULE.TRAJECTORY_EVENT_SCHEMA, **event} for event in events]
     (directory / "events.jsonl").write_text(
         "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
         encoding="utf-8",
     )
     normalized_count = len(events) + 1
     (directory / "manifest.json").write_text(json.dumps({
+        "schema": MODULE.TRAJECTORY_SCHEMA,
         "trajectory_id": trajectory_id,
         "source_system": "codex",
         "warnings": ["synthetic warning"],
@@ -72,6 +74,7 @@ def write_meeting(run: Path, meeting_id: str, *, root=False, records=None) -> Pa
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "meeting.json"
     path.write_text(json.dumps({
+        "schema": MODULE.MEETING_SCHEMA,
         "meeting_id": meeting_id,
         "title": "Private title",
         "records": records if records is not None else [{
@@ -784,7 +787,9 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             )
             self.assertEqual(sorted(path.name for path in (output / "meetings").iterdir()), meeting_ids)
             bundles = {bundle["trajectory"]: bundle for bundle in EXTRACT.extract_bundles(output)}
-            for meeting in MODULE.discover_meetings(output):
+            for meeting in MODULE.discover_meetings(
+                output, expected_schema=MODULE.AI_REVIEW_MEETING_SCHEMA,
+            ):
                 meeting_id = meeting["source_meeting_id"]
                 document = LAUNCHER.meeting_document({
                     "dataset": meeting["dataset"], "meeting_id": meeting_id,

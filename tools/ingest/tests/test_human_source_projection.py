@@ -33,7 +33,7 @@ def event(
     if direction is not None:
         payload["interaction_direction"] = direction
     return {
-        "schema_version": "0.2",
+        "schema": projection.TRAJECTORY_EVENT_SCHEMA,
         "event_id": event_id,
         "trajectory_id": "traj-synthetic",
         "event_type": event_type,
@@ -241,7 +241,11 @@ class HumanSourceProjectionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (trajectory / "manifest.json").write_text(
-                json.dumps({"event_count": 4, "artifact_count": 2}),
+                json.dumps({
+                    "schema": projection.TRAJECTORY_SCHEMA,
+                    "event_count": 4,
+                    "artifact_count": 2,
+                }),
                 encoding="utf-8",
             )
 
@@ -298,7 +302,11 @@ class HumanSourceProjectionTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 (trajectory / "manifest.json").write_text(
-                    json.dumps({"event_count": 2, "artifact_count": 1}), encoding="utf-8",
+                    json.dumps({
+                        "schema": projection.TRAJECTORY_SCHEMA,
+                        "event_count": 2,
+                        "artifact_count": 1,
+                    }), encoding="utf-8",
                 )
                 with self.assertRaisesRegex(ValueError, "artifact contribution"):
                     projection.project_trajectory(trajectory, raw_source_digest="a" * 64)
@@ -377,6 +385,7 @@ class HumanSourceProjectionTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 (trajectory / "manifest.json").write_text(json.dumps({
+                    "schema": projection.TRAJECTORY_SCHEMA,
                     "event_count": len(events),
                     "source_normalization": {"duplicate_semantic_replay_count": 0},
                 }), encoding="utf-8")
@@ -426,7 +435,7 @@ class HumanSourceProjectionTests(unittest.TestCase):
     def test_attachment_identity_and_digest_ignore_dropped_staging_ordinals(self):
         def semantic_source(event_id, record_type):
             return {
-                "schema_version": "0.2",
+                "schema": projection.TRAJECTORY_EVENT_SCHEMA,
                 "event_id": event_id,
                 "trajectory_id": "traj-stable",
                 "event_type": "message" if record_type == "message" else "artifact",

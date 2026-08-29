@@ -177,7 +177,7 @@ Test at minimum:
 
 1. initial revision 1 and false publication state;
 2. direct edit returns stage to reviewing;
-3. Privacy blocks Apply and All set when implemented required candidates are unresolved;
+3. Privacy blocks Apply and All set when required current candidates are unresolved;
 4. first Apply creates revision 2;
 5. revision 2 can be edited again;
 6. second Apply creates revision 3;

@@ -534,7 +534,8 @@ test("public commands execute the nonempty four-lane dependency chain determinis
       "story", "insight", "story_privacy", "preference",
     ]);
     assert.ok(manifest.receipts.every((receipt) => receipt.outputCount > 0));
-    assert.ok((await readJson(first.candidates)).every((row) => parseStorySource(row.summary)));
+    const finalStories = (await readJson(first.candidates)).map((row) => parseStorySource(row.summary));
+    assert.ok(finalStories.every(Boolean));
     const compactStoryManifest = await readJson(join(first.transport, "story", "shards.json"));
     assert.equal(compactStoryManifest.shards.length, 1);
     assert.equal(compactStoryManifest.shards[0].unitIds.length, 2);
@@ -543,7 +544,8 @@ test("public commands execute the nonempty four-lane dependency chain determinis
       await readFile(first.preferenceBundle, "utf8"),
       await readFile(first.preparationManifest, "utf8"),
     ].join("\n");
-    assert.doesNotMatch(finalBytes, /provider|model|prompt|token|publication_approved|safe reviewed canary/u);
+    assert.doesNotMatch(finalBytes, /provider|model|prompt|token|publication_approved/u);
+    assert.equal(finalStories[0].insights[0].quote.text, "safe reviewed canary a");
 
     const parityRoot = join(first.root, "bare-transport");
     const boundary = {

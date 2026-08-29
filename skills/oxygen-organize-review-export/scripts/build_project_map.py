@@ -21,7 +21,13 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 from ingest.human_source_projection import (
+    AI_REVIEW_EVENT_SCHEMA,
+    AI_REVIEW_MEETING_SCHEMA,
+    AI_REVIEW_TRAJECTORY_SCHEMA,
+    MEETING_SCHEMA,
     POLICY_ID,
+    TRAJECTORY_EVENT_SCHEMA,
+    TRAJECTORY_SCHEMA,
     canonical_json,
     digest_value,
     imported_contribution_digest_value,
@@ -43,9 +49,10 @@ SEMANTIC_WORKER_KIND_INVALID = "SEMANTIC_WORKER_KIND_INVALID"
 SEMANTIC_UNIT_KIND_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 SOURCE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}")
 CURRENT_PROJECT_MAP_KEYS = {
-    "schema_version", "primary_project", "summary", "projects",
+    "schema", "primary_project", "summary", "projects",
     "source_authority", "semantic_units", "semantic_manifest",
 }
+PROJECT_MAP_SCHEMA = "oxygen.project-map"
 RECOLLECT_GUIDANCE = (
     "current canonical contribution projections are required; re-collect this run "
     "through tools/ingest/collect_repo_trajectories.py"
@@ -188,6 +195,13 @@ def source_inventory_records(
         events_path = contained_file(candidate, run)
         manifest_path = contained_file(candidate.parent / "manifest.json", run)
         manifest = read_object(manifest_path)
+        manifest_schema = manifest.get("schema")
+        event_schema = {
+            TRAJECTORY_SCHEMA: TRAJECTORY_EVENT_SCHEMA,
+            AI_REVIEW_TRAJECTORY_SCHEMA: AI_REVIEW_EVENT_SCHEMA,
+        }.get(manifest_schema)
+        if event_schema is None or "schema_version" in manifest:
+            raise ValueError(f"{RECOLLECT_GUIDANCE}: non-canonical trajectory contract")
         trajectory_id = manifest.get("trajectory_id") or events_path.parent.name
         if not isinstance(trajectory_id, str) or not SOURCE_ID_PATTERN.fullmatch(trajectory_id):
             raise ValueError("trajectory source identity is invalid")
@@ -206,6 +220,13 @@ def source_inventory_records(
             json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
+        if any(
+            not isinstance(event, dict)
+            or event.get("schema") != event_schema
+            or "schema_version" in event
+            for event in events
+        ):
+            raise ValueError(f"{RECOLLECT_GUIDANCE}: non-canonical trajectory event")
         projected_hasher = hashlib.sha256()
         for event in events:
             projected_hasher.update((canonical_json(event) + "\n").encode("utf-8"))
@@ -278,6 +299,11 @@ def source_inventory_records(
 
     for literal_meeting_id, meeting_path in meeting_candidates:
         meeting = read_object(meeting_path)
+        if (
+            meeting.get("schema") not in {MEETING_SCHEMA, AI_REVIEW_MEETING_SCHEMA}
+            or "schema_version" in meeting
+        ):
+            raise ValueError("meeting source uses a non-canonical contract")
         meeting_id = meeting.get("meeting_id") or meeting.get("id") or literal_meeting_id
         records = meeting.get("records")
         if not isinstance(meeting_id, str) or not meeting_id or not isinstance(records, list):
@@ -660,7 +686,7 @@ def canonical_project_map(
         "sourceDigest": contribution_source_digests[contribution_id],
     } for contribution_id in contribution_ids])
     project_map = {
-        "schema_version": "1",
+        "schema": PROJECT_MAP_SCHEMA,
         "primary_project": primary_project,
         "summary": summary,
         "projects": [{
@@ -694,7 +720,7 @@ def validate_current_project_map_skeleton(
     """Accept only the current builder-owned skeleton shape for this exact run."""
     if not isinstance(project_map, dict) or set(project_map) != CURRENT_PROJECT_MAP_KEYS:
         raise ValueError(f"project map is not the current canonical skeleton; {RECOLLECT_GUIDANCE}")
-    if project_map.get("schema_version") != "1":
+    if project_map.get("schema") != PROJECT_MAP_SCHEMA:
         raise ValueError(f"project map is not the current canonical skeleton; {RECOLLECT_GUIDANCE}")
     project_id = project_map.get("primary_project")
     projects = project_map.get("projects")

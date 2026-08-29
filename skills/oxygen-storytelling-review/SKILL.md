@@ -365,7 +365,7 @@ read-only while the explanatory fields are reviewed. Human-created Insight keeps
 user-selected Story-substring Quote origin and lifecycle. Release uses the accepted source Quote,
 not Story paragraph text, and strips anchor and Evidence identities.
 
-Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base. Production still exposes obsolete category/delete controls, so clean-room product completion is blocked. Required Release Preview behavior is release-safe projection only: deterministic or contributor-confirmed safe content shows safe projection only; `needs_confirmation` is the only actionable state; actions are exactly Keep/Redact; pending content may show only the minimum permitted original and safe projection; unavailable originals are never reconstructed; pending confirmation blocks release. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
+Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer. It is a release-safe projection only: deterministic or contributor-confirmed safe content shows safe projection only; `needs_confirmation` is the only actionable state; actions are exactly Keep/Redact; pending content may show only the minimum permitted original and safe projection; unavailable originals are never reconstructed; pending confirmation blocks release. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
 
 All set confirms the current reviewed Story locally. It does not publish, upload, merge, push, or set `publication_approved=true`.
 
@@ -373,10 +373,10 @@ All set confirms the current reviewed Story locally. It does not publish, upload
 
 Story preparation is complete only when a fresh contributor Agent can execute the public workflow's
 Story preparation transport from the reviewed boundary without prior chat context, hidden prompts, JSON surgery, database
-repair, code edits, or maintainer rescue. Later product completion is still separately blocked by
-the final Chapter Privacy/Release Preview UI, project All set, release gating, and clean-room
-completion described below. The final package remains local, provider-free after approved
-generation steps, and carries `publication_approved=false`.
+repair, code edits, or maintainer rescue. A specific run reaches product completion only after the
+implemented Chapter Privacy review, Chapter All set decisions, Preference answers, and final release
+confirmation are satisfied for the current authority. The final package remains local, provider-free
+after approved generation steps, and carries `publication_approved=false`.
 
 Run final verification from the repository root:
 

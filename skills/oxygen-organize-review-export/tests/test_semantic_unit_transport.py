@@ -67,6 +67,7 @@ def write_trajectory(run: Path, trajectory_id: str, texts: list[str]) -> list[st
     directory = run / "trajectories" / trajectory_id
     directory.mkdir(parents=True)
     events = [{
+        "schema": builder.TRAJECTORY_EVENT_SCHEMA,
         "event_id": event_id(f"{trajectory_id}-{index}"),
         "event_type": "message",
         "sequence": index,
@@ -81,6 +82,7 @@ def write_trajectory(run: Path, trajectory_id: str, texts: list[str]) -> list[st
     serialized = "".join(builder.canonical_json(event) + "\n" for event in events)
     (directory / "events.jsonl").write_text(serialized, encoding="utf-8")
     (directory / "manifest.json").write_text(json.dumps({
+        "schema": builder.TRAJECTORY_SCHEMA,
         "trajectory_id": trajectory_id,
         "event_count": len(events),
         "contribution_projection": {
@@ -118,6 +120,7 @@ def write_meeting(run: Path, meeting_id: str, texts: list[str]) -> list[str]:
     directory.mkdir(parents=True)
     records = [{"record_id": f"record-{index}", "text": text} for index, text in enumerate(texts, 1)]
     (directory / "meeting.json").write_text(json.dumps({
+        "schema": builder.MEETING_SCHEMA,
         "meeting_id": meeting_id, "records": records,
     }), encoding="utf-8")
     return [f"{meeting_id}:record-{index}" for index in range(1, len(texts) + 1)]

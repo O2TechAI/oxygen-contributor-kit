@@ -33,6 +33,7 @@ def write_trajectory(run: Path, trajectory_id: str) -> Path:
     directory = run / "trajectories" / trajectory_id
     directory.mkdir(parents=True)
     item = {
+        "schema": MODULE.TRAJECTORY_EVENT_SCHEMA,
         "event_id": f"evt-{hashlib.sha256(trajectory_id.encode('utf-8')).hexdigest()}",
         "trajectory_id": trajectory_id,
         "event_type": "message",
@@ -45,6 +46,7 @@ def write_trajectory(run: Path, trajectory_id: str) -> Path:
     projected_digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
     (directory / "manifest.json").write_text(
         json.dumps({
+            "schema": MODULE.TRAJECTORY_SCHEMA,
             "trajectory_id": trajectory_id,
             "event_count": 1,
             "contribution_projection": {
@@ -66,7 +68,7 @@ def write_trajectory(run: Path, trajectory_id: str) -> Path:
 def write_index(run: Path, entries: list[dict]) -> None:
     run.mkdir(parents=True, exist_ok=True)
     (run / "index.json").write_text(
-        json.dumps({"trajectories": entries}, ensure_ascii=False), encoding="utf-8"
+        json.dumps({"schema": MODULE.INGEST_RUN_SCHEMA, "trajectories": entries}, ensure_ascii=False), encoding="utf-8"
     )
 
 
@@ -125,6 +127,7 @@ def write_meeting(run: Path, meeting_id: str, *, directory_id=None) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "meeting.json"
     path.write_text(json.dumps({
+        "schema": MODULE.MEETING_SCHEMA,
         "meeting_id": meeting_id,
         "title": meeting_id,
         "records": [{"record_id": "rec-00001", "order": 1, "text": "safe synthetic text"}],
@@ -136,6 +139,7 @@ def write_unsupported_root_meeting(run: Path, meeting_id="meeting-root") -> Path
     run.mkdir(parents=True, exist_ok=True)
     path = run / "meeting.json"
     path.write_text(json.dumps({
+        "schema": MODULE.MEETING_SCHEMA,
         "meeting_id": meeting_id,
         "title": meeting_id,
         "records": [{"record_id": "rec-00001", "order": 1, "text": "safe synthetic text"}],
@@ -938,7 +942,8 @@ class LauncherUnitTest(unittest.TestCase):
 
             trajectory = write_trajectory(run, "traj-stale")
             (trajectory / "events.jsonl").write_text(
-                '{"event_id":"changed","event_type":"message"}\n', encoding="utf-8"
+                '{"schema":"oxygen.trajectory-event","event_id":"changed","event_type":"message"}\n',
+                encoding="utf-8",
             )
             with self.assertRaisesRegex(SystemExit, MODULE.INPUT_PROJECTION_INVALID):
                 MODULE._prepare_trajectory(trajectory, run)

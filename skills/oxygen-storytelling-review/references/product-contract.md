@@ -161,9 +161,9 @@ The required final Viewer must preserve:
 - HTML/ZIP download actions;
 - publication separation.
 
-Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base.
-Production still exposes obsolete category/delete controls, so clean-room product completion remains
-blocked until the required surface and candidate authority exist.
+Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer. Current
+candidate authority may be completed-empty or contain decision candidates; unresolved candidates
+and stale authority fail closed before final release confirmation or export.
 
 Project-specific Story prose, Privacy excerpts, generated candidates, preference answers, screenshots, and runtime database state remain local run artifacts. They must not be hardcoded in reusable Skill, Viewer, or test source.
 

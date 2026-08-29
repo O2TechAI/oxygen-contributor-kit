@@ -405,7 +405,7 @@ export function StoryChapterEditor({
     const ownerBlockId = insight.anchorStoryBlockId;
     if (source.story.blocks.some((block) => block.id === ownerBlockId)) (result[ownerBlockId] ||= []).push(insight);
     return result;
-  }, {}), [chapterReview.sourceInsightReviews, source]);
+  }, {}), [source]);
   const humanInsightIdsByBlock = useMemo(() => Object.keys(chapterReview.humanInsights).sort().reduce<Record<string, string[]>>((result, insightId) => {
     const ownerBlockId = chapterReview.humanInsights[insightId].content.quote.storyBlockId;
     if (source.story.blocks.some((block) => block.id === ownerBlockId)) (result[ownerBlockId] ||= []).push(insightId);

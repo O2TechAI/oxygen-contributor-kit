@@ -1,6 +1,6 @@
 ---
 name: oxygen-ingest-project-history
-description: Collect local Codex or Claude Code sessions and allowed memory related to a repository, import a claude.ai data export, or convert meeting text/audio into Oxygen trajectory v0.2 inputs. Use when a contributor asks to gather project history before local organization and review.
+description: Collect local Codex or Claude Code sessions and allowed memory related to a repository, import a claude.ai data export, or convert meeting text/audio into canonical Oxygen trajectory inputs. Use when a contributor asks to gather project history before local organization and review.
 ---
 
 # Ingest project history

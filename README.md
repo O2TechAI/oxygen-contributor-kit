@@ -316,7 +316,7 @@ diagnostic and no unrelated process is stopped.
 
 ## What this does not promise
 
-> **Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review is
+> **Best-effort redaction; no formal anonymity guarantee. Original-contributor final review is
 > required before release.**
 
 This kit reduces risk. It does not eliminate it, and it cannot tell you that a release candidate

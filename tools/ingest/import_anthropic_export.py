@@ -7,7 +7,7 @@ The schema is not publicly guaranteed, so parsing is deliberately tolerant:
 unknown fields are ignored, missing ones defaulted, and every parse problem is
 reported instead of crashing.
 
-Each conversation becomes one v0.2-style trajectory (message events only — web
+Each conversation becomes one canonical trajectory (message events only — web
 exports carry no tool calls). `projects.json` documents are stored under
 memory/ since they act as persistent context, similar to agent memory.
 """
@@ -108,7 +108,7 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
         sequence += 1
         events.append(
             {
-                "schema_version": "0.2",
+                "schema": vendor_common.TRAJECTORY_EVENT_SCHEMA,
                 "event_id": f"evt-{sequence:06d}",
                 "trajectory_id": trajectory_id,
                 "conversation_id": f"conv-{conv_id or 'unknown'}",
@@ -157,7 +157,7 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
         for event in events:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
     manifest = {
-        "schema_version": "0.2",
+        "schema": vendor_common.TRAJECTORY_SCHEMA,
         "trajectory_id": trajectory_id,
         "title": vendor_common.redact_text(title, home),
         "source_system": "claude-ai-export",
@@ -179,7 +179,12 @@ def convert_conversation(conv: dict, out_root: Path, home: Path, warnings: list[
     write_json(trajectory_dir / "manifest.json", manifest)
     write_json(
         trajectory_dir / "redaction.json",
-        {"review_status": "pending", "publication_approved": False, "reviewed_by": None},
+        {
+            "schema": vendor_common.TRAJECTORY_REDACTION_SCHEMA,
+            "review_status": "pending",
+            "publication_approved": False,
+            "reviewed_by": None,
+        },
     )
     projection = project_trajectory(
         trajectory_dir,
@@ -314,7 +319,7 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
             continue
         sequence += 1
         events.append({
-            "schema_version": "0.2",
+            "schema": vendor_common.TRAJECTORY_EVENT_SCHEMA,
             "event_id": f"evt-{sequence:06d}",
             "trajectory_id": trajectory_id,
             "conversation_id": f"conv-{chat_id}",
@@ -343,7 +348,7 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
         for event in events:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
     write_json(trajectory_dir / "manifest.json", {
-        "schema_version": "0.2", "trajectory_id": trajectory_id,
+        "schema": vendor_common.TRAJECTORY_SCHEMA, "trajectory_id": trajectory_id,
         "title": vendor_common.redact_text(title, home),
         "source_system": "claude-ai-export", "source_session_id": chat_id,
         "source_locator": f"design_chats/{path.name}", "snapshot_at": utc_now(),
@@ -354,8 +359,12 @@ def convert_design_chat(path: Path, out_root: Path, home: Path, warnings: list[s
         "event_count": len(events), "artifact_count": 0,
         "redaction_status": "automatic_only", "warnings": [],
     })
-    write_json(trajectory_dir / "redaction.json",
-               {"review_status": "pending", "publication_approved": False, "reviewed_by": None})
+    write_json(trajectory_dir / "redaction.json", {
+        "schema": vendor_common.TRAJECTORY_REDACTION_SCHEMA,
+        "review_status": "pending",
+        "publication_approved": False,
+        "reviewed_by": None,
+    })
     projection = project_trajectory(
         trajectory_dir,
         raw_source_digest=digest_value(chat),
@@ -424,7 +433,7 @@ def main(argv=None) -> int:
     write_json(
         out / "index.json",
         {
-            "schema_version": "0.2",
+            "schema": vendor_common.INGEST_RUN_SCHEMA,
             "tool": "import_anthropic_export",
             "generated_at": utc_now(),
             "source": str(source),

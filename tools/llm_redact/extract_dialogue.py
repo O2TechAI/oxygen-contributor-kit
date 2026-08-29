@@ -20,7 +20,13 @@ from oxygen_utf8 import configure_utf8_stdio
 from ingest.human_source_projection import (
     meeting_contribution_ids,
 )
-from prepare_ai_review_run import discover_meetings
+from prepare_ai_review_run import (
+    AI_REVIEW_EVENT_SCHEMA,
+    AI_REVIEW_MEETING_SCHEMA,
+    AI_REVIEW_TRAJECTORY_SCHEMA,
+    discover_meetings,
+    validated_trajectory,
+)
 
 KEEP_EVENT_TYPE = "message"
 
@@ -29,30 +35,27 @@ def extract_one(traj_dir: pathlib.Path) -> dict:
     turns = []
     document_id = traj_dir.name
     events_path = traj_dir / "events.jsonl"
-    with events_path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("event_type") != KEEP_EVENT_TYPE:
-                continue
-            payload = event.get("payload") or {}
-            text = payload.get("text") or ""
-            if not text.strip():
-                continue
-            item_id = event.get("event_id")
-            turns.append({
-                "event_id": event.get("event_id"),
-                "document_id": document_id,
-                "item_id": item_id,
-                "role": payload.get("role"),
-                "timestamp": event.get("timestamp"),
-                "text": text,
-            })
+    _, events, _ = validated_trajectory(
+        events_path,
+        manifest_schema=AI_REVIEW_TRAJECTORY_SCHEMA,
+        event_schema=AI_REVIEW_EVENT_SCHEMA,
+    )
+    for event in events:
+        if event.get("event_type") != KEEP_EVENT_TYPE:
+            continue
+        payload = event.get("payload") or {}
+        text = payload.get("text") or ""
+        if not text.strip():
+            continue
+        item_id = event.get("event_id")
+        turns.append({
+            "event_id": event.get("event_id"),
+            "document_id": document_id,
+            "item_id": item_id,
+            "role": payload.get("role"),
+            "timestamp": event.get("timestamp"),
+            "text": text,
+        })
     return {"trajectory": document_id, "document_kind": "trajectory", "turns": turns,
             "chars": sum(len(t["text"]) for t in turns)}
 
@@ -99,7 +102,7 @@ def extract_bundles(run: pathlib.Path) -> list[dict]:
             for traj_dir in sorted(trajectories.iterdir())
             if traj_dir.is_dir()
         )
-    for meeting in discover_meetings(run):
+    for meeting in discover_meetings(run, expected_schema=AI_REVIEW_MEETING_SCHEMA):
         bundle = extract_meeting(meeting["path"])
         if bundle:
             bundles.append(bundle)

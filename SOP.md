@@ -20,10 +20,11 @@ The workflow is complete only when all of the following are true:
 4. `publication_approved` remains `false` unless the contributor separately and explicitly
    approves publication.
 
-Current runtime status: clean-room product completion is **NOT YET ACHIEVED** on this base.
-Activation-time preparation receipts, Preference readiness binding, and the server-owned Story
-Privacy decision authority are implemented. Final decision-only Chapter Privacy and Release Preview
-UI/session hydration, All set gating, and reviewed-release transformation remain unimplemented.
+Current runtime status: the canonical Viewer implements activation-time preparation receipts,
+Preference readiness binding, server-owned Story Privacy decisions, final decision-only Chapter
+Privacy and Release Preview, session hydration, Chapter All set, final release confirmation, and
+reviewed HTML/ZIP transformation. A specific run becomes release-ready only after its current human
+decisions and final confirmation; none of those actions changes `publication_approved=false`.
 
 ## Final public order
 
@@ -210,7 +211,7 @@ changes later, reattach that updated run to the same origin/run ID.
 
 Use the contributor's configured AI model for redaction. The mandatory notice is:
 
-> Best-effort redaction v0.1; no formal anonymity guarantee. Original-contributor final review is
+> Best-effort redaction; no formal anonymity guarantee. Original-contributor final review is
 > required before release.
 
 This is the upstream source Privacy boundary. Its output is the reviewed input boundary used by
@@ -654,10 +655,9 @@ HTML/ZIP download actions. Do not describe unsupported annotation controls as av
 
 Required final surfaces, with current runtime status:
 
-- Final decision-only Chapter Privacy/Release Preview is **NOT YET IMPLEMENTED** on this base.
-  Production still exposes obsolete category/delete controls, so clean-room product completion is
-  blocked until the Viewer implements the contract below and implemented candidate authority
-  supplies candidates.
+- Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer.
+  Contributor actions are exactly Keep/Redact for current `needs_confirmation` candidates; there is
+  no category, reason, delete, or soft-delete mutation surface.
 - Required Privacy review and Release Preview expose only the release-safe projection for
   deterministic or contributor-confirmed safe content. Only `needs_confirmation` rows are
   decision-editable. Those rows show the minimum locally permitted original when present, the

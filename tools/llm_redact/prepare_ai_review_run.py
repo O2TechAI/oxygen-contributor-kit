@@ -23,7 +23,17 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
-from ingest.human_source_projection import POLICY_ID, digest_events
+from ingest.human_source_projection import (
+    AI_REVIEW_EVENT_SCHEMA,
+    AI_REVIEW_MEETING_SCHEMA,
+    AI_REVIEW_RUN_SCHEMA,
+    AI_REVIEW_TRAJECTORY_SCHEMA,
+    MEETING_SCHEMA,
+    POLICY_ID,
+    TRAJECTORY_EVENT_SCHEMA,
+    TRAJECTORY_SCHEMA,
+    digest_events,
+)
 
 ORGANIZER_SCRIPTS = (
     Path(__file__).resolve().parents[2]
@@ -116,7 +126,7 @@ def normalize_event(event: dict, trajectory_id: str, index: int) -> dict:
     event_id = str(event.get("event_id") or f"event-{index:06d}")
     sequence = event.get("sequence")
     base = {
-        "schema_version": "ai-review.event/1",
+        "schema": AI_REVIEW_EVENT_SCHEMA,
         "event_id": event_id,
         "trajectory_id": trajectory_id,
         "turn_id": None,
@@ -146,7 +156,12 @@ def normalize_event(event: dict, trajectory_id: str, index: int) -> dict:
     return base
 
 
-def validated_trajectory(events_path: Path) -> tuple[dict, list[dict], dict]:
+def validated_trajectory(
+    events_path: Path,
+    *,
+    manifest_schema: str = TRAJECTORY_SCHEMA,
+    event_schema: str = TRAJECTORY_EVENT_SCHEMA,
+) -> tuple[dict, list[dict], dict]:
     manifest_path = events_path.parent / "manifest.json"
     try:
         manifest = read_json(manifest_path)
@@ -158,7 +173,17 @@ def validated_trajectory(events_path: Path) -> tuple[dict, list[dict], dict]:
         projected_digest = digest_events(events)
     except (OSError, UnicodeError, ValueError):
         raise SystemExit(INPUT_PROJECTION_INVALID) from None
-    if not isinstance(manifest, dict) or not all(isinstance(event, dict) for event in events):
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema") != manifest_schema
+        or "schema_version" in manifest
+        or not all(
+            isinstance(event, dict)
+            and event.get("schema") == event_schema
+            and "schema_version" not in event
+            for event in events
+        )
+    ):
         raise SystemExit(INPUT_PROJECTION_INVALID)
     projection = manifest.get("contribution_projection")
     manifest_count = manifest.get("event_count")
@@ -229,7 +254,7 @@ def prepare_trajectories(source: Path, output: Path) -> list[dict]:
             encoding="utf-8",
         )
         write_json(destination / "manifest.json", {
-            "schema_version": "0.2",
+            "schema": AI_REVIEW_TRAJECTORY_SCHEMA,
             "trajectory_id": trajectory_id,
             "title": trajectory_id,
             "source_system": safe_source_system(source_manifest.get("source_system")),
@@ -321,7 +346,12 @@ def _validated_meeting_records(meeting_id: str, records: list[dict]) -> list[tup
     return sorted(prepared)
 
 
-def discover_meetings(source: Path, *, require_review_identity: bool = False) -> list[dict]:
+def discover_meetings(
+    source: Path,
+    *,
+    require_review_identity: bool = False,
+    expected_schema: str = MEETING_SCHEMA,
+) -> list[dict]:
     root_candidate = source / "meeting.json"
     if root_candidate.exists() or root_candidate.is_symlink():
         raise SystemExit(INPUT_MEETING_INVALID)
@@ -353,7 +383,12 @@ def discover_meetings(source: Path, *, require_review_identity: bool = False) ->
             meeting = read_json(path)
         except (OSError, UnicodeError, json.JSONDecodeError):
             raise SystemExit(INPUT_MEETING_INVALID) from None
-        if not isinstance(meeting, dict) or not isinstance(meeting.get("records"), list):
+        if (
+            not isinstance(meeting, dict)
+            or meeting.get("schema") != expected_schema
+            or "schema_version" in meeting
+            or not isinstance(meeting.get("records"), list)
+        ):
             raise SystemExit(INPUT_MEETING_INVALID)
         if not all(isinstance(record, dict) for record in meeting["records"]):
             raise SystemExit(INPUT_MEETING_INVALID)
@@ -396,7 +431,7 @@ def prepare_meeting(
         })
     destination = output / "meetings" / source_meeting_id
     write_json(destination / "meeting.json", {
-        "schema_version": "ai-review.meeting/1",
+        "schema": AI_REVIEW_MEETING_SCHEMA,
         "meeting_id": source_meeting_id,
         "title": source_meeting_id,
         "source_warning_count": warning_count,
@@ -489,7 +524,7 @@ def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
             ),
         )
         write_json(staging / "index.json", {
-            "schema_version": "0.2",
+            "schema": AI_REVIEW_RUN_SCHEMA,
             "tool": "prepare_ai_review_run",
             "trajectory_count": len(trajectories),
             "meeting_count": len(meetings),
@@ -501,7 +536,17 @@ def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
             "publication_approved": False,
             "trajectories": trajectories,
         })
-        discover_meetings(staging, require_review_identity=True)
+        for events_path in sorted((staging / "trajectories").glob("*/events.jsonl")):
+            validated_trajectory(
+                events_path,
+                manifest_schema=AI_REVIEW_TRAJECTORY_SCHEMA,
+                event_schema=AI_REVIEW_EVENT_SCHEMA,
+            )
+        discover_meetings(
+            staging,
+            require_review_identity=True,
+            expected_schema=AI_REVIEW_MEETING_SCHEMA,
+        )
         validated_project_map(staging)
         staging.replace(output)
         return trajectories, len(meetings)
