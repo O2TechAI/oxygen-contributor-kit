@@ -562,7 +562,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             self.assertEqual(index["meeting_count"], 1)
             report = json.loads(emit.call_args.args[0])
             self.assertEqual(report, {
-                "output": str(output), "trajectories": 0, "meetings": 1,
+                "output": str(output.resolve()), "trajectories": 0, "meetings": 1,
             })
 
     def test_real_single_trajectory_flow_rebinds_canonical_authority(self):
