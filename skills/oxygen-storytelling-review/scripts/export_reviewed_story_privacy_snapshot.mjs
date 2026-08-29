@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { link, lstat, realpath, rm, writeFile } from "node:fs/promises";
+import { link, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { storyPreparationDigest } from "../../../viewer/lib/story-preparation.ts";
+import { directPathEntry } from "./direct_path_entry.mjs";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -37,27 +38,28 @@ if (!stateInput || !isAbsolute(stateInput) || win32.isAbsolute(basename(stateInp
   fail("VIEWER_STATE_DIR_INVALID");
 }
 const requestedState = resolve(stateInput);
-const stateStat = await lstat(requestedState).catch(() => fail("VIEWER_STATE_DIR_INVALID"));
-const stateDir = await realpath(requestedState).catch(() => fail("VIEWER_STATE_DIR_INVALID"));
-if (!stateStat.isDirectory() || stateStat.isSymbolicLink() || !samePath(stateDir, requestedState)) {
+const stateEntry = await directPathEntry(requestedState).catch(() => fail("VIEWER_STATE_DIR_INVALID"));
+if (!stateEntry?.state.isDirectory()) {
   fail("VIEWER_STATE_TOPOLOGY_INVALID");
 }
+const stateDir = stateEntry.physical;
 const databaseInput = resolve(stateDir, "oxygen.sqlite");
-const databaseStat = await lstat(databaseInput).catch(() => fail("VIEWER_DATABASE_INVALID"));
-const databasePath = await realpath(databaseInput).catch(() => fail("VIEWER_DATABASE_INVALID"));
+const databaseEntry = await directPathEntry(databaseInput).catch(() => fail("VIEWER_DATABASE_INVALID"));
+if (!databaseEntry) fail("VIEWER_DATABASE_TOPOLOGY_INVALID");
+const databaseStat = databaseEntry.state;
+const databasePath = databaseEntry.physical;
 const databaseRelative = relative(stateDir, databasePath);
-if (!databaseStat.isFile() || databaseStat.isSymbolicLink() || databaseStat.nlink !== 1
+if (!databaseStat.isFile() || databaseStat.nlink !== 1
   || databaseRelative === ".." || databaseRelative.startsWith(`..${sep}`)
-  || isAbsolute(databaseRelative) || !samePath(databasePath, databaseInput)) {
+  || isAbsolute(databaseRelative)) {
   fail("VIEWER_DATABASE_TOPOLOGY_INVALID");
 }
 
 const outputInput = resolve(args[3]);
 const requestedParent = dirname(outputInput);
-const parentStat = await lstat(requestedParent).catch(() => fail("OUTPUT_PARENT_INVALID"));
-const parent = await realpath(requestedParent).catch(() => fail("OUTPUT_PARENT_INVALID"));
-if (!parentStat.isDirectory() || parentStat.isSymbolicLink()
-  || !samePath(parent, resolve(requestedParent))) fail("OUTPUT_PARENT_INVALID");
+const parentEntry = await directPathEntry(requestedParent).catch(() => fail("OUTPUT_PARENT_INVALID"));
+if (!parentEntry?.state.isDirectory()) fail("OUTPUT_PARENT_INVALID");
+const parent = parentEntry.physical;
 const output = resolve(parent, basename(outputInput));
 const outputRelative = relative(parent, output);
 if (!outputRelative || outputRelative === ".." || outputRelative.startsWith(`..${sep}`)

@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { applyActiveRedactions } from "../../../viewer/lib/release.mjs";
 import { computeSourceDigest } from "../../../viewer/lib/redaction-pass.mjs";
@@ -25,6 +25,7 @@ import {
   serializedBytes,
   stableId,
 } from "./story_preparation_transport.mjs";
+import { directPathEntry } from "./direct_path_entry.mjs";
 
 export const MAX_STORY_VALIDATION_AUTHORITY_BYTES = 12_000_000;
 export const MAX_STORY_REVIEW_SOURCE_BYTES = 64_000_000;
@@ -32,31 +33,27 @@ export const MAX_STORY_REVIEWED_NARRATIVE_BYTES = 24_000_000;
 
 async function directDirectory(parent, name, optional = false) {
   const candidate = resolve(parent, name);
-  let state;
+  let entry;
   try {
-    state = await lstat(candidate);
+    entry = await directPathEntry(candidate);
   } catch (error) {
     if (optional && error?.code === "ENOENT") return null;
     fail("REVIEWED_SOURCE_INVALID");
   }
-  if (!state.isDirectory() || state.isSymbolicLink()) fail("REVIEWED_SOURCE_INVALID");
-  const physical = await realpath(candidate).catch(() => fail("REVIEWED_SOURCE_INVALID"));
-  if (physical !== candidate) fail("REVIEWED_SOURCE_INVALID");
-  return physical;
+  if (!entry?.state.isDirectory()) fail("REVIEWED_SOURCE_INVALID");
+  return entry.physical;
 }
 
 async function directFile(parent, name) {
   const candidate = resolve(parent, name);
-  let state;
+  let entry;
   try {
-    state = await lstat(candidate);
+    entry = await directPathEntry(candidate);
   } catch {
     fail("REVIEWED_SOURCE_INVALID");
   }
-  if (!state.isFile() || state.isSymbolicLink()) fail("REVIEWED_SOURCE_INVALID");
-  const physical = await realpath(candidate).catch(() => fail("REVIEWED_SOURCE_INVALID"));
-  if (physical !== candidate) fail("REVIEWED_SOURCE_INVALID");
-  return physical;
+  if (!entry?.state.isFile()) fail("REVIEWED_SOURCE_INVALID");
+  return entry.physical;
 }
 
 function sourceText(value) {
@@ -168,9 +165,9 @@ async function meetingRows(root, budget) {
 }
 
 async function reviewedSourceRows(reviewRootInput, semantic) {
-  const root = resolve(reviewRootInput);
-  const physical = await realpath(root).catch(() => fail("REVIEWED_SOURCE_INVALID"));
-  if (physical !== root) fail("REVIEWED_SOURCE_INVALID");
+  const entry = await directPathEntry(reviewRootInput).catch(() => fail("REVIEWED_SOURCE_INVALID"));
+  if (!entry?.state.isDirectory()) fail("REVIEWED_SOURCE_INVALID");
+  const root = entry.physical;
   const reviewSemantic = await readSemanticTransport(await directFile(root, "project-map.json"));
   if (!canonicalJsonEqual(reviewSemantic, semantic)) fail("REVIEWED_SOURCE_AUTHORITY_STALE");
   const budget = { used: 0 };

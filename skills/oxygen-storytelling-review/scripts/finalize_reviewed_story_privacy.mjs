@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { link, lstat, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { link, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { storyPreparationDigest } from "../../../viewer/lib/story-preparation.ts";
+import { directPathEntry } from "./direct_path_entry.mjs";
 
 const [rootInput, outputInput] = process.argv.slice(2);
 const hex = /^[0-9a-f]{64}$/;
@@ -11,9 +12,6 @@ const fail = (code) => { throw new Error(code); };
 const safeId = (value) => typeof value === "string" && Boolean(value.trim())
   && !/[\u0000-\u001f\u007f]/u.test(value);
 const compareUtf8 = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
-const samePath = (left, right) => process.platform === "win32"
-  ? left.replaceAll("/", "\\").toLowerCase() === right.replaceAll("/", "\\").toLowerCase()
-  : left === right;
 const forbidden = new Set(["raworiginal", "original", "evidence", "provider", "model", "prompt",
   "execution", "agent", "duration", "token", "cost", "log"]);
 
@@ -30,13 +28,12 @@ async function contained(root, value) {
   if (typeof value !== "string" || !value || isAbsolute(value) || win32.isAbsolute(value)
     || value.split(/[\\/]/u).some((part) => part === "..")) fail("PATH_NOT_CONTAINED");
   const requested = resolve(root, value);
-  const physical = await realpath(requested).catch(() => fail("FILE_UNREADABLE"));
-  const rel = relative(root, physical);
-  const stat = await lstat(requested).catch(() => fail("FILE_UNREADABLE"));
+  const entry = await directPathEntry(requested).catch(() => fail("FILE_UNREADABLE"));
+  if (!entry) fail("FILE_TOPOLOGY_INVALID");
+  const rel = relative(root, entry.physical);
   if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)
-    || stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1
-    || !samePath(physical, requested)) fail("FILE_TOPOLOGY_INVALID");
-  return physical;
+    || !entry.state.isFile() || entry.state.nlink !== 1) fail("FILE_TOPOLOGY_INVALID");
+  return entry.physical;
 }
 async function json(path) {
   try { return JSON.parse(await readFile(path, "utf8")); } catch { fail("JSON_INVALID"); }
@@ -59,10 +56,9 @@ function candidate(value, changed) {
 }
 
 if (!rootInput || !outputInput) fail("USAGE_FINALIZE_REVIEWED_STORY_PRIVACY_ROOT_OUTPUT");
-const root = await realpath(resolve(rootInput)).catch(() => fail("ROOT_INVALID"));
-const rootStat = await lstat(resolve(rootInput)).catch(() => fail("ROOT_INVALID"));
-if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) fail("ROOT_INVALID");
-if (!samePath(root, resolve(rootInput))) fail("ROOT_INVALID");
+const rootEntry = await directPathEntry(rootInput).catch(() => fail("ROOT_INVALID"));
+if (!rootEntry?.state.isDirectory()) fail("ROOT_INVALID");
+const root = rootEntry.physical;
 const manifest = await json(await contained(root, "manifest.json"));
 const bindingKeys = [
   "workflowRunId", "sourceRevision", "activeStoryDigest", "serverVersion",
@@ -184,8 +180,10 @@ const ordered = {
   receiptDigest: bundle.receiptDigest, candidates: bundle.candidates,
   importDigest: bundle.importDigest,
 };
-const parent = await realpath(dirname(resolve(outputInput))).catch(() => fail("OUTPUT_PARENT_INVALID"));
-if (!samePath(parent, dirname(resolve(outputInput)))) fail("OUTPUT_PARENT_INVALID");
+const parentEntry = await directPathEntry(dirname(resolve(outputInput)))
+  .catch(() => fail("OUTPUT_PARENT_INVALID"));
+if (!parentEntry?.state.isDirectory()) fail("OUTPUT_PARENT_INVALID");
+const parent = parentEntry.physical;
 const output = resolve(parent, basename(outputInput));
 if (win32.isAbsolute(basename(outputInput)) || isAbsolute(basename(outputInput))) fail("OUTPUT_INVALID");
 const temporary = resolve(parent, `.${basename(outputInput)}.${process.pid}.tmp`);

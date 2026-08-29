@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { storyPreparationDigest } from "../../../viewer/lib/story-preparation.ts";
+import { directPathEntry } from "./direct_path_entry.mjs";
 
 const [snapshotInput, outputInput] = process.argv.slice(2);
 const hex = /^[0-9a-f]{64}$/;
@@ -14,16 +15,10 @@ const fail = (code) => { throw new Error(code); };
 const safeId = (value) => typeof value === "string" && Boolean(value.trim())
   && !/[\u0000-\u001f\u007f]/u.test(value);
 const compareUtf8 = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
-const samePath = (left, right) => process.platform === "win32"
-  ? left.replaceAll("/", "\\").toLowerCase() === right.replaceAll("/", "\\").toLowerCase()
-  : left === right;
-
 async function regular(path) {
-  const physical = await realpath(path).catch(() => fail("FILE_UNREADABLE"));
-  const stat = await lstat(path).catch(() => fail("FILE_UNREADABLE"));
-  if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1
-    || !samePath(physical, resolve(path))) fail("FILE_TOPOLOGY_INVALID");
-  return physical;
+  const entry = await directPathEntry(path).catch(() => fail("FILE_UNREADABLE"));
+  if (!entry?.state.isFile() || entry.state.nlink !== 1) fail("FILE_TOPOLOGY_INVALID");
+  return entry.physical;
 }
 
 function shardTargets(targets) {
@@ -107,10 +102,9 @@ if (new Set(targets.map((target) => target.id)).size !== targets.length
 
 if (isAbsolute(basename(outputInput)) || win32.isAbsolute(basename(outputInput))) fail("OUTPUT_INVALID");
 const requestedParent = dirname(resolve(outputInput));
-const parent = await realpath(requestedParent).catch(() => fail("OUTPUT_PARENT_INVALID"));
-const parentStat = await lstat(requestedParent).catch(() => fail("OUTPUT_PARENT_INVALID"));
-if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) fail("OUTPUT_PARENT_INVALID");
-if (!samePath(parent, resolve(requestedParent))) fail("OUTPUT_PARENT_INVALID");
+const parentEntry = await directPathEntry(requestedParent).catch(() => fail("OUTPUT_PARENT_INVALID"));
+if (!parentEntry?.state.isDirectory()) fail("OUTPUT_PARENT_INVALID");
+const parent = parentEntry.physical;
 const output = resolve(parent, basename(outputInput));
 const rel = relative(parent, output);
 if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) fail("OUTPUT_INVALID");

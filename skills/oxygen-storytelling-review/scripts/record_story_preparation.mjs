@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readdir, realpath, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { canonicalizeAutoRemoved } from "../../../viewer/lib/auto-removed.mjs";
 import {
@@ -31,6 +31,7 @@ import {
   stableId,
   MAX_STORY_PREPARATION_FILE_BYTES,
 } from "./story_preparation_transport.mjs";
+import { directPathEntry } from "./direct_path_entry.mjs";
 import {
   LANES,
   laneDirectory,
@@ -147,18 +148,16 @@ function storyProposal(value) {
 }
 
 async function directProposalDirectory(path, shardIds) {
-  const requested = resolve(path);
-  let state;
-  let physical;
+  let entry;
   try {
-    state = await lstat(requested);
-    physical = await realpath(requested);
+    entry = await directPathEntry(path);
   } catch {
     fail("STORY_PROPOSAL_SET_INVALID");
   }
-  if (!state.isDirectory() || state.isSymbolicLink() || physical !== requested) {
+  if (!entry?.state.isDirectory()) {
     fail("STORY_PROPOSAL_SET_INVALID");
   }
+  const physical = entry.physical;
   const expected = shardIds.map((id) => `${id}.json`).sort(compareUtf8);
   const entries = await readdir(physical, { withFileTypes: true }).catch(() => (
     fail("STORY_PROPOSAL_SET_INVALID")
