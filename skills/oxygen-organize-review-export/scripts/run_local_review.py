@@ -1343,10 +1343,19 @@ _RECEIPT_FIELDS = {
     "lane", "status", "inputDigest", "scopeDigest", "scopeCount", "outputDigest", "outputCount",
 }
 _PREPARATION_LANES = ("story", "insight", "story_privacy", "preference")
+_MAX_SAFE_INTEGER = (1 << 53) - 1
 
 
 def _nonnegative_integer(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= _MAX_SAFE_INTEGER
+    )
+
+
+def _activated_source_revision(value: object) -> bool:
+    return _nonnegative_integer(value) and value > 0
 
 
 def _digest(value: object) -> bool:
@@ -1394,7 +1403,7 @@ def validate_ready_authority(
         raise SystemExit("Preference bundle authority is invalid")
     if (
         preference_bundle.get("workflowRunId") != workflow_run_id
-        or not _nonnegative_integer(preference_bundle.get("sourceRevision"))
+        or not _activated_source_revision(preference_bundle.get("sourceRevision"))
         or not _digest(preference_bundle.get("inputDigest"))
         or not _digest(preference_bundle.get("outputDigest"))
         or not _nonnegative_integer(preference_bundle.get("outputCount"))

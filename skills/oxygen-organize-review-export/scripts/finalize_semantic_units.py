@@ -168,7 +168,8 @@ def read_shard_proposals(root: Path, manifest: dict[str, Any]) -> list[dict[str,
         shard_id = shard["id"]
         contribution_ids = shard["contributionIds"]
         expected_input_path = f"inputs/{shard_id}.json"
-        expected_receipt_path = f"receipts/{shard_id}.json"
+        expected_receipt_path = f"records/{shard_id}/receipt.json"
+        expected_output_path = f"records/{shard_id}/output.json"
         if (
             not isinstance(shard_id, str) or SHARD_ID.fullmatch(shard_id) is None
             or shard_id in seen_shards
@@ -209,7 +210,7 @@ def read_shard_proposals(root: Path, manifest: dict[str, Any]) -> list[dict[str,
             or receipt.get("shardId") != shard_id
             or receipt.get("inputDigest") != shard["inputDigest"]
             or receipt.get("contributionIds") != contribution_ids
-            or receipt.get("outputPath") != f"outputs/{shard_id}.json"
+            or receipt.get("outputPath") != expected_output_path
             or not isinstance(receipt.get("outputCount"), int)
             or isinstance(receipt.get("outputCount"), bool)
             or receipt["outputCount"] < 0

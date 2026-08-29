@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { registerHooks } from "node:module";
 import {
   applyChapterReview,
@@ -25,12 +28,20 @@ import {
 } from "../lib/story-release.ts";
 import {
   RELEASE_ERROR,
+  parseServerOwnedReleaseRequest,
+  reconstructReviewedStoryRelease,
   reconstructReviewedStoryReleaseFromDatabase,
 } from "../lib/story-release-server.ts";
 import { readActiveStoryReviewContract } from "../lib/story-review-session-server.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { captureStoryReleasePrivacySnapshot } from "../lib/release-privacy-snapshot.ts";
 import { readCoveragePrivacyAuthority } from "../lib/story-coverage-privacy-authority.ts";
+import {
+  buildCurrentSourcePrivacyDialogue,
+  canonicalSourcePrivacyJson,
+  canonicalSourcePrivacyRedactions,
+  sourcePrivacyDigest,
+} from "../lib/source-privacy-receipt.ts";
 import {
   canonicalAuthorityJson,
   contributionRecordSourceDigest,
@@ -366,12 +377,14 @@ async function sha256(value) {
 
 class FakeStoryReleaseDb {
   constructor({ items, run, session, redactionJob, redactions = [], receipts, probeRun,
-    releaseConfirmation, completeness }) {
+    releaseConfirmation, completeness, sourcePrivacyReceipt, finalizedCorpus }) {
     this.items = items;
     this.runs = new Map([[run.id, run]]);
     this.session = session;
     this.redactionJob = redactionJob;
     this.redactions = redactions;
+    this.sourcePrivacyReceipt = sourcePrivacyReceipt;
+    this.finalizedCorpus = finalizedCorpus;
     this.receipts = receipts;
     this.probeRun = probeRun;
     this.releaseConfirmation = releaseConfirmation;
@@ -419,6 +432,12 @@ class FakeStoryReleaseDb {
         if (/FROM probe_bulk_decisions/.test(sql)) return { results: [] };
         if (/FROM project_release_confirmations/.test(sql)) {
           return { results: this.releaseConfirmation ? [structuredClone(this.releaseConfirmation)] : [] };
+        }
+        if (/FROM source_privacy_receipts/.test(sql)) {
+          return { results: this.sourcePrivacyReceipt ? [structuredClone(this.sourcePrivacyReceipt)] : [] };
+        }
+        if (/FROM finalized_corpus_manifests/.test(sql)) {
+          return { results: this.finalizedCorpus ? [structuredClone(this.finalizedCorpus)] : [] };
         }
         if (/FROM documents/.test(sql)) return { results: [] };
         if (/FROM redaction_jobs/.test(sql)) {
@@ -490,6 +509,7 @@ async function serverFixture({
   const item = {
     id: evidence.eventId,
     document_id: evidence.documentId,
+    document_kind: "trajectory",
     sequence: 1,
     event_type: "message",
     actor_id: "contributor",
@@ -558,6 +578,55 @@ async function serverFixture({
   assert.equal(validation.ok, true);
   assert.equal(validation.chapterCount, 1);
   const sourceDigest = await computeSourceDigest([item]);
+  const sourceRedactions = initiallyRedacted ? [{
+    id: "redaction-story-release",
+    item_id: item.id,
+    document_id: item.document_id,
+    start_offset: 0,
+    end_offset: storyPrivate.length,
+    category: "sensitive",
+    confidence: null,
+    reason: null,
+    review_state: "deterministic",
+    uncertainty_reason: null,
+    status: "active",
+    created_by: "llm",
+    created_at: "2026-08-25T00:00:09.000Z",
+    updated_at: "2026-08-25T00:00:09.000Z",
+  }] : [];
+  const sourceTransport = canonicalSourcePrivacyRedactions(sourceRedactions.map((row) => ({
+    itemId: row.item_id,
+    documentId: row.document_id,
+    startOffset: row.start_offset,
+    endOffset: row.end_offset,
+    category: row.category,
+    confidence: row.confidence,
+    reason: row.reason,
+    reviewState: row.review_state,
+    uncertaintyReason: row.uncertainty_reason,
+    createdBy: "llm",
+  })));
+  const sourceReceiptCore = {
+    status: "complete",
+    workflowRunId: RUN_ID,
+    sourceRevision: SOURCE_REVISION,
+    finalizedCorpus: {
+      revision: 1,
+      digest: "c".repeat(64),
+      documentCount: 1,
+      itemCount: 1,
+    },
+    sourceDigest,
+    dialogue: await buildCurrentSourcePrivacyDialogue([item]),
+    redactions: {
+      count: sourceTransport.length,
+      digest: await sourcePrivacyDigest(sourceTransport),
+    },
+  };
+  const sourceReceipt = {
+    ...sourceReceiptCore,
+    receiptDigest: await sourcePrivacyDigest(sourceReceiptCore),
+  };
   const emptyDigest = await storyPreparationDigest([]);
   const completeDigest = await storyPreparationDigest([{ id: item.id, story: currentSource }]);
   const catalog = deriveStoryReleaseTargetCatalog([currentSource]);
@@ -600,27 +669,33 @@ async function serverFixture({
       completed: initiallyRedacted ? 1 : 0,
       total: initiallyRedacted ? 1 : 0,
       rejected: 0,
+      source_revision: SOURCE_REVISION,
       source_digest: sourceDigest,
+      receipt_digest: sourceReceipt.receiptDigest,
       started_at: completedAt,
       updated_at: completedAt,
       completed_at: completedAt,
     },
-    redactions: initiallyRedacted ? [{
-      id: "redaction-story-release",
-      item_id: item.id,
-      document_id: item.document_id,
-      start_offset: 0,
-      end_offset: storyPrivate.length,
-      category: "sensitive",
-      confidence: null,
-      reason: null,
-      review_state: "deterministic",
-      uncertainty_reason: null,
-      status: "active",
-      created_by: "deterministic",
+    redactions: sourceRedactions,
+    sourcePrivacyReceipt: {
+      job_id: "privacy-story-release",
+      workflow_run_id: RUN_ID,
+      source_revision: SOURCE_REVISION,
+      source_digest: sourceDigest,
+      receipt_digest: sourceReceipt.receiptDigest,
+      receipt_json: canonicalSourcePrivacyJson(sourceReceipt),
       created_at: completedAt,
-      updated_at: completedAt,
-    }] : [],
+    },
+    finalizedCorpus: {
+      workflow_run_id: RUN_ID,
+      corpus_revision: 1,
+      corpus_digest: "c".repeat(64),
+      document_count: 1,
+      item_count: 1,
+      finalized_at: completedAt,
+      current_document_count: 1,
+      current_item_count: 1,
+    },
     receipts,
     probeRun: {
       workflow_run_id: RUN_ID, id: RUN_ID, source_revision: SOURCE_REVISION,
@@ -728,11 +803,104 @@ async function rebindFixtureCoveragePrivacy(fixture) {
     privacyAuthority.authority.snapshotDigest;
 }
 
+async function rebindFakeSourcePrivacyReceipt(fixture) {
+  const { db } = fixture;
+  const sourceDigest = await computeSourceDigest(db.items);
+  const transport = canonicalSourcePrivacyRedactions(db.redactions.map((row) => ({
+    itemId: row.item_id,
+    documentId: row.document_id,
+    startOffset: row.start_offset,
+    endOffset: row.end_offset,
+    category: row.category,
+    confidence: row.confidence ?? null,
+    reason: row.reason ?? null,
+    reviewState: row.review_state === "deterministic" ? "deterministic" : "needs_confirmation",
+    uncertaintyReason: row.uncertainty_reason ?? null,
+    createdBy: "llm",
+  })));
+  const documentCount = new Set(db.items.map((item) => item.document_id)).size;
+  const core = {
+    status: "complete",
+    workflowRunId: RUN_ID,
+    sourceRevision: SOURCE_REVISION,
+    finalizedCorpus: {
+      revision: 1,
+      digest: "c".repeat(64),
+      documentCount,
+      itemCount: db.items.length,
+    },
+    sourceDigest,
+    dialogue: await buildCurrentSourcePrivacyDialogue(db.items),
+    redactions: {
+      count: transport.length,
+      digest: await sourcePrivacyDigest(transport),
+    },
+  };
+  const receipt = { ...core, receiptDigest: await sourcePrivacyDigest(core) };
+  db.redactionJob.completed = transport.length;
+  db.redactionJob.total = transport.length;
+  db.redactionJob.source_revision = SOURCE_REVISION;
+  db.redactionJob.source_digest = sourceDigest;
+  db.redactionJob.receipt_digest = receipt.receiptDigest;
+  db.sourcePrivacyReceipt = {
+    job_id: db.redactionJob.id,
+    workflow_run_id: RUN_ID,
+    source_revision: SOURCE_REVISION,
+    source_digest: sourceDigest,
+    receipt_digest: receipt.receiptDigest,
+    receipt_json: canonicalSourcePrivacyJson(receipt),
+    created_at: db.redactionJob.completed_at,
+  };
+  db.finalizedCorpus = {
+    workflow_run_id: RUN_ID,
+    corpus_revision: 1,
+    corpus_digest: "c".repeat(64),
+    document_count: documentCount,
+    item_count: db.items.length,
+    finalized_at: db.redactionJob.completed_at,
+    current_document_count: documentCount,
+    current_item_count: db.items.length,
+  };
+}
+
 const request = (overrides = {}) => ({
   workflowRunId: RUN_ID,
   serverVersion: SERVER_VERSION,
   sourceRevision: SOURCE_REVISION,
   ...overrides,
+});
+
+test("release request rejects source revision zero before runtime database initialization", async () => {
+  assert.deepEqual(parseServerOwnedReleaseRequest({
+    workflowRunId: RUN_ID,
+    serverVersion: 0,
+    sourceRevision: 1,
+  }), {
+    workflowRunId: RUN_ID,
+    serverVersion: 0,
+    sourceRevision: 1,
+  });
+  assert.equal(parseServerOwnedReleaseRequest({
+    workflowRunId: RUN_ID,
+    serverVersion: 0,
+    sourceRevision: 0,
+  }), null);
+
+  const stateDir = join(tmpdir(), `oxygen-release-revision-zero-${process.pid}-${Date.now()}`);
+  assert.equal(existsSync(stateDir), false);
+  const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
+  process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
+  try {
+    assert.deepEqual(await reconstructReviewedStoryRelease({
+      workflowRunId: RUN_ID,
+      serverVersion: 0,
+      sourceRevision: 0,
+    }), { ok: false, code: RELEASE_ERROR.requestInvalid });
+    assert.equal(existsSync(stateDir), false);
+  } finally {
+    if (previousStateDir === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
+    else process.env.OXYGEN_VIEWER_STATE_DIR = previousStateDir;
+  }
 });
 
 async function refreshFakeGate(db) {
@@ -840,6 +1008,7 @@ test("missing, unknown, or pending Privacy blocks release while confirmed keep a
   };
   const keepSnapshot = await captureStoryReleasePrivacySnapshot(keepFixture.db, RUN_ID);
   assert.notEqual(keepSnapshot.digest, pendingSnapshot.digest);
+  await rebindFakeSourcePrivacyReceipt(keepFixture);
   await rebindFixtureCoveragePrivacy(keepFixture);
   await refreshFakeGate(keepFixture.db);
   const kept = await reconstructReviewedStoryReleaseFromDatabase(keepFixture.db, request());
@@ -861,6 +1030,7 @@ test("missing, unknown, or pending Privacy blocks release while confirmed keep a
     review_state: "confirmed_redact",
     status: "active",
   }];
+  await rebindFakeSourcePrivacyReceipt(redactFixture);
   await rebindFixtureCoveragePrivacy(redactFixture);
   await refreshFakeGate(redactFixture.db);
   const redacted = await reconstructReviewedStoryReleaseFromDatabase(redactFixture.db, request());
@@ -929,7 +1099,7 @@ test("unknown reserved Story-family values cannot bypass live bootstrap or relea
     sequence: 2,
     organization_reason: unknownReason,
   });
-  fixture.db.redactionJob.source_digest = await computeSourceDigest(fixture.db.items);
+  await rebindFakeSourcePrivacyReceipt(fixture);
 
   assert.deepEqual(await readActiveStoryReviewContract(fixture.db, RUN_ID), {
     ready: true,
@@ -986,6 +1156,7 @@ test("a contributor review decision during Story assembly fails the snapshot rac
     created_at: "2026-08-25T00:00:03.000Z",
     updated_at: "2026-08-25T00:00:03.000Z",
   };
+  await rebindFakeSourcePrivacyReceipt(fixture);
   await rebindFixtureCoveragePrivacy(fixture);
   await refreshFakeGate(fixture.db);
   const result = await reconstructReviewedStoryReleaseFromDatabase(

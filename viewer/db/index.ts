@@ -110,6 +110,12 @@ const statements = [
     source_digest TEXT,
     started_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS source_privacy_receipts (
+    job_id TEXT PRIMARY KEY, workflow_run_id TEXT NOT NULL UNIQUE,
+    source_revision INTEGER NOT NULL CHECK(source_revision > 0),
+    source_digest TEXT NOT NULL, receipt_digest TEXT NOT NULL,
+    receipt_json TEXT NOT NULL, created_at TEXT NOT NULL
+  )`,
   // Preference probes: one question per friction moment. `answer` stays NULL
   // until the contributor answers -- an unanswered probe must never be read as
   // a confirmed preference.

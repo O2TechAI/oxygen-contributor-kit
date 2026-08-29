@@ -188,7 +188,7 @@ def build_preparation(run: Path, maximum_shard_bytes: int) -> dict[str, Any]:
             "inputDigest": value["inputDigest"],
             "contributionIds": [record["id"] for record in value["contributions"]],
             "inputPath": f"inputs/{value['shardId']}.json",
-            "receiptPath": f"receipts/{value['shardId']}.json",
+            "receiptPath": f"records/{value['shardId']}/receipt.json",
         } for value in inputs],
     }
     return {"context": context, "manifest": manifest, "inputs": inputs}
@@ -205,8 +205,7 @@ def install_preparation(destination: Path, prepared: dict[str, Any]) -> None:
     try:
         (temporary / "inputs").mkdir(parents=True)
         (temporary / "handoffs").mkdir()
-        (temporary / "receipts").mkdir()
-        (temporary / "outputs").mkdir()
+        (temporary / "records").mkdir()
         (temporary / "semantic-context.json").write_text(
             json.dumps(prepared["context"], ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

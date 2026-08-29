@@ -47,6 +47,33 @@ const saved = (serverVersion) => ({
   persistedAt: `2035-01-01T00:00:0${serverVersion}.000Z`,
 });
 
+test("revision zero initialization fails before queue, scheduler, status, or save mutation", () => {
+  const { StoryReviewSessionPersistenceQueue } = persistenceContract();
+  const scheduler = new ManualScheduler();
+  let saves = 0;
+  const statuses = [];
+  const queue = new StoryReviewSessionPersistenceQueue({
+    save: async () => { saves += 1; return saved(1); },
+    scheduler,
+    onStatus: (state) => statuses.push(state),
+  });
+  const before = queue.getState();
+  assert.throws(() => queue.initialize({
+    workflowRunId: "review-run", serverVersion: 0, sourceRevision: 0, session: null,
+  }), /STORY_SESSION_STATE_INVALID/);
+  assert.deepEqual(queue.getState(), before);
+  assert.equal(scheduler.tasks.size, 0);
+  assert.equal(statuses.length, 0);
+  assert.equal(saves, 0);
+
+  queue.initialize({
+    workflowRunId: "review-run", serverVersion: 0, sourceRevision: 1, session: null,
+  });
+  assert.equal(queue.getState().status, "durable");
+  assert.equal(queue.getState().serverVersion, 0);
+  assert.equal(queue.getState().sourceRevision, 1);
+});
+
 test("debounce coalesces local changes into one latest POST", async () => {
   const { StoryReviewSessionPersistenceQueue } = persistenceContract();
   const scheduler = new ManualScheduler();

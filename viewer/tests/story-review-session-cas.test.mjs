@@ -21,6 +21,11 @@ import {
   validateSemanticManifestAuthority,
 } from "../lib/story-readiness.ts";
 import { readCoveragePrivacyAuthority } from "../lib/story-coverage-privacy-authority.ts";
+import {
+  buildCurrentSourcePrivacyDialogue,
+  canonicalSourcePrivacyJson,
+  sourcePrivacyDigest as digestSourcePrivacyValue,
+} from "../lib/source-privacy-receipt.ts";
 
 const serverModule = await import("../lib/story-review-session-server.ts")
   .catch((importError) => ({ importError }));
@@ -132,6 +137,28 @@ const sourcePrivacyDigest = await computeSourceDigest([{
   timestamp: authorityItem.timestamp,
   content: authorityItem.content,
 }]);
+const sourcePrivacyDialogue = await buildCurrentSourcePrivacyDialogue([{
+  ...authorityItem,
+  document_kind: "trajectory",
+}]);
+const sourcePrivacyCore = {
+  status: "complete",
+  workflowRunId: "review-run",
+  sourceRevision: 1,
+  finalizedCorpus: {
+    revision: 1,
+    digest: "c".repeat(64),
+    documentCount: 1,
+    itemCount: 1,
+  },
+  sourceDigest: sourcePrivacyDigest,
+  dialogue: sourcePrivacyDialogue,
+  redactions: { count: 0, digest: await digestSourcePrivacyValue([]) },
+};
+const sourcePrivacyReceipt = {
+  ...sourcePrivacyCore,
+  receiptDigest: await digestSourcePrivacyValue(sourcePrivacyCore),
+};
 const sourcePrivacyJob = {
   id: "privacy-review-run",
   status: "complete",
@@ -140,10 +167,21 @@ const sourcePrivacyJob = {
   completed: 0,
   total: 0,
   rejected: 0,
+  source_revision: 1,
   source_digest: sourcePrivacyDigest,
+  receipt_digest: sourcePrivacyReceipt.receiptDigest,
   started_at: AUTHORITY_NOW,
   updated_at: AUTHORITY_NOW,
   completed_at: AUTHORITY_NOW,
+};
+const sourcePrivacyReceiptRow = {
+  job_id: sourcePrivacyJob.id,
+  workflow_run_id: "review-run",
+  source_revision: 1,
+  source_digest: sourcePrivacyDigest,
+  receipt_digest: sourcePrivacyReceipt.receiptDigest,
+  receipt_json: canonicalSourcePrivacyJson(sourcePrivacyReceipt),
+  created_at: AUTHORITY_NOW,
 };
 let privacyAuthorityDigest = "0".repeat(64);
 
@@ -173,7 +211,8 @@ class SqliteReviewDb {
     this.sqlite = new DatabaseSync(":memory:");
     this.sqlite.exec(`
       CREATE TABLE documents (
-        id TEXT PRIMARY KEY
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL DEFAULT 'trajectory'
       );
       CREATE TABLE workflow_runs (
         id TEXT PRIMARY KEY,
@@ -241,6 +280,12 @@ class SqliteReviewDb {
         rejected INTEGER NOT NULL, source_digest TEXT,
         started_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
       );
+      CREATE TABLE source_privacy_receipts (
+        job_id TEXT PRIMARY KEY, workflow_run_id TEXT NOT NULL UNIQUE,
+        source_revision INTEGER NOT NULL, source_digest TEXT NOT NULL,
+        receipt_digest TEXT NOT NULL, receipt_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
       CREATE TABLE story_review_sessions (
         workflow_run_id TEXT PRIMARY KEY,
         state_json TEXT NOT NULL,
@@ -294,7 +339,14 @@ class SqliteReviewDb {
       semanticUnitCore.id, "review-run", "represented", storySource.key,
     );
     this.sqlite.prepare(`INSERT INTO redaction_jobs
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(...Object.values(sourcePrivacyJob));
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+        sourcePrivacyJob.id, sourcePrivacyJob.status, sourcePrivacyJob.stage,
+        sourcePrivacyJob.model, sourcePrivacyJob.completed, sourcePrivacyJob.total,
+        sourcePrivacyJob.rejected, sourcePrivacyJob.source_digest,
+        sourcePrivacyJob.started_at, sourcePrivacyJob.updated_at, sourcePrivacyJob.completed_at,
+      );
+    this.sqlite.prepare(`INSERT INTO source_privacy_receipts
+      VALUES (?,?,?,?,?,?,?)`).run(...Object.values(sourcePrivacyReceiptRow));
   }
 
   prepare(sql) {
@@ -388,17 +440,20 @@ class FakeReviewDb {
           item_id: authorityRecord.id,
           source_digest: authorityRecord.sourceDigest,
         }] };
+        if (/FROM source_privacy_receipts/.test(sql)) return { results: [sourcePrivacyReceiptRow] };
         if (/FROM redaction_jobs/.test(sql)) return { results: [sourcePrivacyJob] };
         if (/FROM redactions/.test(sql)) return { results: [] };
-        if (/content_length FROM items/.test(sql)) return { results: this.items.map((item) => ({
+        if (/AS content_length/.test(sql)) return { results: this.items.map((item) => ({
           id: item.id,
           document_id: item.document_id,
+          document_kind: "trajectory",
           sequence: item.sequence,
           event_type: item.event_type,
           actor_type: item.actor_type,
           timestamp: item.timestamp,
-          ...(/length\(content\)/.test(sql) ? { content: item.content } : {}),
-          content_length: /length\(content\)/.test(sql) ? item.content.length : 0,
+          ...(/length\(i\.content\)/.test(sql) ? { content: item.content } : {}),
+          ...(/length\(i\.content\)/.test(sql) ? { original_json: item.original_json } : {}),
+          content_length: /length\(i\.content\)/.test(sql) ? item.content.length : 0,
         })) };
         if (/FROM story_coverage_rows/.test(sql)) return { results: [{
           unit_id: semanticUnitCore.id,
@@ -571,6 +626,37 @@ test("initial metadata is version 0 and first exact create advances 0 to 1", asy
   });
 });
 
+test("revision zero is neither stored nor active authority and cannot create a session", async () => {
+  const {
+    parseStoredStoryReviewSession,
+    persistStoryReviewSessionCas,
+    readActiveStoryReviewSource,
+    STORY_SESSION_ERROR,
+  } = serverContract();
+  assert.deepEqual(parseStoredStoryReviewSession({
+    sourceRevision: 0,
+    session: session("zero-stored"),
+  }), { session: null, sourceRevision: null });
+
+  const db = new FakeReviewDb();
+  db.runs.get("review-run").sourceRevision = 0;
+  assert.deepEqual(await readActiveStoryReviewSource(db, "review-run"), {
+    ready: false,
+    sourceRevision: null,
+  });
+  const before = structuredClone([...db.sessions.entries()]);
+  assert.deepEqual(await persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run",
+    expectedVersion: 0,
+    sourceRevision: 0,
+    session: session("zero-request"),
+  }, "2035-01-01T00:00:00.000Z"), {
+    ok: false,
+    code: STORY_SESSION_ERROR.sourceConflict,
+  });
+  assert.deepEqual([...db.sessions.entries()], before);
+});
+
 test("sequential semantic update advances 1 to 2 and server time owns persisted state", async () => {
   const { persistStoryReviewSessionCas, readStoryReviewSessionRecord } = serverContract();
   const db = new FakeReviewDb();
@@ -689,6 +775,44 @@ test("stale, future, and invalid versions fail without mutation", async () => {
     }, "2035-01-01T00:00:03.000Z");
     assert.equal(result.code, STORY_SESSION_ERROR.versionInvalid);
   }
+  assert.deepEqual(db.sessions.get("review-run"), before);
+});
+
+test("a persisted zero source envelope fails before session mutation", async () => {
+  const { persistStoryReviewSessionCas, STORY_SESSION_ERROR } = serverContract();
+  const db = new FakeReviewDb();
+  db.sessions.set("review-run", {
+    stateJson: JSON.stringify({ sourceRevision: 0, session: session("invalid-source") }),
+    updatedAt: "2035-01-01T00:00:00.000Z",
+    serverVersion: 1,
+  });
+  const before = structuredClone(db.sessions.get("review-run"));
+  const rejected = await persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run",
+    expectedVersion: 1,
+    sourceRevision: 1,
+    session: session("replacement"),
+  }, "2035-01-01T00:00:01.000Z");
+  assert.equal(rejected.code, STORY_SESSION_ERROR.stateInvalid);
+  assert.deepEqual(db.sessions.get("review-run"), before);
+});
+
+test("the maximum safe server version cannot publish an unsafe successor", async () => {
+  const { persistStoryReviewSessionCas, STORY_SESSION_ERROR } = serverContract();
+  const db = new FakeReviewDb();
+  db.sessions.set("review-run", {
+    stateJson: JSON.stringify({ sourceRevision: 1, session: session("max-version") }),
+    updatedAt: "2035-01-01T00:00:00.000Z",
+    serverVersion: Number.MAX_SAFE_INTEGER,
+  });
+  const before = structuredClone(db.sessions.get("review-run"));
+  const rejected = await persistStoryReviewSessionCas(db, {
+    workflowRunId: "review-run",
+    expectedVersion: Number.MAX_SAFE_INTEGER,
+    sourceRevision: 1,
+    session: session("unsafe-successor"),
+  }, "2035-01-01T00:00:01.000Z");
+  assert.equal(rejected.code, STORY_SESSION_ERROR.versionInvalid);
   assert.deepEqual(db.sessions.get("review-run"), before);
 });
 

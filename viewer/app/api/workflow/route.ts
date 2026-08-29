@@ -29,12 +29,14 @@ import {
   STORY_SOURCE_WRITE_STATUS,
   abortStorySourceMutation,
   beginStoryActivationMutation,
+  isStorySourceWriteInProgress,
   publishActivatedStorySourceMutation,
 } from "../../../lib/story-source-publication";
 import {
   coveragePrivacyAuthorityGuardStatement,
   readCoveragePrivacyAuthority,
 } from "../../../lib/story-coverage-privacy-authority";
+import { validActivatedSourceRevision } from "../../../lib/authority-validation.mjs";
 
 const EVENTS = new Set([
   "target_confirmed",
@@ -79,7 +81,9 @@ async function readPreferenceBatchAuthority(
     db.prepare(`SELECT id,kind,count,question,evidence_sample_json,presentations_json
         FROM probe_bulk_decisions ORDER BY id`).all<Record<string, unknown>>(),
   ]);
-  if (!run || run.workflow_run_id !== workflowRunId
+  if (!validActivatedSourceRevision(sourceRevision)
+    || !run || run.workflow_run_id !== workflowRunId
+    || !validActivatedSourceRevision(Number(run.source_revision))
     || Number(run.source_revision) !== sourceRevision
     || run.status !== "complete" || run.stage !== "preference"
     || typeof run.input_digest !== "string" || typeof run.output_digest !== "string") return null;
@@ -166,7 +170,11 @@ export async function POST(request: Request) {
   }
   if (event === "story_ready_for_human_review"
     && (record.coverageManifest === undefined || record.storyCandidates === undefined
-      || record.preparationManifest === undefined)) {
+      || !record.preparationManifest || typeof record.preparationManifest !== "object"
+      || Array.isArray(record.preparationManifest)
+      || !validActivatedSourceRevision(
+        (record.preparationManifest as Record<string, unknown>).sourceRevision,
+      ))) {
     return Response.json({
       error: "Story candidates, coverage, and preparation are required at activation",
     }, { status: 400 });
@@ -220,19 +228,39 @@ export async function POST(request: Request) {
       if (!semanticManifest) {
         return Response.json({ error: "Current semantic manifest is required" }, { status: 409 });
       }
-      const started = await db.prepare(`UPDATE workflow_runs
+      if (isStorySourceWriteInProgress(run.story_generation_status)) {
+        return Response.json({ error: "Reviewed Story boundary changed" }, { status: 409 });
+      }
+      const privacyAuthority = await readCoveragePrivacyAuthority(
+        db,
+        workflowRunId,
+        semanticManifest,
+      );
+      if (!privacyAuthority.ok) {
+        return Response.json({
+          error: "Current source Privacy authority is required",
+          code: privacyAuthority.code,
+        }, { status: 409 });
+      }
+      const startedBatch = await db.batch([
+        coveragePrivacyAuthorityGuardStatement(
+          db,
+          privacyAuthority.authority,
+          run.story_generation_status,
+        ),
+        db.prepare(`UPDATE workflow_runs
         SET story_generation_status='running',story_generation_completed=0,
             story_generation_total=0,active_story_digest=NULL,updated_at=?
-        WHERE id=?
-          AND story_generation_status NOT IN (?,?)
-          AND EXISTS (SELECT 1 FROM organization_jobs WHERE status='complete')
-          AND EXISTS (SELECT 1 FROM redaction_jobs WHERE status='complete')`)
+        WHERE id=? AND story_generation_status=? AND story_source_revision=?
+          AND EXISTS (SELECT 1 FROM organization_jobs WHERE status='complete')`)
         .bind(
           now,
           workflowRunId,
-          STORY_SOURCE_WRITE_STATUS.idle,
-          STORY_SOURCE_WRITE_STATUS.resumeGeneration,
-        ).run();
+          run.story_generation_status,
+          run.story_source_revision,
+        ),
+      ]);
+      const started = startedBatch[1];
       if (Number(started.meta.changes || 0) !== 1) {
         return Response.json({ error: "Reviewed Story boundary changed" }, { status: 409 });
       }
@@ -260,10 +288,38 @@ export async function POST(request: Request) {
     if (run.story_generation_status !== "running") {
       return Response.json({ error: "Story generation is not running" }, { status: 409 });
     }
+    const leasedRevision = Number(run.story_source_revision);
+    const preparationSourceRevision = Number(
+      (record.preparationManifest as Record<string, unknown>).sourceRevision,
+    );
+    if (!validActivatedSourceRevision(leasedRevision)
+      || preparationSourceRevision !== leasedRevision) {
+      return Response.json({ error: "Story source authority is invalid" }, { status: 409 });
+    }
+    const [preflightSemanticManifest, preflightPreferenceAuthority] = await Promise.all([
+      readSemanticManifestAuthority(db, workflowRunId),
+      readPreferenceBatchAuthority(db, workflowRunId, leasedRevision),
+    ]);
+    if (!preflightSemanticManifest) {
+      return Response.json({ error: "Current semantic manifest is required" }, { status: 409 });
+    }
+    if (!preflightPreferenceAuthority) {
+      return Response.json({ error: "Current Preference preparation is required" }, { status: 409 });
+    }
+    const preflightPrivacyAuthority = await readCoveragePrivacyAuthority(
+      db,
+      workflowRunId,
+      preflightSemanticManifest,
+    );
+    if (!preflightPrivacyAuthority.ok) {
+      return Response.json({
+        error: "Current source Privacy authority is required",
+        code: preflightPrivacyAuthority.code,
+      }, { status: 409 });
+    }
     if (!await beginStoryActivationMutation(db, workflowRunId, now)) {
       return Response.json({ error: "Another Story source mutation is already running" }, { status: 409 });
     }
-    const leasedRevision = Number(run.story_source_revision);
     try {
       const [
         { results: itemRows },

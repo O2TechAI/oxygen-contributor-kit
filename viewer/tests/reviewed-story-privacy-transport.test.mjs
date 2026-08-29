@@ -39,6 +39,7 @@ const {
   buildReviewedStoryPrivacyPreparationSnapshot,
   decideStoryPrivacyCandidate,
   importReviewedStoryPrivacyAuthority,
+  parseImportBundle,
   readStoryPrivacyAuthority,
 } = await import("../lib/story-privacy-authority.ts");
 const { reconstructReviewedStoryPrivacyRevision } = await import("../lib/story-privacy-revision.ts");
@@ -171,9 +172,12 @@ async function insertInitial(db) {
     (id,story_generation_status,story_source_revision,active_story_digest,created_at,updated_at)
     VALUES (?,'ready_for_human_review',?,?,?,?)`)
     .bind(RUN_ID, SOURCE_REVISION, activeDigest, NOW, NOW).run();
+  await db.prepare(`INSERT INTO documents
+    (id,kind,title,source_system,item_count,imported_at,updated_at)
+    VALUES ('doc','trajectory','Synthetic source','test',1,?,?)`).bind(NOW, NOW).run();
   await db.prepare(`INSERT INTO items
     (id,document_id,sequence,content,original_json,organization_reason,event_type,actor_id,actor_type)
-    VALUES (?,'doc',0,'PRIVATE_SOURCE_SENTINEL exact quotation','{}',?,'message','person','human')`)
+    VALUES (?,'doc',1,'PRIVATE_SOURCE_SENTINEL exact quotation','{}',?,'message','person','human')`)
     .bind(evidence.eventId, summary).run();
   const seeded = await seedCoveragePrivacyAuthority(db, {
     workflowRunId: RUN_ID,
@@ -201,6 +205,7 @@ async function insertInitial(db) {
   await db.prepare(`UPDATE story_privacy_candidates
     SET decision='redact',decision_version=1,decided_at=? WHERE candidate_id=?`)
     .bind(NOW, changed.id).run();
+  return seeded;
 }
 
 function bundle(snapshot, candidates, completedAt = "2044-01-02T00:00:00.000Z") {
@@ -221,6 +226,63 @@ function bundle(snapshot, candidates, completedAt = "2044-01-02T00:00:00.000Z") 
   })();
 }
 
+test("Story Privacy import rejects source revision zero before database initialization", async () => {
+  const binding = {
+    workflowRunId: "zero-import-run",
+    sourceRevision: 1,
+    activeStoryDigest: "a".repeat(64),
+    serverVersion: 0,
+    reviewedStoryDigest: "b".repeat(64),
+    targetCatalogDigest: "c".repeat(64),
+    changedTargetDigest: "d".repeat(64),
+    changedTargetCount: 0,
+    previousCandidateDigest: "e".repeat(64),
+  };
+  const terminalReceipt = {
+    schema: "oxygen.reviewed-story-privacy-terminal-receipt",
+    status: "complete",
+    workflowRunId: binding.workflowRunId,
+    sourceRevision: binding.sourceRevision,
+    activeStoryDigest: binding.activeStoryDigest,
+    serverVersion: binding.serverVersion,
+    reviewedStoryDigest: binding.reviewedStoryDigest,
+    targetCatalogDigest: binding.targetCatalogDigest,
+    changedTargetDigest: binding.changedTargetDigest,
+    changedTargetCount: binding.changedTargetCount,
+    outputDigest: "f".repeat(64),
+    outputCount: 0,
+    completedAt: NOW,
+  };
+  const bundle = {
+    schema: "oxygen.reviewed-story-privacy-import",
+    binding,
+    terminalReceipt,
+    receiptDigest: "1".repeat(64),
+    candidates: [],
+    importDigest: "2".repeat(64),
+  };
+  assert.ok(parseImportBundle(bundle), "server-version zero remains valid with activated source one");
+
+  const revisionZero = structuredClone(bundle);
+  revisionZero.binding.sourceRevision = 0;
+  revisionZero.terminalReceipt.sourceRevision = 0;
+  assert.equal(parseImportBundle(revisionZero), null);
+  const stateDir = join(tmpdir(), `oxygen-story-privacy-zero-${process.pid}-${Date.now()}`);
+  assert.equal(existsSync(stateDir), false);
+  const previous = process.env.OXYGEN_VIEWER_STATE_DIR;
+  process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
+  try {
+    const response = await importRoute.POST(new Request("http://localhost/api/story-privacy/import", {
+      method: "POST", body: JSON.stringify(revisionZero),
+    }));
+    assert.equal(response.status, 400);
+    assert.equal(existsSync(stateDir), false);
+  } finally {
+    if (previous === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
+    else process.env.OXYGEN_VIEWER_STATE_DIR = previous;
+  }
+});
+
 test("reviewed Story changes use one atomic current Privacy authority", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "reviewed-story-privacy-"));
   const previous = process.env.OXYGEN_VIEWER_STATE_DIR;
@@ -228,7 +290,7 @@ test("reviewed Story changes use one atomic current Privacy authority", async ()
   try {
     const { getLocalDatabase } = await import("../db/index.ts");
     const db = await getLocalDatabase();
-    await insertInitial(db);
+    const { sourcePrivacyReceipt } = await insertInitial(db);
     const initial = await readStoryPrivacyAuthority(db, RUN_ID);
     assert.equal(initial.ok, true);
     assert.equal(initial.authority.candidates.find((item) => item.id === unchanged.id).decision, "keep");
@@ -489,6 +551,7 @@ test("reviewed Story changes use one atomic current Privacy authority", async ()
           replaceAll: true,
           job: { status: "complete", stage: "done", total: 0, rejected: 0 },
           redactions: [],
+          receipt: sourcePrivacyReceipt,
         }),
       },
     ));
@@ -518,15 +581,15 @@ test("reviewed Story changes use one atomic current Privacy authority", async ()
   }
 });
 
-async function createScriptFixture(directory) {
+async function createScriptFixture(directory, { sourceRevision = 3, serverVersion = 2 } = {}) {
   if (!existsSync(directory)) await mkdir(directory);
   const target = {
     id: "chapter::story:block", storyKey: "chapter", target: "story:block",
     content: "Reviewed private candidate input", contentDigest: await storyPreparationDigest("Reviewed private candidate input"),
   };
   const binding = {
-    workflowRunId: "script-run", sourceRevision: 3, activeStoryDigest: "a".repeat(64),
-    serverVersion: 2, reviewedStoryDigest: "b".repeat(64), targetCatalogDigest: "c".repeat(64),
+    workflowRunId: "script-run", sourceRevision, activeStoryDigest: "a".repeat(64),
+    serverVersion, reviewedStoryDigest: "b".repeat(64), targetCatalogDigest: "c".repeat(64),
     changedTargetDigest: await storyPreparationDigest([{
       id: target.id, previousContentDigest: "e".repeat(64), contentDigest: target.contentDigest,
     }]), changedTargetCount: 1,
@@ -565,7 +628,7 @@ async function createScriptFixture(directory) {
     outputDigest: await storyPreparationDigest(candidates), outputCount: candidates.length,
     completedAt: "2044-02-01T00:00:00.000Z",
   }));
-  return { root, outputPath };
+  return { root, outputPath, snapshotPath, prepare };
 }
 
 async function createBalancedScriptFixture(directory, count = 130) {
@@ -658,6 +721,36 @@ test("local preparation/finalization is exact, terminal, and topology-contained"
   const bundleValue = JSON.parse(await readFile(bundlePath, "utf8"));
   assert.equal(bundleValue.schema, "oxygen.reviewed-story-privacy-import");
   assert.equal(bundleValue.terminalReceipt.outputCount, 1);
+
+  const zeroSourceSnapshot = JSON.parse(await readFile(valid.snapshotPath, "utf8"));
+  zeroSourceSnapshot.binding.sourceRevision = 0;
+  zeroSourceSnapshot.binding.serverVersion = 0;
+  const zeroSourceSnapshotPath = join(directory, "zero-source-snapshot.json");
+  const zeroSourceRoot = join(directory, "zero-source-prepared");
+  await writeFile(zeroSourceSnapshotPath, JSON.stringify(zeroSourceSnapshot));
+  await assert.rejects(execFile(process.execPath, [valid.prepare, zeroSourceSnapshotPath, zeroSourceRoot]));
+  assert.equal(existsSync(zeroSourceRoot), false);
+
+  const validManifestPath = join(valid.root, "manifest.json");
+  const validManifestText = await readFile(validManifestPath, "utf8");
+  const zeroSourceManifest = JSON.parse(validManifestText);
+  zeroSourceManifest.binding.sourceRevision = 0;
+  await writeFile(validManifestPath, JSON.stringify(zeroSourceManifest));
+  const zeroSourceBundle = join(directory, "zero-source-bundle.json");
+  await assert.rejects(execFile(process.execPath, [finalize, valid.root, zeroSourceBundle]));
+  assert.equal(existsSync(zeroSourceBundle), false);
+  assert.equal((await readdir(directory)).some((name) => name.startsWith(".zero-source-bundle.")), false);
+  await writeFile(validManifestPath, validManifestText);
+
+  const serverZero = await createScriptFixture(join(directory, "server-zero"), {
+    sourceRevision: 1,
+    serverVersion: 0,
+  });
+  const serverZeroBundle = join(directory, "server-zero-bundle.json");
+  await execFile(process.execPath, [finalize, serverZero.root, serverZeroBundle]);
+  assert.deepEqual(JSON.parse(await readFile(serverZeroBundle, "utf8")).binding, {
+    ...JSON.parse(await readFile(serverZero.snapshotPath, "utf8")).binding,
+  });
 
   const balanced = await createBalancedScriptFixture(join(directory, "balanced"));
   assert.ok(balanced.manifest.shards.length > 1);

@@ -98,9 +98,15 @@ function redactionReviewReleaseError(redactions) {
     : null;
 }
 
-export function redactionReleaseError(job, currentSourceDigest, redactions = []) {
+export function redactionReleaseError(
+  job,
+  currentSourceDigest,
+  redactions = [],
+  currentSourceRevision,
+) {
   if (!job) return "AI redaction must complete before the contribution ZIP can be built";
-  if (Number(job.rejected || 0) > 0) {
+  const rejected = Number(job.rejected);
+  if (!Number.isSafeInteger(rejected) || rejected !== 0) {
     return "AI redaction contains rejected spans; resolve or rerun it before export";
   }
   if (job.status !== "complete") {
@@ -108,12 +114,20 @@ export function redactionReleaseError(job, currentSourceDigest, redactions = [])
   }
   const completed = Number(job.completed);
   const total = Number(job.total);
-  if (!Number.isInteger(completed) || !Number.isInteger(total)
-      || completed < 0 || total < 0 || completed !== total) {
+  if (!Number.isSafeInteger(completed) || !Number.isSafeInteger(total)
+      || completed < 0 || total < 0 || completed !== total
+      || completed !== redactions.length) {
     return "AI redaction is incomplete; completed and total counts do not match";
   }
   if (!job.source_digest) {
     return "AI redaction source identity is missing; rerun redaction before export";
+  }
+  if (!Number.isSafeInteger(job.source_revision) || job.source_revision <= 0
+      || !/^[0-9a-f]{64}$/u.test(String(job.receipt_digest || ""))
+      || (currentSourceRevision !== undefined
+        && (!Number.isSafeInteger(currentSourceRevision) || currentSourceRevision <= 0
+          || job.source_revision > currentSourceRevision))) {
+    return "AI redaction source receipt is missing or stale; rerun redaction before export";
   }
   if (job.source_digest !== currentSourceDigest) {
     return "AI redaction source changed after review; rerun redaction before export";

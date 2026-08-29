@@ -344,7 +344,10 @@ def _validated_meeting_records(meeting_id: str, records: list[dict]) -> list[tup
         raise SystemExit(INPUT_MEETING_INVALID) from None
     prepared = []
     for record, contribution_id in zip(records, contribution_ids):
-        record_id = _record_id(record.get("record_id"))
+        prefix = f"{meeting_id}:"
+        if not contribution_id.startswith(prefix):
+            raise SystemExit(INPUT_MEETING_INVALID)
+        record_id = _record_id(contribution_id[len(prefix):])
         if contribution_id != f"{meeting_id}:{record_id}" or len(contribution_id) > 300:
             raise SystemExit(INPUT_MEETING_INVALID)
         text = record.get("text")

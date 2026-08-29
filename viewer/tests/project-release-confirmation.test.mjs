@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getLocalDatabase } from "../db/index.ts";
 import {
   applyChapterReview,
@@ -115,7 +118,8 @@ async function clear(db) {
     "project_release_confirmations", "story_privacy_authorities", "story_privacy_candidates", "story_preparation_receipts",
     "probe_runs", "probe_bulk_decisions", "probes", "story_review_sessions",
     "story_coverage_rows", "story_coverage_manifests", "semantic_unit_members", "semantic_units",
-    "semantic_manifests", "finalized_corpus_manifests", "redactions", "redaction_jobs",
+    "semantic_manifests", "finalized_corpus_manifests", "redactions",
+    "source_privacy_receipts", "redaction_jobs",
     "workflow_runs", "items", "documents",
   ]) await db.prepare(`DELETE FROM ${table}`).run();
 }
@@ -135,7 +139,7 @@ function observeDatabase(db) {
   db.prepare = function observedPrepare(sql) {
     counts.queries += 1;
     if (/FROM project_release_confirmations/.test(sql)) counts.confirmationQueries += 1;
-    if (/SELECT id,document_id,sequence,event_type,actor_id,actor_type,timestamp,[\s\S]*organization_reason FROM items/.test(sql)) {
+    if (/SELECT i\.id,i\.document_id,d\.kind AS document_kind,i\.sequence,i\.event_type,\s*i\.actor_id,i\.actor_type,[\s\S]*i\.organization_reason[\s\S]*FROM items i LEFT JOIN documents d/.test(sql)) {
       counts.storySnapshotQueries += 1;
     }
     if (/SELECT id,kind,title,source_system,source_timestamp,item_count,[\s\S]*FROM documents/.test(sql)) {
@@ -289,6 +293,25 @@ async function setup() {
     workflowRunId: RUN, serverVersion: VERSION, sourceRevision: REVISION,
   } };
 }
+
+test("release confirmation rejects source revision zero before database initialization", async () => {
+  const stateDir = join(tmpdir(), `oxygen-release-confirmation-zero-${process.pid}-${Date.now()}`);
+  assert.equal(existsSync(stateDir), false);
+  const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
+  process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
+  try {
+    const route = await import("../app/api/release-confirmation/route.ts");
+    const response = await route.POST(new Request("http://localhost/api/release-confirmation", {
+      method: "POST",
+      body: JSON.stringify({ workflowRunId: RUN, serverVersion: 0, sourceRevision: 0 }),
+    }));
+    assert.equal(response.status, 400);
+    assert.equal(existsSync(stateDir), false);
+  } finally {
+    if (previousStateDir === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
+    else process.env.OXYGEN_VIEWER_STATE_DIR = previousStateDir;
+  }
+});
 
 test("active Story with no confirmation row performs no release reconstruction or write transaction", async () => {
   const { db } = await setup();
@@ -778,7 +801,8 @@ test("provider-free 24,796-item release-confirmation benchmark", { timeout: 120_
   });
   for (const table of [
     "story_coverage_rows", "story_coverage_manifests", "semantic_unit_members", "semantic_units",
-    "semantic_manifests", "finalized_corpus_manifests", "redaction_jobs",
+    "semantic_manifests", "finalized_corpus_manifests", "source_privacy_receipts",
+    "redaction_jobs",
   ]) await db.prepare(`DELETE FROM ${table}`).run();
   await seedCoveragePrivacyAuthority(db, {
     workflowRunId: RUN,

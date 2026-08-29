@@ -19,6 +19,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     JOIN probe_runs probe_run ON probe_run.workflow_run_id=workflow.id
     WHERE workflow.id=? AND workflow.story_generation_status='ready_for_human_review'
       AND probe_run.status='complete' AND probe_run.stage='preference'
+      AND workflow.story_source_revision>0 AND probe_run.source_revision>0
       AND probe_run.source_revision=workflow.story_source_revision)`;
   const currentAuthority = await db.prepare(`SELECT 1 AS current
     WHERE ${currentAuthoritySql}`).bind(authority.workflowRunId).first();

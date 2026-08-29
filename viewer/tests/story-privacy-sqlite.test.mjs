@@ -120,10 +120,14 @@ test("fresh SQLite defaults, immutable CAS, replacement reset, and mutation-boun
       VALUES (?,'ready_for_human_review',?,?,?,?)`)
       .bind(RUN_ID, SOURCE_REVISION, ACTIVE_DIGEST,
         "2042-01-01T00:00:00.000Z", "2042-01-01T00:00:00.000Z").run();
+    await db.prepare(`INSERT INTO documents
+      (id,kind,title,item_count,imported_at,updated_at)
+      VALUES ('doc','trajectory','Synthetic source',1,?,?)`)
+      .bind("2042-01-01T00:00:00.000Z", "2042-01-01T00:00:00.000Z").run();
     await db.prepare(`INSERT INTO items
       (id,document_id,sequence,content,original_json,organization_reason,
        event_type,actor_id,actor_type)
-      VALUES ('event-a','doc',0,'source','{}',?,'message','contributor-a','human')`)
+      VALUES ('event-a','doc',1,'source','{}',?,'message','contributor-a','human')`)
       .bind(STORY_SUMMARY).run();
     const seeded = await seedCoveragePrivacyAuthority(db, {
       workflowRunId: RUN_ID,

@@ -1,10 +1,12 @@
 import hashlib
+import http.server
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 
@@ -186,7 +188,41 @@ class UnicodeWorkflowTest(unittest.TestCase):
                 },
             }), encoding="utf-8")
             dialogue = Path(temporary, "dialogue output")
-            extract = run_python("tools/llm_redact/extract_dialogue.py", run, "--out", dialogue)
+            source_authority = {
+                "workflowRunId": "unicode-run",
+                "sourceRevision": 1,
+                "finalizedCorpus": {
+                    "revision": 1, "digest": "a" * 64,
+                    "documentCount": 1, "itemCount": len(events),
+                },
+                "sourceDigest": "b" * 64,
+            }
+
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    payload = json.dumps({"sourceAuthority": source_authority}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+
+                def log_message(self, *_args):
+                    pass
+
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                extract = run_python(
+                    "tools/llm_redact/extract_dialogue.py", run, "--out", dialogue,
+                    "--base-url", f"http://127.0.0.1:{server.server_address[1]}",
+                    "--workflow-run-id", "unicode-run",
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
             self.assertEqual(extract.returncode, 0, extract.stderr)
             coverage = run_python("tools/llm_redact/audit_coverage.py", run)
             self.assertEqual(coverage.returncode, 0, coverage.stderr)
@@ -194,7 +230,9 @@ class UnicodeWorkflowTest(unittest.TestCase):
             self.assertIsNotNone(match, coverage.stdout)
             expected = sum(len(text) for text in texts)
             index = json.loads((dialogue / "index.json").read_text(encoding="utf-8"))
-            self.assertEqual(index[0]["chars"], expected)
+            reviewed = json.loads((dialogue / "traj-unicode.json").read_text(encoding="utf-8"))
+            self.assertEqual(index["dialogue"]["turnCount"], len(texts))
+            self.assertEqual(reviewed["chars"], expected)
             self.assertEqual(int(match.group(1)), expected)
 
     def test_malformed_utf8_transcript_fails_instead_of_mojibake(self):

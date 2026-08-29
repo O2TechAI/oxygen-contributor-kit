@@ -561,6 +561,18 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       bulkDecisions: [],
       autoRemoved: { total: 0, reversible: true, categories: [] },
     };
+    let revisionZeroBatchCalls = 0;
+    db.batch = async (statements) => {
+      revisionZeroBatchCalls += 1;
+      return realBatch(statements);
+    };
+    assert.equal((await route.POST(new Request("http://localhost/api/probes", {
+      method: "POST", body: JSON.stringify({ ...zero, sourceRevision: 0 }),
+    }))).status, 400);
+    assert.equal(revisionZeroBatchCalls, 0);
+    assert.deepEqual(await sqliteSnapshot(db), answered);
+    db.batch = realBatch;
+
     assert.equal((await route.POST(new Request("http://localhost/api/probes", {
       method: "POST", body: JSON.stringify(zero),
     }))).status, 200);
@@ -649,6 +661,23 @@ test("Preference GET and PATCH expose and mutate only current ready authority", 
     }), { params: Promise.resolve({ id: "current-probe" }) });
     const beforeStalePatch = await db.prepare(`SELECT answer_choice,answer_text,answered_at
       FROM probes WHERE id='current-probe'`).first();
+
+    await db.prepare(`UPDATE workflow_runs SET story_source_revision=0 WHERE id=?`)
+      .bind(RUN_ID).run();
+    await db.prepare(`UPDATE probe_runs SET source_revision=0 WHERE workflow_run_id=?`)
+      .bind(RUN_ID).run();
+    assert.deepEqual(await (await collectionRoute.GET()).json(), {
+      probes: [], bulkDecisions: [], run: null,
+    });
+    assert.equal((await itemRoute.PATCH(new Request("http://localhost/api/probes/current-probe", {
+      method: "PATCH", body: JSON.stringify({ clear: true }),
+    }), { params: Promise.resolve({ id: "current-probe" }) })).status, 409);
+    assert.deepEqual(await db.prepare(`SELECT answer_choice,answer_text,answered_at
+      FROM probes WHERE id='current-probe'`).first(), beforeStalePatch);
+    await db.prepare(`UPDATE workflow_runs SET story_source_revision=? WHERE id=?`)
+      .bind(SOURCE_REVISION, RUN_ID).run();
+    await db.prepare(`UPDATE probe_runs SET source_revision=? WHERE workflow_run_id=?`)
+      .bind(SOURCE_REVISION, RUN_ID).run();
 
     await db.prepare(`UPDATE workflow_runs SET story_source_revision=? WHERE id=?`)
       .bind(SOURCE_REVISION + 1, RUN_ID).run();

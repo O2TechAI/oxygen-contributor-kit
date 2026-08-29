@@ -10,6 +10,7 @@ import { computeSourceDigest, redactionReleaseError } from "../../../lib/redacti
 import {
   capturePackageReleasePrivacySnapshot,
   captureStoryReleasePrivacySnapshot,
+  validateReleaseSourcePrivacyReceipt,
   type ReleaseSnapshotTestOptions,
 } from "../../../lib/release-privacy-snapshot.ts";
 import {
@@ -77,6 +78,7 @@ export async function buildPackageFromDatabase(
     redactionJob,
     redactionJob?.source_digest,
     privacySnapshot.redactionReviewRows,
+    parsedReleaseRequest.sourceRevision,
   );
   if (preliminaryError) {
     return Response.json({ error: preliminaryError }, { status: 409 });
@@ -89,10 +91,17 @@ export async function buildPackageFromDatabase(
   const bulkResult = { results: privacySnapshot.bulkRows };
   const probeRun = privacySnapshot.probeRun;
   const currentSourceDigest = await computeSourceDigest(itemResult.results);
-  const sourceError = redactionReleaseError(
+  const sourceReceiptValid = await validateReleaseSourcePrivacyReceipt(
+    privacySnapshot,
+    parsedReleaseRequest.workflowRunId,
+    parsedReleaseRequest.sourceRevision,
+    currentSourceDigest,
+  );
+  const sourceError = !sourceReceiptValid ? "Source Privacy receipt is stale" : redactionReleaseError(
     redactionJob,
     currentSourceDigest,
     privacySnapshot.redactionReviewRows,
+    parsedReleaseRequest.sourceRevision,
   );
   if (sourceError) {
     return Response.json({ error: sourceError }, { status: 409 });

@@ -484,7 +484,7 @@ async function captureStoredSnapshot(
 ): Promise<CurrentAuthority | AuthorityFailure> {
   if (row.workflow_run_id !== workflowRunId || !Number.isSafeInteger(Number(row.source_revision))
     || Number(row.source_revision) <= 0 || !Number.isSafeInteger(Number(row.server_version))
-    || Number(row.server_version) < 1 || !Number.isSafeInteger(Number(row.changed_target_count))
+    || Number(row.server_version) < 0 || !Number.isSafeInteger(Number(row.changed_target_count))
     || Number(row.changed_target_count) <= 0 || !Number.isSafeInteger(Number(row.candidate_count))
     || Number(row.candidate_count) < 0 || !exactTimestamp(row.imported_at)
     || ![row.active_story_digest, row.reviewed_story_digest, row.target_catalog_digest,
@@ -682,7 +682,7 @@ type ReviewedStoryPrivacyImport = {
   importDigest: string;
 };
 
-function parseImportBundle(value: unknown): ReviewedStoryPrivacyImport | null {
+export function parseImportBundle(value: unknown): ReviewedStoryPrivacyImport | null {
   if (!isRecord(value) || !onlyKeys(value, [
     "schema", "binding", "terminalReceipt", "receiptDigest", "candidates", "importDigest",
   ]) || value.schema !== "oxygen.reviewed-story-privacy-import"

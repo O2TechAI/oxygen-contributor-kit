@@ -37,6 +37,7 @@ import {
   selectViewerChapters,
   type ViewerChapter as StoryViewerChapter,
 } from "../lib/story-readiness";
+import { validActivatedSourceRevision } from "../lib/authority-validation.mjs";
 import {
   phaseGroupIdentity,
   groupDownloadReviewBlockers,
@@ -675,7 +676,7 @@ export function InlineWorkspace({
           storySessionSchema?: unknown;
         };
         if (!Number.isSafeInteger(payload.serverVersion) || Number(payload.serverVersion) < 0
-          || !Number.isSafeInteger(payload.sourceRevision) || Number(payload.sourceRevision) < 0
+          || !validActivatedSourceRevision(payload.sourceRevision)
           || (payload.persistedAt !== null && typeof payload.persistedAt !== "string")) {
           throw new Error("Story review persistence metadata is invalid");
         }

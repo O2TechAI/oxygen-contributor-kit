@@ -4,6 +4,14 @@ import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import {
+  buildSourcePrivacyReceipt,
+  seedFinalizedCorpusManifest,
+} from "./fixtures/source-privacy-receipt.mjs";
+import {
+  canonicalSourcePrivacyJson,
+  sourcePrivacyDigest,
+} from "../lib/source-privacy-receipt.ts";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -39,7 +47,7 @@ function span(overrides = {}) {
   };
 }
 
-function payload(redactions, overrides = {}) {
+function payload(redactions, receipt, overrides = {}) {
   const { job = {}, ...rest } = overrides;
   return {
     replaceAll: true,
@@ -52,8 +60,15 @@ function payload(redactions, overrides = {}) {
       ...job,
     },
     redactions,
+    receipt,
     ...rest,
   };
+}
+
+async function resignReceipt(receipt) {
+  const core = { ...receipt };
+  delete core.receiptDigest;
+  return { ...core, receiptDigest: await sourcePrivacyDigest(core) };
 }
 
 function post(route, body) {
@@ -73,11 +88,12 @@ function decide(route, id, body) {
 }
 
 async function privacySnapshot(db) {
-  const [jobs, redactions] = await Promise.all([
+  const [jobs, redactions, receipts] = await Promise.all([
     db.prepare("SELECT * FROM redaction_jobs ORDER BY id").all(),
     db.prepare("SELECT * FROM redactions ORDER BY id").all(),
+    db.prepare("SELECT * FROM source_privacy_receipts ORDER BY job_id").all(),
   ]);
-  return { jobs: jobs.results, redactions: redactions.results };
+  return { jobs: jobs.results, redactions: redactions.results, receipts: receipts.results };
 }
 
 async function storyAuthoritySnapshot(db) {
@@ -194,17 +210,20 @@ async function seedConcurrentPrivacyState(db, establishWorkflowRun, computeSourc
       (workflow_run_id,review_gate_digest,confirmed_at)
       VALUES (?,?,?)`).bind(workflowRunId, "9".repeat(64), oldTime),
   ]);
+  await seedFinalizedCorpusManifest(db, { workflowRunId, at: oldTime });
   return { workflowRunId, sourceRevision, sourceDigest, activeStoryDigest };
 }
 
 async function completeAuthoritySnapshot(db) {
   return db.transaction(async () => {
-    const [documents, items, jobs, redactions, workflow, storyPrivacy, releaseConfirmation, manifest] =
+    const [documents, items, jobs, redactions, receipts, workflow, storyPrivacy,
+      releaseConfirmation, manifest] =
       await Promise.all([
         db.prepare("SELECT * FROM documents ORDER BY id").all(),
         db.prepare("SELECT * FROM items ORDER BY id").all(),
         db.prepare("SELECT * FROM redaction_jobs ORDER BY id").all(),
         db.prepare("SELECT * FROM redactions ORDER BY id").all(),
+        db.prepare("SELECT * FROM source_privacy_receipts ORDER BY job_id").all(),
         db.prepare("SELECT * FROM workflow_runs ORDER BY id").all(),
         db.prepare("SELECT * FROM story_privacy_authorities ORDER BY workflow_run_id").all(),
         db.prepare("SELECT * FROM project_release_confirmations ORDER BY workflow_run_id").all(),
@@ -215,6 +234,7 @@ async function completeAuthoritySnapshot(db) {
       items: items.results,
       jobs: jobs.results,
       redactions: redactions.results,
+      receipts: receipts.results,
       workflow: workflow.results,
       storyPrivacy: storyPrivacy.results,
       releaseConfirmation: releaseConfirmation.results,
@@ -260,11 +280,11 @@ test("redaction replacement validates completely and commits once with real SQLi
     const [
       { getLocalDatabase },
       { establishWorkflowRun },
-      { computeSourceDigest },
+      { computeSourceDigest, redactionReleaseError },
       route,
       decisionRoute,
       { buildPackageFromDatabase },
-      { capturePackageReleasePrivacySnapshot },
+      { capturePackageReleasePrivacySnapshot, validateReleaseSourcePrivacyReceipt },
     ] =
       await Promise.all([
         import("../db/index.ts"),
@@ -334,7 +354,17 @@ test("redaction replacement validates completely and commits once with real SQLi
           active_story_digest=? WHERE id='workflow-redaction-atomicity'`)
       .bind(sourceRevision, activeStoryDigest).run();
     await activateStory();
+    await seedFinalizedCorpusManifest(db, {
+      workflowRunId: "workflow-redaction-atomicity",
+      at: oldTime,
+    });
     await seedReleaseConfirmation(db);
+    const receiptFor = (redactions, revision = sourceRevision) => buildSourcePrivacyReceipt(db, {
+      workflowRunId: "workflow-redaction-atomicity",
+      sourceRevision: revision,
+      redactions,
+    });
+    const baseReceipt = await receiptFor([span()]);
 
     const oldSnapshot = await privacySnapshot(db);
     const oldStoryAuthority = await storyAuthoritySnapshot(db);
@@ -350,41 +380,42 @@ test("redaction replacement validates completely and commits once with real SQLi
       ["unknown-only", payload([span({
         itemId: "https://private.invalid/RAW_PRIVACY_URL",
         reason: "RAW_PRIVACY_REASON",
-      })])],
+      })], baseReceipt)],
       ["mixed valid and invalid", payload([
         span({ id: "valid-span" }),
         span({ id: "invalid-span", category: "invented-category" }),
-      ])],
-      ["wrong document", payload([span({ documentId: "document-beta" })])],
-      ["stored-content length", payload([span({ endOffset: 99 })])],
+      ], baseReceipt)],
+      ["wrong document", payload([span({ documentId: "document-beta" })], baseReceipt)],
+      ["stored-content length", payload([span({ endOffset: 99 })], baseReceipt)],
       ["overlap", payload([
         span({ id: "overlap-a", startOffset: 0, endOffset: 7 }),
         span({ id: "overlap-b", startOffset: 6, endOffset: 12 }),
-      ])],
+      ], baseReceipt)],
       ["duplicate identity", payload([
         span({ id: "duplicate", startOffset: 0, endOffset: 5 }),
         span({
           id: "duplicate", itemId: "item-beta", documentId: "document-beta",
           startOffset: 0, endOffset: 4,
         }),
-      ])],
-      ["reported rejection", payload([span()], { job: { rejected: 1 } })],
-      ["wrong total", payload([span()], { job: { total: 2 } })],
-      ["missing review state", payload([span({ reviewState: undefined })])],
-      ["unsupported review state", payload([span({ reviewState: "confirmed_keep" })])],
+      ], baseReceipt)],
+      ["reported rejection", payload([span()], baseReceipt, { job: { rejected: 1 } })],
+      ["wrong total", payload([span()], baseReceipt, { job: { total: 2 } })],
+      ["missing review state", payload([span({ reviewState: undefined })], baseReceipt)],
+      ["unsupported review state", payload([span({ reviewState: "confirmed_keep" })], baseReceipt)],
+      ["unsupported confidence", payload([span({ confidence: "bogus" })], baseReceipt)],
       ["deterministic uncertainty", payload([
         span({ uncertaintyReason: LOCAL_UNCERTAINTY_SENTINEL }),
-      ])],
+      ], baseReceipt)],
       ["pending without uncertainty", payload([
         span({ reviewState: "needs_confirmation", uncertaintyReason: null }),
-      ])],
+      ], baseReceipt)],
       ["pending blank uncertainty", payload([
         span({ reviewState: "needs_confirmation", uncertaintyReason: "   " }),
-      ])],
-      ["additive bulk import", payload([span()], { replaceAll: false })],
-      ["missing replacement authority", payload([span()], { replaceAll: undefined })],
-      ["null member", payload([null])],
-      ["non-object member", payload(["not-a-redaction"])],
+      ], baseReceipt)],
+      ["additive bulk import", payload([span()], baseReceipt, { replaceAll: false })],
+      ["missing replacement authority", payload([span()], baseReceipt, { replaceAll: undefined })],
+      ["null member", payload([null], baseReceipt)],
+      ["non-object member", payload(["not-a-redaction"], baseReceipt)],
     ];
 
     for (const [name, invalidPayload] of invalidCases) {
@@ -400,6 +431,55 @@ test("redaction replacement validates completely and commits once with real SQLi
       assert.deepEqual(await releaseConfirmationSnapshot(db), oldReleaseConfirmation, name);
       assert.equal(routeBatchCalls, 0, `${name} must not start a write batch`);
     }
+
+    const zeroRevisionReceipt = await resignReceipt({
+      ...await receiptFor([]), sourceRevision: 0,
+    });
+    const zeroRevisionResponse = await post(route, payload([], zeroRevisionReceipt));
+    assert.equal(zeroRevisionResponse.status, 400);
+    assert.equal((await zeroRevisionResponse.json()).code, "SOURCE_PRIVACY_REQUEST_INVALID");
+    assert.deepEqual(await privacySnapshot(db), oldSnapshot);
+    assert.equal(routeBatchCalls, 0, "revision zero must fail before a write batch");
+
+    const tamperedRedactionReceipt = await resignReceipt({
+      ...baseReceipt,
+      redactions: { ...baseReceipt.redactions, digest: "0".repeat(64) },
+    });
+    const tamperedReceiptResponse = await post(
+      route,
+      payload([span()], tamperedRedactionReceipt),
+    );
+    assert.equal(tamperedReceiptResponse.status, 400);
+    assert.equal((await tamperedReceiptResponse.json()).code,
+      "SOURCE_PRIVACY_REPLACEMENT_INVALID");
+    assert.deepEqual(await privacySnapshot(db), oldSnapshot);
+    assert.equal(routeBatchCalls, 0, "tampered receipt must fail before a write batch");
+
+    const missingBundleDialogue = {
+      ...baseReceipt.dialogue,
+      bundleCount: 1,
+      turnCount: baseReceipt.dialogue.bundles[0].turns.length,
+      bundles: [baseReceipt.dialogue.bundles[0]],
+    };
+    missingBundleDialogue.digest = await sourcePrivacyDigest(missingBundleDialogue.bundles);
+    const missingBundleReceipt = await resignReceipt({
+      ...baseReceipt,
+      dialogue: missingBundleDialogue,
+    });
+    const missingBundleResponse = await post(route, payload([span()], missingBundleReceipt));
+    assert.equal(missingBundleResponse.status, 409);
+    assert.equal((await missingBundleResponse.json()).code, "SOURCE_PRIVACY_MUTATION_CONFLICT");
+    assert.deepEqual(await privacySnapshot(db), oldSnapshot);
+    assert.equal(routeBatchCalls, 0, "incomplete reviewed set must not start a write batch");
+
+    await db.prepare("UPDATE items SET content='alpha public omega' WHERE id='item-alpha'").run();
+    const equalLengthSourceSnapshot = await privacySnapshot(db);
+    const equalLengthResponse = await post(route, payload([span()], baseReceipt));
+    assert.equal(equalLengthResponse.status, 409);
+    assert.equal((await equalLengthResponse.json()).code, "SOURCE_PRIVACY_MUTATION_CONFLICT");
+    assert.deepEqual(await privacySnapshot(db), equalLengthSourceSnapshot);
+    assert.equal(routeBatchCalls, 0, "equal-length source mutation must not start a write batch");
+    await db.prepare("UPDATE items SET content='alpha secret omega' WHERE id='item-alpha'").run();
 
     const malformed = await route.POST(new Request("http://localhost/api/redactions", {
       method: "POST", headers: { "content-type": "application/json" },
@@ -419,7 +499,11 @@ test("redaction replacement validates completely and commits once with real SQLi
         WHEN NEW.id='force-sql-failure'
         BEGIN SELECT RAISE(ABORT, 'forced redaction failure'); END`),
     ]);
-    const failedSql = await post(route, payload([span({ id: "force-sql-failure" })]));
+    const failedSqlRedactions = [span({ id: "force-sql-failure" })];
+    const failedSql = await post(route, payload(
+      failedSqlRedactions,
+      await receiptFor(failedSqlRedactions),
+    ));
     assert.equal(failedSql.status, 409);
     const failedSqlBody = await failedSql.json();
     assert.deepEqual(failedSqlBody, {
@@ -447,12 +531,13 @@ test("redaction replacement validates completely and commits once with real SQLi
         uncertaintyReason: LOCAL_UNCERTAINTY_SENTINEL,
       }),
     ];
+    const validReceipt = await receiptFor(validRedactions);
     await originalBatch([
       db.prepare(`CREATE TRIGGER fail_release_confirmation_invalidation
         BEFORE DELETE ON project_release_confirmations
         BEGIN SELECT RAISE(ABORT, 'RAW_SQLITE_PATH_D:/private/oxygen.sqlite'); END`),
     ]);
-    const failedInvalidation = await post(route, payload(validRedactions));
+    const failedInvalidation = await post(route, payload(validRedactions, validReceipt));
     assert.equal(failedInvalidation.status, 409);
     const failedInvalidationBody = await failedInvalidation.json();
     assert.equal(failedInvalidationBody.code, "SOURCE_PRIVACY_MUTATION_CONFLICT");
@@ -463,7 +548,7 @@ test("redaction replacement validates completely and commits once with real SQLi
     assert.deepEqual(await storyAuthoritySnapshot(db), oldStoryAuthority);
     assert.deepEqual(await releaseConfirmationSnapshot(db), oldReleaseConfirmation);
     await originalBatch([db.prepare("DROP TRIGGER fail_release_confirmation_invalidation")]);
-    const response = await post(route, payload(validRedactions));
+    const response = await post(route, payload(validRedactions, validReceipt));
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       imported: 3,
@@ -595,6 +680,36 @@ test("redaction replacement validates completely and commits once with real SQLi
     assert.deepEqual(await releaseConfirmationSnapshot(db), beforeRejectedReleaseConfirmation);
     await originalBatch([db.prepare("DROP TRIGGER fail_release_confirmation_decision_invalidation")]);
 
+    await db.prepare("UPDATE redaction_jobs SET completed=2,total=2").run();
+    const countPairPrivacyBefore = await privacySnapshot(db);
+    const countPairAuthorityBefore = await storyAuthoritySnapshot(db);
+    const countPairConfirmationBefore = await releaseConfirmationSnapshot(db);
+    const countPairSnapshot = await capturePackageReleasePrivacySnapshot(db);
+    assert.equal(await validateReleaseSourcePrivacyReceipt(
+      countPairSnapshot,
+      "workflow-redaction-atomicity",
+      sourceRevision,
+      sourceDigest,
+    ), false, "release receipt rejects a self-consistent but false job count pair");
+    assert.match(redactionReleaseError(
+      countPairSnapshot.redactionJob,
+      sourceDigest,
+      countPairSnapshot.redactionReviewRows,
+      sourceRevision,
+    ), /counts do not match/);
+    const countPairPackage = await buildPackageFromDatabase(db, undefined, undefined, {
+      exportedAt: oldTime,
+    });
+    assert.equal(countPairPackage.status, 400,
+      "package release fails closed when job counts do not equal persisted redactions");
+    const countPairDecision = await decide(decisionRoute, "replacement-keep", { decision: "keep" });
+    assert.equal(countPairDecision.status, 409);
+    assert.equal((await countPairDecision.json()).code, "SOURCE_PRIVACY_MUTATION_CONFLICT");
+    assert.deepEqual(await privacySnapshot(db), countPairPrivacyBefore);
+    assert.deepEqual(await storyAuthoritySnapshot(db), countPairAuthorityBefore);
+    assert.deepEqual(await releaseConfirmationSnapshot(db), countPairConfirmationBefore);
+    await db.prepare("UPDATE redaction_jobs SET completed=3,total=3").run();
+
     const beforeKeepDigest = (await capturePackageReleasePrivacySnapshot(db)).digest;
     const keepResponse = await decide(decisionRoute, "replacement-keep", { decision: "keep" });
     assert.equal(keepResponse.status, 200);
@@ -653,7 +768,8 @@ test("redaction replacement validates completely and commits once with real SQLi
 
     await activateStory();
     await seedReleaseConfirmation(db);
-    const zeroResponse = await post(route, payload([]));
+    const zeroReceipt = await receiptFor([]);
+    const zeroResponse = await post(route, payload([], zeroReceipt));
     assert.equal(zeroResponse.status, 200);
     assert.deepEqual(await zeroResponse.json(), { imported: 0, rejected: [], status: "complete" });
     const completedZero = await privacySnapshot(db);
@@ -665,6 +781,14 @@ test("redaction replacement validates completely and commits once with real SQLi
       rejected: completedZero.jobs[0].rejected,
     }, { status: "complete", completed: 0, total: 0, rejected: 0 });
     assert.deepEqual(completedZero.redactions, []);
+    assert.equal(completedZero.receipts.length, 1);
+    assert.equal(completedZero.receipts[0].job_id, completedZero.jobs[0].id);
+    assert.equal(completedZero.receipts[0].workflow_run_id, "workflow-redaction-atomicity");
+    assert.equal(completedZero.receipts[0].source_revision, sourceRevision);
+    assert.equal(completedZero.receipts[0].source_digest, zeroReceipt.sourceDigest);
+    assert.equal(completedZero.receipts[0].receipt_digest, zeroReceipt.receiptDigest);
+    assert.equal(completedZero.receipts[0].receipt_json,
+      canonicalSourcePrivacyJson(zeroReceipt));
     assert.deepEqual(await storyAuthoritySnapshot(db), {
       story_generation_status: "blocked",
       story_source_revision: sourceRevision,
@@ -686,41 +810,22 @@ test("source-first publication makes a stale bulk Privacy replacement lose witho
     db, establishWorkflowRun, computeSourceDigest, redactionRoute, documentsRoute,
   }) => {
     await seedConcurrentPrivacyState(db, establishWorkflowRun, computeSourceDigest);
-    const sourceRead = deferred();
-    const releasePrivacy = deferred();
-    const realPrepare = db.prepare.bind(db);
-    let interceptSourceRead = true;
-    db.prepare = (sql) => {
-      const statement = realPrepare(sql);
-      if (interceptSourceRead && /FROM workflow_runs r LEFT JOIN items i ON 1=1/u.test(sql)) {
-        interceptSourceRead = false;
-        const realAll = statement.all.bind(statement);
-        statement.all = async (...args) => {
-          const result = await realAll(...args);
-          sourceRead.resolve();
-          await releasePrivacy.promise;
-          return result;
-        };
-      }
-      return statement;
-    };
-    const stalePrivacy = post(redactionRoute, payload([span({
+    const staleRedactions = [span({
       id: "race-candidate", itemId: "item-old", documentId: "document-old",
       startOffset: 4, endOffset: 11, reviewState: "needs_confirmation",
       uncertaintyReason: LOCAL_UNCERTAINTY_SENTINEL,
-    })]));
-    await Promise.race([
-      sourceRead.promise,
-      stalePrivacy.then(() => assert.fail("Privacy replacement completed before source-read barrier")),
-    ]);
+    })];
+    const staleReceipt = await buildSourcePrivacyReceipt(db, {
+      workflowRunId: "workflow-redaction-atomicity",
+      sourceRevision: 7,
+      redactions: staleRedactions,
+    });
     const sourceResponse = await postDocuments(documentsRoute, [
       corpusEntry("document-new", "item-new", "new public source"),
     ]);
     assert.equal(sourceResponse.status, 200);
     const afterSource = await completeAuthoritySnapshot(db);
-    releasePrivacy.resolve();
-    const response = await stalePrivacy;
-    db.prepare = realPrepare;
+    const response = await post(redactionRoute, payload(staleRedactions, staleReceipt));
     assert.equal(response.status, 409);
     const failure = await response.json();
     assert.deepEqual(failure, {
@@ -747,46 +852,27 @@ test("Privacy-first replacement linearizes before source publication and unrelat
     db, establishWorkflowRun, computeSourceDigest, redactionRoute, documentsRoute,
   }) => {
     const seeded = await seedConcurrentPrivacyState(db, establishWorkflowRun, computeSourceDigest);
-    const sourceRead = deferred();
-    const releasePrivacy = deferred();
-    const realPrepare = db.prepare.bind(db);
-    let interceptSourceRead = true;
-    db.prepare = (sql) => {
-      const statement = realPrepare(sql);
-      if (interceptSourceRead && /FROM workflow_runs r LEFT JOIN items i ON 1=1/u.test(sql)) {
-        interceptSourceRead = false;
-        const realAll = statement.all.bind(statement);
-        statement.all = async (...args) => {
-          const result = await realAll(...args);
-          sourceRead.resolve();
-          await releasePrivacy.promise;
-          return result;
-        };
-      }
-      return statement;
-    };
-    const currentPrivacy = post(redactionRoute, payload([span({
+    const currentRedactions = [span({
       id: "privacy-first", itemId: "item-old", documentId: "document-old",
       startOffset: 4, endOffset: 11,
-    })]));
-    await Promise.race([
-      sourceRead.promise,
-      currentPrivacy.then(() => assert.fail("Privacy replacement completed before barrier")),
-    ]);
-    await realPrepare(`INSERT INTO organization_jobs
+    })];
+    const currentReceipt = await buildSourcePrivacyReceipt(db, {
+      workflowRunId: "workflow-redaction-atomicity",
+      sourceRevision: seeded.sourceRevision,
+      redactions: currentRedactions,
+    });
+    const privacyResponse = await post(redactionRoute, payload(currentRedactions, currentReceipt));
+    assert.equal(privacyResponse.status, 200);
+    assert.equal((await privacyResponse.json()).imported, 1);
+    await db.prepare(`INSERT INTO organization_jobs
       (id,status,stage,started_at,updated_at) VALUES (?,?,?,?,?)`)
       .bind("unrelated-write", "complete", "done", oldTime, oldTime).run();
-    await realPrepare(`INSERT INTO probe_runs
+    await db.prepare(`INSERT INTO probe_runs
       (workflow_run_id,id,source_revision,input_digest,output_digest,output_count,status,stage,
        generated,set_aside,auto_removed_json,started_at,updated_at,completed_at)
       VALUES (?,?,?,?,?,0,'complete','preference',0,0,'{}',?,?,?)`)
       .bind("unrelated-probe-run", "unrelated-probe-run", 1,
         "b".repeat(64), "c".repeat(64), oldTime, oldTime, oldTime).run();
-    releasePrivacy.resolve();
-    const privacyResponse = await currentPrivacy;
-    db.prepare = realPrepare;
-    assert.equal(privacyResponse.status, 200);
-    assert.equal((await privacyResponse.json()).imported, 1);
     assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM organization_jobs").first()).count, 1);
     assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM probe_runs WHERE workflow_run_id=?")
       .bind("unrelated-probe-run").first()).count, 1);
@@ -838,11 +924,20 @@ test("PATCH loses stale-source and same-id replacement races with exact CAS", as
         ]);
         assert.equal(sourceResponse.status, 200);
       } else {
-        const replacement = await post(redactionRoute, payload([span({
+        const replacementRedactions = [span({
           id: "race-candidate", itemId: "item-old", documentId: "document-old",
           startOffset: 0, endOffset: 3, category: "credential",
           reviewState: "needs_confirmation", uncertaintyReason: "replacement uncertainty",
-        })]));
+        })];
+        const replacementReceipt = await buildSourcePrivacyReceipt(db, {
+          workflowRunId: "workflow-redaction-atomicity",
+          sourceRevision: 7,
+          redactions: replacementRedactions,
+        });
+        const replacement = await post(
+          redactionRoute,
+          payload(replacementRedactions, replacementReceipt),
+        );
         assert.equal(replacement.status, 200);
       }
       db.transaction = realTransaction;
@@ -893,11 +988,24 @@ test("24,796-item explicit replacement stays bounded while passive polling avoid
         json_extract(value,'$.timestamp'),json_extract(value,'$.content'),
         json_extract(value,'$.originalJson') FROM json_each(?)`)
       .bind(JSON.stringify(items)).run();
-    const started = performance.now();
-    const response = await post(redactionRoute, payload([span({
+    await db.prepare(`UPDATE workflow_runs SET story_source_revision=1,
+      story_generation_status='ready_for_human_review' WHERE id=?`)
+      .bind("workflow-redaction-atomicity").run();
+    await seedFinalizedCorpusManifest(db, {
+      workflowRunId: "workflow-redaction-atomicity",
+      at: oldTime,
+    });
+    const scaleRedactions = [span({
       id: "scale-redaction", itemId: "scale-item-00000", documentId: "document-scale",
       startOffset: 0, endOffset: 6,
-    })]));
+    })];
+    const scaleReceipt = await buildSourcePrivacyReceipt(db, {
+      workflowRunId: "workflow-redaction-atomicity",
+      sourceRevision: 1,
+      redactions: scaleRedactions,
+    });
+    const started = performance.now();
+    const response = await post(redactionRoute, payload(scaleRedactions, scaleReceipt));
     const elapsedMs = performance.now() - started;
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { imported: 1, rejected: [], status: "complete" });

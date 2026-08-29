@@ -1424,6 +1424,34 @@ class LauncherUnitTest(unittest.TestCase):
                         preparation_manifest=preparation_manifest)
             request.assert_not_called()
 
+    def test_story_ready_rejects_zero_source_revisions_before_http(self):
+        unsafe = (1 << 53)
+        for preference_revision, preparation_revision, message in (
+            (0, 0, "Preference bundle authority is invalid"),
+            (7, 0, "Story preparation authority is invalid"),
+            (unsafe, unsafe, "Preference bundle authority is invalid"),
+            (7, unsafe, "Story preparation authority is invalid"),
+        ):
+            with self.subTest(
+                preference_revision=preference_revision,
+                preparation_revision=preparation_revision,
+            ):
+                preference_bundle, preparation_manifest = ready_authority(probes=[])
+                preference_bundle["sourceRevision"] = preference_revision
+                preparation_manifest["sourceRevision"] = preparation_revision
+                with mock.patch.object(MODULE, "request_json") as request:
+                    with self.assertRaisesRegex(SystemExit, message):
+                        MODULE.update_story_workflow(
+                            "http://127.0.0.1:3298",
+                            "run-1",
+                            "ready",
+                            coverage_manifest={},
+                            story_candidates=[{"id": "doc:item-1"}],
+                            preference_bundle=preference_bundle,
+                            preparation_manifest=preparation_manifest,
+                        )
+                request.assert_not_called()
+
     def test_cli_accepts_documented_story_started_command(self):
         with (
             mock.patch.object(sys, "argv", [

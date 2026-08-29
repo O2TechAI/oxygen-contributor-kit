@@ -146,6 +146,8 @@ test("source-equivalent Story reattach preserves Privacy while source changes do
 
 test("only internally consistent completed redaction passes are releasable", () => {
   const digest = "a".repeat(64);
+  const receiptAuthority = { source_revision: 1, receipt_digest: "b".repeat(64) };
+  const resolved = { review_state: "deterministic", status: "active" };
   assert.equal(finalRedactionStatus({
     requestedStatus: "complete", completed: 0, total: 999,
     rejected: 0, sourceDigest: digest,
@@ -177,15 +179,15 @@ test("only internally consistent completed redaction passes are releasable", () 
   }, digest), /rejected spans/);
   assert.equal(redactionReleaseError({
     status: "complete", completed: 3, total: 3, rejected: 0,
-    source_digest: digest,
-  }, digest), null);
+    source_digest: digest, ...receiptAuthority,
+  }, digest, [resolved, resolved, resolved]), null);
   assert.equal(redactionReleaseError({
     status: "complete", completed: 0, total: 0, rejected: 0,
-    source_digest: digest,
+    source_digest: digest, ...receiptAuthority,
   }, digest), null);
   const completeJob = {
     status: "complete", completed: 1, total: 1, rejected: 0,
-    source_digest: digest,
+    source_digest: digest, ...receiptAuthority,
   };
   const legacyStateError = "AI redaction review state is missing or invalid; rerun Privacy before release";
   for (const confidence of ["low", "medium", "high"]) {
@@ -202,11 +204,11 @@ test("only internally consistent completed redaction passes are releasable", () 
   assert.equal(redactionReleaseError(completeJob, digest, [{
     review_state: "deterministic", status: "active", confidence: "low",
   }]), null);
-  assert.equal(redactionReleaseError(completeJob, digest, [{
+  assert.match(redactionReleaseError(completeJob, digest, [{
     review_state: "confirmed_redact", status: "active",
   }, {
     review_state: "confirmed_keep", status: "removed",
-  }]), null);
+  }]), /counts do not match/);
   assert.match(redactionReleaseError(completeJob, digest, [{
     review_state: "needs_confirmation", status: "removed",
   }]), /inconsistent/);
@@ -244,8 +246,8 @@ test("same ids and Unicode length cannot substitute different reviewed content",
   assert.notEqual(digestA, digestB);
   assert.match(redactionReleaseError({
     status: "complete", completed: 1, total: 1, rejected: 0,
-    source_digest: digestA,
-  }, digestB), /source changed/);
+    source_digest: digestA, source_revision: 1, receipt_digest: "b".repeat(64),
+  }, digestB, [{ review_state: "deterministic", status: "active" }]), /source changed/);
 });
 
 test("confirmed fragments are removed from derived ZIP text too", () => {

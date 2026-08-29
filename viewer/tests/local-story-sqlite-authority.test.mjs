@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 import { registerHooks } from "node:module";
 import test from "node:test";
 import { seedCoveragePrivacyAuthority } from "./story-coverage-privacy-fixture.mjs";
+import {
+  buildSourcePrivacyReceipt,
+  installSourcePrivacyReceipt,
+} from "./fixtures/source-privacy-receipt.mjs";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -162,7 +166,7 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
 
     await db.prepare(`INSERT INTO documents
       (id,kind,title,item_count,imported_at,updated_at) VALUES (?,?,?,?,?,?)`).bind(
-      DOCUMENT_ID, "synthetic", "Synthetic reviewed Story", 1,
+      DOCUMENT_ID, "trajectory", "Synthetic reviewed Story", 1,
       "2037-12-31T00:00:00.000Z", "2037-12-31T00:00:00.000Z",
     ).run();
     await db.prepare(`INSERT INTO items
@@ -171,7 +175,7 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
       STORY_ITEM_ID,
       DOCUMENT_ID,
       1,
-      "decision",
+      "message",
       "reviewer",
       "human",
       "2038-01-01T00:00:00.000Z",
@@ -428,12 +432,14 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       },
       { deriveStoryReleaseTargetCatalog, storyPreparationDigest },
       { computeSourceDigest },
+      { loadWorkflowProgress },
     ] = await Promise.all([
       import("../db/index.ts"),
       import("../app/api/workflow/route.ts"),
       import("../lib/story-readiness.ts"),
       import("../lib/story-preparation.ts"),
       import("../lib/redaction-pass.mjs"),
+      import("../lib/workflow-progress-server.ts"),
     ]);
     const db = await getLocalDatabase();
     const timestamp = "2041-01-01T00:00:00.000Z";
@@ -453,12 +459,12 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     await db.prepare(`INSERT INTO items
       (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,
        original_json,organization_category,organization_reason)
-      VALUES (?,?,1,'decision','reviewer','human',?,'Synthetic route event.','{}','project',NULL)`)
+      VALUES (?,?,1,'message','reviewer','human',?,'Synthetic route event.','{}','project',NULL)`)
       .bind(STORY_ITEM_ID, DOCUMENT_ID, timestamp).run();
     await db.prepare(`INSERT INTO items
       (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,
        original_json,organization_category,organization_reason)
-      VALUES (?,?,2,'note','reviewer','human',?,'Private synthetic event.','{}','project',NULL)`)
+      VALUES (?,?,2,'message','reviewer','human',?,'Private synthetic event.','{}','project',NULL)`)
       .bind(PRIVATE_ITEM_ID, DOCUMENT_ID, timestamp).run();
     await db.prepare(`INSERT INTO finalized_corpus_manifests
       (workflow_run_id,corpus_revision,corpus_digest,document_count,item_count,finalized_at)
@@ -474,8 +480,30 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
        review_state,uncertainty_reason,status,created_by,created_at,updated_at)
       VALUES ('source-private',?,?,0,7,'sensitive','high','Local private sentinel',
-        'deterministic',NULL,'active','local-test',?,?)`)
+        'deterministic',NULL,'active','llm',?,?)`)
       .bind(PRIVATE_ITEM_ID, DOCUMENT_ID, timestamp, timestamp).run();
+    const sourcePrivacyReceipt = await buildSourcePrivacyReceipt(db, {
+      workflowRunId: RUN_ID,
+      sourceRevision: INITIAL_SOURCE_REVISION,
+      redactions: [{
+        itemId: PRIVATE_ITEM_ID,
+        documentId: DOCUMENT_ID,
+        startOffset: 0,
+        endOffset: 7,
+        category: "sensitive",
+        confidence: "high",
+        reason: "Local private sentinel",
+        reviewState: "deterministic",
+        uncertaintyReason: null,
+        createdBy: "llm",
+      }],
+    });
+    await installSourcePrivacyReceipt(db, {
+      jobId: "redaction",
+      workflowRunId: RUN_ID,
+      receipt: sourcePrivacyReceipt,
+      at: timestamp,
+    });
 
     const hash = (value) => sha256(canonicalAuthorityJson(value));
     const storySourceDigest = await hash({ id: STORY_ITEM_ID });
@@ -614,6 +642,91 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     };
 
     const realBatch = db.batch.bind(db);
+    const completionReceipt = await db.prepare(
+      "SELECT * FROM source_privacy_receipts WHERE workflow_run_id=?",
+    ).bind(RUN_ID).first();
+    await db.prepare("DELETE FROM source_privacy_receipts WHERE workflow_run_id=?")
+      .bind(RUN_ID).run();
+    const legacyProgress = await loadWorkflowProgress(RUN_ID);
+    assert.equal(legacyProgress.currentStageId, "privacy");
+    assert.equal(legacyProgress.safeStatusCode, "privacy_check_required");
+    const legacyStartBefore = await activationSnapshot(db);
+    const legacyStart = await workflowRoute.POST(new Request("http://localhost/api/workflow", {
+      method: "POST",
+      body: JSON.stringify({ workflowRunId: RUN_ID, event: "story_generation_started" }),
+    }));
+    assert.equal(legacyStart.status, 409);
+    assert.deepEqual(await activationSnapshot(db), legacyStartBefore);
+    await db.prepare(`INSERT INTO source_privacy_receipts
+      (job_id,workflow_run_id,source_revision,source_digest,receipt_digest,receipt_json,created_at)
+      VALUES (?,?,?,?,?,?,?)`).bind(
+      completionReceipt.job_id,
+      completionReceipt.workflow_run_id,
+      completionReceipt.source_revision,
+      completionReceipt.source_digest,
+      completionReceipt.receipt_digest,
+      completionReceipt.receipt_json,
+      completionReceipt.created_at,
+    ).run();
+    assert.equal((await workflowRoute.POST(new Request("http://localhost/api/workflow", {
+      method: "POST",
+      body: JSON.stringify({ workflowRunId: RUN_ID, event: "story_generation_started" }),
+    }))).status, 200);
+
+    const beforeRevisionZero = await activationSnapshot(db);
+    const realPrepare = db.prepare;
+    let revisionZeroPrepareCalls = 0;
+    let revisionZeroBatchCalls = 0;
+    db.prepare = function observedPrepare(...args) {
+      revisionZeroPrepareCalls += 1;
+      return realPrepare.apply(this, args);
+    };
+    db.batch = async (statements) => {
+      revisionZeroBatchCalls += 1;
+      return realBatch(statements);
+    };
+    const revisionZeroBody = structuredClone(body);
+    revisionZeroBody.preparationManifest.sourceRevision = 0;
+    const revisionZeroResponse = await workflowRoute.POST(new Request(
+      "http://localhost/api/workflow",
+      { method: "POST", body: JSON.stringify(revisionZeroBody) },
+    ));
+    db.prepare = realPrepare;
+    db.batch = realBatch;
+    assert.equal(revisionZeroResponse.status, 400);
+    assert.equal(revisionZeroPrepareCalls, 0);
+    assert.equal(revisionZeroBatchCalls, 0);
+    assert.deepEqual(await activationSnapshot(db), beforeRevisionZero);
+
+    await db.prepare(`UPDATE workflow_runs SET story_source_revision=0 WHERE id=?`)
+      .bind(RUN_ID).run();
+    const zeroStoredBefore = await activationSnapshot(db);
+    const zeroStoredResponse = await workflowRoute.POST(new Request(
+      "http://localhost/api/workflow",
+      { method: "POST", body: JSON.stringify(body) },
+    ));
+    assert.equal(zeroStoredResponse.status, 409);
+    assert.deepEqual(await activationSnapshot(db), zeroStoredBefore);
+    await db.prepare(`UPDATE workflow_runs SET story_source_revision=? WHERE id=?`)
+      .bind(INITIAL_SOURCE_REVISION, RUN_ID).run();
+
+    for (const authorityTable of ["semantic_manifests", "probe_runs"]) {
+      const beforeInnerRevisionZero = await activationSnapshot(db);
+      await db.prepare(`UPDATE ${authorityTable} SET source_revision=0 WHERE workflow_run_id=?`)
+        .bind(RUN_ID).run();
+      const afterTamper = await activationSnapshot(db);
+      const innerRevisionZeroResponse = await workflowRoute.POST(new Request(
+        "http://localhost/api/workflow",
+        { method: "POST", body: JSON.stringify(body) },
+      ));
+      assert.equal(innerRevisionZeroResponse.status, 409, authorityTable);
+      assert.deepEqual(await activationSnapshot(db), afterTamper,
+        `${authorityTable} revision zero is rejected before any activation mutation`);
+      await db.prepare(`UPDATE ${authorityTable} SET source_revision=? WHERE workflow_run_id=?`)
+        .bind(INITIAL_SOURCE_REVISION, RUN_ID).run();
+      assert.deepEqual(await activationSnapshot(db), beforeInnerRevisionZero, authorityTable);
+    }
+
     const originalRedaction = await db.prepare("SELECT * FROM redactions WHERE id='source-private'").first();
     const races = [{
       label: "redaction decision",
@@ -762,6 +875,16 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     await db.prepare(`UPDATE redactions SET review_state='deterministic',status='active',
       updated_at=? WHERE id='source-private'`).bind(timestamp).run();
     assert.ok(await readCoverageManifestAuthority(db, RUN_ID, semantic));
+    const durableReceipt = await db.prepare(
+      "SELECT * FROM source_privacy_receipts WHERE workflow_run_id=?",
+    ).bind(RUN_ID).first();
+    await db.prepare(`UPDATE source_privacy_receipts SET receipt_json=receipt_json||' '
+      WHERE workflow_run_id=?`).bind(RUN_ID).run();
+    assert.equal(await readCoverageManifestAuthority(db, RUN_ID, semantic), null,
+      "valid but noncanonical durable receipt JSON fails closed");
+    await db.prepare("UPDATE source_privacy_receipts SET receipt_json=? WHERE workflow_run_id=?")
+      .bind(durableReceipt.receipt_json, RUN_ID).run();
+    assert.ok(await readCoverageManifestAuthority(db, RUN_ID, semantic));
     await db.prepare("UPDATE items SET content=? WHERE id=?")
       .bind("Changed private synthetic event.", PRIVATE_ITEM_ID).run();
     assert.equal(
@@ -771,6 +894,18 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     );
     await db.prepare("UPDATE items SET content=? WHERE id=?")
       .bind("Private synthetic event.", PRIVATE_ITEM_ID).run();
+    assert.ok(await readCoverageManifestAuthority(db, RUN_ID, semantic));
+    await db.prepare("DELETE FROM source_privacy_receipts WHERE workflow_run_id=?")
+      .bind(RUN_ID).run();
+    assert.equal(await readCoverageManifestAuthority(db, RUN_ID, semantic), null,
+      "a completed legacy job without its normalized receipt fails closed");
+    await db.prepare(`INSERT INTO source_privacy_receipts
+      (job_id,workflow_run_id,source_revision,source_digest,receipt_digest,receipt_json,created_at)
+      VALUES (?,?,?,?,?,?,?)`).bind(
+      durableReceipt.job_id, durableReceipt.workflow_run_id, durableReceipt.source_revision,
+      durableReceipt.source_digest, durableReceipt.receipt_digest, durableReceipt.receipt_json,
+      durableReceipt.created_at,
+    ).run();
     assert.ok(await readCoverageManifestAuthority(db, RUN_ID, semantic));
     await db.prepare("DELETE FROM redactions WHERE id='source-private'").run();
     assert.equal(

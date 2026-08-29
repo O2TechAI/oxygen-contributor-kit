@@ -1,4 +1,14 @@
 import type { getLocalDatabase } from "../db";
+import {
+  validActivatedSourceRevision,
+  validNonnegativeAuthorityCounter,
+} from "./authority-validation.mjs";
+import {
+  buildCurrentSourcePrivacyDialogue,
+  validateStoredSourcePrivacyReceipt,
+  type CurrentSourceRow,
+  type PersistedSourcePrivacyRedaction,
+} from "./source-privacy-receipt.ts";
 
 type ReleaseDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 type SnapshotRow = Record<string, unknown>;
@@ -9,9 +19,18 @@ export type ReleaseSnapshotTestOptions = {
   exportedAt?: string;
 };
 
-const redactionJobSql = `SELECT id,status,stage,model,completed,total,rejected,source_digest,
-  started_at,updated_at,completed_at
-  FROM redaction_jobs ORDER BY started_at DESC,id DESC LIMIT 1`;
+const redactionJobSql = `SELECT j.id,j.status,j.stage,j.model,j.completed,j.total,j.rejected,
+  p.source_revision,j.source_digest,p.receipt_digest,j.started_at,j.updated_at,j.completed_at
+  FROM redaction_jobs j LEFT JOIN source_privacy_receipts p ON p.job_id=j.id
+  ORDER BY j.started_at DESC,j.id DESC`;
+
+const sourcePrivacyReceiptSql = `SELECT job_id,workflow_run_id,source_revision,source_digest,
+  receipt_digest,receipt_json,created_at FROM source_privacy_receipts ORDER BY job_id`;
+
+const finalizedCorpusSql = `SELECT workflow_run_id,corpus_revision,corpus_digest,document_count,
+  item_count,finalized_at,(SELECT COUNT(*) FROM documents) AS current_document_count,
+  (SELECT COUNT(*) FROM items) AS current_item_count
+  FROM finalized_corpus_manifests ORDER BY workflow_run_id`;
 
 const reviewRedactionsSql = `SELECT id,item_id,document_id,start_offset,end_offset,category,
   confidence,reason,review_state,uncertainty_reason,status,created_by,created_at,updated_at
@@ -21,8 +40,10 @@ const activeRedactionsSql = `SELECT id,item_id,document_id,start_offset,end_offs
   review_state FROM redactions WHERE status='active'
   AND review_state IN ('deterministic','confirmed_redact') ORDER BY item_id,start_offset,id`;
 
-const storyItemsSql = `SELECT id,document_id,sequence,event_type,actor_id,actor_type,timestamp,
-  content,organization_reason FROM items ORDER BY document_id,sequence,id`;
+const storyItemsSql = `SELECT i.id,i.document_id,d.kind AS document_kind,i.sequence,i.event_type,
+  i.actor_id,i.actor_type,i.timestamp,i.content,i.original_json,i.organization_reason
+  FROM items i LEFT JOIN documents d ON d.id=i.document_id
+  ORDER BY i.document_id,i.sequence,i.id`;
 
 const preparationReceiptsSql = `SELECT workflow_run_id,lane,source_revision,input_digest,
   scope_digest,scope_count,output_digest,output_count,completed_at
@@ -54,9 +75,11 @@ const releaseConfirmationSql = `SELECT workflow_run_id,review_gate_digest,confir
 const packageDocumentsSql = `SELECT id,kind,title,source_system,source_timestamp,item_count,
   metadata_json,formatted_summary_json FROM documents ORDER BY source_timestamp,title,id`;
 
-const packageItemsSql = `SELECT id,document_id,sequence,event_type,actor_type,timestamp,content,
-  organization_category,organization_confidence,organization_reason
-  FROM items ORDER BY document_id,sequence,id`;
+const packageItemsSql = `SELECT i.id,i.document_id,d.kind AS document_kind,i.sequence,i.event_type,
+  i.actor_type,i.timestamp,i.content,i.original_json,i.organization_category,
+  i.organization_confidence,i.organization_reason
+  FROM items i LEFT JOIN documents d ON d.id=i.document_id
+  ORDER BY i.document_id,i.sequence,i.id`;
 
 const packageProbesSql = `SELECT id,document_id,document_kind,event_ids_json,timestamp,signal,
   score,turns,recap,question,options_json,allow_other,allow_skip,answer_choice,answer_text,
@@ -102,6 +125,8 @@ export async function computeReviewGateDigest(
     },
     sourcePrivacy: {
       redactionJobRows: storySnapshot.redactionJobRows,
+      sourcePrivacyReceiptRows: storySnapshot.sourcePrivacyReceiptRows,
+      finalizedCorpusRows: storySnapshot.finalizedCorpusRows,
       itemRows: storySnapshot.itemRows,
       redactionReviewRows: storySnapshot.redactionReviewRows,
     },
@@ -130,6 +155,77 @@ function safeActiveRows(results: unknown[], index: number): SnapshotRow[] {
     && ["deterministic", "confirmed_redact"].includes(String(row.review_state)));
 }
 
+export async function validateReleaseSourcePrivacyReceipt(
+  snapshot: {
+    redactionJobRows: SnapshotRow[];
+    sourcePrivacyReceiptRows: SnapshotRow[];
+    finalizedCorpusRows: SnapshotRow[];
+    itemRows: SnapshotRow[];
+    redactionReviewRows: SnapshotRow[];
+  },
+  workflowRunId: string,
+  sourceRevision: number,
+  sourceDigest: string,
+) {
+  if (!validActivatedSourceRevision(sourceRevision)
+    || snapshot.redactionJobRows.length !== 1
+    || snapshot.sourcePrivacyReceiptRows.length !== 1
+    || snapshot.finalizedCorpusRows.length !== 1) return false;
+  const job = snapshot.redactionJobRows[0];
+  const receiptSourceRevision = Number(snapshot.sourcePrivacyReceiptRows[0].source_revision);
+  const corpus = snapshot.finalizedCorpusRows[0];
+  const corpusRevision = Number(corpus.corpus_revision);
+  const documentCount = Number(corpus.document_count);
+  const itemCount = Number(corpus.item_count);
+  const completed = Number(job.completed);
+  const total = Number(job.total);
+  const rejected = Number(job.rejected);
+  if (!validActivatedSourceRevision(receiptSourceRevision)
+    || receiptSourceRevision > sourceRevision
+    || corpus.workflow_run_id !== workflowRunId
+    || !validActivatedSourceRevision(corpusRevision)
+    || !/^[0-9a-f]{64}$/u.test(String(corpus.corpus_digest || ""))
+    || !Number.isSafeInteger(documentCount) || documentCount < 0
+    || !Number.isSafeInteger(itemCount) || itemCount < 0
+    || Number(corpus.current_document_count) !== documentCount
+    || Number(corpus.current_item_count) !== itemCount
+    || snapshot.itemRows.length !== itemCount
+    || job.status !== "complete"
+    || !validNonnegativeAuthorityCounter(completed)
+    || !validNonnegativeAuthorityCounter(total)
+    || !validNonnegativeAuthorityCounter(rejected)
+    || completed !== total
+    || completed !== snapshot.redactionReviewRows.length
+    || rejected !== 0
+    || Number(job.source_revision) !== receiptSourceRevision
+    || job.source_digest !== sourceDigest) return false;
+  let dialogue;
+  try {
+    dialogue = await buildCurrentSourcePrivacyDialogue(
+      snapshot.itemRows as unknown as CurrentSourceRow[],
+    );
+  } catch {
+    return false;
+  }
+  return Boolean(await validateStoredSourcePrivacyReceipt(
+    snapshot.sourcePrivacyReceiptRows[0],
+    {
+      jobId: String(job.id || ""),
+      workflowRunId,
+      sourceRevision: receiptSourceRevision,
+      sourceDigest,
+      finalizedCorpus: {
+        revision: corpusRevision,
+        digest: String(corpus.corpus_digest),
+        documentCount,
+        itemCount,
+      },
+      dialogue,
+      redactions: snapshot.redactionReviewRows as unknown as PersistedSourcePrivacyRedaction[],
+    },
+  ));
+}
+
 /** Capture every database row that governs reviewed Story reconstruction in one
  * local SQLite transaction, so the returned rows cannot combine pre- and
  * post-mutation Privacy state. */
@@ -144,6 +240,8 @@ export async function captureStoryReleasePrivacySnapshot(
     db.prepare(`SELECT state_json,updated_at,server_version
       FROM story_review_sessions WHERE workflow_run_id=?`).bind(workflowRunId),
     db.prepare(redactionJobSql),
+    db.prepare(sourcePrivacyReceiptSql),
+    db.prepare(finalizedCorpusSql),
     db.prepare(storyItemsSql),
     db.prepare(reviewRedactionsSql),
     db.prepare(activeRedactionsSql),
@@ -159,21 +257,25 @@ export async function captureStoryReleasePrivacySnapshot(
   const runRows = rows(results, 1);
   const sessionRows = rows(results, 2);
   const redactionJobRows = rows(results, 3);
-  const itemRows = rows(results, 4);
-  const redactionReviewRows = rows(results, 5);
-  const redactionRows = safeActiveRows(results, 6);
-  const preparationReceiptRows = rows(results, 7);
-  const storyPrivacyAuthorityRows = rows(results, 8);
-  const storyPrivacyCandidateRows = rows(results, 9);
-  const probeRunRows = rows(results, 10);
-  const probeRows = rows(results, 11);
-  const bulkRows = rows(results, 12);
-  const releaseConfirmationRows = rows(results, 13);
+  const sourcePrivacyReceiptRows = rows(results, 4);
+  const finalizedCorpusRows = rows(results, 5);
+  const itemRows = rows(results, 6);
+  const redactionReviewRows = rows(results, 7);
+  const redactionRows = safeActiveRows(results, 8);
+  const preparationReceiptRows = rows(results, 9);
+  const storyPrivacyAuthorityRows = rows(results, 10);
+  const storyPrivacyCandidateRows = rows(results, 11);
+  const probeRunRows = rows(results, 12);
+  const probeRows = rows(results, 13);
+  const bulkRows = rows(results, 14);
+  const releaseConfirmationRows = rows(results, 15);
   const value = {
     authorityRows,
     runRows,
     sessionRows,
     redactionJobRows,
+    sourcePrivacyReceiptRows,
+    finalizedCorpusRows,
     itemRows,
     redactionReviewRows,
     preparationReceiptRows,
@@ -202,6 +304,8 @@ export async function captureStoryReleasePrivacySnapshot(
 export async function capturePackageReleasePrivacySnapshot(db: ReleaseDatabase) {
   const results = await db.batch([
     db.prepare(redactionJobSql),
+    db.prepare(sourcePrivacyReceiptSql),
+    db.prepare(finalizedCorpusSql),
     db.prepare(packageDocumentsSql),
     db.prepare(packageItemsSql),
     db.prepare(reviewRedactionsSql),
@@ -211,15 +315,19 @@ export async function capturePackageReleasePrivacySnapshot(db: ReleaseDatabase) 
     db.prepare(packageProbeRunSql),
   ]);
   const redactionJobRows = rows(results, 0);
-  const documentRows = rows(results, 1);
-  const itemRows = rows(results, 2);
-  const redactionReviewRows = rows(results, 3);
-  const redactionRows = safeActiveRows(results, 4);
-  const probeRows = rows(results, 5);
-  const bulkRows = rows(results, 6);
-  const probeRunRows = rows(results, 7);
+  const sourcePrivacyReceiptRows = rows(results, 1);
+  const finalizedCorpusRows = rows(results, 2);
+  const documentRows = rows(results, 3);
+  const itemRows = rows(results, 4);
+  const redactionReviewRows = rows(results, 5);
+  const redactionRows = safeActiveRows(results, 6);
+  const probeRows = rows(results, 7);
+  const bulkRows = rows(results, 8);
+  const probeRunRows = rows(results, 9);
   const value = {
     redactionJobRows,
+    sourcePrivacyReceiptRows,
+    finalizedCorpusRows,
     documentRows,
     itemRows,
     redactionReviewRows,

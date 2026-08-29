@@ -872,10 +872,36 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 outputs.append(tree_bytes(output))
             self.assertEqual(outputs[0], outputs[1])
 
+    def test_missing_or_malformed_record_ids_keep_importer_fallback_identity(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            path = write_meeting(source, "meeting-safe", records=[{
+                "order": 1, "text": "first fallback record",
+            }, {
+                "record_id": "other:record", "order": 2,
+                "text": "second fallback record",
+            }])
+            source_meeting = json.loads(path.read_text(encoding="utf-8"))
+            expected_ids = MODULE.project_map_authority.meeting_contribution_ids(
+                "meeting-safe", source_meeting["records"],
+            )
+            write_semantic_project_map(source)
+
+            self.run_main(source, output)
+
+            prepared_path = output / "meetings" / "meeting-safe" / "meeting.json"
+            prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [f"meeting-safe:{record['record_id']}" for record in prepared["records"]],
+                expected_ids,
+            )
+            turns = EXTRACT.extract_bundles(output)[0]["turns"]
+            self.assertEqual([turn["item_id"] for turn in turns], expected_ids)
+
     def test_invalid_record_identity_and_sequence_authority_fail_atomically(self):
         mutations = {
-            "missing-record-id": lambda records: records[0].pop("record_id"),
-            "foreign-qualified-id": lambda records: records[0].update(record_id="other:record"),
             "duplicate-record-id": lambda records: records[1].update(record_id=records[0]["record_id"]),
             "missing-sequence": lambda records: records[0].pop("order"),
             "zero-sequence": lambda records: records[0].update(order=0),

@@ -19,13 +19,20 @@ def write_meeting(run: Path, meeting_id: str, *, root=False, records=None) -> Pa
     directory = run if root else run / "meetings" / meeting_id
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "meeting.json"
+    meeting_records = records if records is not None else [{
+        "record_id": "record-000001",
+        "text": f"safe synthetic text for {meeting_id}",
+    }]
+    if isinstance(meeting_records, list):
+        meeting_records = [
+            {**record, "sequence_in_meeting": record.get("sequence_in_meeting", index)}
+            if isinstance(record, dict) else record
+            for index, record in enumerate(meeting_records, 1)
+        ]
     path.write_text(json.dumps({
         "schema": MODULE.AI_REVIEW_MEETING_SCHEMA,
         "meeting_id": meeting_id,
-        "records": records if records is not None else [{
-            "record_id": "record-000001",
-            "text": f"safe synthetic text for {meeting_id}",
-        }],
+        "records": meeting_records,
     }), encoding="utf-8")
     return path
 
@@ -146,12 +153,12 @@ class ExtractDialogueTest(unittest.TestCase):
             turns = MODULE.extract_bundles(run)[0]["turns"]
 
             self.assertEqual(turns[0]["item_id"], "meeting-000001:stable-record")
-            self.assertEqual(turns[0]["event_id"], "stable-record")
+            self.assertEqual(turns[0]["event_id"], "meeting-000001:stable-record")
             self.assertRegex(
                 turns[1]["item_id"],
                 r"^meeting-000001:rec-[0-9a-f]{64}$",
             )
-            self.assertEqual(turns[1]["event_id"], "record-000002")
+            self.assertEqual(turns[1]["event_id"], turns[1]["item_id"])
             self.assertEqual([turn["text"] for turn in turns], [
                 "safe stable record", "safe fallback record",
             ])
@@ -167,8 +174,43 @@ class ExtractDialogueTest(unittest.TestCase):
 
             self.assertEqual(
                 [bundle["trajectory"] for bundle in bundles],
-                ["traj-safe", "meeting-000001", "meeting-000002"],
+                ["meeting-000001", "meeting-000002", "traj-safe"],
             )
+
+    def test_output_identity_is_validated_before_any_staging_write(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            invalid = {
+                "trajectory": "../escaped",
+                "document_kind": "trajectory",
+                "turns": [{
+                    "event_id": "evt-" + "a" * 64,
+                    "document_id": "../escaped",
+                    "item_id": "evt-" + "a" * 64,
+                    "sequence": 1,
+                    "role": "user",
+                    "timestamp": None,
+                    "text": "safe synthetic text",
+                }],
+                "chars": len("safe synthetic text"),
+            }
+            authority = {
+                "workflowRunId": "workflow-safe",
+                "sourceRevision": 1,
+                "finalizedCorpus": {
+                    "revision": 1,
+                    "digest": "c" * 64,
+                    "documentCount": 1,
+                    "itemCount": 1,
+                },
+                "sourceDigest": "d" * 64,
+            }
+
+            with self.assertRaisesRegex(SystemExit, "^SOURCE_PRIVACY_DIALOGUE_INVALID$"):
+                MODULE.install_dialogue_output(root / "out", authority, [invalid])
+
+            self.assertFalse((root / "out").exists())
+            self.assertFalse((root / "escaped.json").exists())
 
     def test_duplicate_and_malformed_prepared_meetings_fail_closed(self):
         with TemporaryDirectory() as temp:

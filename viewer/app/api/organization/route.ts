@@ -19,6 +19,7 @@ import {
   isStorySourceWriteInProgress,
   publishCompletedSemanticSourceMutation,
 } from "../../../lib/story-source-publication";
+import { validActivatedSourceRevision } from "../../../lib/authority-validation.mjs";
 
 const JOB_ID = "default";
 const MAX_SEMANTIC_EVIDENCE_PAGE_MEMBERS = 50;
@@ -32,13 +33,14 @@ type FinalizedCorpusAuthority = {
   currentDocumentCount: number;
   currentItemCount: number;
   storyGenerationStatus: string;
+  storySourceRevision: number;
 };
 
 async function readFinalizedCorpusAuthority(
   db: Awaited<ReturnType<typeof getLocalDatabase>>,
   workflowRunId: string,
 ): Promise<FinalizedCorpusAuthority | null> {
-  const row = await db.prepare(`SELECT r.story_generation_status,
+  const row = await db.prepare(`SELECT r.story_generation_status,r.story_source_revision,
       m.corpus_revision,m.corpus_digest,m.document_count,m.item_count,
       (SELECT COUNT(*) FROM documents) AS current_document_count,
       (SELECT COUNT(*) FROM items) AS current_item_count
@@ -46,6 +48,7 @@ async function readFinalizedCorpusAuthority(
     WHERE r.id=?`).bind(workflowRunId).first<Record<string, unknown>>();
   if (!row || !Number.isSafeInteger(Number(row.corpus_revision))
     || Number(row.corpus_revision) < 1
+    || !validActivatedSourceRevision(Number(row.story_source_revision))
     || !/^[0-9a-f]{64}$/.test(String(row.corpus_digest || ""))) return null;
   return {
     corpusRevision: Number(row.corpus_revision),
@@ -55,6 +58,7 @@ async function readFinalizedCorpusAuthority(
     currentDocumentCount: Number(row.current_document_count),
     currentItemCount: Number(row.current_item_count),
     storyGenerationStatus: String(row.story_generation_status || ""),
+    storySourceRevision: Number(row.story_source_revision),
   };
 }
 
@@ -88,6 +92,8 @@ async function status(db: Awaited<ReturnType<typeof getLocalDatabase>>, workflow
   const completed = Number(counts?.completed || 0);
   const recordedStatus = String(job?.status || (total ? "idle" : "empty"));
   const currentManifest = manifest
+    && validActivatedSourceRevision(Number(manifest.source_revision))
+    && validActivatedSourceRevision(Number(manifest.story_source_revision))
     && Number(manifest.source_revision) === Number(manifest.story_source_revision)
     && Number(manifest.corpus_revision) === Number(manifest.finalized_corpus_revision)
     && String(manifest.corpus_digest) === String(manifest.finalized_corpus_digest)
@@ -135,7 +141,9 @@ async function readSemanticProjection(
       JOIN finalized_corpus_manifests f ON f.workflow_run_id=m.workflow_run_id
       WHERE m.workflow_run_id=?`).bind(workflowRunId)
     .first<Record<string, unknown>>();
-  if (!manifest || Number(manifest.source_revision) !== Number(manifest.story_source_revision)
+  if (!manifest || !validActivatedSourceRevision(Number(manifest.source_revision))
+    || !validActivatedSourceRevision(Number(manifest.story_source_revision))
+    || Number(manifest.source_revision) !== Number(manifest.story_source_revision)
     || Number(manifest.corpus_revision) !== Number(manifest.finalized_corpus_revision)
     || String(manifest.corpus_digest) !== String(manifest.finalized_corpus_digest)
     || Number(manifest.corpus_document_count) !== Number(manifest.finalized_document_count)
@@ -204,6 +212,7 @@ export async function GET(request: Request) {
         JOIN workflow_runs r ON r.id=m.workflow_run_id
         JOIN finalized_corpus_manifests f ON f.workflow_run_id=m.workflow_run_id
         WHERE m.workflow_run_id=? AND m.source_revision=r.story_source_revision
+          AND m.source_revision>0 AND r.story_source_revision>0
           AND m.corpus_revision=f.corpus_revision AND m.corpus_digest=f.corpus_digest
           AND m.corpus_document_count=f.document_count AND m.corpus_item_count=f.item_count
           AND f.document_count=(SELECT COUNT(*) FROM documents)

@@ -10,6 +10,19 @@ import threading
 import unittest
 from unittest import mock
 
+TEST_ROOT = Path(__file__).resolve().parent
+if str(TEST_ROOT) not in sys.path:
+    sys.path.insert(0, str(TEST_ROOT))
+
+from source_privacy_fixture import (
+    EVENT_ID,
+    bundle,
+    canonical_bundle_bytes,
+    finalized_fixture,
+    write_dialogue,
+    write_redacted_output,
+)
+
 
 def load_script(name: str):
     path = Path(__file__).resolve().parents[1] / f"{name}.py"
@@ -25,38 +38,32 @@ VERIFY = load_script("verify_coverage")
 PUSH = load_script("push_redactions")
 
 
-EVENT_ID = "evt-" + "a" * 64
-
-
-def write_push_fixture(root: Path, *, turn_updates=None, trajectory="traj-1") -> tuple[Path, Path]:
-    redacted = root / "redacted"
-    redacted.mkdir()
-    turn = {
+def write_push_fixture(
+    root: Path,
+    *,
+    turn_updates=None,
+    findings=None,
+) -> tuple[Path, Path, Path]:
+    default_findings = [{
         "event_id": EVENT_ID,
-        "document_id": trajectory,
-        "item_id": EVENT_ID,
-        "role": "user",
-        "text": "safe synthetic text",
-        "redactions": [{
-            "start": 0,
-            "end": 4,
-            "category": "sensitive",
-            "review_state": "deterministic",
-            "uncertainty_reason": None,
-        }],
-    }
-    turn.update(turn_updates or {})
-    (redacted / f"{trajectory}.json").write_text(json.dumps({
-        "trajectory": trajectory,
-        "document_kind": "trajectory",
-        "turns": [turn],
-    }), encoding="utf-8")
-    report = root / "report.json"
-    report.write_text(json.dumps({
-        "rejected": 0,
-        "missing_worker_output": [],
-    }), encoding="utf-8")
-    return redacted, report
+        "start": 0,
+        "end": 4,
+        "category": "sensitive",
+        "confidence": None,
+        "reason": None,
+        "review_state": "deterministic",
+        "uncertainty_reason": None,
+    }]
+    _, _, review, _ = finalized_fixture(
+        root, findings=default_findings if findings is None else findings,
+    )
+    redacted, report = write_redacted_output(root, review)
+    if turn_updates:
+        path = redacted / "traj-1.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["turns"][0].update(turn_updates)
+        path.write_bytes(canonical_bundle_bytes(payload))
+    return redacted, report, root / "receipt.json"
 
 
 class ReleaseGateTest(unittest.TestCase):
@@ -70,9 +77,12 @@ class ReleaseGateTest(unittest.TestCase):
                 argv = [
                     "push_redactions.py", "--redacted", str(Path(temp) / "redacted"),
                     "--report", str(Path(temp) / "report.json"),
+                    "--receipt", str(Path(temp) / "receipt.json"),
                     "--base-url", supplied,
                 ]
-                with mock.patch.object(PUSH, "load_report", return_value={"rejected": 0}), \
+                with mock.patch.object(
+                        PUSH, "read_receipt", return_value={"receiptDigest": "a" * 64}), \
+                        mock.patch.object(PUSH, "load_report", return_value={"rejected": 0}), \
                         mock.patch.object(PUSH, "collect_spans", return_value=[]), \
                         mock.patch.object(PUSH, "post", return_value={
                             "imported": 0, "status": "complete", "rejected": [],
@@ -115,9 +125,12 @@ class ReleaseGateTest(unittest.TestCase):
                 with self.subTest(supplied=supplied):
                     argv = [
                         "push_redactions.py", "--redacted", str(Path(temp) / "private"),
-                        "--report", fixture_path, "--base-url", supplied,
+                        "--report", fixture_path,
+                        "--receipt", str(Path(temp) / "private" / "receipt.json"),
+                        "--base-url", supplied,
                     ]
-                    with mock.patch.object(PUSH, "load_report") as load_report, \
+                    with mock.patch.object(PUSH, "read_receipt") as read_receipt, \
+                            mock.patch.object(PUSH, "load_report") as load_report, \
                             mock.patch.object(PUSH, "collect_spans") as collect_spans, \
                             mock.patch.object(PUSH, "post") as post, \
                             mock.patch.object(PUSH.urllib.request, "Request") as request, \
@@ -129,6 +142,7 @@ class ReleaseGateTest(unittest.TestCase):
                     self.assertNotIn(supplied, str(raised.exception))
                     self.assertNotIn(fixture_path, str(raised.exception))
                     load_report.assert_not_called()
+                    read_receipt.assert_not_called()
                     collect_spans.assert_not_called()
                     post.assert_not_called()
                     request.assert_not_called()
@@ -234,24 +248,23 @@ class ReleaseGateTest(unittest.TestCase):
             root = Path(temp)
             dialogue = root / "dialogue"
             findings = root / "findings"
-            dialogue.mkdir()
             findings.mkdir()
-            (dialogue / "traj-1.json").write_text(
-                json.dumps({"trajectory": "traj-1", "turns": [{"event_id": "evt-1"}]}),
-                encoding="utf-8",
-            )
+            write_dialogue(dialogue, [bundle()])
+            receipt = root / "receipt.json"
             argv = sys.argv
             try:
                 sys.argv = [
                     "verify_coverage.py", "--dialogue", str(dialogue),
                     "--findings", str(findings),
+                    "--receipt", str(receipt),
                 ]
                 with contextlib.redirect_stdout(io.StringIO()) as output:
                     result = VERIFY.main()
             finally:
                 sys.argv = argv
             self.assertEqual(result, 1)
-            self.assertIn("MISSING traj-1", output.getvalue())
+            self.assertIn("SOURCE_PRIVACY_REVIEW_INVALID", output.getvalue())
+            self.assertFalse(receipt.exists())
 
     def test_push_report_blocks_incomplete_worker_coverage(self):
         with TemporaryDirectory() as temp:
@@ -298,21 +311,22 @@ class ReleaseGateTest(unittest.TestCase):
         for name, updates in cases:
             with self.subTest(name=name), TemporaryDirectory() as temp:
                 root = Path(temp)
-                redacted, report = write_push_fixture(root, turn_updates=updates)
+                redacted, report, receipt = write_push_fixture(root, turn_updates=updates)
                 argv = [
                     "push_redactions.py", "--redacted", str(redacted),
                     "--report", str(report),
+                    "--receipt", str(receipt),
                 ]
                 with mock.patch.object(PUSH, "post") as post, \
                         mock.patch.object(sys, "argv", argv), \
-                        self.assertRaisesRegex(SystemExit, "invalid redaction identity"):
+                        self.assertRaisesRegex(SystemExit, "SOURCE_PRIVACY_PUSH_INPUT_INVALID"):
                     PUSH.main()
                 post.assert_not_called()
 
     def test_duplicate_identity_fails_before_http(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
-            redacted, report = write_push_fixture(root)
+            redacted, report, receipt = write_push_fixture(root)
             path = redacted / "traj-1.json"
             bundle = json.loads(path.read_text(encoding="utf-8"))
             bundle["turns"].append(dict(bundle["turns"][0]))
@@ -320,10 +334,11 @@ class ReleaseGateTest(unittest.TestCase):
             argv = [
                 "push_redactions.py", "--redacted", str(redacted),
                 "--report", str(report),
+                "--receipt", str(receipt),
             ]
             with mock.patch.object(PUSH, "post") as post, \
                     mock.patch.object(sys, "argv", argv), \
-                    self.assertRaisesRegex(SystemExit, "duplicate event_id"):
+                    self.assertRaisesRegex(SystemExit, "SOURCE_PRIVACY_PUSH_INPUT_INVALID"):
                 PUSH.main()
             post.assert_not_called()
 
@@ -331,15 +346,16 @@ class ReleaseGateTest(unittest.TestCase):
         with TemporaryDirectory() as temp:
             root = Path(temp)
             safe_reason = "human context is required to classify this reference"
-            redacted, report = write_push_fixture(root, turn_updates={
-                "redactions": [{
+            redacted, report, receipt = write_push_fixture(root, findings=[{
+                    "event_id": EVENT_ID,
                     "start": 0,
                     "end": 4,
                     "category": "sensitive",
+                    "confidence": None,
+                    "reason": None,
                     "review_state": "needs_confirmation",
                     "uncertainty_reason": safe_reason,
-                }],
-            })
+                }])
             captured = {}
 
             def fake_post(base_url, body):
@@ -349,6 +365,7 @@ class ReleaseGateTest(unittest.TestCase):
             argv = [
                 "push_redactions.py", "--redacted", str(redacted),
                 "--report", str(report), "--base-url", "http://127.0.0.1:3270",
+                "--receipt", str(receipt),
             ]
             with mock.patch.object(PUSH, "post", fake_post), \
                     mock.patch.object(sys, "argv", argv), \
@@ -368,6 +385,48 @@ class ReleaseGateTest(unittest.TestCase):
             "createdBy": "llm",
         }])
         self.assertNotIn("traj-1:", captured["body"]["redactions"][0]["itemId"])
+        self.assertIn("receipt", captured["body"])
+
+    def test_positive_completed_zero_pushes_the_unchanged_receipt(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            redacted, report, receipt = write_push_fixture(root, findings=[])
+            captured = {}
+
+            def fake_post(base_url, body):
+                captured.update(body)
+                return {"imported": 0, "status": "complete", "rejected": []}
+
+            argv = [
+                "push_redactions.py", "--redacted", str(redacted),
+                "--report", str(report), "--receipt", str(receipt),
+            ]
+            with mock.patch.object(PUSH, "post", fake_post), \
+                    mock.patch.object(sys, "argv", argv), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(PUSH.main(), 0)
+
+            self.assertEqual(captured["redactions"], [])
+            self.assertEqual(captured["receipt"]["sourceRevision"], 3)
+            self.assertEqual(captured["receipt"]["redactions"]["count"], 0)
+
+    def test_tampered_redacted_bundle_fails_before_http(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            redacted, report, receipt = write_push_fixture(root)
+            path = redacted / "traj-1.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["turns"][0]["redacted_text"] += "x"
+            path.write_bytes(canonical_bundle_bytes(payload))
+            argv = [
+                "push_redactions.py", "--redacted", str(redacted),
+                "--report", str(report), "--receipt", str(receipt),
+            ]
+            with mock.patch.object(PUSH, "post") as post, \
+                    mock.patch.object(sys, "argv", argv), \
+                    self.assertRaisesRegex(SystemExit, "SOURCE_PRIVACY_PUSH_INPUT_INVALID"):
+                PUSH.main()
+            post.assert_not_called()
 
     def test_invalid_review_contract_fails_before_any_http_push(self):
         invalid_spans = [
@@ -386,16 +445,17 @@ class ReleaseGateTest(unittest.TestCase):
         ]
         with TemporaryDirectory() as temp:
             root = Path(temp)
-            redacted, report = write_push_fixture(
+            redacted, report, receipt = write_push_fixture(
                 root, turn_updates={"redactions": invalid_spans}
             )
             argv = [
                 "push_redactions.py", "--redacted", str(redacted),
                 "--report", str(report),
+                "--receipt", str(receipt),
             ]
             with mock.patch.object(PUSH, "post") as post, \
                     mock.patch.object(sys, "argv", argv), \
-                    self.assertRaisesRegex(SystemExit, "uncertainty_reason"):
+                    self.assertRaisesRegex(SystemExit, "SOURCE_PRIVACY_PUSH_INPUT_INVALID"):
                 PUSH.main()
             post.assert_not_called()
 
@@ -421,10 +481,11 @@ class ReleaseGateTest(unittest.TestCase):
         for name, response, error in cases:
             with self.subTest(name=name), TemporaryDirectory() as temp:
                 root = Path(temp)
-                redacted, report = write_push_fixture(root)
+                redacted, report, receipt = write_push_fixture(root)
                 argv = [
                     "push_redactions.py", "--redacted", str(redacted),
                     "--report", str(report),
+                    "--receipt", str(receipt),
                 ]
                 with mock.patch.object(PUSH, "post", return_value=response), \
                         mock.patch.object(sys, "argv", argv), \

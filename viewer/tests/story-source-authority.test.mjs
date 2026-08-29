@@ -18,6 +18,8 @@ import {
   beginStorySourceMutation,
   publishActivatedStorySourceMutation,
   publishCompletedStorySourceMutation,
+  publishCompletedSemanticSourceMutation,
+  publishFinalizedCorpusSourceMutation,
 } from "../lib/story-source-publication.ts";
 import { STORY_PREFIX } from "../lib/timeline.ts";
 import { STORY_PREPARATION_EMPTY_ARRAY_DIGEST } from "../lib/story-preparation.ts";
@@ -212,6 +214,7 @@ class PublicationDb {
           return { meta: { changes: 1 } };
         }
         if (/story_generation_status='ready_for_human_review'/.test(sql)) {
+          if (this.revision >= Number.MAX_SAFE_INTEGER) return { meta: { changes: 0 } };
           const expected = Number(values[5]);
           if (this.status !== values[6] || this.revision !== expected
             || this.semanticRevision !== Number(values[8])
@@ -223,6 +226,7 @@ class PublicationDb {
           return { meta: { changes: 1 } };
         }
         if (/story_source_revision=story_source_revision\+1/.test(sql)) {
+          if (this.revision >= Number.MAX_SAFE_INTEGER) return { meta: { changes: 0 } };
           if (![STORY_SOURCE_WRITE_STATUS.idle, STORY_SOURCE_WRITE_STATUS.resumeGeneration]
             .includes(this.status)) return { meta: { changes: 0 } };
           this.status = this.status === STORY_SOURCE_WRITE_STATUS.resumeGeneration
@@ -241,6 +245,9 @@ class PublicationDb {
           return { meta: { changes: 1 } };
         }
         if (/story_generation_status NOT IN/.test(sql)) {
+          if (this.revision < 0 || this.revision >= Number.MAX_SAFE_INTEGER) {
+            return { meta: { changes: 0 } };
+          }
           if ([STORY_SOURCE_WRITE_STATUS.idle, STORY_SOURCE_WRITE_STATUS.resumeGeneration]
             .includes(this.status)) return { meta: { changes: 0 } };
           this.status = this.status === "running" ? values[0] : values[1];
@@ -248,6 +255,9 @@ class PublicationDb {
           return { meta: { changes: 1 } };
         }
         if (/story_generation_status='running'/.test(sql)) {
+          if (this.revision < 0 || this.revision >= Number.MAX_SAFE_INTEGER) {
+            return { meta: { changes: 0 } };
+          }
           if (this.status !== "running") return { meta: { changes: 0 } };
           this.status = values[0];
           this.digest = null;
@@ -364,6 +374,54 @@ test("mismatched coverage cannot partially rebind semantic authority", async () 
   assert.equal(db.semanticRevision, 40);
   assert.equal(db.revision, 40);
   assert.equal(db.status, STORY_SOURCE_WRITE_STATUS.resumeGeneration);
+});
+
+test("source publication never creates an unsafe successor revision", async () => {
+  const maximum = Number.MAX_SAFE_INTEGER;
+  const digest = "d".repeat(64);
+  const coverageDigest = "c".repeat(64);
+  const finalizedAtMaximum = new PublicationDb(STORY_SOURCE_WRITE_STATUS.idle, maximum);
+  assert.equal(await publishFinalizedCorpusSourceMutation(
+    finalizedAtMaximum, [], RUN_ID, maximum, 1, digest, 0, 0,
+    "2036-02-07T00:00:00.000Z",
+  ), false);
+  assert.equal(finalizedAtMaximum.batchCalls, 0);
+
+  const semanticAtMaximum = new PublicationDb(STORY_SOURCE_WRITE_STATUS.idle, maximum);
+  assert.equal(await publishCompletedSemanticSourceMutation(
+    semanticAtMaximum, [], RUN_ID, maximum, digest, 1, digest, 0, 0,
+    "2036-02-07T00:00:00.000Z",
+  ), false);
+  assert.equal(semanticAtMaximum.batchCalls, 0);
+
+  const activationAtMaximum = new PublicationDb(
+    STORY_SOURCE_WRITE_STATUS.resumeGeneration,
+    maximum,
+  );
+  assert.equal(await publishActivatedStorySourceMutation(
+    activationAtMaximum, [], RUN_ID, maximum, 0, digest, 1, coverageDigest,
+    0, STORY_PREPARATION_EMPTY_ARRAY_DIGEST, 0,
+    "2036-02-07T00:00:00.000Z",
+  ), false);
+  assert.equal(activationAtMaximum.batchCalls, 0);
+
+  const standaloneAtMaximum = new PublicationDb(STORY_SOURCE_WRITE_STATUS.idle, maximum);
+  assert.equal(await publishCompletedStorySourceMutation(
+    standaloneAtMaximum, RUN_ID, "2036-02-07T00:00:00.000Z",
+  ), false);
+  assert.equal(await beginStorySourceMutation(
+    new PublicationDb("not_started", maximum), RUN_ID, "2036-02-07T00:00:00.000Z",
+  ), false);
+  assert.equal(await beginStoryActivationMutation(
+    new PublicationDb("running", maximum), RUN_ID, "2036-02-07T00:00:00.000Z",
+  ), false);
+
+  const safeBoundary = new PublicationDb(STORY_SOURCE_WRITE_STATUS.idle, maximum - 1);
+  assert.equal(await publishFinalizedCorpusSourceMutation(
+    safeBoundary, [], RUN_ID, maximum - 1, 1, digest, 0, 0,
+    "2036-02-07T00:00:01.000Z",
+  ), true);
+  assert.equal(safeBoundary.revision, maximum);
 });
 
 test("activation, Viewer, release selection, and digest share one total source order", async (t) => {

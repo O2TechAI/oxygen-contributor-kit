@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { storyPreparationDigest } from "../../../viewer/lib/story-preparation.ts";
+import {
+  validActivatedSourceRevision,
+  validNonnegativeAuthorityCounter,
+} from "../../../viewer/lib/authority-validation.mjs";
 import { directPathEntry } from "./direct_path_entry.mjs";
 
 const [snapshotInput, outputInput] = process.argv.slice(2);
@@ -57,8 +61,8 @@ if (!exact(snapshot, ["schema", "binding", "targetTransitions", "changedTargets"
   || !exact(snapshot.binding, bindingKeys) || !Array.isArray(snapshot.targetTransitions)
   || !Array.isArray(snapshot.changedTargets)
   || !safeId(snapshot.binding.workflowRunId)
-  || !Number.isSafeInteger(snapshot.binding.sourceRevision) || snapshot.binding.sourceRevision <= 0
-  || !Number.isSafeInteger(snapshot.binding.serverVersion) || snapshot.binding.serverVersion < 1
+  || !validActivatedSourceRevision(snapshot.binding.sourceRevision)
+  || !validNonnegativeAuthorityCounter(snapshot.binding.serverVersion)
   || !Number.isSafeInteger(snapshot.binding.changedTargetCount)
   || snapshot.binding.changedTargetCount !== snapshot.targetTransitions.length
   || snapshot.targetTransitions.length === 0 || snapshot.targetTransitions.length > 4_000

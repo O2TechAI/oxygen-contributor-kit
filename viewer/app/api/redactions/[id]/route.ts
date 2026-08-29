@@ -6,6 +6,16 @@ import {
 } from "../../../../lib/workflow-run-server";
 import { computeSourceDigest } from "../../../../lib/redaction-pass.mjs";
 import {
+  validActivatedSourceRevision,
+  validNonnegativeAuthorityCounter,
+} from "../../../../lib/authority-validation.mjs";
+import {
+  buildCurrentSourcePrivacyDialogue,
+  validateStoredSourcePrivacyReceipt,
+  type CurrentSourceRow,
+  type PersistedSourcePrivacyRedaction,
+} from "../../../../lib/source-privacy-receipt";
+import {
   activeStoryPrivacyInvalidationStatements,
   storySourceGenerationGuardStatement,
 } from "../../../../lib/story-source-publication";
@@ -21,11 +31,6 @@ const SOURCE_PRIVACY_ERROR = {
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const db = await getLocalDatabase();
-  const authority = await requireEstablishedWorkflowRun(db);
-  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
-    return workflowRunErrorResponse(authority);
-  }
   let body: unknown;
   try { body = await request.json(); } catch {
     return Response.json({
@@ -44,70 +49,104 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const decision = String((body as { decision: unknown }).decision);
   const reviewState = decision === "keep" ? "confirmed_keep" : "confirmed_redact";
   const status = decision === "keep" ? "removed" : "active";
+  const db = await getLocalDatabase();
+  const authority = await requireEstablishedWorkflowRun(db);
+  if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
+    return workflowRunErrorResponse(authority);
+  }
   const now = new Date().toISOString();
-  let snapshot: {
-    sourceRevision: number;
-    sourceRows: Record<string, unknown>[];
-    jobs: Record<string, unknown>[];
-    candidate?: Record<string, unknown>;
-  };
+  let outcome: { kind: "success"; updated: Record<string, unknown> }
+    | { kind: "notFound" } | { kind: "notActionable" } | { kind: "conflict" };
   try {
-    snapshot = await db.transaction(async () => {
-      const [sourceRevisionRow, sourceResult, jobResult, candidate] = await Promise.all([
-        db.prepare("SELECT story_source_revision FROM workflow_runs WHERE id=?")
+    outcome = await db.transaction(async () => {
+      const [sourceRevisionRow, sourceResult, jobResult, receiptResult, redactionResult,
+        candidate] = await Promise.all([
+        db.prepare(`SELECT r.story_source_revision,f.corpus_revision,f.corpus_digest,
+          f.document_count,f.item_count,
+          (SELECT COUNT(*) FROM workflow_runs) AS current_run_count,
+          (SELECT COUNT(*) FROM documents) AS current_document_count,
+          (SELECT COUNT(*) FROM items) AS current_item_count
+          FROM workflow_runs r LEFT JOIN finalized_corpus_manifests f ON f.workflow_run_id=r.id
+          WHERE r.id=?`)
           .bind(authority.workflowRunId).first<Record<string, unknown>>(),
-        db.prepare(`SELECT document_id,id,sequence,event_type,actor_type,timestamp,content
-          FROM items ORDER BY document_id,sequence,id`).all<Record<string, unknown>>(),
-        db.prepare(`SELECT id,status,stage,model,completed,total,rejected,source_digest,
-          started_at,updated_at,completed_at FROM redaction_jobs
-          ORDER BY started_at DESC,id DESC LIMIT 2`).all<Record<string, unknown>>(),
+        db.prepare(`SELECT i.document_id,d.kind AS document_kind,i.id,i.sequence,i.event_type,
+          i.actor_type,i.timestamp,i.content,i.original_json
+          FROM items i LEFT JOIN documents d ON d.id=i.document_id
+          ORDER BY i.document_id,i.sequence,i.id`).all<Record<string, unknown>>(),
+        db.prepare(`SELECT j.id,j.status,j.stage,j.model,j.completed,j.total,j.rejected,
+          p.source_revision,j.source_digest,p.receipt_digest,j.started_at,j.updated_at,j.completed_at
+          FROM redaction_jobs j LEFT JOIN source_privacy_receipts p ON p.job_id=j.id
+          ORDER BY j.started_at DESC,j.id DESC LIMIT 2`).all<Record<string, unknown>>(),
+        db.prepare(`SELECT job_id,workflow_run_id,source_revision,source_digest,receipt_digest,
+          receipt_json,created_at FROM source_privacy_receipts ORDER BY job_id`)
+          .all<Record<string, unknown>>(),
+        db.prepare(`SELECT id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
+          review_state,uncertainty_reason,status,created_by,created_at,updated_at
+          FROM redactions ORDER BY document_id,item_id,start_offset,id`)
+          .all<Record<string, unknown>>(),
         db.prepare(`SELECT id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
           review_state,uncertainty_reason,status,created_by,created_at,updated_at
           FROM redactions WHERE id=?`).bind(id).first<Record<string, unknown>>(),
       ]);
-      return {
-        sourceRevision: Number(sourceRevisionRow?.story_source_revision),
-        sourceRows: sourceResult.results,
-        jobs: jobResult.results,
-        candidate: candidate || undefined,
-      };
-    });
-  } catch {
-    return Response.json({
-      error: "Source Privacy decision conflicted",
-      code: SOURCE_PRIVACY_ERROR.mutationConflict,
-    }, { status: 409 });
-  }
-  if (!snapshot.candidate) return Response.json({
-    error: "Redaction not found",
-    code: SOURCE_PRIVACY_ERROR.notFound,
-  }, { status: 404 });
-  if (snapshot.candidate.review_state !== "needs_confirmation") {
-    return Response.json({
-      error: "Only a pending redaction can receive a decision",
-      code: SOURCE_PRIVACY_ERROR.notActionable,
-    }, { status: 409 });
-  }
-  const sourceDigest = await computeSourceDigest(snapshot.sourceRows);
-  const job = snapshot.jobs[0];
-  if (!Number.isSafeInteger(snapshot.sourceRevision) || snapshot.sourceRevision < 0
-      || snapshot.jobs.length !== 1 || job.status !== "complete"
-      || Number(job.completed) !== Number(job.total) || Number(job.rejected) !== 0
-      || job.source_digest !== sourceDigest) {
-    return Response.json({
-      error: "Source Privacy decision conflicted",
-      code: SOURCE_PRIVACY_ERROR.mutationConflict,
-    }, { status: 409 });
-  }
-  const candidate = snapshot.candidate;
-  let updated: Record<string, unknown>;
-  try {
-    updated = await db.transaction(async () => {
+      if (!candidate) return { kind: "notFound" };
+      if (candidate.review_state !== "needs_confirmation") return { kind: "notActionable" };
+      const sourceRevision = Number(sourceRevisionRow?.story_source_revision);
+      const corpusRevision = Number(sourceRevisionRow?.corpus_revision);
+      const documentCount = Number(sourceRevisionRow?.document_count);
+      const itemCount = Number(sourceRevisionRow?.item_count);
+      const job = jobResult.results[0];
+      const completed = Number(job?.completed);
+      const total = Number(job?.total);
+      const rejected = Number(job?.rejected);
+      const sourceDigest = await computeSourceDigest(sourceResult.results);
+      let dialogue;
+      try {
+        dialogue = await buildCurrentSourcePrivacyDialogue(
+          sourceResult.results as unknown as CurrentSourceRow[],
+        );
+      } catch {
+        return { kind: "conflict" };
+      }
+      if (Number(sourceRevisionRow?.current_run_count) !== 1
+          || !validActivatedSourceRevision(sourceRevision)
+          || !validActivatedSourceRevision(corpusRevision)
+          || !/^[0-9a-f]{64}$/u.test(String(sourceRevisionRow?.corpus_digest || ""))
+          || !Number.isSafeInteger(documentCount) || documentCount < 0
+          || !Number.isSafeInteger(itemCount) || itemCount < 0
+          || Number(sourceRevisionRow?.current_document_count) !== documentCount
+          || Number(sourceRevisionRow?.current_item_count) !== itemCount
+          || sourceResult.results.length !== itemCount
+          || jobResult.results.length !== 1 || job.status !== "complete"
+          || !validNonnegativeAuthorityCounter(completed)
+          || !validNonnegativeAuthorityCounter(total)
+          || !validNonnegativeAuthorityCounter(rejected)
+          || completed !== total || completed !== redactionResult.results.length || rejected !== 0
+          || Number(job.source_revision) !== sourceRevision
+          || job.source_digest !== sourceDigest
+          || !/^[0-9a-f]{64}$/u.test(String(job.receipt_digest || ""))
+          || receiptResult.results.length !== 1) {
+        return { kind: "conflict" };
+      }
+      const receipt = await validateStoredSourcePrivacyReceipt(receiptResult.results[0], {
+        jobId: String(job.id),
+        workflowRunId: authority.workflowRunId,
+        sourceRevision,
+        sourceDigest,
+        finalizedCorpus: {
+          revision: corpusRevision,
+          digest: String(sourceRevisionRow?.corpus_digest),
+          documentCount,
+          itemCount,
+        },
+        dialogue,
+        redactions: redactionResult.results as unknown as PersistedSourcePrivacyRedaction[],
+      });
+      if (!receipt) return { kind: "conflict" };
       const [guard, result] = await db.batch([
         storySourceGenerationGuardStatement(
           db,
           authority.workflowRunId,
-          snapshot.sourceRevision,
+          sourceRevision,
         ),
         db.prepare(`UPDATE redactions
             SET review_state=?,status=?,created_by='contributor',updated_at=?
@@ -115,10 +154,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
             AND category=? AND confidence IS ? AND reason IS ?
             AND review_state='needs_confirmation' AND uncertainty_reason IS ?
             AND status=? AND created_by=? AND created_at=? AND updated_at=?
-            AND EXISTS (SELECT 1 FROM redaction_jobs
-              WHERE id=? AND status=? AND stage=? AND model IS ? AND completed=? AND total=?
-                AND rejected=? AND source_digest=? AND started_at=? AND updated_at=?
-                AND completed_at IS ?)`)
+            AND EXISTS (SELECT 1 FROM redaction_jobs j
+              JOIN source_privacy_receipts p ON p.job_id=j.id
+              WHERE j.id=? AND j.status=? AND j.stage=? AND j.model IS ?
+                AND j.completed=? AND j.total=? AND j.rejected=?
+                AND p.workflow_run_id=? AND p.source_revision=? AND j.source_digest=?
+                AND p.source_digest=? AND p.receipt_digest=? AND p.receipt_json=?
+                AND p.created_at=?
+                AND j.started_at=? AND j.updated_at=? AND j.completed_at IS ?)`)
           .bind(
             reviewState, status, now,
             candidate.id, candidate.item_id, candidate.document_id,
@@ -126,7 +169,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
             candidate.confidence, candidate.reason, candidate.uncertainty_reason,
             candidate.status, candidate.created_by, candidate.created_at, candidate.updated_at,
             job.id, job.status, job.stage, job.model, job.completed, job.total,
-            job.rejected, job.source_digest, job.started_at, job.updated_at, job.completed_at,
+            job.rejected, authority.workflowRunId, job.source_revision, job.source_digest,
+            receiptResult.results[0].source_digest, job.receipt_digest,
+            receiptResult.results[0].receipt_json, receiptResult.results[0].created_at,
+            job.started_at, job.updated_at, job.completed_at,
           ),
       ]);
       if (!guard.success || Number(result.meta.changes) !== 1) {
@@ -139,15 +185,24 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       ));
       const persisted = await db.prepare("SELECT * FROM redactions WHERE id=?").bind(id).first();
       if (!persisted) throw new Error("Source Privacy mutation did not persist");
-      return persisted;
+      return { kind: "success", updated: persisted };
     });
   } catch {
-    return Response.json({
-      error: "Source Privacy decision conflicted",
-      code: SOURCE_PRIVACY_ERROR.mutationConflict,
-    }, { status: 409 });
+    outcome = { kind: "conflict" };
   }
-  return Response.json(updated);
+  if (outcome.kind === "notFound") return Response.json({
+    error: "Redaction not found",
+    code: SOURCE_PRIVACY_ERROR.notFound,
+  }, { status: 404 });
+  if (outcome.kind === "notActionable") return Response.json({
+    error: "Only a pending redaction can receive a decision",
+    code: SOURCE_PRIVACY_ERROR.notActionable,
+  }, { status: 409 });
+  if (outcome.kind === "conflict") return Response.json({
+    error: "Source Privacy decision conflicted",
+    code: SOURCE_PRIVACY_ERROR.mutationConflict,
+  }, { status: 409 });
+  return Response.json(outcome.updated);
 }
 
 export async function DELETE() {

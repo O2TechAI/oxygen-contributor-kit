@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 test("local SQLite preserves the viewer database contract", async () => {
@@ -60,6 +61,37 @@ test("local SQLite preserves the viewer database contract", async () => {
     ]);
     assert.equal(casZero.meta.changes, 0);
     assert.equal(casOne.meta.changes, 1);
+  } finally {
+    globalThis.__oxygenLocalSqlite?.database.close();
+    delete globalThis.__oxygenLocalSqlite;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("legacy completed redaction jobs remain present but gain no forged Source Privacy receipt", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "oxygen-local-sqlite-legacy-"));
+  const databasePath = join(stateDir, "oxygen.sqlite");
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`CREATE TABLE redaction_jobs (
+    id TEXT PRIMARY KEY, status TEXT NOT NULL, stage TEXT NOT NULL,
+    model TEXT, completed INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 0, rejected INTEGER NOT NULL DEFAULT 0,
+    source_digest TEXT, started_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    completed_at TEXT
+  )`);
+  legacy.prepare(`INSERT INTO redaction_jobs
+    (id,status,stage,completed,total,rejected,source_digest,started_at,updated_at,completed_at)
+    VALUES ('legacy-complete','complete','privacy',0,0,0,?,?,?,?)`).run(
+    "a".repeat(64), "2036-01-01", "2036-01-01", "2036-01-01",
+  );
+  legacy.close();
+  process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
+  try {
+    const { getLocalDatabase } = await import("../db/index.ts");
+    const db = await getLocalDatabase();
+    assert.equal((await db.prepare("SELECT status FROM redaction_jobs WHERE id='legacy-complete'")
+      .first()).status, "complete");
+    assert.deepEqual((await db.prepare("SELECT * FROM source_privacy_receipts").all()).results, []);
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
     delete globalThis.__oxygenLocalSqlite;

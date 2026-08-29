@@ -23,6 +23,7 @@ import {
   captureStoryReleasePrivacySnapshot,
   capturePackageReleasePrivacySnapshot,
   computeReviewGateDigest,
+  validateReleaseSourcePrivacyReceipt,
   type ReleaseSnapshotTestOptions,
 } from "./release-privacy-snapshot.ts";
 import type { StoryReleaseTarget } from "./timeline.ts";
@@ -30,6 +31,10 @@ import {
   readStoryPrivacyAuthority,
   type StoryPrivacyCandidateResponse,
 } from "./story-privacy-authority.ts";
+import {
+  validActivatedSourceRevision,
+  validNonnegativeAuthorityCounter,
+} from "./authority-validation.mjs";
 
 type ReleaseDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
@@ -124,8 +129,12 @@ type ReleaseReconstructionOptions = ReleaseSnapshotTestOptions & {
 };
 
 const REQUEST_KEYS = new Set(["workflowRunId", "serverVersion", "sourceRevision"]);
-const validRevision = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
-
+const validCounter = (value: unknown): value is number => (
+  typeof value === "number" && validNonnegativeAuthorityCounter(value)
+);
+const validSourceRevision = (value: unknown): value is number => (
+  typeof value === "number" && validActivatedSourceRevision(value)
+);
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -135,8 +144,8 @@ export function parseServerOwnedReleaseRequest(value: unknown): ServerOwnedRelea
     || Object.keys(value).length !== REQUEST_KEYS.size
     || Object.keys(value).some((key) => !REQUEST_KEYS.has(key))
     || !isWorkflowRunId(value.workflowRunId)
-    || !validRevision(value.serverVersion)
-    || !validRevision(value.sourceRevision)) return null;
+    || !validCounter(value.serverVersion)
+    || !validSourceRevision(value.sourceRevision)) return null;
   return {
     workflowRunId: value.workflowRunId,
     serverVersion: value.serverVersion,
@@ -187,8 +196,8 @@ function validPreparationAndPreference(
       || !digestPattern.test(String(receipt.input_digest || ""))
       || !digestPattern.test(String(receipt.scope_digest || ""))
       || !digestPattern.test(String(receipt.output_digest || ""))
-      || !validRevision(Number(receipt.scope_count))
-      || !validRevision(Number(receipt.output_count))
+      || !validCounter(Number(receipt.scope_count))
+      || !validCounter(Number(receipt.output_count))
       || !exactTimestamp(receipt.completed_at)) return false;
   }
   void privacyCandidates;
@@ -201,7 +210,7 @@ function validPreparationAndPreference(
     || probeRun.input_digest !== preferenceReceipt.input_digest
     || probeRun.output_digest !== preferenceReceipt.output_digest
     || Number(probeRun.output_count) !== Number(preferenceReceipt.output_count)
-    || !validRevision(Number(probeRun.output_count))
+    || !validCounter(Number(probeRun.output_count))
     || Number(probeRun.output_count) !== snapshot.probeRows.length + snapshot.bulkRows.length
     || snapshot.probeRows.some((row) => row.answer_choice === null || row.answer_choice === undefined
       || !exactTimestamp(row.answered_at))
@@ -236,7 +245,7 @@ function readReleaseSessionRecord(row: ReleaseSessionRow | null): ReleaseSession
   }
   return {
     session,
-    serverVersion: validRevision(row.server_version) ? row.server_version : 0,
+    serverVersion: validCounter(row.server_version) ? row.server_version : 0,
     sourceRevision,
     persistedAt: typeof row.updated_at === "string" && row.updated_at ? row.updated_at : null,
   };
@@ -262,8 +271,9 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
   const record = readReleaseSessionRecord(initialSnapshot.session as ReleaseSessionRow | null);
   const redactionJob = initialSnapshot.redactionJob;
 
-  const activeSourceRevision = validRevision(run?.story_source_revision)
-    ? run.story_source_revision
+  const candidateSourceRevision = run?.story_source_revision;
+  const activeSourceRevision = validSourceRevision(candidateSourceRevision)
+    ? candidateSourceRevision
     : null;
   const boundedMetadata = {
     serverVersion: record.serverVersion,
@@ -289,10 +299,16 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
 
   const items = initialSnapshot.itemRows as ReleaseItemRow[];
   const currentSourceDigest = await computeSourceDigest(items);
-  if (redactionReleaseError(
+  if (!(await validateReleaseSourcePrivacyReceipt(
+    initialSnapshot,
+    request.workflowRunId,
+    activeSourceRevision,
+    currentSourceDigest,
+  )) || redactionReleaseError(
     redactionJob,
     currentSourceDigest,
     initialSnapshot.redactionReviewRows,
+    activeSourceRevision,
   )) {
     return failure(RELEASE_ERROR.storyNotReady, boundedMetadata);
   }
@@ -422,8 +438,10 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
 }
 
 export async function reconstructReviewedStoryRelease(input: unknown) {
+  const request = parseServerOwnedReleaseRequest(input);
+  if (!request) return failure(RELEASE_ERROR.requestInvalid);
   const { getLocalDatabase: getRuntimeDatabase } = await import("../db/index.ts");
-  return reconstructReviewedStoryReleaseFromDatabase(await getRuntimeDatabase(), input);
+  return reconstructReviewedStoryReleaseFromDatabase(await getRuntimeDatabase(), request);
 }
 
 const messages: Record<ReleaseErrorCode, string> = {

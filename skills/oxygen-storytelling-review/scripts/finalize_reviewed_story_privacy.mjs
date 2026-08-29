@@ -2,6 +2,10 @@
 import { link, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { storyPreparationDigest } from "../../../viewer/lib/story-preparation.ts";
+import {
+  validActivatedSourceRevision,
+  validNonnegativeAuthorityCounter,
+} from "../../../viewer/lib/authority-validation.mjs";
 import { directPathEntry } from "./direct_path_entry.mjs";
 
 const [rootInput, outputInput] = process.argv.slice(2);
@@ -70,6 +74,9 @@ if (!exact(manifest, ["schema", "binding", "targetTransitions", "changedTargetId
   || manifest.schema !== "oxygen.reviewed-story-privacy-preparation"
   || !exact(manifest.binding, bindingKeys) || !Array.isArray(manifest.targetTransitions)
   || !Array.isArray(manifest.changedTargetIds) || !Array.isArray(manifest.shards)
+  || !validActivatedSourceRevision(manifest.binding.sourceRevision)
+  || !validNonnegativeAuthorityCounter(manifest.binding.serverVersion)
+  || !validNonnegativeAuthorityCounter(manifest.binding.changedTargetCount)
   || !exact(manifest.shardLimits, ["maxContentBytes", "maxTargets"])
   || manifest.shardLimits.maxContentBytes !== 1_000_000 || manifest.shardLimits.maxTargets !== 64
   || !hex.test(manifest.manifestDigest)) fail("MANIFEST_INVALID");

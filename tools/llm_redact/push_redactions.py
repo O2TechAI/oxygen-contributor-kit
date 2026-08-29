@@ -19,13 +19,23 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
+from source_privacy_receipt import (
+    REDACTED_TURN_KEYS,
+    REDACTION_KEYS,
+    TURN_INPUT_KEYS,
+    apply_spans,
+    assert_literal_physical_path,
+    bundle_authority,
+    canonical_bundle_bytes,
+    canonical_transport_redactions,
+    digest_value,
+    read_receipt,
+    transport_redaction,
+    validate_findings,
+    validate_receipt,
+)
 
 
-DOCUMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}")
-TRAJECTORY_ITEM_ID = re.compile(r"evt-[0-9a-f]{64}")
-MEETING_ITEM_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}")
-MEETING_FALLBACK_ITEM = re.compile(r"rec-[0-9a-f]{64}")
-REVIEW_STATES = {"deterministic", "needs_confirmation"}
 INVALID_ORIGIN_ERROR = (
     "REDACTION_PUSH_INVALID_ORIGIN: expected an explicit local Viewer HTTP origin"
 )
@@ -73,7 +83,12 @@ def post(base_url: str, body: dict) -> dict:
         return json.loads(response.read().decode("utf-8") or "{}")
 
 
-def load_report(report_path: pathlib.Path) -> dict:
+def load_report(
+    report_path: pathlib.Path,
+    *,
+    receipt_digest: str | None = None,
+    expected_total: int | None = None,
+) -> dict:
     if not report_path.is_file():
         raise SystemExit(
             f"redaction report not found: {report_path}; "
@@ -102,120 +117,105 @@ def load_report(report_path: pathlib.Path) -> dict:
         raise SystemExit(
             f"redaction merge rejected {rejected} finding(s); refusing to push"
         )
+    if receipt_digest is not None and report.get("receiptDigest") != receipt_digest:
+        raise SystemExit("SOURCE_PRIVACY_PUSH_REPORT_MISMATCH")
+    if expected_total is not None and report.get("total_applied") != expected_total:
+        raise SystemExit("SOURCE_PRIVACY_PUSH_REPORT_MISMATCH")
     return report
 
 
-def _identity_error(path: pathlib.Path, message: str) -> SystemExit:
-    return SystemExit(f"invalid redaction identity in {path}: {message}")
+def _input_error() -> SystemExit:
+    return SystemExit("SOURCE_PRIVACY_PUSH_INPUT_INVALID")
 
 
-def collect_spans(redacted: pathlib.Path) -> list[dict]:
-    """Validate every bundle before returning the canonical API spans."""
-    spans = []
-    seen_item_ids: set[str] = set()
-    bundles = [p for p in sorted(redacted.glob("*.json")) if p.name != "index.json"]
-    if not bundles:
-        raise SystemExit(f"no redacted bundles found in {redacted}")
+def collect_spans(redacted: pathlib.Path, receipt: dict) -> list[dict]:
+    """Rebuild and validate the exact receipt-bound API span set."""
+    try:
+        receipt = validate_receipt(receipt)
+    except ValueError:
+        raise _input_error() from None
+    try:
+        redacted = assert_literal_physical_path(redacted).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        raise _input_error() from None
+    declared = {
+        bundle["documentId"]: bundle for bundle in receipt["dialogue"]["bundles"]
+    }
+    expected_names = sorted(f"{document_id}.json" for document_id in declared)
+    try:
+        if redacted.is_symlink() or not redacted.is_dir():
+            raise _input_error()
+        actual_names = sorted(
+            path.name for path in redacted.iterdir() if path.suffix == ".json"
+        )
+    except OSError:
+        raise _input_error() from None
+    if actual_names != expected_names:
+        raise _input_error()
 
-    for path in bundles:
+    spans: list[dict] = []
+    for authority in receipt["dialogue"]["bundles"]:
+        path = redacted / f"{authority['documentId']}.json"
         try:
-            bundle = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise SystemExit(f"cannot read redacted bundle {path}: {error}") from error
-        if not isinstance(bundle, dict):
-            raise _identity_error(path, "bundle must be an object")
-        trajectory = bundle.get("trajectory")
-        if not isinstance(trajectory, str) or not DOCUMENT_ID.fullmatch(trajectory):
-            raise _identity_error(path, "trajectory is missing or invalid")
-        if path.stem != trajectory:
-            raise _identity_error(path, "bundle trajectory does not match its filename")
-        document_kind = bundle.get("document_kind")
-        if document_kind not in {"trajectory", "meeting"}:
-            raise _identity_error(path, "document_kind must be trajectory or meeting")
-        turns = bundle.get("turns")
-        if not isinstance(turns, list):
-            raise _identity_error(path, "turns must be a list")
-
-        seen_event_ids: set[str] = set()
-        for turn in turns:
-            if not isinstance(turn, dict):
-                raise _identity_error(path, "turn must be an object")
-            event_id = turn.get("event_id")
-            document_id = turn.get("document_id")
-            item_id = turn.get("item_id")
-            if not isinstance(event_id, str) or not event_id:
-                raise _identity_error(path, "turn event_id is missing or invalid")
-            if event_id in seen_event_ids:
-                raise _identity_error(path, f"duplicate event_id {event_id}")
-            seen_event_ids.add(event_id)
-            if not isinstance(document_id, str) or not DOCUMENT_ID.fullmatch(document_id):
-                raise _identity_error(path, f"turn {event_id} document_id is missing or invalid")
-            if document_id != trajectory:
-                raise _identity_error(path, f"turn {event_id} belongs to a different document")
-            if not isinstance(item_id, str):
-                raise _identity_error(path, f"turn {event_id} item_id is missing or invalid")
-
-            if document_kind == "trajectory":
-                if not TRAJECTORY_ITEM_ID.fullmatch(item_id) or item_id != event_id:
-                    raise _identity_error(path, f"turn {event_id} has a forged trajectory item_id")
-            else:
-                prefix = f"{document_id}:"
-                if not item_id.startswith(prefix):
-                    raise _identity_error(path, f"turn {event_id} has a forged meeting item_id")
-                component = item_id[len(prefix):]
-                if not MEETING_ITEM_COMPONENT.fullmatch(component):
-                    raise _identity_error(path, f"turn {event_id} meeting item_id has invalid grammar")
-                if component != event_id and not MEETING_FALLBACK_ITEM.fullmatch(component):
-                    raise _identity_error(path, f"turn {event_id} has a forged meeting item_id")
-
-            if item_id in seen_item_ids:
-                raise _identity_error(path, f"duplicate item_id {item_id}")
-            seen_item_ids.add(item_id)
-            redactions = turn.get("redactions", [])
-            if not isinstance(redactions, list):
-                raise _identity_error(path, f"turn {event_id} redactions must be a list")
-            for span in redactions:
-                if not isinstance(span, dict):
-                    raise _identity_error(path, f"turn {event_id} redaction must be an object")
-                try:
-                    start = span["start"]
-                    end = span["end"]
-                    category = span["category"]
-                    review_state = span["review_state"]
-                except KeyError as error:
-                    raise _identity_error(
-                        path, f"turn {event_id} redaction is missing {error.args[0]}"
-                    ) from error
-                uncertainty_reason = span.get("uncertainty_reason")
-                if not isinstance(review_state, str) or review_state not in REVIEW_STATES:
-                    raise _identity_error(
-                        path, f"turn {event_id} redaction review_state is invalid"
-                    )
-                if review_state == "needs_confirmation":
-                    if not isinstance(uncertainty_reason, str) \
-                            or not uncertainty_reason.strip():
-                        raise _identity_error(
-                            path,
-                            f"turn {event_id} needs_confirmation redaction is missing "
-                            "uncertainty_reason",
-                        )
-                elif uncertainty_reason is not None:
-                    raise _identity_error(
-                        path,
-                        f"turn {event_id} deterministic redaction has uncertainty_reason",
-                    )
-                spans.append({
-                    "itemId": item_id,
-                    "documentId": document_id,
-                    "startOffset": start,
-                    "endOffset": end,
-                    "category": category,
-                    "confidence": span.get("confidence"),
-                    "reason": span.get("reason"),
-                    "reviewState": review_state,
-                    "uncertaintyReason": uncertainty_reason,
-                    "createdBy": "llm",
-                })
+            raw = assert_literal_physical_path(path).read_bytes()
+            bundle = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise _input_error() from None
+        if (
+            not isinstance(bundle, dict)
+            or set(bundle) != {"trajectory", "document_kind", "turns", "chars"}
+            or canonical_bundle_bytes(bundle) != raw
+            or not isinstance(bundle.get("turns"), list)
+        ):
+            raise _input_error()
+        original_turns = []
+        bundle_spans: list[dict] = []
+        for turn in bundle["turns"]:
+            if not isinstance(turn, dict) or set(turn) != REDACTED_TURN_KEYS:
+                raise _input_error()
+            if not isinstance(turn.get("redactions"), list):
+                raise _input_error()
+            original_turn = {key: turn[key] for key in TURN_INPUT_KEYS}
+            original_turns.append(original_turn)
+            findings = []
+            for redaction in turn["redactions"]:
+                if not isinstance(redaction, dict) or set(redaction) != REDACTION_KEYS:
+                    raise _input_error()
+                findings.append({"event_id": turn["event_id"], **redaction})
+            rejects: list[dict] = []
+            by_event = validate_findings(
+                findings,
+                {turn["event_id"]: original_turn},
+                str(bundle.get("trajectory") or ""),
+                rejects,
+            )
+            normalized = by_event.get(turn["event_id"], [])
+            if rejects or normalized != turn["redactions"]:
+                raise _input_error()
+            if (
+                not isinstance(turn.get("redacted_text"), str)
+                or turn["redacted_text"] != apply_spans(turn["text"], normalized)
+            ):
+                raise _input_error()
+            bundle_spans.extend(
+                transport_redaction(original_turn, redaction) for redaction in normalized
+            )
+        original_bundle = {**bundle, "turns": original_turns}
+        try:
+            actual_authority = bundle_authority(
+                original_bundle, canonical_bundle_bytes(original_bundle),
+            )
+        except ValueError:
+            raise _input_error() from None
+        if actual_authority != authority:
+            raise _input_error()
+        spans.extend(bundle_spans)
+    spans = canonical_transport_redactions(spans)
+    if (
+        receipt["redactions"]["count"] != len(spans)
+        or receipt["redactions"]["digest"] != digest_value(spans)
+    ):
+        raise _input_error()
     return spans
 
 
@@ -243,6 +243,7 @@ def main() -> int:
     parser.add_argument("--redacted", type=pathlib.Path, required=True)
     parser.add_argument("--base-url", default="http://127.0.0.1:3210")
     parser.add_argument("--model", default="claude-sonnet-5")
+    parser.add_argument("--receipt", type=pathlib.Path, required=True)
     parser.add_argument(
         "--report",
         type=pathlib.Path,
@@ -251,14 +252,23 @@ def main() -> int:
     args = parser.parse_args()
 
     base_url = validate_base_url(args.base_url)
-    report = load_report(args.report or args.redacted.parent / "report.json")
-    spans = collect_spans(args.redacted)
+    try:
+        receipt = read_receipt(args.receipt)
+    except ValueError:
+        raise SystemExit("SOURCE_PRIVACY_PUSH_RECEIPT_INVALID") from None
+    spans = collect_spans(args.redacted, receipt)
+    report = load_report(
+        args.report or args.redacted.parent / "report.json",
+        receipt_digest=receipt["receiptDigest"],
+        expected_total=len(spans),
+    )
 
     result = post(base_url, {
         "replaceAll": True,
         "job": {"status": "complete", "stage": "已完成", "model": args.model,
                 "total": len(spans), "rejected": report["rejected"]},
         "redactions": spans,
+        "receipt": receipt,
     })
     result = validate_push_result(result, len(spans))
     print(json.dumps({"sent": len(spans), **result}, ensure_ascii=False))

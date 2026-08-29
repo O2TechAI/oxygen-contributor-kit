@@ -1,4 +1,5 @@
 import { canonicalAuthorityJson, type StoryCandidateRow } from "./story-readiness.ts";
+import { validActivatedSourceRevision } from "./authority-validation.mjs";
 import {
   parseStorySource,
   type StoryReleaseTarget,
@@ -272,6 +273,8 @@ export async function validateStoryPreparationManifest(
     "schema", "workflowRunId", "sourceRevision", "receipts", "storyPrivacyCandidates",
   ]) || input.schema !== STORY_PREPARATION_SCHEMA
     || input.workflowRunId !== context.workflowRunId
+    || !validActivatedSourceRevision(context.sourceRevision)
+    || !validActivatedSourceRevision(input.sourceRevision)
     || input.sourceRevision !== context.sourceRevision
     || !Array.isArray(input.receipts) || input.receipts.length !== STORY_PREPARATION_LANES.length) {
     return mismatch("STORY_PREPARATION_MANIFEST_INVALID");
@@ -308,6 +311,7 @@ export async function validateStoryPreparationManifest(
   if (!privacyCandidates) return mismatch("STORY_PREPARATION_PRIVACY_CANDIDATES_INVALID");
   if (!context.preference
     || context.preference.workflowRunId !== context.workflowRunId
+    || !validActivatedSourceRevision(context.preference.sourceRevision)
     || context.preference.sourceRevision !== context.sourceRevision
     || !digestPattern.test(context.preference.inputDigest)
     || !digestPattern.test(context.preference.outputDigest)
