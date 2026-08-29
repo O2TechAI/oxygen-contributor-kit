@@ -593,7 +593,9 @@ class LauncherUnitTest(unittest.TestCase):
                 MODULE.main()
 
             environment = start.call_args.kwargs["env"]
-            self.assertEqual(environment["OXYGEN_VIEWER_STATE_DIR"], str(session / "state"))
+            self.assertEqual(
+                environment["OXYGEN_VIEWER_STATE_DIR"], str((session / "state").resolve())
+            )
             request.assert_called_once_with(
                 mock.ANY, "http://127.0.0.1:3210/api/workflow"
             )
