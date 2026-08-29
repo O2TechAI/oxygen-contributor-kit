@@ -294,7 +294,7 @@ $AudioPython = ".\tools\ingest\.venv-audio\Scripts\python.exe"
 $env:HF_TOKEN = "<current-user-token>"
 try {
   python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.m4a" `
-    --out "work\meeting-run" --language en --no-publish
+    --out "work\meeting-run" --language en
 }
 finally {
   Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue

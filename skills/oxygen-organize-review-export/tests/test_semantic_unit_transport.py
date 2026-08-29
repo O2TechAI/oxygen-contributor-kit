@@ -96,6 +96,22 @@ def write_trajectory(run: Path, trajectory_id: str, texts: list[str]) -> list[st
             "cross_trajectory_semantic_replay_count": 0,
         },
     }), encoding="utf-8")
+    index_path = run / "index.json"
+    index = (
+        json.loads(index_path.read_text(encoding="utf-8"))
+        if index_path.exists()
+        else {
+            "schema": builder.INGEST_RUN_SCHEMA,
+            "tool": "collect_repo_trajectories",
+            "collection_status": "complete",
+            "trajectory_count": 0,
+            "trajectory_failures": 0,
+            "trajectories": [],
+        }
+    )
+    index["trajectories"].append({"trajectory_id": trajectory_id, "ok": True})
+    index["trajectory_count"] = len(index["trajectories"])
+    index_path.write_text(json.dumps(index), encoding="utf-8")
     return [event["event_id"] for event in events]
 
 

@@ -46,6 +46,22 @@ def write_trajectory(run: Path, trajectory_id: str) -> Path:
             "cross_trajectory_semantic_replay_count": 0,
         },
     }), encoding="utf-8")
+    index_path = run / "index.json"
+    index = (
+        json.loads(index_path.read_text(encoding="utf-8"))
+        if index_path.exists()
+        else {
+            "schema": MODULE.INGEST_RUN_SCHEMA,
+            "tool": "collect_repo_trajectories",
+            "collection_status": "complete",
+            "trajectory_count": 0,
+            "trajectory_failures": 0,
+            "trajectories": [],
+        }
+    )
+    index["trajectories"].append({"trajectory_id": trajectory_id, "ok": True})
+    index["trajectory_count"] = len(index["trajectories"])
+    index_path.write_text(json.dumps(index), encoding="utf-8")
     return directory
 
 
@@ -186,6 +202,77 @@ class BuildProjectMapTests(unittest.TestCase):
                 [{"id": "unit-all", "kind": "discussion", "members": ids}],
             )
             self.assertEqual(manifest["units"][0]["memberCount"], 3)
+
+    def test_trajectory_inventory_requires_exact_successful_index_membership(self):
+        mutations = ("failed", "extra", "missing")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                run = Path(temporary)
+                trajectory = write_trajectory(run, "traj-current")
+                index_path = run / "index.json"
+                index = json.loads(index_path.read_text(encoding="utf-8"))
+                if mutation == "failed":
+                    index["trajectory_failures"] = 1
+                    index["trajectories"][0]["ok"] = False
+                    index_path.write_text(json.dumps(index), encoding="utf-8")
+                elif mutation == "extra":
+                    (run / "trajectories" / "traj-stale").mkdir()
+                else:
+                    for path in trajectory.iterdir():
+                        path.unlink()
+                    trajectory.rmdir()
+
+                with self.assertRaisesRegex(
+                    ValueError, "trajectory (index authority|index membership)",
+                ):
+                    MODULE.source_inventory(run)
+
+    def test_trajectory_index_contract_is_bound_to_its_exact_producer(self):
+        mutations = {
+            "missing-tool": lambda index: index.pop("tool"),
+            "unknown-tool": lambda index: index.update(tool="unknown"),
+            "collector-missing-ok": lambda index: index["trajectories"][0].pop("ok"),
+            "collector-false-ok": lambda index: index["trajectories"][0].update(ok=False),
+            "collector-in-progress": lambda index: index.update(collection_status="in_progress"),
+            "schema-tool-mismatch": lambda index: index.update(
+                schema=MODULE.AI_REVIEW_RUN_SCHEMA,
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                run = Path(temporary)
+                write_trajectory(run, "traj-current")
+                index_path = run / "index.json"
+                index = json.loads(index_path.read_text(encoding="utf-8"))
+                mutate(index)
+                index_path.write_text(json.dumps(index), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "trajectory index authority"):
+                    MODULE.source_inventory(run)
+
+    def test_real_anthropic_index_shape_is_accepted_without_collector_ok(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            write_trajectory(run, "traj-current")
+            (run / "index.json").write_text(json.dumps({
+                "schema": MODULE.INGEST_RUN_SCHEMA,
+                "tool": "import_anthropic_export",
+                "trajectory_count": 1,
+                "trajectories": [{"trajectory_id": "traj-current"}],
+            }), encoding="utf-8")
+
+            ids, sources, digests = MODULE.source_inventory(run)
+
+            self.assertEqual(len(ids), 1)
+            self.assertEqual([source["id"] for source in sources], ["traj-current"])
+            self.assertEqual(set(ids), set(digests))
+
+    def test_trajectory_directory_without_index_is_never_discovered_by_glob(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            write_trajectory(run, "traj-current")
+            (run / "index.json").unlink()
+            with self.assertRaisesRegex(ValueError, "trajectory index authority is required"):
+                MODULE.source_inventory(run)
 
     def test_root_meeting_file_and_symlink_fail_closed(self):
         with tempfile.TemporaryDirectory() as temporary:

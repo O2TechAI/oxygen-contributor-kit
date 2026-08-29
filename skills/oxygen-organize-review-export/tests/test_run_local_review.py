@@ -68,7 +68,14 @@ def write_trajectory(run: Path, trajectory_id: str) -> Path:
 def write_index(run: Path, entries: list[dict]) -> None:
     run.mkdir(parents=True, exist_ok=True)
     (run / "index.json").write_text(
-        json.dumps({"schema": MODULE.INGEST_RUN_SCHEMA, "trajectories": entries}, ensure_ascii=False), encoding="utf-8"
+        json.dumps({
+            "schema": MODULE.INGEST_RUN_SCHEMA,
+            "tool": "collect_repo_trajectories",
+            "collection_status": "complete",
+            "trajectory_count": len(entries),
+            "trajectory_failures": 0,
+            "trajectories": entries,
+        }, ensure_ascii=False), encoding="utf-8"
     )
 
 
@@ -420,6 +427,117 @@ class LauncherUnitTest(unittest.TestCase):
                 MODULE.save_viewer_state(runtime, destination, "run-existing")
             self.assertEqual(sentinel.read_bytes(), b"owner bytes")
             self.assertEqual(list(destination.iterdir()), [sentinel])
+
+    def test_hardlinked_sqlite_is_rejected_without_changing_either_link(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            database = write_viewer_state(runtime, [("workflow", b"complete")])
+            external = root / "external.sqlite"
+            try:
+                os.link(database, external)
+            except OSError as error:
+                self.skipTest(f"hard links unavailable: {error}")
+            before = database.read_bytes()
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$",
+            ):
+                MODULE.validate_viewer_state(runtime)
+
+            self.assertEqual(database.read_bytes(), before)
+            self.assertEqual(external.read_bytes(), before)
+
+    def test_aliased_state_directory_is_rejected_without_external_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            external_runtime = root / "external-runtime"
+            write_viewer_state(external_runtime, [("workflow", b"complete")])
+            before = state_file_bytes(external_runtime / "state")
+            session = root / "session"
+            session.mkdir()
+            directory_link_or_skip(self, session / "state", external_runtime / "state")
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$",
+            ):
+                MODULE.validate_viewer_state(session)
+
+            self.assertEqual(state_file_bytes(external_runtime / "state"), before)
+
+    def test_symlinked_state_member_is_rejected_without_external_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(runtime, [("workflow", b"complete")])
+            external = root / "external.bin"
+            external.write_bytes(b"external member bytes")
+            link = runtime / "state" / "linked.bin"
+            try:
+                link.symlink_to(external)
+            except OSError as error:
+                self.skipTest(f"file symlink unavailable: {error}")
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$",
+            ):
+                MODULE.validate_viewer_state(runtime)
+
+            self.assertEqual(external.read_bytes(), b"external member bytes")
+
+    def test_save_parent_junction_is_rejected_before_external_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(runtime, [("workflow", b"complete")])
+            external = root / "external"
+            external.mkdir()
+            sentinel = external / "sentinel.bin"
+            sentinel.write_bytes(b"external owner bytes")
+            directory_link_or_skip(self, root / "alias", external)
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_SAVE_FAILED)}$",
+            ):
+                MODULE.save_viewer_state(runtime, root / "alias" / "saved", "run-safe")
+
+            self.assertEqual(sentinel.read_bytes(), b"external owner bytes")
+            self.assertFalse((external / "saved").exists())
+
+    def test_late_save_collision_is_no_clobber_and_clean_retry_succeeds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(runtime, [("workflow", b"complete")])
+            destination = root / "sessions" / "saved"
+            destination.parent.mkdir()
+            real_rename = MODULE.rename_noreplace
+
+            def race(staging: Path, final: Path) -> None:
+                final.mkdir()
+                (final / "owner.bin").write_bytes(b"raced owner bytes")
+                real_rename(staging, final)
+
+            with (
+                mock.patch.object(MODULE, "_current_head", return_value="d" * 40),
+                mock.patch.object(MODULE, "rename_noreplace", side_effect=race),
+                self.assertRaisesRegex(
+                    SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_EXISTS)}$",
+                ),
+            ):
+                MODULE.save_viewer_state(runtime, destination, "run-race")
+
+            self.assertEqual((destination / "owner.bin").read_bytes(), b"raced owner bytes")
+            self.assertEqual(list(destination.parent.glob(".saved.save-*")), [])
+            (destination / "owner.bin").unlink()
+            destination.rmdir()
+            with (
+                mock.patch.object(MODULE, "_current_head", return_value="d" * 40),
+                mock.patch("builtins.print"),
+            ):
+                saved = MODULE.save_viewer_state(runtime, destination, "run-race")
+            self.assertEqual(saved, destination)
+            self.assertEqual(MODULE.validate_viewer_state(saved), saved / "state" / "oxygen.sqlite")
 
     def test_save_runs_after_termination_and_port_release(self):
         order = []
@@ -1789,6 +1907,14 @@ class LocateInputsContainmentTest(unittest.TestCase):
                 "trajectory_failures": 1,
                 "trajectories": [{"trajectory_id": "traj-alpha", "ok": False}],
             }), encoding="utf-8")
+            self.assert_import_fails_before_request(run, MODULE.INPUT_INDEX_INVALID)
+
+    def test_empty_index_never_falls_back_to_stale_trajectory_glob(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_trajectory(run, "traj-stale")
+            write_index(run, [])
+
             self.assert_import_fails_before_request(run, MODULE.INPUT_INDEX_INVALID)
 
     def test_multi_meeting_cli_preserves_document_ids_and_qualified_records(self):

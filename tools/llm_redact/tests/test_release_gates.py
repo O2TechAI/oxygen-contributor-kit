@@ -1,10 +1,12 @@
 import contextlib
+import http.server
 import importlib.util
 import io
 import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+import threading
 import unittest
 from unittest import mock
 
@@ -58,6 +60,175 @@ def write_push_fixture(root: Path, *, turn_updates=None, trajectory="traj-1") ->
 
 
 class ReleaseGateTest(unittest.TestCase):
+    def test_valid_loopback_origins_pass_before_private_input(self):
+        cases = [
+            ("http://127.0.0.1:3210", "http://127.0.0.1:3210"),
+            ("http://localhost:3210", "http://localhost:3210"),
+        ]
+        for supplied, normalized in cases:
+            with self.subTest(supplied=supplied), TemporaryDirectory() as temp:
+                argv = [
+                    "push_redactions.py", "--redacted", str(Path(temp) / "redacted"),
+                    "--report", str(Path(temp) / "report.json"),
+                    "--base-url", supplied,
+                ]
+                with mock.patch.object(PUSH, "load_report", return_value={"rejected": 0}), \
+                        mock.patch.object(PUSH, "collect_spans", return_value=[]), \
+                        mock.patch.object(PUSH, "post", return_value={
+                            "imported": 0, "status": "complete", "rejected": [],
+                        }) as post, \
+                        mock.patch.object(sys, "argv", argv), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(PUSH.main(), 0)
+                self.assertEqual(post.call_args.args[0], normalized)
+
+    def test_invalid_origin_families_fail_before_private_input_or_http(self):
+        cases = [
+            "https://127.0.0.1:3210",
+            "http://example.com:3210",
+            "http://viewer.local:3210",
+            "http://0.0.0.0:3210",
+            "http://[::1]:3210",
+            "http://127.1:3210",
+            "http://user@localhost:3210",
+            "http://user:secret@localhost:3210",
+            "http://localhost",
+            "http://localhost:not-a-port",
+            "http://localhost:0",
+            "http://localhost:01",
+            "http://localhost:65536",
+            "http://localhost:3210/",
+            "http://localhost:3210/private",
+            "http://localhost:3210/;private",
+            "http://localhost:3210?",
+            "http://localhost:3210?private=1",
+            "http://localhost:3210#",
+            "http://localhost:3210#private",
+            "http://localhost:3210\t",
+            "\nhttp://localhost:3210",
+            "HTTP://localhost:3210",
+            "http://[localhost:3210",
+        ]
+        with TemporaryDirectory() as temp:
+            fixture_path = str(Path(temp) / "private" / "report.json")
+            for supplied in cases:
+                with self.subTest(supplied=supplied):
+                    argv = [
+                        "push_redactions.py", "--redacted", str(Path(temp) / "private"),
+                        "--report", fixture_path, "--base-url", supplied,
+                    ]
+                    with mock.patch.object(PUSH, "load_report") as load_report, \
+                            mock.patch.object(PUSH, "collect_spans") as collect_spans, \
+                            mock.patch.object(PUSH, "post") as post, \
+                            mock.patch.object(PUSH.urllib.request, "Request") as request, \
+                            mock.patch.object(PUSH.urllib.request, "build_opener") as opener, \
+                            mock.patch.object(sys, "argv", argv), \
+                            self.assertRaises(SystemExit) as raised:
+                        PUSH.main()
+                    self.assertEqual(str(raised.exception), PUSH.INVALID_ORIGIN_ERROR)
+                    self.assertNotIn(supplied, str(raised.exception))
+                    self.assertNotIn(fixture_path, str(raised.exception))
+                    load_report.assert_not_called()
+                    collect_spans.assert_not_called()
+                    post.assert_not_called()
+                    request.assert_not_called()
+                    opener.assert_not_called()
+
+    def test_direct_post_rejects_external_origin_before_request_construction(self):
+        supplied = "http://example.com:3210"
+        sentinel = "SYNTHETIC_PRIVATE_MARKER"
+        with mock.patch.object(PUSH.urllib.request, "Request") as request, \
+                mock.patch.object(PUSH.urllib.request, "build_opener") as opener, \
+                self.assertRaises(SystemExit) as raised:
+            PUSH.post(supplied, {"marker": sentinel})
+        self.assertEqual(str(raised.exception), PUSH.INVALID_ORIGIN_ERROR)
+        self.assertNotIn(supplied, str(raised.exception))
+        self.assertNotIn(sentinel, str(raised.exception))
+        request.assert_not_called()
+        opener.assert_not_called()
+
+    def test_post_disables_environment_proxies(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b"{}"
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with mock.patch.object(
+            PUSH.urllib.request,
+            "getproxies",
+            return_value={"http": "http://proxy.example:8080"},
+        ) as getproxies, mock.patch.object(
+            PUSH.urllib.request, "build_opener", return_value=opener,
+        ) as build_opener:
+            self.assertEqual(
+                PUSH.post("http://127.0.0.1:3210", {"marker": "private"}),
+                {},
+            )
+
+        getproxies.assert_not_called()
+        handlers = build_opener.call_args.args
+        self.assertIsInstance(handlers[0], PUSH.urllib.request.ProxyHandler)
+        self.assertEqual(handlers[0].proxies, {})
+        self.assertIsInstance(handlers[1], PUSH._RejectRedirects)
+
+    def test_caller_controlled_route_is_not_part_of_post_contract(self):
+        sentinel = "SYNTHETIC_ROUTE_MARKER"
+        with mock.patch.object(PUSH.urllib.request, "Request") as request, \
+                mock.patch.object(PUSH.urllib.request, "build_opener") as opener, \
+                self.assertRaises(TypeError):
+            PUSH.post(
+                "http://127.0.0.1:3210",
+                "@example.com:80/api/redactions",
+                {"marker": sentinel},
+            )
+        request.assert_not_called()
+        opener.assert_not_called()
+
+    def test_redirect_statuses_stop_without_follow_up_contact(self):
+        sentinel = "SYNTHETIC_REDIRECT_MARKER"
+        for status in (301, 302, 303, 307, 308):
+            with self.subTest(status=status):
+                class RedirectHandler(http.server.BaseHTTPRequestHandler):
+                    requests = []
+
+                    def do_POST(self):
+                        length = int(self.headers.get("content-length", "0"))
+                        body = self.rfile.read(length)
+                        self.__class__.requests.append((self.command, self.path, body))
+                        self.send_response(status)
+                        self.send_header(
+                            "Location",
+                            f"http://127.0.0.1:{self.server.server_port}/redirect-target",
+                        )
+                        self.end_headers()
+
+                    def do_GET(self):
+                        self.__class__.requests.append((self.command, self.path, b""))
+                        self.send_response(204)
+                        self.end_headers()
+
+                    def log_message(self, format, *args):
+                        pass
+
+                server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    with self.assertRaises(SystemExit) as raised:
+                        PUSH.post(
+                            f"http://127.0.0.1:{server.server_port}",
+                            {"marker": sentinel},
+                        )
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
+                self.assertEqual(str(raised.exception), PUSH.REDIRECT_ERROR)
+                self.assertEqual(
+                    [(method, path) for method, path, _ in RedirectHandler.requests],
+                    [("POST", "/api/redactions")],
+                )
+
     def test_missing_worker_file_fails_coverage(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -171,8 +342,8 @@ class ReleaseGateTest(unittest.TestCase):
             })
             captured = {}
 
-            def fake_post(base_url, path, body):
-                captured.update({"base_url": base_url, "path": path, "body": body})
+            def fake_post(base_url, body):
+                captured.update({"base_url": base_url, "body": body})
                 return {"imported": 1, "status": "complete", "rejected": []}
 
             argv = [
@@ -184,7 +355,6 @@ class ReleaseGateTest(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(PUSH.main(), 0)
 
-        self.assertEqual(captured["path"], "/api/redactions")
         self.assertEqual(captured["body"]["redactions"], [{
             "itemId": EVENT_ID,
             "documentId": "traj-1",

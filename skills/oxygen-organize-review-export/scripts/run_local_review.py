@@ -50,6 +50,7 @@ from ingest.human_source_projection import (
     projected_contribution_id,
 )
 from oxygen_utf8 import configure_utf8_stdio, text_subprocess_options
+from atomic_rename import rename_noreplace
 
 
 VIEWER_HOST = "127.0.0.1"
@@ -325,14 +326,79 @@ def viewer_environment(runtime_root: Path) -> dict[str, str]:
     return environment
 
 
+def _is_link_or_reparse(path: Path, metadata: os.stat_result) -> bool:
+    if stat.S_ISLNK(metadata.st_mode):
+        return True
+    attributes = getattr(metadata, "st_file_attributes", None)
+    if os.name == "nt" and attributes is None:
+        raise ValueError
+    if attributes is None:
+        return False
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def _literal_state_path(path: Path, *, allow_missing_tail: bool = False) -> Path:
+    """Validate every existing literal component before syntactic normalization."""
+    literal = path.expanduser()
+    if not literal.is_absolute():
+        literal = Path.cwd() / literal
+    current = Path(literal.anchor)
+    missing = False
+    parts = literal.parts[1:] if literal.anchor else literal.parts
+    for index, part in enumerate(parts):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            current = current.parent
+        else:
+            current = current / part
+        try:
+            metadata = current.lstat()
+            missing = False
+        except FileNotFoundError:
+            if not allow_missing_tail:
+                raise ValueError
+            missing = True
+            continue
+        except OSError as error:
+            raise ValueError from error
+        if _is_link_or_reparse(current, metadata):
+            raise ValueError
+        if index < len(parts) - 1 and not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError
+    if missing and not allow_missing_tail:
+        raise ValueError
+    return Path(os.path.abspath(literal))
+
+
+def _validate_unique_state_tree(runtime_root: Path) -> tuple[Path, Path]:
+    root = _literal_state_path(runtime_root)
+    state_root = _literal_state_path(root / "state")
+    database = _literal_state_path(state_root / "oxygen.sqlite")
+    if not root.is_dir() or not state_root.is_dir() or not database.is_file():
+        raise ValueError
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        for entry in directory.iterdir():
+            metadata = entry.lstat()
+            if _is_link_or_reparse(entry, metadata):
+                raise ValueError
+            if stat.S_ISDIR(metadata.st_mode):
+                pending.append(entry)
+            elif stat.S_ISREG(metadata.st_mode):
+                if metadata.st_nlink != 1:
+                    raise ValueError
+            else:
+                raise ValueError
+    return root, database
+
+
 def validate_viewer_state(runtime_root: Path) -> Path:
     """Return the SQLite path for a complete, readable Viewer state directory."""
-    state_root = runtime_root / "state"
-    database = state_root / "oxygen.sqlite"
     try:
-        if not state_root.is_dir() or not database.is_file():
-            raise OSError
-        database_uri = f"{database.resolve(strict=True).as_uri()}?mode=ro"
+        _, database = _validate_unique_state_tree(runtime_root)
+        database_uri = f"{database.as_uri()}?mode=ro"
         with closing(sqlite3.connect(database_uri, uri=True)) as connection:
             integrity = connection.execute("PRAGMA integrity_check").fetchall()
             workflow_rows = connection.execute(WORKFLOW_SESSION_QUERY).fetchmany(2)
@@ -345,10 +411,15 @@ def validate_viewer_state(runtime_root: Path) -> Path:
     return database
 
 
-def resolve_state_path(path: Path, error: str) -> Path:
+def resolve_state_path(
+    path: Path,
+    error: str,
+    *,
+    allow_missing_tail: bool = False,
+) -> Path:
     try:
-        return path.expanduser().resolve()
-    except (OSError, RuntimeError):
+        return _literal_state_path(path, allow_missing_tail=allow_missing_tail)
+    except (OSError, RuntimeError, ValueError):
         raise SystemExit(error) from None
 
 
@@ -371,19 +442,22 @@ def save_viewer_state(
     workflow_run_id: str | None,
 ) -> Path:
     """Copy one stopped Viewer's complete state directory into a new local session."""
-    validate_viewer_state(runtime_root)
-    destination = resolve_state_path(destination, VIEWER_STATE_SAVE_FAILED)
-    if destination.exists() or destination.is_symlink():
-        raise SystemExit(VIEWER_STATE_EXISTS)
-
-    created = False
+    staging: Path | None = None
     try:
+        validate_viewer_state(runtime_root)
+        destination = resolve_state_path(
+            destination, VIEWER_STATE_SAVE_FAILED, allow_missing_tail=True,
+        )
+        if destination.exists() or destination.is_symlink():
+            raise SystemExit(VIEWER_STATE_EXISTS)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.mkdir()
-        created = True
-        saved_state = destination / "state"
-        shutil.copytree(runtime_root / "state", saved_state, symlinks=True)
-        validate_viewer_state(destination)
+        destination = resolve_state_path(
+            destination, VIEWER_STATE_SAVE_FAILED, allow_missing_tail=True,
+        )
+        staging = Path(tempfile.mkdtemp(
+            prefix=f".{destination.name}.save-", dir=destination.parent,
+        ))
+        shutil.copytree(runtime_root / "state", staging / "state", symlinks=False)
         locator = "\n".join((
             f"origin_worktree: {KIT_ROOT.resolve()}",
             f"origin_head: {_current_head()}",
@@ -391,15 +465,20 @@ def save_viewer_state(
             f"saved_path: {destination}",
             "",
         ))
-        (destination / "viewer-session.txt").write_text(locator, encoding="utf-8")
-    except SystemExit:
-        if created:
-            shutil.rmtree(destination, ignore_errors=True)
+        (staging / "viewer-session.txt").write_text(locator, encoding="utf-8")
+        validate_viewer_state(staging)
+        rename_noreplace(staging, destination)
+    except FileExistsError:
+        raise SystemExit(VIEWER_STATE_EXISTS) from None
+    except SystemExit as error:
+        if str(error) == VIEWER_STATE_EXISTS:
+            raise
         raise SystemExit(VIEWER_STATE_SAVE_FAILED) from None
     except (OSError, RuntimeError, shutil.Error, sqlite3.Error):
-        if created:
-            shutil.rmtree(destination, ignore_errors=True)
         raise SystemExit(VIEWER_STATE_SAVE_FAILED) from None
+    finally:
+        if staging is not None and staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
 
     print(f"Saved Viewer state: {destination}", flush=True)
     return destination
@@ -1061,54 +1140,64 @@ def locate_inputs(run: Path):
             raise SystemExit(INPUT_INDEX_INVALID) from None
         if not isinstance(index, dict):
             raise SystemExit(INPUT_INDEX_INVALID)
-        if (
-            index.get("schema") not in {INGEST_RUN_SCHEMA, AI_REVIEW_RUN_SCHEMA}
-            or "schema_version" in index
+        schema = index.get("schema")
+        tool = index.get("tool")
+        collector_index = schema == INGEST_RUN_SCHEMA and tool == "collect_repo_trajectories"
+        anthropic_index = schema == INGEST_RUN_SCHEMA and tool == "import_anthropic_export"
+        review_index = schema == AI_REVIEW_RUN_SCHEMA and tool == "prepare_ai_review_run"
+        if "schema_version" in index or not (
+            collector_index or anthropic_index or review_index
         ):
             raise SystemExit(INPUT_INDEX_INVALID)
-        entries = index.get("trajectories") or []
-        trajectory_failures = index.get("trajectory_failures", 0)
+        entries = index.get("trajectories")
+        trajectory_count = index.get("trajectory_count")
         if (
             not isinstance(entries, list)
-            or not isinstance(trajectory_failures, int)
-            or isinstance(trajectory_failures, bool)
-            or trajectory_failures < 0
-            or trajectory_failures != sum(
-                1 for entry in entries
-                if isinstance(entry, dict) and entry.get("ok", True) is False
-            )
+            or not isinstance(trajectory_count, int)
+            or isinstance(trajectory_count, bool)
+            or trajectory_count != len(entries)
         ):
             raise SystemExit(INPUT_INDEX_INVALID)
-        if trajectory_failures:
+        if collector_index and (
+            index.get("collection_status") != "complete"
+            or not isinstance(index.get("trajectory_failures"), int)
+            or isinstance(index.get("trajectory_failures"), bool)
+            or index.get("trajectory_failures") != 0
+        ):
             raise SystemExit(INPUT_INDEX_INVALID)
-        selected_entries = 0
+        if (anthropic_index or review_index) and "trajectory_failures" in index:
+            raise SystemExit(INPUT_INDEX_INVALID)
         seen_ids = set()
         for entry in entries:
-            if not isinstance(entry, dict) or ("ok" in entry and not isinstance(entry["ok"], bool)):
+            if not isinstance(entry, dict):
+                raise SystemExit(INPUT_INDEX_INVALID)
+            if (
+                (collector_index and entry.get("ok") is not True)
+                or (review_index and entry.get("ok") is not True)
+                or (anthropic_index and "ok" in entry)
+            ):
                 raise SystemExit(INPUT_INDEX_INVALID)
             trajectory_id = entry.get("trajectory_id")
             trajectory_id = _validated_trajectory_id(trajectory_id)
             if trajectory_id in seen_ids:
                 raise SystemExit(INPUT_INDEX_INVALID)
             seen_ids.add(trajectory_id)
-            if entry.get("ok", True) is False:
-                raise SystemExit(INPUT_INDEX_INVALID)
-            selected_entries += 1
             directory = _located_input(approved_run / "trajectories" / trajectory_id, approved_run)
             if not directory.is_dir():
                 raise SystemExit(INPUT_PATH_MISSING)
             _trajectory_files(directory, approved_run)
             trajectories.append(directory)
-        if not trajectories and selected_entries == 0:
-            trajectory_root = approved_run / "trajectories"
-            if trajectory_root.is_dir():
-                for events_candidate in sorted(trajectory_root.glob("*/events.jsonl")):
-                    events_path = _located_input(events_candidate, approved_run)
-                    directory = _located_input(events_path.parent, approved_run)
-                    if not events_path.is_file() or not directory.is_dir():
-                        raise SystemExit(INPUT_PATH_MISSING)
-                    _trajectory_files(directory, approved_run)
-                    trajectories.append(directory)
+        trajectory_root = approved_run / "trajectories"
+        if _has_path_entry(trajectory_root):
+            physical_root = _located_input(trajectory_root, approved_run)
+            if not physical_root.is_dir():
+                raise SystemExit(INPUT_PATH_MISSING)
+            try:
+                actual_ids = {entry.name for entry in physical_root.iterdir()}
+            except (OSError, RuntimeError):
+                raise SystemExit(INPUT_PATH_MISSING) from None
+            if actual_ids != seen_ids:
+                raise SystemExit(INPUT_INDEX_INVALID)
 
     _located_file(approved_run / "project-map.json", approved_run, required=False)
 
@@ -1529,7 +1618,9 @@ def main():
     run = args.run.expanduser().resolve() if args.run else None
     target = args.target.expanduser().resolve() if args.target else None
     save_destination = (
-        resolve_state_path(args.save_state, VIEWER_STATE_SAVE_FAILED)
+        resolve_state_path(
+            args.save_state, VIEWER_STATE_SAVE_FAILED, allow_missing_tail=True,
+        )
         if args.save_state else None
     )
     resume_session = (

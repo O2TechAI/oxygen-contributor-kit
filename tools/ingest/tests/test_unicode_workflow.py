@@ -100,6 +100,14 @@ class UnicodeWorkflowTest(unittest.TestCase):
                     "cross_trajectory_semantic_replay_count": 0,
                 },
             }), encoding="utf-8")
+            (run / "index.json").write_text(json.dumps({
+                "schema": "oxygen.ingest-run",
+                "tool": "collect_repo_trajectories",
+                "collection_status": "complete",
+                "trajectory_count": 1,
+                "trajectory_failures": 0,
+                "trajectories": [{"trajectory_id": "traj-unicode", "ok": True}],
+            }), encoding="utf-8")
             project_map = run_python(
                 "skills/oxygen-organize-review-export/scripts/build_project_map.py",
                 run,

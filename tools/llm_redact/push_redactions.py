@@ -26,16 +26,50 @@ TRAJECTORY_ITEM_ID = re.compile(r"evt-[0-9a-f]{64}")
 MEETING_ITEM_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}")
 MEETING_FALLBACK_ITEM = re.compile(r"rec-[0-9a-f]{64}")
 REVIEW_STATES = {"deterministic", "needs_confirmation"}
+INVALID_ORIGIN_ERROR = (
+    "REDACTION_PUSH_INVALID_ORIGIN: expected an explicit local Viewer HTTP origin"
+)
+REDIRECT_ERROR = "REDACTION_PUSH_REDIRECT_BLOCKED: HTTP redirects are disabled"
+LOOPBACK_ORIGIN = re.compile(
+    r"http://(?P<host>127\.0\.0\.1|localhost):(?P<port>[1-9][0-9]{0,4})"
+)
 
 
-def post(base_url: str, path: str, body: dict) -> dict:
+def validate_base_url(base_url: str) -> str:
+    """Return the canonical local Viewer origin or fail without echoing input."""
+    if not isinstance(base_url, str):
+        raise SystemExit(INVALID_ORIGIN_ERROR)
+    match = LOOPBACK_ORIGIN.fullmatch(base_url)
+    if match is None or int(match.group("port")) > 65535:
+        raise SystemExit(INVALID_ORIGIN_ERROR)
+    return base_url
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    def _blocked(self, request, response, code, message, headers):
+        response.close()
+        raise SystemExit(REDIRECT_ERROR)
+
+    http_error_301 = _blocked
+    http_error_302 = _blocked
+    http_error_303 = _blocked
+    http_error_307 = _blocked
+    http_error_308 = _blocked
+
+
+def post(base_url: str, body: dict) -> dict:
+    base_url = validate_base_url(base_url)
     request = urllib.request.Request(
-        f"{base_url}{path}",
+        f"{base_url}/api/redactions",
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={"content-type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _RejectRedirects(),
+    )
+    with opener.open(request, timeout=60) as response:
         return json.loads(response.read().decode("utf-8") or "{}")
 
 
@@ -216,10 +250,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    base_url = validate_base_url(args.base_url)
     report = load_report(args.report or args.redacted.parent / "report.json")
     spans = collect_spans(args.redacted)
 
-    result = post(args.base_url, "/api/redactions", {
+    result = post(base_url, {
         "replaceAll": True,
         "job": {"status": "complete", "stage": "已完成", "model": args.model,
                 "total": len(spans), "rejected": report["rejected"]},

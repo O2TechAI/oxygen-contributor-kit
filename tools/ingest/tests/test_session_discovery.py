@@ -397,7 +397,15 @@ class CollectorMainBoundaryTest(unittest.TestCase):
             (current / "events.jsonl").write_text("current\n", encoding="utf-8")
             (stale / "events.jsonl").write_text("stale\n", encoding="utf-8")
             (out / "index.json").write_text(json.dumps({
+                "schema": MODULE.INGEST_RUN_SCHEMA,
                 "tool": "collect_repo_trajectories",
+                "collection_status": "complete",
+                "trajectory_count": 2,
+                "trajectory_failures": 0,
+                "trajectories": [
+                    {"trajectory_id": "traj-current", "ok": True},
+                    {"trajectory_id": "traj-stale", "ok": True},
+                ],
             }), encoding="utf-8")
 
             self.assertTrue(MODULE.validate_rerunnable_output(out))
@@ -406,6 +414,100 @@ class CollectorMainBoundaryTest(unittest.TestCase):
             )
             self.assertTrue((current / "events.jsonl").is_file())
             self.assertFalse(stale.exists())
+
+    def test_failed_same_identity_rerun_removes_previous_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            repo = root / "repo"
+            out = root / "collector-output"
+            repo.mkdir()
+            session = home / ".codex" / "sessions" / "same.jsonl"
+            write_jsonl(session, [codex_session_meta(str(repo), "same")])
+            previous = out / "trajectories" / "traj-same"
+            previous.mkdir(parents=True)
+            (previous / "events.jsonl").write_bytes(b"previous successful bytes\n")
+            (out / "index.json").write_text(json.dumps({
+                "schema": MODULE.INGEST_RUN_SCHEMA,
+                "tool": "collect_repo_trajectories",
+                "collection_status": "complete",
+                "trajectory_count": 1,
+                "trajectory_failures": 0,
+                "trajectories": [{"trajectory_id": "traj-same", "ok": True}],
+            }), encoding="utf-8")
+
+            def failed_extract(*_args):
+                return {
+                    "trajectory_id": "traj-same",
+                    "system": "codex",
+                    "source_session": str(session),
+                    "source_sha256_prefix": "synthetic",
+                    "ok": False,
+                    "error": "synthetic failure",
+                }
+
+            with (
+                mock.patch.object(MODULE, "extract", side_effect=failed_extract),
+                mock.patch("builtins.print"),
+            ):
+                result = MODULE.main([
+                    str(repo), "--home", str(home), "--out", str(out),
+                    "--agents", "codex", "--user", "synthetic",
+                ])
+
+            self.assertEqual(result, 1)
+            self.assertFalse(previous.exists())
+            index = json.loads((out / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(index["trajectory_failures"], 1)
+            self.assertEqual(index["trajectories"][0]["trajectory_id"], "traj-same")
+            self.assertIs(index["trajectories"][0]["ok"], False)
+
+    def test_interrupted_rerun_invalidates_old_index_before_trajectory_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            repo = root / "repo"
+            out = root / "collector-output"
+            repo.mkdir()
+            session = home / ".codex" / "sessions" / "same.jsonl"
+            write_jsonl(session, [codex_session_meta(str(repo), "same")])
+            previous = out / "trajectories" / "traj-same"
+            previous.mkdir(parents=True)
+            (previous / "events.jsonl").write_bytes(b"previous successful bytes\n")
+            (out / "index.json").write_text(json.dumps({
+                "schema": MODULE.INGEST_RUN_SCHEMA,
+                "tool": "collect_repo_trajectories",
+                "collection_status": "complete",
+                "trajectory_count": 1,
+                "trajectory_failures": 0,
+                "trajectories": [{"trajectory_id": "traj-same", "ok": True}],
+            }), encoding="utf-8")
+
+            def interrupted_extract(*_args):
+                current = json.loads((out / "index.json").read_text(encoding="utf-8"))
+                self.assertEqual(current["collection_status"], "in_progress")
+                self.assertEqual(current["trajectory_failures"], 1)
+                self.assertEqual(current["trajectories"], [])
+                raise RuntimeError("synthetic interruption")
+
+            with (
+                mock.patch.object(MODULE, "extract", side_effect=interrupted_extract),
+                mock.patch("builtins.print"),
+                self.assertRaisesRegex(RuntimeError, "synthetic interruption"),
+            ):
+                MODULE.main([
+                    str(repo), "--home", str(home), "--out", str(out),
+                    "--agents", "codex", "--user", "synthetic",
+                ])
+
+            self.assertEqual(
+                (previous / "events.jsonl").read_bytes(),
+                b"previous successful bytes\n",
+            )
+            current = json.loads((out / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(current["collection_status"], "in_progress")
+            self.assertEqual(current["trajectory_failures"], 1)
+            self.assertTrue(MODULE.validate_rerunnable_output(out))
 
     def test_nonempty_unidentified_output_is_never_cleaned_as_a_rerun(self):
         with tempfile.TemporaryDirectory() as temporary:

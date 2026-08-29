@@ -126,6 +126,24 @@ class ImportMeetingParserTest(unittest.TestCase):
 
 
 class ImportMeetingTopologyTest(unittest.TestCase):
+    def test_documented_text_command_shape_reaches_import_boundary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "meeting notes.txt"
+            source.write_text("Speaker A: bounded text\n", encoding="utf-8")
+            out = root / "meeting-run"
+
+            result = run_main(source, "--out", out)
+
+            self.assertEqual(result["meeting_count"], 1)
+            self.assertTrue(Path(result["meetings"][0]["output"]).is_dir())
+
+    def test_canonical_docs_contain_no_removed_no_publish_flag(self):
+        for name in ("README.md", "SOP.md"):
+            with self.subTest(name=name):
+                text = (KIT_ROOT / name).read_text(encoding="utf-8")
+                self.assertNotIn("--no-publish", text)
+
     def test_mocked_reparse_metadata_is_detected_and_unknown_windows_metadata_fails_closed(self):
         reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
         metadata = SimpleNamespace(
@@ -242,6 +260,8 @@ class ImportMeetingTopologyTest(unittest.TestCase):
                     return 0
 
             def run_mock_asr(command, **_kwargs):
+                self.assertIn("--language", command)
+                self.assertEqual(command[command.index("--language") + 1], "en")
                 asr_out = Path(command[command.index("--out") + 1])
                 asr_outputs.append(asr_out)
                 asr_out.mkdir(parents=True)
@@ -254,6 +274,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             with mock.patch.object(MODULE.subprocess, "Popen", side_effect=run_mock_asr):
                 result = run_main(
                     source, "--out", run, "--meeting-id", "meeting-audio",
+                    "--language", "en",
                 )
 
             meeting = run / "meetings" / "meeting-audio"
