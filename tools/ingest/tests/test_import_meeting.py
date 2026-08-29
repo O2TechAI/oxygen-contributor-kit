@@ -191,7 +191,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             self.assertEqual(result["output"], str(run.resolve()))
             self.assertEqual(result["meeting_count"], 1)
             self.assertEqual(result["meetings"][0]["meeting_id"], "meeting-stable")
-            self.assertEqual(result["meetings"][0]["output"], str(meeting))
+            self.assertEqual(result["meetings"][0]["output"], str(meeting.resolve()))
             self.assertNotIn("staged", result["meetings"][0])
             for name in ("meeting.json", "raw.md", "timestamped.txt"):
                 self.assertFalse((run / name).exists())
