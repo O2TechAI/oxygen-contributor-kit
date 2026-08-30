@@ -8,6 +8,22 @@ Upstream source Privacy runs before Story generation. It prepares the reviewed i
 
 Story/Release Privacy runs after the Story candidate exists. The Agent authors one meaning-preserving proposal for every release target, while candidates remain explanatory metadata outside `oxygen.story`. The contributor then chooses the exact release bytes through the server-owned target authority; the hydrated Story session does not own those choices.
 
+## Provider Processing And Final Export Boundary
+
+During Organization and Story authoring, the contributor-selected current coding Agent/model
+provider may process raw or private project material so semantic meaning and narrative quality
+survive. Provider processing is distinct from automatic upload, publication, and final package
+export. Oxygen must not silently switch providers or send Privacy-derived data to a second endpoint.
+Final package reconstruction is provider-free, but the whole workflow is not necessarily
+provider-free or entirely on-machine.
+
+The hard Privacy boundary applies to the exact contributor-reviewed final export bytes. Detection
+and anonymization are best effort, and final human review is mandatory. Final release uses
+meaning-preserving anonymization rather than blank deletion; making an exact noncredential public
+occurrence public remains an explicit reviewed contributor choice. The localhost Viewer, working
+artifacts, and final package flow do not automatically upload or publish data, and
+`publication_approved=false` remains unchanged.
+
 ## Reviewed Boundary Is The Ceiling
 
 Story work may use only the reviewed contribution artifact and explicitly permitted local Story data. Do not reopen or search:
@@ -88,6 +104,11 @@ Unsupported factual additions remain `needs_evidence` until exact permitted evid
 
 Verify:
 
+- selected-provider processing is distinguished from automatic upload, publication, and final
+  package export;
+- final export reconstruction does not call a provider or silently switch to a second endpoint;
+- the hard Privacy boundary is limited to exact contributor-reviewed final export bytes, with
+  best-effort detection/anonymization and mandatory final human review;
 - source Privacy preparation ran on the reviewed input boundary, not raw package output;
 - unresolved source `needs_confirmation` items block release;
 - Story/Release candidate metadata and target proposals do not exist inside `oxygen.story`;
