@@ -48,6 +48,10 @@ MAX_PROJECT_MAP_SUMMARY_BYTES = MAX_STORY_SEMANTIC_PROJECTION_BYTES
 # A third manifest budget bounds JSON framing and the remaining project metadata.
 MAX_PROJECT_MAP_BYTES = 3 * MAX_SEMANTIC_MANIFEST_BYTES
 SEMANTIC_WORKER_KIND_INVALID = "SEMANTIC_WORKER_KIND_INVALID"
+PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION = "PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION"
+CWD_RELATIONS = {"exact", "child", "parent", "sibling", "unrelated", "missing_unparseable"}
+CURRENT_CWD_RELATIONS = {"exact", "child"}
+FOREIGN_CWD_RELATIONS = {"sibling", "unrelated"}
 SEMANTIC_UNIT_KIND_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 SOURCE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}")
 CURRENT_PROJECT_MAP_KEYS = {
@@ -262,7 +266,30 @@ def indexed_trajectory_directories(run: Path) -> list[Path]:
             actual[entry.name] = physical
     if set(actual) != set(expected_ids):
         raise ValueError("trajectory index membership is not exact")
-    return [actual[value] for value in sorted(expected_ids, key=lambda item: item.encode("utf-8"))]
+    selected_ids = expected_ids
+    if collector_index:
+        selected_ids = []
+        unresolved = False
+        for entry in entries:
+            if "cwd_relations" not in entry:
+                unresolved = True
+                continue
+            relations = entry["cwd_relations"]
+            if (
+                not isinstance(relations, list) or not relations
+                or relations != sorted(relations) or len(relations) != len(set(relations))
+                or any(not isinstance(value, str) or value not in CWD_RELATIONS
+                       for value in relations)
+            ):
+                raise ValueError("trajectory index authority is invalid")
+            relation_set = set(relations)
+            if relation_set <= CURRENT_CWD_RELATIONS:
+                selected_ids.append(entry["trajectory_id"])
+            elif not relation_set <= FOREIGN_CWD_RELATIONS:
+                unresolved = True
+        if unresolved:
+            raise ValueError(PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION)
+    return [actual[value] for value in sorted(selected_ids, key=lambda item: item.encode("utf-8"))]
 
 
 def source_inventory(
@@ -953,6 +980,8 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        if isinstance(error, ValueError) and str(error) == SEMANTIC_WORKER_KIND_INVALID:
-            raise SystemExit(SEMANTIC_WORKER_KIND_INVALID) from None
+        if isinstance(error, ValueError) and str(error) in {
+            SEMANTIC_WORKER_KIND_INVALID, PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION,
+        }:
+            raise SystemExit(str(error)) from None
         raise SystemExit("PROJECT_MAP_INPUT_INVALID") from None

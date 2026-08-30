@@ -79,7 +79,9 @@ def write_source_trajectory(run: Path, trajectory_id: str, events: list[dict]) -
             "trajectories": [],
         }
     )
-    index["trajectories"].append({"trajectory_id": trajectory_id, "ok": True})
+    index["trajectories"].append({
+        "trajectory_id": trajectory_id, "ok": True, "cwd_relations": ["exact"],
+    })
     index["trajectory_count"] = len(index["trajectories"])
     index_path.write_text(json.dumps(index), encoding="utf-8")
     return directory
@@ -223,6 +225,58 @@ def file_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path) ->
 
 
 class PrepareAiReviewRunTest(unittest.TestCase):
+    def test_source_privacy_copies_only_current_collector_trajectories(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            output = root / "prepared"
+            event = lambda label: {
+                "event_id": synthetic_event_id(label), "event_type": "message",
+                "actor": {"type": "human"}, "payload": {"text": label},
+            }
+            write_source_trajectory(source, "traj-current", [event("current")])
+            write_source_trajectory(source, "traj-foreign", [event("foreign")])
+            index_path = source / "index.json"
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index["trajectories"][1]["cwd_relations"] = ["unrelated"]
+            index_path.write_text(json.dumps(index), encoding="utf-8")
+            write_semantic_project_map(source)
+
+            trajectories, meetings = MODULE.prepare_run(source, output)
+
+            self.assertEqual([entry["trajectory_id"] for entry in trajectories], ["traj-current"])
+            self.assertEqual(meetings, 0)
+            self.assertEqual(
+                [path.name for path in (output / "trajectories").iterdir()], ["traj-current"],
+            )
+
+    def test_unresolved_cli_creates_no_output_and_emits_only_fixed_outcome(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            output = root / "HOSTILE_SENTINEL-example.invalid-output"
+            write_source_trajectory(source, "traj-one", [{
+                "event_id": synthetic_event_id("one"), "event_type": "message",
+                "actor": {"type": "human"}, "payload": {"text": "safe"},
+            }])
+            write_semantic_project_map(source)
+            index_path = source / "index.json"
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index["trajectories"][0]["cwd_relations"] = ["parent"]
+            index_path.write_text(json.dumps(index), encoding="utf-8")
+
+            result = subprocess.run([
+                sys.executable, str(MODULE_PATH), "--run", str(source), "--out", str(output),
+            ], capture_output=True, text=True, encoding="utf-8", check=False)
+
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr.splitlines(), [
+                MODULE.project_map_authority.PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION,
+            ])
+            self.assertFalse(output.exists())
+            self.assertNotIn("HOSTILE_SENTINEL", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
     def run_main(self, source: Path, output: Path) -> None:
         with mock.patch.object(sys, "argv", [
             str(MODULE_PATH), "--run", str(source), "--out", str(output),

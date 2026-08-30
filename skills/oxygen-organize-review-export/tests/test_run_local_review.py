@@ -74,7 +74,10 @@ def write_index(run: Path, entries: list[dict]) -> None:
             "collection_status": "complete",
             "trajectory_count": len(entries),
             "trajectory_failures": 0,
-            "trajectories": entries,
+            "trajectories": [
+                {**entry, "cwd_relations": entry.get("cwd_relations", ["exact"])}
+                for entry in entries
+            ],
         }, ensure_ascii=False), encoding="utf-8"
     )
 
@@ -2106,6 +2109,49 @@ class LocateInputsContainmentTest(unittest.TestCase):
                     }.isdisjoint(item)
                     for item in entry["items"]
                 ))
+
+    def test_viewer_import_posts_only_current_collector_documents(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            current = write_trajectory(run, "traj-current")
+            write_trajectory(run, "traj-foreign")
+            write_index(run, [
+                {"trajectory_id": "traj-current", "ok": True},
+                {"trajectory_id": "traj-foreign", "ok": True,
+                 "cwd_relations": ["sibling", "unrelated"]},
+            ])
+            trajectories, meetings = MODULE.locate_inputs(run)
+            self.assertEqual(trajectories, [current.resolve()])
+            self.assertEqual(meetings, [])
+            with mock.patch.object(
+                MODULE, "request_json", return_value=finalized_response(1, 1)
+            ) as request:
+                self.assertEqual(MODULE.import_run(
+                    mock.sentinel.opener, "http://127.0.0.1:3298", run,
+                ), (1, 1))
+            documents = request.call_args.kwargs["body"]["documents"]
+            self.assertEqual([item["document"]["id"] for item in documents], ["traj-current"])
+
+    def test_unresolved_viewer_import_makes_zero_requests_and_cli_is_fixed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "HOSTILE_SENTINEL-run")
+            write_trajectory(run, "traj-one")
+            write_index(run, [{
+                "trajectory_id": "traj-one", "ok": True, "cwd_relations": ["parent"],
+            }])
+            self.assert_import_fails_before_request(
+                run, MODULE.project_map_authority.PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION,
+            )
+            result = subprocess.run([
+                sys.executable, str(MODULE_PATH), str(run),
+                "--attach-url", "http://127.0.0.1:9", "--workflow-run-id", "run-1",
+            ], capture_output=True, text=True, encoding="utf-8", check=False)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr.splitlines(), [
+                MODULE.project_map_authority.PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION,
+            ])
+            self.assertNotIn("HOSTILE_SENTINEL", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
 
     def test_failed_collector_index_is_never_attached_as_an_exhaustive_run(self):
         with tempfile.TemporaryDirectory() as temporary:

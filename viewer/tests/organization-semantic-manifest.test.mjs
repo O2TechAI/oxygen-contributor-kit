@@ -362,7 +362,7 @@ test("Python Organization finalizer and Viewer validator share one digest contra
       collection_status: "complete",
       trajectory_count: 1,
       trajectory_failures: 0,
-      trajectories: [{ trajectory_id: "traj-parity", ok: true }],
+      trajectories: [{ trajectory_id: "traj-parity", ok: true, cwd_relations: ["exact"] }],
     }), "utf8");
     const skeleton = spawnSync("python", [
       script, root, "--primary-project", "Synthetic Project",

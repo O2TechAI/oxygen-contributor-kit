@@ -52,6 +52,11 @@ from ingest.human_source_projection import (
 from oxygen_utf8 import configure_utf8_stdio, text_subprocess_options
 from atomic_rename import rename_noreplace
 
+SCRIPTS_ROOT = Path(__file__).resolve().parent
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
+import build_project_map as project_map_authority
+
 
 VIEWER_HOST = "127.0.0.1"
 INPUT_RUN_INVALID = "INPUT_RUN_INVALID"
@@ -1329,6 +1334,12 @@ def locate_inputs(run: Path):
                 raise SystemExit(INPUT_PATH_MISSING) from None
             if actual_ids != seen_ids:
                 raise SystemExit(INPUT_INDEX_INVALID)
+        try:
+            trajectories = project_map_authority.indexed_trajectory_directories(approved_run)
+        except (OSError, RuntimeError, ValueError) as error:
+            if str(error) == project_map_authority.PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION:
+                raise SystemExit(str(error)) from None
+            raise SystemExit(INPUT_INDEX_INVALID) from None
 
     _located_file(approved_run / "project-map.json", approved_run, required=False)
 
@@ -1770,6 +1781,7 @@ def main():
         ):
             parser.error("attach mode requires RUN, --attach-url, and --workflow-run-id only")
         run = args.run.expanduser().resolve()
+        locate_inputs(run)
         attach_run(normalize_local_viewer_url(args.attach_url), args.workflow_run_id, run)
         return
 

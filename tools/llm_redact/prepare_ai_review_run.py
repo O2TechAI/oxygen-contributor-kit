@@ -224,7 +224,9 @@ def prepare_trajectories(source: Path, output: Path) -> list[dict]:
     prepared: list[tuple[str, dict, list[dict], dict, int]] = []
     try:
         trajectory_directories = project_map_authority.indexed_trajectory_directories(source)
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError) as error:
+        if str(error) == project_map_authority.PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION:
+            raise SystemExit(str(error)) from None
         raise SystemExit(INPUT_INDEX_INVALID) from None
     for trajectory_dir in trajectory_directories:
         events_path = trajectory_dir / "events.jsonl"
@@ -472,7 +474,9 @@ def validated_project_map(source: Path) -> tuple[dict, dict]:
         canonical = project_map_authority.validate_project_map_authority(
             source, project_map,
         )
-    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as error:
+        if str(error) == project_map_authority.PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION:
+            raise SystemExit(str(error)) from None
         raise SystemExit(INPUT_SEMANTIC_AUTHORITY_INVALID) from None
     return project_map, canonical
 

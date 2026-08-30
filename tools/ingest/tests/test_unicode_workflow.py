@@ -108,7 +108,10 @@ class UnicodeWorkflowTest(unittest.TestCase):
                 "collection_status": "complete",
                 "trajectory_count": 1,
                 "trajectory_failures": 0,
-                "trajectories": [{"trajectory_id": "traj-unicode", "ok": True}],
+                "trajectories": [{
+                    "trajectory_id": "traj-unicode", "ok": True,
+                    "cwd_relations": ["exact"],
+                }],
             }), encoding="utf-8")
             project_map = run_python(
                 "skills/oxygen-organize-review-export/scripts/build_project_map.py",
