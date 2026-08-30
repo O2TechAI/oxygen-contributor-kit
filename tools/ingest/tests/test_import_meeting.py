@@ -66,6 +66,175 @@ def hard_link_or_skip(testcase: unittest.TestCase, source: Path, target: Path) -
 
 
 class ImportMeetingParserTest(unittest.TestCase):
+    def test_speaker_time_matrix_preserves_turn_ownership_and_source_anchors(self):
+        text = (
+            "\nAlex O'Neil (Host) 9:05 AM\n"
+            "Opening line\nWe reconvene at 10:45 AM\n\nSecond line\n\n"
+            "[李 小龙] 14:06:07\n中文正文\n"
+            "Alex O'Neil (Host) 09:07:08 PM\nClosing line\n"
+            "[Jean-Luc O’Neil] 23:59\nOne-line body\n\n"
+        )
+
+        records, detected = MODULE.parse_lines(text)
+
+        self.assertEqual(detected, "speaker-time")
+        self.assertEqual(
+            [
+                (record["speaker"], record["timestamp"], record["source_line"], record["text"])
+                for record in records
+            ],
+            [
+                ("Alex O'Neil (Host)", "9:05 AM", 2,
+                 "Opening line\nWe reconvene at 10:45 AM\nSecond line"),
+                ("李 小龙", "14:06:07", 8, "中文正文"),
+                ("Alex O'Neil (Host)", "09:07:08 PM", 10, "Closing line"),
+                ("Jean-Luc O’Neil", "23:59", 12, "One-line body"),
+            ],
+        )
+        self.assertEqual([record["record_id"] for record in records], [
+            "rec-00001", "rec-00002", "rec-00003", "rec-00004",
+        ])
+        self.assertEqual([record["order"] for record in records], [1, 2, 3, 4])
+
+    def test_speaker_time_layout_is_stable_across_newlines_blanks_names_and_counts(self):
+        families = (
+            (("[Ava Stone]", "08:01", ("alpha",)),),
+            (
+                ("Speaker 7", "1:02 PM", ("beta one", "beta two")),
+                ("[Noémie D'Arcy]", "13:03:04", ("gamma",)),
+            ),
+            (
+                ("张 三", "07:00", ("one",)),
+                ("[Rina-Soo Park]", "7:01:02 am", ("two",)),
+                ("张 三", "19:02", ("three",)),
+            ),
+        )
+
+        for turns in families:
+            with self.subTest(record_count=len(turns)):
+                compact = "\n".join(
+                    line
+                    for speaker, clock, body in turns
+                    for line in (f"{speaker} {clock}", *body)
+                ) + "\n"
+                separated = "\n\n".join(
+                    "\n".join((f"{speaker} {clock}", *body))
+                    for speaker, clock, body in turns
+                ) + "\n\n"
+                variants = (compact, compact.replace("\n", "\r\n"), separated)
+                normalized = []
+                for variant in variants:
+                    records, detected = MODULE.parse_lines(variant)
+                    self.assertEqual(detected, "speaker-time")
+                    self.assertEqual(len(records), len(turns))
+                    normalized.append([
+                        (record["speaker"], record["timestamp"], record["text"])
+                        for record in records
+                    ])
+                self.assertEqual(normalized[1:], normalized[:1] * 2)
+
+    def test_explicit_single_and_recurrent_bare_speakers_are_accepted(self):
+        cases = (
+            (
+                "[Solo Speaker] 08:01:02\none\ntwo\n",
+                [("Solo Speaker", "08:01:02", 1, "one\ntwo")],
+            ),
+            (
+                "Dana North 09:00\none\nLee West 09:10\ntwo\n"
+                "Dana North 09:20\nthree\nLee West 09:30\nfour\n",
+                [
+                    ("Dana North", "09:00", 1, "one"),
+                    ("Lee West", "09:10", 3, "two"),
+                    ("Dana North", "09:20", 5, "three"),
+                    ("Lee West", "09:30", 7, "four"),
+                ],
+            ),
+        )
+        for text, expected in cases:
+            with self.subTest(expected=expected):
+                records, detected = MODULE.parse_lines(text)
+                self.assertEqual(detected, "speaker-time")
+                self.assertEqual([
+                    (row["speaker"], row["timestamp"], row["source_line"], row["text"])
+                    for row in records
+                ], expected)
+
+    def test_speaker_time_structural_evidence_fails_closed(self):
+        cases = {
+            "malformed header": "[Alice Stone] 09:00\none\n[Bob Reed] 25:61\ntwo\n",
+            "missing body": "[Alice Stone] 09:00\n[Bob Reed] 10:00\ntwo\n",
+            "incomplete final header": "[Alice Stone] 09:00\none\n[Bob Reed] 10:00\n",
+            "mixed plain preamble": (
+                "ordinary preamble\n[Alice Stone] 09:00\none\n[Bob Reed] 10:00\ntwo\n"
+            ),
+            "mixed structured layouts": (
+                "[Alice Stone] 09:00\none\nBob Reed: ambiguous owner\n"
+                "[Carol Jones] 10:00\nthree\n"
+            ),
+            "recurring malformed clocks": (
+                "[Dana North] 25:61\nFirst body\n[Lee West] 24:99\nSecond body\n"
+            ),
+            "monotonic singleton bare title": (
+                "Dana North 09:00\none\nLee West 09:10\ntwo\n"
+                "Checkpoint Review 09:15\nordinary body\nDana North 09:20\nthree\n"
+                "Lee West 09:30\nfour\n"
+            ),
+            "multiple unique bare candidates": "Dana North 09:00\none\nLee West 09:10\ntwo\n",
+            "unbalanced bracket": "[Dana North 09:00\none\n",
+            "nested bracket": "[[Dana North]] 09:00\none\n",
+        }
+        for name, text in cases.items():
+            with self.subTest(name=name), self.assertRaises(MODULE.MeetingStructureError):
+                MODULE.parse_lines(text)
+
+    def test_plain_and_existing_structured_records_are_behaviorally_unchanged(self):
+        cases = (
+            (
+                "ordinary prose\nzero-speaker note\n",
+                "plain",
+                [
+                    {"timestamp": None, "speaker": None, "text": "ordinary prose",
+                     "source_line": 1, "record_id": "rec-00001", "order": 1},
+                    {"timestamp": None, "speaker": None, "text": "zero-speaker note",
+                     "source_line": 2, "record_id": "rec-00002", "order": 2},
+                ],
+            ),
+            (
+                "Checkpoint Review 14:30\nThe release continues tomorrow.\n",
+                "plain",
+                [
+                    {"timestamp": None, "speaker": None, "text": "Checkpoint Review 14:30",
+                     "source_line": 1, "record_id": "rec-00001", "order": 1},
+                    {"timestamp": None, "speaker": None,
+                     "text": "The release continues tomorrow.", "source_line": 2,
+                     "record_id": "rec-00002", "order": 2},
+                ],
+            ),
+            (
+                "0:01Speaker Afirst\ncontinuation\n0:02Speaker Bsecond\n",
+                "timestamped",
+                [
+                    {"timestamp": "0:01", "speaker": "A", "text": "first continuation",
+                     "source_line": 1, "record_id": "rec-00001", "order": 1},
+                    {"timestamp": "0:02", "speaker": "B", "text": "second",
+                     "source_line": 3, "record_id": "rec-00002", "order": 2},
+                ],
+            ),
+            (
+                "Alice: first\ncontinuation\nBob: second\n",
+                "speaker-labeled",
+                [
+                    {"timestamp": None, "speaker": "Alice", "text": "first continuation",
+                     "source_line": 1, "record_id": "rec-00001", "order": 1},
+                    {"timestamp": None, "speaker": "Bob", "text": "second",
+                     "source_line": 3, "record_id": "rec-00002", "order": 2},
+                ],
+            ),
+        )
+        for text, detected, expected in cases:
+            with self.subTest(detected=detected):
+                self.assertEqual(MODULE.parse_lines(text), (expected, detected))
+
     def test_documented_multiword_and_unicode_speaker_labels_are_preserved(self):
         records, detected = MODULE.parse_lines(
             "Speaker A: first\nAlex Smith  :   second\n张三: 第三\n李  小龙: 第四\n说话人0: 第五\n"
@@ -126,6 +295,69 @@ class ImportMeetingParserTest(unittest.TestCase):
 
 
 class ImportMeetingTopologyTest(unittest.TestCase):
+    def test_speaker_time_import_preserves_schema_privacy_and_exact_fields(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "synthetic.txt"
+            source.write_text(
+                "[Ada North] 11:02 AM\nfirst line\nsecond line\n"
+                "[Béla West] 16:03:04\nthird line\n",
+                encoding="utf-8",
+            )
+            run = root / "run"
+
+            result = run_main(
+                source, "--out", run, "--meeting-id", "speaker-time",
+                "--title", "Synthetic", "--date", "2026-08-30",
+            )
+
+            meeting = run / "meetings" / "speaker-time"
+            dataset = json.loads((meeting / "meeting.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["meetings"][0]["detected_format"], "speaker-time")
+            self.assertEqual(dataset["schema"], MODULE.MEETING_SCHEMA)
+            self.assertEqual(dataset["tool"], "import_meeting")
+            self.assertEqual(dataset["speakers"], ["Ada North", "Béla West"])
+            self.assertEqual(
+                [(row["speaker"], row["timestamp"], row["text"]) for row in dataset["records"]],
+                [
+                    ("Ada North", "11:02 AM", "first line\nsecond line"),
+                    ("Béla West", "16:03:04", "third line"),
+                ],
+            )
+            self.assertTrue(dataset["contains_unredacted_source_text"])
+            self.assertEqual(dataset["review_status"], "pending")
+            self.assertFalse(dataset["publication_approved"])
+
+    def test_hostile_structural_failure_emits_only_safe_code_and_no_artifacts(self):
+        with tempfile.TemporaryDirectory(prefix="HOSTILE_PATH_SENTINEL_") as temporary:
+            root = Path(temporary)
+            sentinel = "HOSTILE_BODY_SENTINEL_https_example_invalid"
+            source = root / "synthetic.txt"
+            source.write_text(
+                f"Alice Stone 09:00\n{sentinel}\nBob Reed 10:00\n",
+                encoding="utf-8",
+            )
+            run = root / "run"
+
+            result = subprocess.run(
+                [sys.executable, str(MODULE_PATH), str(source), "--out", str(run)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(
+                result.stderr.splitlines(), [MODULE.STRUCTURAL_FAILURE_CODE]
+            )
+            captured = result.stdout + result.stderr
+            for leaked in (
+                "Traceback", str(root), str(KIT_ROOT), sentinel, "https", "example", "invalid",
+            ):
+                self.assertNotIn(leaked, captured)
+            self.assertFalse(run.exists())
+            for artifact in ("meeting.json", "raw.md", "timestamped.txt"):
+                self.assertEqual(list(root.rglob(artifact)), [])
+
     def test_documented_text_command_shape_reaches_import_boundary(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
