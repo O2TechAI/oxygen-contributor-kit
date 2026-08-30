@@ -1173,17 +1173,14 @@ def _prepare_trajectory(directory: Path, approved_run: Path) -> dict:
         TRAJECTORY_SCHEMA: TRAJECTORY_EVENT_SCHEMA,
         AI_REVIEW_TRAJECTORY_SCHEMA: AI_REVIEW_EVENT_SCHEMA,
     }.get(manifest_schema)
-    if event_schema is None or "schema_version" in manifest:
+    if event_schema is None:
         raise SystemExit(INPUT_FILE_INVALID)
     if manifest.get("trajectory_id") is not None:
         _validated_trajectory_id(manifest["trajectory_id"])
     redaction = _read_json_object(redaction_path) if redaction_path else {
         "review_status": "pending", "publication_approved": False,
     }
-    if redaction_path and (
-        redaction.get("schema") != TRAJECTORY_REDACTION_SCHEMA
-        or "schema_version" in redaction
-    ):
+    if redaction_path and redaction.get("schema") != TRAJECTORY_REDACTION_SCHEMA:
         raise SystemExit(INPUT_FILE_INVALID)
     try:
         events = [
@@ -1196,7 +1193,6 @@ def _prepare_trajectory(directory: Path, approved_run: Path) -> dict:
     if not all(
         isinstance(event, dict)
         and event.get("schema") == event_schema
-        and "schema_version" not in event
         for event in events
     ):
         raise SystemExit(INPUT_FILE_INVALID)
@@ -1238,10 +1234,7 @@ def _prepare_trajectory(directory: Path, approved_run: Path) -> dict:
 
 def _prepare_meeting(path: Path) -> dict:
     dataset = _read_json_object(path)
-    if (
-        dataset.get("schema") not in {MEETING_SCHEMA, AI_REVIEW_MEETING_SCHEMA}
-        or "schema_version" in dataset
-    ):
+    if dataset.get("schema") not in {MEETING_SCHEMA, AI_REVIEW_MEETING_SCHEMA}:
         raise SystemExit(INPUT_FILE_INVALID)
     records = dataset.get("records")
     if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
@@ -1281,9 +1274,7 @@ def locate_inputs(run: Path):
         collector_index = schema == INGEST_RUN_SCHEMA and tool == "collect_repo_trajectories"
         anthropic_index = schema == INGEST_RUN_SCHEMA and tool == "import_anthropic_export"
         review_index = schema == AI_REVIEW_RUN_SCHEMA and tool == "prepare_ai_review_run"
-        if "schema_version" in index or not (
-            collector_index or anthropic_index or review_index
-        ):
+        if not (collector_index or anthropic_index or review_index):
             raise SystemExit(INPUT_INDEX_INVALID)
         entries = index.get("trajectories")
         trajectory_count = index.get("trajectory_count")

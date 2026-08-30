@@ -273,11 +273,9 @@ def validated_trajectory(
     if (
         not isinstance(manifest, dict)
         or manifest.get("schema") != manifest_schema
-        or "schema_version" in manifest
         or not all(
             isinstance(event, dict)
             and event.get("schema") == event_schema
-            and "schema_version" not in event
             for event in events
         )
     ):
@@ -506,7 +504,6 @@ def discover_meetings(
         if (
             not isinstance(meeting, dict)
             or meeting.get("schema") != expected_schema
-            or "schema_version" in meeting
             or not isinstance(meeting.get("records"), list)
         ):
             raise SystemExit(INPUT_MEETING_INVALID)
