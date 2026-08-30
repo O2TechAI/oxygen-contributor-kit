@@ -111,6 +111,47 @@ test("root routing is progressive and preserves the canonical stage owners", asy
   }
 });
 
+test("Source Privacy docs attach the reviewed generation before the receipt window", async () => {
+  const [readme, sop, organizerSkill] = await Promise.all([
+    read("README.md"),
+    read("SOP.md"),
+    read("skills/oxygen-organize-review-export/SKILL.md"),
+  ]);
+
+  for (const document of [readme, sop]) {
+    for (const startMarker of [
+      "python3 tools/llm_redact/prepare_ai_review_run.py",
+      "python .\\tools\\llm_redact\\prepare_ai_review_run.py",
+    ]) {
+      const start = document.indexOf(startMarker);
+      assert.ok(start >= 0, `${startMarker} must exist`);
+      const sequence = document.slice(start);
+      assertOrdered(sequence, [
+        "prepare_ai_review_run.py",
+        "audit_coverage.py",
+        "run_local_review.py",
+        "extract_dialogue.py",
+        "verify_coverage.py",
+        "merge_and_apply.py",
+        "push_redactions.py",
+      ]);
+      const extraction = sequence.indexOf("extract_dialogue.py");
+      const push = sequence.indexOf("push_redactions.py", extraction);
+      assert.doesNotMatch(sequence.slice(extraction, push), /run_local_review\.py/);
+    }
+  }
+
+  for (const document of [readme, sop, organizerSkill]) {
+    assert.match(document, /source-bearing attach[\s\S]{0,240}(?:assignments|findings)[\s\S]{0,160}stale/i);
+    assert.match(document, /(?:re-sign|hand-edit)[\s\S]{0,100}(?:reuse|old receipt)/i);
+  }
+  assert.match(
+    organizerSkill,
+    /prepare the reviewed run[\s\S]{0,120}audit[\s\S]{0,120}attach[\s\S]{0,160}extract dialogue[\s\S]{0,160}model review[\s\S]{0,100}verify coverage[\s\S]{0,100}merge and apply[\s\S]{0,100}push/i,
+  );
+  assert.doesNotMatch(organizerSkill, /reattach[^\n]{0,160}idempotent/i);
+});
+
 test("reviewed Story has no numeric quota and Preferences stays inside the reviewed boundary", async () => {
   const paths = [
     "README.md",

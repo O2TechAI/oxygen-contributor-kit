@@ -209,8 +209,8 @@ python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/re
   --attach-url <viewer-url> --workflow-run-id <run-id>
 ```
 
-Do not start a second Viewer. When the prepared reviewed boundary or validated Story metadata
-changes later, reattach that updated run to the same origin/run ID.
+Do not start a second Viewer. After preparation and audit, attach the reviewed boundary to this
+origin/run ID before dialogue extraction.
 
 ## 4. Prepare upstream source Privacy review
 
@@ -258,6 +258,32 @@ letting them reach the release candidate. Report the rejection count alongside t
 pass with zero rejections and a pass whose failures were dropped silently look identical otherwise.
 `verify_coverage.py` exits non-zero on a mismatch and atomically creates the immutable Source
 Privacy receipt. The merge, Viewer import, and release gates all require that same receipt.
+
+Audit and attach the prepared reviewed run before extracting any dialogue assignment:
+
+```bash
+python3 tools/llm_redact/audit_coverage.py work/<run>-review
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  work/<run>-review --attach-url <viewer-url> --workflow-run-id <run-id>
+python3 tools/llm_redact/extract_dialogue.py work/<run>-review \
+  --out work/<run>-dialogue --base-url <viewer-url> --workflow-run-id <run-id>
+
+# After the configured model writes one findings JSON per dialogue bundle:
+python3 tools/llm_redact/verify_coverage.py \
+  --dialogue work/<run>-dialogue --findings work/<run>-findings \
+  --receipt work/<run>-source-privacy-receipt.json
+python3 tools/llm_redact/merge_and_apply.py \
+  --dialogue work/<run>-dialogue --findings work/<run>-findings \
+  --out work/<run>-redaction --receipt work/<run>-source-privacy-receipt.json
+python3 tools/llm_redact/push_redactions.py \
+  --redacted work/<run>-redaction/redacted --base-url <viewer-url> \
+  --receipt work/<run>-source-privacy-receipt.json
+```
+
+There must be no source-bearing attach from dialogue extraction through the corresponding push. If
+one occurs, the existing assignments, findings, receipt, and merged output are stale. Extract new
+assignments from the current Viewer and repeat review and validation; do not re-sign, hand-edit, or
+reuse the old receipt.
 
 Two failures found the hard way, both of which look like success:
 
@@ -390,18 +416,9 @@ output, private messages, Story/Evidence content, or removed material through pr
 
 ## 6. Continue and show the Viewer
 
-The progress-first Viewer from §1 is still running. Attach the safe reviewed run to that same
-origin and workflow run ID:
-
-```bash
-python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
-  work/<run>-review --attach-url <viewer-url> --workflow-run-id <run-id>
-
-# Import only the validated spans produced by merge_and_apply.py.
-python3 tools/llm_redact/push_redactions.py \
-  --redacted work/<run>-redaction/redacted --base-url <viewer-url> \
-  --receipt work/<run>-source-privacy-receipt.json
-```
+The progress-first Viewer from §1 is still running. Section 4 attached the reviewed run before
+dialogue extraction and pushed the receipt-bound validated spans to that same origin and workflow
+run ID. Continue in that Viewer without reattaching the source.
 
 The initial launcher validates Node/npm, resolves the platform-native npm command, repairs missing
 or cross-OS `node_modules` with lockfile-preserving `npm ci`, and starts native Next with one fresh
@@ -449,6 +466,11 @@ Set-Location -LiteralPath $Kit
 python .\tools\llm_redact\prepare_ai_review_run.py `
   --run "$Run" --out "$Review"
 python .\tools\llm_redact\audit_coverage.py "$Review"
+
+# Attach the reviewed boundary before creating dialogue assignments or a receipt.
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
+
 python .\tools\llm_redact\extract_dialogue.py "$Review" `
   --out "$Dialogue" --base-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
@@ -457,9 +479,6 @@ python .\tools\llm_redact\verify_coverage.py `
   --dialogue "$Dialogue" --findings "$Findings" --receipt "$Receipt"
 python .\tools\llm_redact\merge_and_apply.py `
   --dialogue "$Dialogue" --findings "$Findings" --out "$Redaction" --receipt "$Receipt"
-# Reattach the reviewed boundary to the Viewer already running from §1.
-python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
 # Push only the validated spans produced by merge_and_apply.py.
 python .\tools\llm_redact\push_redactions.py `
