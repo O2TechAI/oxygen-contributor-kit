@@ -24,8 +24,8 @@ def main() -> int:
     try:
         review = finalize_review(args.dialogue, args.findings)
         install_receipt(args.receipt, review["receipt"])
-    except (OSError, RuntimeError, ValueError) as error:
-        print(f"SOURCE_PRIVACY_REVIEW_INVALID: {error}")
+    except (OSError, RuntimeError, ValueError):
+        print("SOURCE_PRIVACY_REVIEW_INVALID", file=sys.stderr)
         return 1
     receipt = review["receipt"]
     print(json.dumps({

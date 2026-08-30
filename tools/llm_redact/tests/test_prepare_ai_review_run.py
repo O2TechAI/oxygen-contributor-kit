@@ -765,13 +765,18 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             source.mkdir()
             write_semantic_project_map(source, units=[])
 
-            with mock.patch.object(sys, "argv", [
-                str(MODULE_PATH), "--run", str(source), "--out", str(output),
-            ]):
-                with self.assertRaisesRegex(SystemExit, "^no trajectories or meeting found"):
-                    MODULE.main()
-
+            result = subprocess.run(
+                [sys.executable, str(MODULE_PATH), "--run", str(source),
+                 "--out", str(output)], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", check=False,
+            )
+            self.assertEqual(
+                (result.returncode, result.stdout, result.stderr),
+                (1, "", "AI_REVIEW_INPUT_INVALID\n"),
+            )
+            self.assertNotIn(str(root), result.stderr)
             self.assertFalse(output.exists())
+            self.assertEqual(list(root.glob(".review.prepare-*")), [])
 
     def test_plural_meetings_prepare_as_distinct_private_documents(self):
         with TemporaryDirectory() as temp:

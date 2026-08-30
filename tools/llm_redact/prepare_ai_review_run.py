@@ -550,7 +550,7 @@ def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
         trajectories = prepare_trajectories(source, staging)
         meeting_warning_count = prepare_meetings(meetings, staging)
         if not trajectories and not meetings:
-            raise SystemExit(f"no trajectories or meeting found in {source}")
+            raise SystemExit(AI_REVIEW_INPUT_INVALID)
         write_json(staging / "index.json", {
             "schema": AI_REVIEW_RUN_SCHEMA,
             "tool": "prepare_ai_review_run",

@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -16,14 +17,19 @@ assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
 
 
-def write_trajectory(run: Path, text: str, action_text: str | None = None) -> None:
+def write_trajectory(
+    run: Path, text: str, action_text: str | None = None,
+    artifact_bytes: bytes | None = None,
+) -> None:
     directory = run / "trajectories" / "traj-safe"
     directory.mkdir(parents=True)
-    events = [{
-        "schema": MODULE.AI_REVIEW_EVENT_SCHEMA,
-        "event_type": "message",
-        "payload": {"text": text},
-    }]
+    if artifact_bytes is None:
+        events = [{"schema": MODULE.AI_REVIEW_EVENT_SCHEMA,
+                   "event_type": "message", "payload": {"text": text}}]
+    else:
+        (directory / "hostile.bin").write_bytes(artifact_bytes)
+        events = [{"schema": MODULE.AI_REVIEW_EVENT_SCHEMA,
+                   "event_type": "artifact", "payload": {"path": "hostile.bin"}}]
     if action_text is not None:
         events.append({
             "schema": MODULE.AI_REVIEW_EVENT_SCHEMA,
@@ -108,6 +114,21 @@ class AuditCoverageTest(unittest.TestCase):
             with mock.patch.object(sys, "argv", [str(MODULE_PATH), temp]):
                 with self.assertRaisesRegex(SystemExit, "^NO_REVIEWABLE_TEXT$"):
                     MODULE.main()
+
+    def test_non_utf8_artifact_returns_fixed_terminal_error(self):
+        with TemporaryDirectory() as temp:
+            run = Path(temp)
+            write_trajectory(run, "", artifact_bytes=b"\xffHOSTILE_CODEC_SENTINEL")
+
+            result = subprocess.run(
+                [sys.executable, str(MODULE_PATH), str(run)], capture_output=True,
+                text=True, encoding="utf-8", errors="replace", check=False,
+            )
+            self.assertEqual(
+                (result.returncode, result.stdout, result.stderr),
+                (1, "", "SOURCE_PRIVACY_AUDIT_INPUT_INVALID\n"),
+            )
+            self.assertNotIn(str(run), result.stderr)
 
 
 if __name__ == "__main__":

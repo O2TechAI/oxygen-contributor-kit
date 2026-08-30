@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import threading
@@ -258,12 +259,13 @@ class ReleaseGateTest(unittest.TestCase):
                     "--findings", str(findings),
                     "--receipt", str(receipt),
                 ]
-                with contextlib.redirect_stdout(io.StringIO()) as output:
+                with contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as error:
                     result = VERIFY.main()
             finally:
                 sys.argv = argv
             self.assertEqual(result, 1)
-            self.assertIn("SOURCE_PRIVACY_REVIEW_INVALID", output.getvalue())
+            self.assertEqual((output.getvalue(), error.getvalue()),
+                             ("", "SOURCE_PRIVACY_REVIEW_INVALID\n"))
             self.assertFalse(receipt.exists())
 
     def test_push_report_blocks_incomplete_worker_coverage(self):
@@ -273,14 +275,43 @@ class ReleaseGateTest(unittest.TestCase):
                 json.dumps({"rejected": 0, "missing_worker_output": ["traj-2"]}),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SystemExit, "traj-2"):
+            with self.assertRaisesRegex(SystemExit, "^SOURCE_PRIVACY_PUSH_INPUT_INVALID$"):
                 PUSH.load_report(report)
 
-    def test_push_report_missing_fails_closed(self):
+    def test_missing_report_and_http_failure_use_fixed_terminal_errors(self):
         with TemporaryDirectory() as temp:
-            report = Path(temp) / "missing.json"
-            with self.assertRaisesRegex(SystemExit, "redaction report not found"):
-                PUSH.load_report(report)
+            root = Path(temp)
+            redacted, report, receipt = write_push_fixture(root)
+            class FailureHandler(http.server.BaseHTTPRequestHandler):
+                requests = 0
+                def do_POST(self):
+                    self.__class__.requests += 1
+                    self.rfile.read(int(self.headers.get("content-length", "0")))
+                    self.send_response(503)
+                    self.end_headers()
+                    self.wfile.write(b"HOSTILE_VIEWER_SENTINEL")
+                def log_message(self, format, *args):
+                    pass
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FailureHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                cases = ((root / "missing.json", "SOURCE_PRIVACY_PUSH_INPUT_INVALID", 0),
+                         (report, "SOURCE_PRIVACY_VIEWER_UNAVAILABLE", 1))
+                for report_path, error, calls in cases:
+                    before = FailureHandler.requests
+                    result = subprocess.run([
+                        sys.executable, str(TEST_ROOT.parent / "push_redactions.py"),
+                        "--redacted", str(redacted), "--report", str(report_path),
+                        "--receipt", str(receipt), "--base-url",
+                        f"http://127.0.0.1:{server.server_port}",
+                    ], capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", check=False)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                     (1, "", f"{error}\n"))
+                    self.assertEqual(FailureHandler.requests - before, calls)
+            finally:
+                server.shutdown(); server.server_close(); thread.join(timeout=5)
 
     def test_push_report_blocks_nonzero_rejected_count(self):
         with TemporaryDirectory() as temp:
@@ -289,7 +320,7 @@ class ReleaseGateTest(unittest.TestCase):
                 json.dumps({"rejected": 3, "missing_worker_output": []}),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SystemExit, "rejected 3"):
+            with self.assertRaisesRegex(SystemExit, "^SOURCE_PRIVACY_PUSH_INPUT_INVALID$"):
                 PUSH.load_report(report)
 
     def test_push_report_requires_rejected_field(self):
@@ -299,7 +330,7 @@ class ReleaseGateTest(unittest.TestCase):
                 json.dumps({"missing_worker_output": []}),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SystemExit, "rejected must be an integer"):
+            with self.assertRaisesRegex(SystemExit, "^SOURCE_PRIVACY_PUSH_INPUT_INVALID$"):
                 PUSH.load_report(report)
 
     def test_missing_or_forged_identity_fails_before_http(self):

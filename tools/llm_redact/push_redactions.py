@@ -8,6 +8,7 @@ document/item pair; this script validates and forwards those identities without
 rewriting them.
 """
 import argparse
+import http.client
 import json
 import pathlib
 import re
@@ -69,18 +70,21 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
 
 def post(base_url: str, body: dict) -> dict:
     base_url = validate_base_url(base_url)
-    request = urllib.request.Request(
-        f"{base_url}/api/redactions",
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={"content-type": "application/json"},
-        method="POST",
-    )
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({}),
-        _RejectRedirects(),
-    )
-    with opener.open(request, timeout=60) as response:
-        return json.loads(response.read().decode("utf-8") or "{}")
+    try:
+        request = urllib.request.Request(
+            f"{base_url}/api/redactions",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _RejectRedirects(),
+        )
+        with opener.open(request, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8") or "{}")
+    except (OSError, UnicodeError, json.JSONDecodeError, http.client.HTTPException):
+        raise SystemExit("SOURCE_PRIVACY_VIEWER_UNAVAILABLE") from None
 
 
 def load_report(
@@ -90,33 +94,23 @@ def load_report(
     expected_total: int | None = None,
 ) -> dict:
     if not report_path.is_file():
-        raise SystemExit(
-            f"redaction report not found: {report_path}; "
-            "run merge_and_apply.py before pushing"
-        )
+        raise _input_error()
     try:
         report = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise SystemExit(f"cannot read redaction report {report_path}: {error}") from error
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise _input_error() from None
     if not isinstance(report, dict):
-        raise SystemExit(f"invalid redaction report {report_path}: expected an object")
+        raise _input_error()
     missing = report.get("missing_worker_output")
     if not isinstance(missing, list):
-        raise SystemExit(
-            f"invalid redaction report {report_path}: missing_worker_output must be a list"
-        )
+        raise _input_error()
     if missing:
-        raise SystemExit(
-            "redaction coverage is incomplete; missing worker output for: "
-            + ", ".join(map(str, missing))
-        )
+        raise _input_error()
     rejected = report.get("rejected")
     if not isinstance(rejected, int) or isinstance(rejected, bool):
-        raise SystemExit(f"invalid redaction report {report_path}: rejected must be an integer")
+        raise _input_error()
     if rejected != 0:
-        raise SystemExit(
-            f"redaction merge rejected {rejected} finding(s); refusing to push"
-        )
+        raise _input_error()
     if receipt_digest is not None and report.get("receiptDigest") != receipt_digest:
         raise SystemExit("SOURCE_PRIVACY_PUSH_REPORT_MISMATCH")
     if expected_total is not None and report.get("total_applied") != expected_total:

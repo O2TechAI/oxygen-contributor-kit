@@ -60,8 +60,8 @@ def main() -> int:
                     data = candidate.read_bytes()
                     if b"\0" not in data:
                         text = data.decode("utf-8")
-                except UnicodeDecodeError as error:
-                    raise SystemExit(f"artifact is not valid UTF-8 text: {candidate}: {error}") from error
+                except UnicodeDecodeError:
+                    raise SystemExit("SOURCE_PRIVACY_AUDIT_INPUT_INVALID") from None
                 except (OSError, ValueError):
                     pass
             if not text:

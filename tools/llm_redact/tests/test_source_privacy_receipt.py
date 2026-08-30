@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -39,12 +40,21 @@ MERGE = load_script("merge_and_apply")
 
 
 class SourcePrivacyReceiptTest(unittest.TestCase):
+    def _terminal(self, module: str, patch: str, args: list[str]):
+        runner = (f"import sys;sys.path.insert(0,{str(TEST_ROOT.parent)!r});"
+                  f"import {module} as m;{patch};sys.argv=['{module}.py',"
+                  "*sys.argv[1:]];raise SystemExit(m.main())")
+        return subprocess.run(
+            [sys.executable, "-c", runner, *args], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", check=False,
+        )
+
     def _verify(self, dialogue: Path, findings: Path, receipt: Path) -> int:
         argv = [
             "verify_coverage.py", "--dialogue", str(dialogue),
             "--findings", str(findings), "--receipt", str(receipt),
         ]
-        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return VERIFY.main()
 
     def test_positive_completed_zero_creates_one_exact_receipt_and_merges(self):
@@ -71,6 +81,40 @@ class SourcePrivacyReceiptTest(unittest.TestCase):
                 json.loads((output / "report.json").read_text(encoding="utf-8"))["receiptDigest"],
                 review["receipt"]["receiptDigest"],
             )
+
+    def test_receipt_output_io_failure_returns_fixed_terminal_error(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            dialogue, findings, _, _ = finalized_fixture(root)
+            prior_receipt = root / "receipt.json"; prior_bytes = prior_receipt.read_bytes()
+            target = root / "blocked-receipt.json"
+            result = self._terminal(
+                "verify_coverage", "m.install_receipt=lambda *_:(_ for _ in ()).throw("
+                "OSError('HOSTILE_RECEIPT_IO'))", ["--dialogue", str(dialogue),
+                "--findings", str(findings), "--receipt", str(target)],
+            )
+            self.assertEqual((result.returncode, result.stdout, result.stderr),
+                             (1, "", "SOURCE_PRIVACY_REVIEW_INVALID\n"))
+            self.assertFalse(target.exists())
+            self.assertEqual(prior_receipt.read_bytes(), prior_bytes)
+
+    def test_merge_install_io_failure_cleans_staging_and_is_fixed(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            dialogue, findings, _, _ = finalized_fixture(root)
+            receipt = root / "receipt.json"; receipt_bytes = receipt.read_bytes()
+            output = root / "merged"
+            result = self._terminal(
+                "merge_and_apply", "m.rename_noreplace=lambda *_:(_ for _ in ()).throw("
+                "OSError('HOSTILE_MERGE_IO'))", ["--dialogue", str(dialogue),
+                "--findings", str(findings), "--out", str(output),
+                "--receipt", str(receipt)],
+            )
+            self.assertEqual((result.returncode, result.stdout, result.stderr),
+                             (1, "", "SOURCE_PRIVACY_MERGE_OUTPUT_INVALID\n"))
+            self.assertFalse(output.exists())
+            self.assertEqual(list(root.glob(".merged.*.tmp")), [])
+            self.assertEqual(receipt.read_bytes(), receipt_bytes)
 
     def test_revision_zero_and_wrong_reviewed_sets_create_no_receipt(self):
         cases = ("revision-zero", "missing-item", "foreign-item")
