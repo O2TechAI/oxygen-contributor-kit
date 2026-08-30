@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -63,13 +64,13 @@ function lessons(stories) {
   })));
 }
 
-function probe() {
+function probe(documentKind = "trajectory") {
   const options = [
     { id: "one", text: "Ask before editing deployment files." },
     { id: "two", text: "Put deployment work on a separate branch." },
   ];
   return {
-    id: "probe-a", documentId: "doc", documentKind: "trajectory", eventIds: ["event:é"],
+    id: "probe-a", documentId: "doc", documentKind, eventIds: ["event:é"],
     timestamp: "2026-08-27T12:00:00Z", signal: "explicit_rule", score: 80, turns: 2,
     recap: "The reviewed event records a deployment boundary.",
     question: "What should the agent remember?", options,
@@ -119,7 +120,7 @@ function privacyOutput(stories, candidates) {
 
 async function fixture({
   insightIds = ["same", "same"], privacy = true, questions = true, reverse = false,
-  candidateIds = null,
+  candidateIds = null, documentKind = "trajectory",
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "story-finalizer-"));
   const shards = join(directory, "shards");
@@ -156,7 +157,7 @@ async function fixture({
   const base = canonicalRows.map((row, index) => ({ id: row.id, story: { ...canonicalStories[index], insights: [] } }));
   const complete = canonicalRows.map((row, index) => ({ id: row.id, story: canonicalStories[index] }));
   const inputDigest = digest(lessons(canonicalStories));
-  const probes = questions ? [probe()] : [];
+  const probes = questions ? [probe(documentKind)] : [];
   const bulkDecisions = questions ? [bulkDecision()] : [];
   const batch = canonicalPreferenceQuestionBatch(probes, bulkDecisions);
   const preference = {
@@ -251,6 +252,15 @@ async function fixture({
         validationAuthorityDigest: digest(validationAuthority),
         storyCandidates: baseStoryCandidates,
         reviewedNarrative: insightReviewedNarrative,
+      } : lane === "preference" ? {
+        preferenceContext: {
+          schema: "oxygen.preference-context", reusableLessons: lessons(canonicalStories),
+          insightIdentities: lessons(canonicalStories).map(({ storyKey, insightId }) => ({ storyKey, insightId })),
+          reviewedEvidence: [...eventIds.values()].map((eventId) => ({
+            documentId: "doc", eventId, documentKind,
+          })),
+          autoRemoved: preference.autoRemoved,
+        },
       } : {},
     };
     const workerInputDigest = digest(workerInput);
@@ -431,6 +441,11 @@ test("the sole producer-shaped Preference bundle fails closed on extra authority
     duplicateOptionText: (value) => { value.probes[0].options[1].text = `${value.probes[0].options[0].text}.`; },
     oversizedText: (value) => { value.probes[0].question = "x".repeat(20_001); },
     oversizedEventId: (value) => { value.probes[0].eventIds = ["x".repeat(1_001)]; },
+    oversizedProbeEvidence: (value) => { value.probes[0].eventIds = Array.from({ length: 501 }, (_, index) => `event-${index}`); },
+    oversizedBulkEvidence: (value) => { value.bulkDecisions[0].evidenceSample = Array.from({ length: 501 }, (_, index) => `event-${index}`); },
+    tooManyQuestions: (value) => { value.probes = Array.from({ length: 21 }, (_, index) => ({ ...structuredClone(value.probes[0]), id: `probe-${index}` })); },
+    malformedDocumentKind: (value) => { value.probes[0].documentKind = "Lab_notebook"; },
+    mismatchedDocumentKind: (value) => { value.probes[0].documentKind = "meeting"; },
     unsortedProbes: (value) => { value.probes.push({ ...structuredClone(value.probes[0]), id: "probe-0" }); },
     unsortedBulkDecisions: (value) => { value.bulkDecisions.push({ ...structuredClone(value.bulkDecisions[0]), id: "bulk-0" }); },
   };
@@ -439,8 +454,20 @@ test("the sole producer-shaped Preference bundle fails closed on extra authority
     try {
       await mutatePreferenceAuthority(value, mutate);
       assert.notEqual(run(value).status, 0);
+      assert.equal(existsSync(value.output), false);
     } finally { await value.cleanup(); }
   });
+});
+
+test("open lab_notebook Preference kind finalizes without registration", async () => {
+  const value = await fixture({ documentKind: "lab_notebook" });
+  try {
+    const result = run(value);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readJson(value.output)).receipts.find((receipt) => (
+      receipt.lane === "preference"
+    )).outputCount, 2);
+  } finally { await value.cleanup(); }
 });
 
 test("Preference option normalization trims ECMAScript space, strips ASCII dots, and folds only ASCII", async () => {

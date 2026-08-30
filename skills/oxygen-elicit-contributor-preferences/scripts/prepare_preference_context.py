@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 from typing import Any
@@ -26,6 +27,9 @@ from tools.llm_redact.merge_and_apply import (  # noqa: E402
 CONTEXT_SCHEMA = "oxygen.preference-context"
 AUTO_REMOVED_KINDS = frozenset(MERGE_ALLOWED)
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
+MAX_PREFERENCE_QUESTIONS = 20
+MAX_PREFERENCE_EVIDENCE_IDS = 500
+DOCUMENT_KIND_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 STABLE_ID_CONTROLS = frozenset(chr(code) for code in (*range(0x20), 0x7F))
 SAFE_TEXT_CONTROLS = STABLE_ID_CONTROLS - {"\t", "\n", "\r"}
 ECMASCRIPT_TRIM = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
@@ -67,6 +71,10 @@ def stable_id(value: Any, maximum: int = 20_000) -> bool:
 
 def nonnegative_integer(value: Any) -> bool:
     return type(value) is int and 0 <= value <= MAX_SAFE_INTEGER
+
+
+def valid_document_kind(value: Any) -> bool:
+    return isinstance(value, str) and DOCUMENT_KIND_PATTERN.fullmatch(value) is not None
 
 
 def exact_object(value: Any, required: set[str], optional: set[str] = set()) -> bool:
@@ -246,7 +254,7 @@ def read_privacy_authority(
         document_kind = bundle["document_kind"]
         turns = bundle["turns"]
         if (not stable_id(document_id) or path.stem != document_id
-                or document_kind not in {"trajectory", "meeting"}
+                or not valid_document_kind(document_kind)
                 or not isinstance(turns, list)
                 or not nonnegative_integer(bundle["chars"])
                 or document_id in observed_documents):

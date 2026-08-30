@@ -79,7 +79,7 @@ def context_evidence(context: Any) -> dict[tuple[str, str], str]:
     for record in context["reviewedEvidence"]:
         if (not exact(record, {"documentId", "eventId", "documentKind"})
                 or not stable_id(record["documentId"]) or not stable_id(record["eventId"], 1_000)
-                or record["documentKind"] not in {"trajectory", "meeting"}):
+                or not PREPARE.valid_document_kind(record["documentKind"])):
             raise ValueError("preference context has malformed reviewed evidence")
         identity = (record["documentId"], record["eventId"])
         if identity in evidence:
@@ -111,7 +111,7 @@ def presentations(value: Any, options: list[dict[str, str]], bulk: bool = False)
 def probe(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
     if not exact(value, PROBE_KEYS):
         raise ValueError("candidate probe has extra, unknown, or missing fields")
-    if not stable_id(value["id"]) or not stable_id(value["documentId"]) or value["documentKind"] not in {"trajectory", "meeting"} or value["signal"] not in SIGNALS:
+    if not stable_id(value["id"]) or not stable_id(value["documentId"]) or not PREPARE.valid_document_kind(value["documentKind"]) or value["signal"] not in SIGNALS:
         raise ValueError("candidate probe identity, kind, or signal is invalid")
     if (not PREPARE.nonnegative_integer(value["score"]) or value["score"] > 100
             or not PREPARE.nonnegative_integer(value["turns"])):
@@ -121,7 +121,8 @@ def probe(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
     if not safe_text(value["recap"]) or not safe_text(value["question"]):
         raise ValueError("candidate probe text is invalid")
     event_ids = value["eventIds"]
-    if not isinstance(event_ids, list) or not event_ids or not all(stable_id(event, 1_000) for event in event_ids) or len(set(event_ids)) != len(event_ids):
+    if (not isinstance(event_ids, list) or not 1 <= len(event_ids) <= PREPARE.MAX_PREFERENCE_EVIDENCE_IDS
+            or not all(stable_id(event, 1_000) for event in event_ids) or len(set(event_ids)) != len(event_ids)):
         raise ValueError("candidate probe evidence is invalid")
     if any(evidence.get((value["documentId"], event)) != value["documentKind"] for event in event_ids):
         raise ValueError("candidate probe cites foreign or cross-document evidence")
@@ -148,7 +149,8 @@ def bulk(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
             or not safe_text(value["question"]) or not PREPARE.nonnegative_integer(value["count"])):
         raise ValueError("candidate bulk decision is invalid")
     sample = value["evidenceSample"]
-    if not isinstance(sample, list) or not all(stable_id(event, 1_000) for event in sample) or len(set(sample)) != len(sample):
+    if (not isinstance(sample, list) or len(sample) > PREPARE.MAX_PREFERENCE_EVIDENCE_IDS
+            or not all(stable_id(event, 1_000) for event in sample) or len(set(sample)) != len(sample)):
         raise ValueError("candidate bulk evidence is invalid")
     known = {event_id for _, event_id in evidence}
     if any(event not in known for event in sample) or not presentations(value["presentations"], [], True):
@@ -164,6 +166,7 @@ def finalize(context: Any, candidates: Any, workflow_run_id: str, source_revisio
     if (not exact(candidates, {"probes", "bulkDecisions", "setAside"})
             or not isinstance(candidates["probes"], list)
             or not isinstance(candidates["bulkDecisions"], list)
+            or len(candidates["probes"]) + len(candidates["bulkDecisions"]) > PREPARE.MAX_PREFERENCE_QUESTIONS
             or not PREPARE.nonnegative_integer(candidates["setAside"])):
         raise ValueError("candidates must contain only valid probes, bulkDecisions, and setAside")
     probes = [probe(item, evidence) for item in candidates["probes"]]

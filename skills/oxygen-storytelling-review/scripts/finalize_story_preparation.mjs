@@ -4,8 +4,11 @@ import { basename, dirname, resolve } from "node:path";
 import {
   canonicalPreferenceQuestionBatch,
   deriveStoryReleaseTargetContents,
+  MAX_PREFERENCE_EVIDENCE_IDS,
+  MAX_PREFERENCE_QUESTIONS,
   normalizeStoryPrivacyOutput,
   storyPreparationDigest,
+  validPreferenceDocumentKind,
   validateStoryPreparationManifest,
 } from "../../../viewer/lib/story-preparation.ts";
 import { canonicalizeAutoRemoved } from "../../../viewer/lib/auto-removed.mjs";
@@ -227,13 +230,17 @@ function preferenceOption(value) {
   return exactKeys(value, ["id", "text"]) && boundedId(value.id, 200) && boundedText(value.text);
 }
 
-function preferenceProbe(value, evidence) {
+function preferenceProbe(value, evidence, reviewedEvidence) {
   if (!exactKeys(value, probeKeys) || !boundedId(value.id) || !boundedId(value.documentId)
-    || !["trajectory", "meeting"].includes(value.documentKind)
+    || !validPreferenceDocumentKind(value.documentKind)
     || !Array.isArray(value.eventIds) || value.eventIds.length === 0
+    || value.eventIds.length > MAX_PREFERENCE_EVIDENCE_IDS
     || value.eventIds.some((eventId) => !boundedId(eventId, 1_000))
     || new Set(value.eventIds).size !== value.eventIds.length
     || value.eventIds.some((eventId) => !evidence.has(canonicalAuthorityJson([value.documentId, eventId])))
+    || value.eventIds.some((eventId) => reviewedEvidence.get(
+      canonicalAuthorityJson([value.documentId, eventId]),
+    ) !== value.documentKind)
     || (value.timestamp !== null && !boundedText(value.timestamp)) || !signals.has(value.signal)
     || !nonnegative(value.score) || value.score > 100 || !nonnegative(value.turns)
     || !boundedText(value.recap) || !boundedText(value.question)
@@ -255,6 +262,7 @@ function preferenceProbe(value, evidence) {
 function preferenceBulkDecision(value, evidenceIds) {
   if (!exactKeys(value, bulkKeys) || !boundedId(value.id) || !boundedText(value.kind)
     || !nonnegative(value.count) || !boundedText(value.question) || !Array.isArray(value.evidenceSample)
+    || value.evidenceSample.length > MAX_PREFERENCE_EVIDENCE_IDS
     || value.evidenceSample.some((eventId) => !boundedId(eventId, 1_000) || !evidenceIds.has(eventId))
     || new Set(value.evidenceSample).size !== value.evidenceSample.length) fail("PREFERENCE_BUNDLE_INVALID");
   const presentations = normalizeBulkPreferencePresentations(value.presentations);
@@ -265,14 +273,19 @@ function preferenceBulkDecision(value, evidenceIds) {
   return value;
 }
 
-async function preferenceAuthority(value, workflowRunId, sourceRevision, inputDigest, evidence, evidenceIds) {
+async function preferenceAuthority(
+  value, workflowRunId, sourceRevision, inputDigest, evidence, evidenceIds, reviewedEvidence,
+) {
   if (!exactKeys(value, preferenceKeys) || value.workflowRunId !== workflowRunId
     || value.sourceRevision !== sourceRevision || value.inputDigest !== inputDigest
     || !hex.test(value.outputDigest) || !nonnegative(value.outputCount)
     || !nonnegative(value.setAside) || !Array.isArray(value.probes)
-    || !Array.isArray(value.bulkDecisions)) fail("PREFERENCE_BUNDLE_INVALID");
+    || !Array.isArray(value.bulkDecisions)
+    || value.probes.length + value.bulkDecisions.length > MAX_PREFERENCE_QUESTIONS) {
+    fail("PREFERENCE_BUNDLE_INVALID");
+  }
   rejectMetadata({ probes: value.probes, bulkDecisions: value.bulkDecisions });
-  const probes = value.probes.map((probe) => preferenceProbe(probe, evidence));
+  const probes = value.probes.map((probe) => preferenceProbe(probe, evidence, reviewedEvidence));
   const bulkDecisions = value.bulkDecisions.map((decision) => preferenceBulkDecision(decision, evidenceIds));
   const ids = [...probes, ...bulkDecisions].map((item) => item.id);
   if (new Set(ids).size !== ids.length || value.outputCount !== ids.length
@@ -349,9 +362,22 @@ async function finalize(args) {
   )));
   const evidenceIds = new Set(insightGrounding.map((reference) => reference.eventId));
   const preferenceInputDigest = await storyPreparationDigest(lessons);
+  const preferenceAuthorityRecord = await readLaneAuthority(shardRootInput, "preference");
+  const preferenceContext = preferenceAuthorityRecord.input.payload?.preferenceContext;
+  if (!isObject(preferenceContext) || !Array.isArray(preferenceContext.reviewedEvidence)) {
+    fail("PREFERENCE_INPUT_STALE");
+  }
+  const reviewedEvidence = new Map(preferenceContext.reviewedEvidence.map((record) => [
+    canonicalAuthorityJson([record?.documentId, record?.eventId]), record?.documentKind,
+  ]));
+  if (reviewedEvidence.size !== preferenceContext.reviewedEvidence.length
+    || preferenceContext.reviewedEvidence.some((record) => !exactKeys(
+      record, ["documentId", "eventId", "documentKind"],
+    ) || !boundedId(record.documentId) || !boundedId(record.eventId, 1_000)
+      || !validPreferenceDocumentKind(record.documentKind))) fail("PREFERENCE_INPUT_STALE");
   const preference = await preferenceAuthority(
     await jsonFile(resolve(preferencePath)), workflowRunId, sourceRevision,
-    preferenceInputDigest, evidence, evidenceIds,
+    preferenceInputDigest, evidence, evidenceIds, reviewedEvidence,
   );
   composeStory([storyAuthority.output], base, "STORY");
   if (storyAuthority.outputCount !== base.length) fail("STORY_RECEIPT_STALE");
@@ -405,7 +431,6 @@ async function finalize(args) {
   const preferenceUniverse = rows.flatMap((row) => row.story.insights.map((insight) => ({
     storyKey: row.story.key, insightId: insight.id,
   }))).sort((a, b) => utf8(a.storyKey, b.storyKey) || utf8(a.insightId, b.insightId));
-  const preferenceAuthorityRecord = await readLaneAuthority(shardRootInput, "preference");
   if (preferenceAuthorityRecord.manifest.inputDigest !== preferenceInputDigest) fail("PREFERENCE_INPUT_STALE");
   sameIds(preferenceAuthorityRecord.manifest.unitIds,
     preferenceUniverse.map((identity) => canonicalAuthorityJson(identity)), "PREFERENCE_SCOPE_STALE");

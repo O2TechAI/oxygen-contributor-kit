@@ -17,6 +17,8 @@ export const STORY_PREPARATION_LANES = [
 ] as const;
 export const STORY_PREPARATION_EMPTY_ARRAY_DIGEST =
   "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
+export const MAX_PREFERENCE_QUESTIONS = 20;
+export const MAX_PREFERENCE_EVIDENCE_IDS = 500;
 
 export type StoryPreparationLane = typeof STORY_PREPARATION_LANES[number];
 
@@ -110,6 +112,9 @@ const nonEmptyString = (value: unknown): value is string => (
 );
 const stableId = (value: unknown): value is string => (
   nonEmptyString(value) && !/[\u0000-\u001f\u007f]/u.test(value)
+);
+export const validPreferenceDocumentKind = (value: unknown): value is string => (
+  typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(value)
 );
 const safeText = (value: unknown): value is string => (
   nonEmptyString(value) && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
@@ -454,7 +459,8 @@ export async function validateStoryPreparationManifest(
     || context.preference.sourceRevision !== context.sourceRevision
     || !digestPattern.test(context.preference.inputDigest)
     || !digestPattern.test(context.preference.outputDigest)
-    || !exactNonNegativeInteger(context.preference.outputCount)) {
+    || !exactNonNegativeInteger(context.preference.outputCount)
+    || context.preference.outputCount > MAX_PREFERENCE_QUESTIONS) {
     return mismatch("STORY_PREPARATION_PREFERENCE_AUTHORITY_INVALID");
   }
 

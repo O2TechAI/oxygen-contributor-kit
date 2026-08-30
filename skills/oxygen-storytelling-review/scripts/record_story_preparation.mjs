@@ -6,7 +6,10 @@ import { canonicalizeAutoRemoved } from "../../../viewer/lib/auto-removed.mjs";
 import {
   canonicalPreferenceQuestionBatch,
   deriveStoryReleaseTargetContents,
+  MAX_PREFERENCE_EVIDENCE_IDS,
+  MAX_PREFERENCE_QUESTIONS,
   normalizeStoryPrivacyOutput,
+  validPreferenceDocumentKind,
 } from "../../../viewer/lib/story-preparation.ts";
 import {
   normalizeBulkPreferencePresentations,
@@ -490,8 +493,9 @@ function preferenceOption(value) {
 
 function preferenceProbe(value, evidence) {
   if (!exactKeys(value, probeKeys) || !boundedId(value.id) || !boundedId(value.documentId)
-    || !["trajectory", "meeting"].includes(value.documentKind)
+    || !validPreferenceDocumentKind(value.documentKind)
     || !Array.isArray(value.eventIds) || value.eventIds.length === 0
+    || value.eventIds.length > MAX_PREFERENCE_EVIDENCE_IDS
     || value.eventIds.some((eventId) => !boundedId(eventId, 1_000))
     || new Set(value.eventIds).size !== value.eventIds.length
     || value.eventIds.some((eventId) => evidence.get(canonicalAuthorityJson([value.documentId, eventId])) !== value.documentKind)
@@ -515,6 +519,7 @@ function preferenceProbe(value, evidence) {
 function preferenceBulk(value, evidenceIds) {
   if (!exactKeys(value, bulkKeys) || !boundedId(value.id) || !safeText(value.kind)
     || !nonnegative(value.count) || !safeText(value.question) || !Array.isArray(value.evidenceSample)
+    || value.evidenceSample.length > MAX_PREFERENCE_EVIDENCE_IDS
     || value.evidenceSample.some((eventId) => !boundedId(eventId, 1_000) || !evidenceIds.has(eventId))
     || new Set(value.evidenceSample).size !== value.evidenceSample.length) fail("PREFERENCE_BUNDLE_INVALID");
   const presentations = normalizeBulkPreferencePresentations(value.presentations);
@@ -531,7 +536,8 @@ function validatePreference(value, input) {
     || !nonnegative(value.sourceRevision) || value.sourceRevision < 1
     || value.inputDigest !== input.inputDigest
     || !/^[0-9a-f]{64}$/u.test(value.outputDigest) || !nonnegative(value.outputCount)
-    || !nonnegative(value.setAside) || !Array.isArray(value.probes) || !Array.isArray(value.bulkDecisions)) {
+    || !nonnegative(value.setAside) || !Array.isArray(value.probes) || !Array.isArray(value.bulkDecisions)
+    || value.probes.length + value.bulkDecisions.length > MAX_PREFERENCE_QUESTIONS) {
     fail("PREFERENCE_BUNDLE_INVALID");
   }
   rejectMetadata({ probes: value.probes, bulkDecisions: value.bulkDecisions });

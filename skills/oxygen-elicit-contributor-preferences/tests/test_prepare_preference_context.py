@@ -373,6 +373,20 @@ class PrepareContextTests(unittest.TestCase):
             "documentKind": "meeting",
         }])
 
+    def test_open_bounded_document_kind_crosses_reviewed_preparation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidates, redacted, report = inputs(root)
+            bundle_path = redacted / "trajectory-a.json"
+            bundle = json.loads(bundle_path.read_text())
+            bundle["document_kind"] = "lab_notebook"
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+            output = PREPARE.prepare(candidates, redacted, report)
+        self.assertEqual(output["reviewedEvidence"][0]["documentKind"], "lab_notebook")
+        for malformed in ("Lab_notebook", "lab-notebook", "1lab", "a" * 65):
+            with self.subTest(malformed=malformed):
+                self.assertFalse(PREPARE.valid_document_kind(malformed))
+
     def test_invalid_input_does_not_replace_existing_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
