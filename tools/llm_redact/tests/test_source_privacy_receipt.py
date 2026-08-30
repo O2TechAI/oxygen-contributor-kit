@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -16,9 +17,9 @@ if str(TEST_ROOT) not in sys.path:
 
 from source_privacy_fixture import (
     EVENT_ID,
+    authority,
     bundle,
     canonical_bundle_bytes,
-    digest_value,
     finalized_fixture,
     write_dialogue,
     write_findings,
@@ -37,6 +38,7 @@ def load_script(name: str):
 
 VERIFY = load_script("verify_coverage")
 MERGE = load_script("merge_and_apply")
+EXTRACT = load_script("extract_dialogue")
 
 
 class SourcePrivacyReceiptTest(unittest.TestCase):
@@ -76,11 +78,59 @@ class SourcePrivacyReceiptTest(unittest.TestCase):
             ]
             with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(MERGE.main(), 0)
-            self.assertTrue((output / "redacted" / "traj-1.json").is_file())
+            redacted_bundle = json.loads(
+                (output / "redacted" / "traj-1.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                set(redacted_bundle),
+                {"trajectory", "document_kind", "turns", "chars"},
+            )
             self.assertEqual(
                 json.loads((output / "report.json").read_text(encoding="utf-8"))["receiptDigest"],
                 review["receipt"]["receiptDigest"],
             )
+
+    def test_generated_assignment_documented_output_is_accepted(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            value = bundle()
+            assignment_source = {
+                key: value[key]
+                for key in ("trajectory", "document_kind", "turns", "chars")
+            }
+            dialogue = root / "dialogue"
+            EXTRACT.install_dialogue_output(dialogue, authority(), [assignment_source])
+            assignment = json.loads(
+                (dialogue / "traj-1.json").read_text(encoding="utf-8")
+            )
+            declared = json.loads(
+                (dialogue / "index.json").read_text(encoding="utf-8")
+            )["dialogue"]["bundles"][0]
+            self.assertEqual(
+                set(assignment),
+                {"trajectory", "document_kind", "turns", "chars", "input_digest"},
+            )
+            assignment_bytes = canonical_bundle_bytes(assignment_source)
+            worker_bytes = canonical_bundle_bytes(assignment)
+            self.assertEqual(assignment["input_digest"], declared["inputDigest"])
+            self.assertEqual(
+                declared["inputDigest"], hashlib.sha256(assignment_bytes).hexdigest()
+            )
+            self.assertEqual(declared["inputByteLength"], len(assignment_bytes))
+            self.assertGreater(len(worker_bytes), declared["inputByteLength"])
+
+            findings = root / "findings"
+            findings.mkdir()
+            (findings / "traj-1.json").write_text(json.dumps({
+                "trajectory": assignment["trajectory"],
+                "input_digest": assignment["input_digest"],
+                "findings": [],
+                "reviewed_turns": len(assignment["turns"]),
+            }), encoding="utf-8")
+            receipt = root / "receipt.json"
+
+            self.assertEqual(self._verify(dialogue, findings, receipt), 0)
+            self.assertTrue(receipt.is_file())
 
     def test_receipt_output_io_failure_returns_fixed_terminal_error(self):
         with TemporaryDirectory() as temp:
@@ -116,8 +166,14 @@ class SourcePrivacyReceiptTest(unittest.TestCase):
             self.assertEqual(list(root.glob(".merged.*.tmp")), [])
             self.assertEqual(receipt.read_bytes(), receipt_bytes)
 
-    def test_revision_zero_and_wrong_reviewed_sets_create_no_receipt(self):
-        cases = ("revision-zero", "missing-item", "foreign-item")
+    def test_invalid_or_stale_worker_authority_creates_no_receipt(self):
+        cases = (
+            "revision-zero",
+            "under-specified-four-field",
+            "foreign-digest",
+            "stale-assignment",
+            "tampered-assignment",
+        )
         for case in cases:
             with self.subTest(case=case), TemporaryDirectory() as temp:
                 root = Path(temp)
@@ -125,16 +181,58 @@ class SourcePrivacyReceiptTest(unittest.TestCase):
                 dialogue = write_dialogue(
                     root / "dialogue", [value], source_revision=0 if case == "revision-zero" else 3,
                 )
-                findings = write_findings(root / "findings", [value])
+                worker_value = (
+                    bundle(text="different synthetic input")
+                    if case == "stale-assignment" else value
+                )
+                findings = write_findings(root / "findings", [worker_value])
                 worker_path = findings / "traj-1.json"
                 worker = json.loads(worker_path.read_text(encoding="utf-8"))
-                if case == "missing-item":
-                    worker["reviewed_item_ids"] = []
-                elif case == "foreign-item":
-                    worker["reviewed_item_ids"] = ["evt-" + "b" * 64]
-                if case != "revision-zero":
-                    worker["reviewed_items_digest"] = digest_value(worker["reviewed_item_ids"])
+                if case == "under-specified-four-field":
+                    worker.pop("input_digest")
+                    worker["notes"] = "synthetic partial contract"
+                elif case == "foreign-digest":
+                    worker["input_digest"] = "0" * 64
+                if case not in {"revision-zero", "tampered-assignment"}:
                     worker_path.write_text(json.dumps(worker), encoding="utf-8")
+                if case == "tampered-assignment":
+                    assignment_path = dialogue / "traj-1.json"
+                    assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+                    assignment["turns"][0]["text"] = "tampered synthetic input"
+                    assignment["chars"] = len(assignment["turns"][0]["text"])
+                    assignment_path.write_bytes(canonical_bundle_bytes(assignment))
+                receipt = root / "receipt.json"
+
+                self.assertEqual(self._verify(dialogue, findings, receipt), 1)
+                self.assertFalse(receipt.exists())
+
+    def test_invalid_spans_still_fail_closed_without_receipt(self):
+        base = {
+            "event_id": EVENT_ID,
+            "category": "sensitive",
+            "confidence": "high",
+            "reason": "synthetic",
+            "review_state": "deterministic",
+            "uncertainty_reason": None,
+        }
+        cases = {
+            "offset": [{**base, "start": 0, "end": 10_000}],
+            "enum": [{**base, "start": 0, "end": 4, "category": "unknown"}],
+            "overlap": [
+                {**base, "start": 0, "end": 6},
+                {**base, "start": 4, "end": 8},
+            ],
+        }
+        for case, spans in cases.items():
+            with self.subTest(case=case), TemporaryDirectory() as temp:
+                root = Path(temp)
+                value = bundle()
+                dialogue = write_dialogue(root / "dialogue", [value])
+                findings = write_findings(
+                    root / "findings",
+                    [value],
+                    findings_by_document={value["trajectory"]: spans},
+                )
                 receipt = root / "receipt.json"
 
                 self.assertEqual(self._verify(dialogue, findings, receipt), 1)

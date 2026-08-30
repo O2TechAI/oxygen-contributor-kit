@@ -15,7 +15,11 @@ VERIFY_SCRIPT = REPOSITORY_ROOT / "tools" / "llm_redact" / "verify_coverage.py"
 LLM_REDACT_ROOT = REPOSITORY_ROOT / "tools" / "llm_redact"
 if str(LLM_REDACT_ROOT) not in sys.path:
     sys.path.insert(0, str(LLM_REDACT_ROOT))
-from source_privacy_receipt import canonical_bundle_bytes, dialogue_authority, digest_value
+from source_privacy_receipt import (
+    bind_worker_assignment,
+    canonical_bundle_bytes,
+    dialogue_authority,
+)
 SPEC = importlib.util.spec_from_file_location("prepare_preference_context", SCRIPT)
 PREPARE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
@@ -284,7 +288,7 @@ class PrepareContextTests(unittest.TestCase):
             dialogue.mkdir()
             findings.mkdir()
             text = "token safe reviewed text"
-            bundle = {
+            bundle = bind_worker_assignment({
                 "trajectory": "trajectory-a", "document_kind": "trajectory",
                 "turns": [{
                     "event_id": "event-a", "document_id": "trajectory-a",
@@ -293,7 +297,7 @@ class PrepareContextTests(unittest.TestCase):
                     "text": text,
                 }],
                 "chars": len(text),
-            }
+            })
             bundle_bytes = canonical_bundle_bytes(bundle)
             (dialogue / "trajectory-a.json").write_bytes(bundle_bytes)
             dialogue_receipt = dialogue_authority([(bundle, bundle_bytes)])
@@ -312,8 +316,6 @@ class PrepareContextTests(unittest.TestCase):
             finding = {
                 "trajectory": "trajectory-a",
                 "input_digest": dialogue_receipt["bundles"][0]["inputDigest"],
-                "reviewed_item_ids": ["event-a"],
-                "reviewed_items_digest": digest_value(["event-a"]),
                 "findings": [{
                     "event_id": "event-a", "start": 0, "end": 5,
                     "category": "credential", "confidence": "high",
