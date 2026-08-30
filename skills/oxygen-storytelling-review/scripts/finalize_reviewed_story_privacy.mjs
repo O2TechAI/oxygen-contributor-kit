@@ -13,15 +13,17 @@ import {
 import { directPathEntry } from "./direct_path_entry.mjs";
 import { publishDirectoryNoReplace } from "./atomic_publish.mjs";
 
+class CliFailure extends Error {}
+const fail = (code) => { throw new CliFailure(code); };
+async function main() {
 const inputs = process.argv.slice(2);
 if (inputs.length !== 3) {
-  throw new Error("USAGE_FINALIZE_REVIEWED_STORY_PRIVACY_ROOT_PROPOSALS_OUTPUT");
+  fail("USAGE_FINALIZE_REVIEWED_STORY_PRIVACY_ROOT_PROPOSALS_OUTPUT");
 }
 const [rootInput, proposalInput, outputInput] = inputs;
 const hex = /^[0-9a-f]{64}$/;
 const exact = (value, keys) => Boolean(value) && typeof value === "object" && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
-const fail = (code) => { throw new Error(code); };
 const safeId = (value) => typeof value === "string" && Boolean(value.trim())
   && !/[\u0000-\u001f\u007f]/u.test(value);
 const compareUtf8 = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
@@ -283,3 +285,6 @@ try {
 }
 console.log(JSON.stringify({ output, importDigest: bundle.importDigest,
   outputCount: recordedPrivacy.targetProposals.length }));
+}
+await main().catch((error) => { console.error(error instanceof CliFailure
+  ? error.message : "REVIEWED_STORY_PRIVACY_FINALIZE_FAILED"); process.exitCode = 1; });

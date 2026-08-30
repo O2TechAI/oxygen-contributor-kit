@@ -52,6 +52,14 @@ const exportRoute = await import("../app/api/story-privacy/export/route.ts");
 const sourcePrivacyRoute = await import("../app/api/redactions/route.ts");
 const execFile = promisify(execFileCallback);
 
+async function expectCliFailure(script, args, code) {
+  await assert.rejects(execFile(process.execPath, [script, ...args]), (error) => {
+    assert.deepEqual({ code: error.code, stdout: error.stdout, stderr: error.stderr },
+      { code: 1, stdout: "", stderr: `${code}\n` });
+    return true;
+  });
+}
+
 const RUN_ID = "reviewed-story-privacy-run";
 const SOURCE_REVISION = 19;
 const NOW = "2044-01-01T00:00:00.000Z";
@@ -1020,6 +1028,32 @@ async function createRemovalOnlyScriptFixture(directory) {
   const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8"));
   return { root, proposals, manifest };
 }
+
+test("public wrappers emit only fixed terminal failure codes", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "reviewed-story-privacy-cli-errors-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const fixture = await createScriptFixture(join(directory, "fixture"));
+  const finalize = join(process.cwd(), "..", "skills", "oxygen-storytelling-review", "scripts",
+    "finalize_reviewed_story_privacy.mjs");
+  await expectCliFailure(fixture.prepare, [],
+    "USAGE_PREPARE_REVIEWED_STORY_PRIVACY_SNAPSHOT_OUTPUT_DIRECTORY");
+  await expectCliFailure(finalize, [],
+    "USAGE_FINALIZE_REVIEWED_STORY_PRIVACY_ROOT_PROPOSALS_OUTPUT");
+  const hostileOutput = join(directory, `HOSTILE_SENTINEL_${"x".repeat(260)}`);
+  await expectCliFailure(fixture.prepare, [fixture.snapshotPath, hostileOutput],
+    "REVIEWED_STORY_PRIVACY_PREPARE_FAILED");
+  await execFile(process.execPath, [finalize, fixture.root, fixture.proposals,
+    join(directory, "published.json")]);
+  const recordNames = await readdir(join(fixture.root, "records"));
+  const recordsBefore = await Promise.all(recordNames.map((name) => readFile(join(fixture.root, "records", name))));
+  const preserved = join(directory, "HOSTILE_SENTINEL_https_example.invalid_Error_at_file.json");
+  await writeFile(preserved, "preserve");
+  await expectCliFailure(finalize, [fixture.root, fixture.proposals, preserved],
+    "REVIEWED_STORY_PRIVACY_FINALIZE_FAILED");
+  assert.equal(await readFile(preserved, "utf8"), "preserve");
+  assert.deepEqual(await Promise.all(recordNames.map((name) => readFile(join(fixture.root,
+    "records", name)))), recordsBefore);
+});
 
 test("public refresh finalization publishes immutable records and exact replay", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "reviewed-story-privacy-public-finalize-"));
