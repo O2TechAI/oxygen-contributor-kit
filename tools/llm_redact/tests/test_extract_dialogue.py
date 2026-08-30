@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
@@ -204,6 +205,32 @@ class ExtractDialogueTest(unittest.TestCase):
                 [bundle["trajectory"] for bundle in bundles],
                 ["meeting-000001", "meeting-000002", "traj-safe"],
             )
+
+    def test_empty_dialogue_returns_fixed_terminal_error(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root / "review"
+            output = root / "dialogue"
+            write_meeting(run, "meeting-safe", records=[])
+            authority = {"workflowRunId": "workflow-safe", "sourceRevision": 1,
+                         "finalizedCorpus": {"revision": 1, "digest": "c" * 64,
+                         "documentCount": 1, "itemCount": 1}, "sourceDigest": "d" * 64}
+            runner = (
+                f"import sys;sys.path.insert(0,{str(MODULE_PATH.parent)!r});"
+                "import extract_dialogue as m;"
+                f"m.fetch_source_authority=lambda *_:{authority!r};"
+                "sys.argv=['extract_dialogue.py',*sys.argv[1:]];raise SystemExit(m.main())"
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", runner, str(run), "--out", str(output),
+                 "--base-url", "http://127.0.0.1:9", "--workflow-run-id",
+                 "workflow-safe"], capture_output=True, text=True, encoding="utf-8",
+                errors="replace", check=False,
+            )
+            self.assertEqual((result.returncode, result.stdout, result.stderr),
+                             (1, "", "SOURCE_PRIVACY_DIALOGUE_INPUT_INVALID\n"))
+            self.assertFalse(output.exists())
+            self.assertEqual(list(root.glob(".dialogue.*.tmp")), [])
 
     def test_output_identity_is_validated_before_any_staging_write(self):
         with TemporaryDirectory() as temp:

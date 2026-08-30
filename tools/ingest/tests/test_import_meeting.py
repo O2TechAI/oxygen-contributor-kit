@@ -244,6 +244,30 @@ class ImportMeetingTopologyTest(unittest.TestCase):
 
             self.assertFalse((fake_module.parent / "out").exists())
 
+    def test_missing_source_cli_emits_only_fixed_code(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sentinel = "HOSTILE_MEETING_SENTINEL"
+            exception_body = "synthetic-exception-body"
+            source = root / f"missing-{sentinel}-https-example.invalid-{exception_body}.txt"
+            out = root / "requested-output"
+
+            result = subprocess.run(
+                [sys.executable, str(MODULE_PATH), str(source), "--out", str(out)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            captured = result.stdout + result.stderr
+
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr.splitlines(), ["MEETING_SOURCE_INVALID"])
+            for leaked in (
+                "Traceback", str(root), str(KIT_ROOT), sentinel,
+                "https", "example.invalid", exception_body,
+            ):
+                self.assertNotIn(leaked, captured)
+            self.assertFalse(out.exists())
+
     def test_audio_cli_uses_temporary_asr_scratch_and_leaves_only_canonical_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

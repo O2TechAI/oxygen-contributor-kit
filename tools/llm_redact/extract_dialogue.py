@@ -215,7 +215,7 @@ def main() -> int:
     bundles = extract_bundles(args.run)
     bundles = [bundle for bundle in bundles if bundle["turns"]]
     if not bundles:
-        raise SystemExit(f"no conversational turns found in {args.run}")
+        raise SystemExit("SOURCE_PRIVACY_DIALOGUE_INPUT_INVALID")
     install_dialogue_output(args.out, authority, bundles)
     total = sum(bundle["chars"] for bundle in bundles)
     print(json.dumps({"trajectories": len(bundles),

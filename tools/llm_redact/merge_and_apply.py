@@ -77,13 +77,16 @@ def main() -> int:
         raise SystemExit("SOURCE_PRIVACY_MERGE_OUTPUT_INVALID") from None
     if literal_out.exists() or literal_out.is_symlink():
         raise SystemExit("SOURCE_PRIVACY_MERGE_OUTPUT_EXISTS")
-    temporary = pathlib.Path(tempfile.mkdtemp(
-        prefix=f".{literal_out.name}.", suffix=".tmp", dir=literal_out.parent,
-    ))
+    try:
+        temporary = pathlib.Path(tempfile.mkdtemp(
+            prefix=f".{literal_out.name}.", suffix=".tmp", dir=literal_out.parent,
+        ))
+    except OSError:
+        raise SystemExit("SOURCE_PRIVACY_MERGE_OUTPUT_INVALID") from None
     redacted_dir = temporary / "redacted"
-    redacted_dir.mkdir()
     counts, per_traj = {}, []
     try:
+        redacted_dir.mkdir()
         for source_bundle in review["bundles"]:
             bundle = copy.deepcopy(source_bundle)
             traj = bundle["trajectory"]
@@ -119,9 +122,14 @@ def main() -> int:
             rename_noreplace(temporary, literal_out)
         except FileExistsError:
             raise SystemExit("SOURCE_PRIVACY_MERGE_OUTPUT_EXISTS") from None
+    except OSError:
+        raise SystemExit("SOURCE_PRIVACY_MERGE_OUTPUT_INVALID") from None
     finally:
         if temporary.exists():
-            shutil.rmtree(temporary)
+            try:
+                shutil.rmtree(temporary)
+            except OSError:
+                raise SystemExit("SOURCE_PRIVACY_MERGE_OUTPUT_INVALID") from None
     print(json.dumps({k: report[k] for k in
                       ("categories", "total_applied", "rejected",
                        "missing_worker_output")}, ensure_ascii=False))

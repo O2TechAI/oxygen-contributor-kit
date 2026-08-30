@@ -263,7 +263,8 @@ def main(argv=None) -> int:
     sources = [source.expanduser().resolve() for source in args.source]
     for source in sources:
         if not source.is_file():
-            raise fail(f"source not found: {source}")
+            print("MEETING_SOURCE_INVALID", file=sys.stderr)
+            return 1
     if len(sources) > 1 and (args.meeting_id or args.title):
         raise fail("--meeting-id and --title require exactly one source")
     if args.meeting_id is not None and not MEETING_ID_RE.fullmatch(args.meeting_id):

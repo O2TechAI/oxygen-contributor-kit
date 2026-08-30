@@ -902,7 +902,8 @@ def main(argv=None) -> int:
 
     repo = args.repo.expanduser().resolve()
     if not repo.is_dir():
-        raise fail(f"repo not found: {repo}")
+        print("REPOSITORY_SOURCE_INVALID", file=sys.stderr)
+        return 1
     agents = {a.strip() for a in args.agents.split(",") if a.strip()}
     try:
         out = validate_output_root(args.out)

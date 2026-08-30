@@ -386,6 +386,30 @@ class CollectorMainBoundaryTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 MODULE.main([str(repo)])
 
+    def test_missing_repository_cli_emits_only_fixed_code(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sentinel = "HOSTILE_REPOSITORY_SENTINEL"
+            exception_body = "synthetic-exception-body"
+            repo = root / f"missing-{sentinel}-https-example.invalid-{exception_body}"
+            out = root / "requested-output"
+
+            result = subprocess.run(
+                [sys.executable, str(MODULE_PATH), str(repo), "--out", str(out)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            captured = result.stdout + result.stderr
+
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr.splitlines(), ["REPOSITORY_SOURCE_INVALID"])
+            for leaked in (
+                "Traceback", str(root), str(INGEST_DIR), sentinel,
+                "https", "example.invalid", exception_body,
+            ):
+                self.assertNotIn(leaked, captured)
+            self.assertFalse(out.exists())
+
     def test_rerun_prunes_only_stale_derived_trajectory_directories(self):
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary, "collector-output")
