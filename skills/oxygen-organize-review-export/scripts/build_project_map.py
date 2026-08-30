@@ -317,7 +317,7 @@ def source_inventory_records(
             TRAJECTORY_SCHEMA: TRAJECTORY_EVENT_SCHEMA,
             AI_REVIEW_TRAJECTORY_SCHEMA: AI_REVIEW_EVENT_SCHEMA,
         }.get(manifest_schema)
-        if event_schema is None or "schema_version" in manifest:
+        if event_schema is None:
             raise ValueError(f"{RECOLLECT_GUIDANCE}: non-canonical trajectory contract")
         trajectory_id = manifest.get("trajectory_id")
         if (
@@ -344,7 +344,6 @@ def source_inventory_records(
         if any(
             not isinstance(event, dict)
             or event.get("schema") != event_schema
-            or "schema_version" in event
             for event in events
         ):
             raise ValueError(f"{RECOLLECT_GUIDANCE}: non-canonical trajectory event")
@@ -420,10 +419,7 @@ def source_inventory_records(
 
     for literal_meeting_id, meeting_path in meeting_candidates:
         meeting = read_object(meeting_path)
-        if (
-            meeting.get("schema") not in {MEETING_SCHEMA, AI_REVIEW_MEETING_SCHEMA}
-            or "schema_version" in meeting
-        ):
+        if meeting.get("schema") not in {MEETING_SCHEMA, AI_REVIEW_MEETING_SCHEMA}:
             raise ValueError("meeting source uses a non-canonical contract")
         meeting_id = meeting.get("meeting_id") or meeting.get("id") or literal_meeting_id
         records = meeting.get("records")

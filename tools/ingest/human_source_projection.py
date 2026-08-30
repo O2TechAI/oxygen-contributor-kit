@@ -668,11 +668,9 @@ def project_trajectory(
     if (
         not isinstance(manifest, dict)
         or manifest.get("schema") != TRAJECTORY_SCHEMA
-        or "schema_version" in manifest
         or any(
             not isinstance(event, dict)
             or event.get("schema") != TRAJECTORY_EVENT_SCHEMA
-            or "schema_version" in event
             for event in events
         )
     ):
