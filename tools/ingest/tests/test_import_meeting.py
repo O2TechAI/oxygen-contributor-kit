@@ -22,6 +22,7 @@ SPEC = importlib.util.spec_from_file_location("oxygen_import_meeting_test", MODU
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
+import meeting_interpretation as INTERPRETATION
 
 
 def run_main(*arguments: object) -> dict:
@@ -31,6 +32,40 @@ def run_main(*arguments: object) -> dict:
     if result != 0:
         raise AssertionError(f"import returned {result}")
     return json.loads(output.getvalue().strip().splitlines()[-1])
+
+
+def run_failure(*arguments: object) -> str:
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        result = MODULE.main([str(argument) for argument in arguments])
+    if result != 1 or stdout.getvalue():
+        raise AssertionError(f"unexpected failure result: {result}, {stdout.getvalue()!r}")
+    return stderr.getvalue().strip()
+
+
+def proposal_for(source: Path, **changes) -> dict:
+    proposal = {
+        "sourceDigest": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "recordForm": "header_body",
+        "prefix": "<<< Speaker: ",
+        "separator": " | ",
+        "suffix": " >>>",
+        "fields": ["speaker", "timestamp"],
+        "blankLines": "body",
+    }
+    proposal.update(changes)
+    return proposal
+
+
+def proposal_path(run: Path, source: Path) -> Path:
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    return run / ".meeting-interpretation" / digest / "proposal.json"
+
+
+def write_proposal(run: Path, source: Path, proposal: dict) -> None:
+    path = proposal_path(run, source)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(proposal, ensure_ascii=False), encoding="utf-8")
 
 
 def tree_snapshot(root: Path) -> list[tuple[str, str, bytes | None]]:
@@ -294,6 +329,348 @@ class ImportMeetingParserTest(unittest.TestCase):
                 self.assertIsNone(records[0]["speaker"])
 
 
+class MeetingInterpretationTest(unittest.TestCase):
+    HEADER_TEXT = (
+        "<<< Speaker: Alice North | 09:00 >>>\n"
+        "First body line\nInternal 10:45 time\n\nSecond body line\n"
+        "<<< Speaker: Bob Reed | 09:05:30 >>>\n"
+        "Body resembling [Other] 11:00 but not the exact header\n"
+    )
+
+    def test_unsupported_prepares_content_free_state_and_safe_public_code(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, run = root / "renamed.txt", root / "run"
+            source.write_text(self.HEADER_TEXT, encoding="utf-8", newline="")
+
+            code = run_failure(source, "--out", run, "--meeting-id", "unknown")
+
+            self.assertEqual(code, INTERPRETATION.UNSUPPORTED_CODE)
+            state_path = proposal_path(run, source).with_name("state.json")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(state), INTERPRETATION.STATE_KEYS)
+            self.assertEqual(state["status"], "awaiting_initial")
+            self.assertFalse(state["initialProposalRejected"])
+            self.assertEqual(state["rejectedCorrections"], 0)
+            self.assertFalse((run / "meetings" / "unknown").exists())
+            self.assertFalse(proposal_path(run, source).exists())
+            old_proposal = proposal_path(run, source)
+            write_proposal(run, source, proposal_for(source))
+            source.write_text(self.HEADER_TEXT.replace("Alice North", "Renamed Person"),
+                              encoding="utf-8", newline="")
+            self.assertEqual(run_failure(source, "--out", run, "--meeting-id", "unknown"),
+                             INTERPRETATION.UNSUPPORTED_CODE)
+            self.assertNotEqual(proposal_path(run, source), old_proposal)
+            self.assertTrue(old_proposal.exists())
+            self.assertFalse((run / "meetings" / "unknown").exists())
+    def test_header_plan_is_canonical_source_derived_and_preserves_body_bytes(self):
+        variants = (self.HEADER_TEXT, self.HEADER_TEXT.replace("\n", "\r\n"))
+        for text in variants:
+            with self.subTest(newline="CRLF" if "\r\n" in text else "LF"), \
+                    tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source, run = root / "layout.txt", root / "run"
+                source.write_bytes(text.encode("utf-8"))
+                self.assertEqual(run_failure(source, "--out", run, "--meeting-id", "planned"),
+                                 INTERPRETATION.UNSUPPORTED_CODE)
+                write_proposal(run, source, proposal_for(source))
+
+                with mock.patch.object(MODULE.subprocess, "Popen") as provider:
+                    result = run_main(source, "--out", run, "--meeting-id", "planned",
+                                      "--title", "Stable", "--date", "2026-08-30")
+
+                provider.assert_not_called()
+                meeting = run / "meetings" / "planned"
+                dataset = json.loads((meeting / "meeting.json").read_text(encoding="utf-8"))
+                expected_break = "\r\n" if "\r\n" in text else "\n"
+                self.assertEqual(result["meetings"][0]["detected_format"],
+                                 INTERPRETATION.DETECTED_FORMAT)
+                self.assertEqual(dataset["source_digest"], hashlib.sha256(source.read_bytes()).hexdigest())
+                self.assertRegex(dataset["interpretation_plan_digest"], r"^[0-9a-f]{64}$")
+                self.assertNotIn("generated_at", dataset)
+                self.assertEqual(dataset["speakers"], ["Alice North", "Bob Reed"])
+                self.assertEqual(dataset["records"][0]["source_line"], 1)
+                self.assertEqual(dataset["records"][1]["source_line"], 6)
+                self.assertEqual(
+                    dataset["records"][0]["text"],
+                    expected_break.join(("First body line", "Internal 10:45 time", "", "Second body line")),
+                )
+                self.assertEqual([row["record_id"] for row in dataset["records"]],
+                                 ["rec-00001", "rec-00002"])
+                self.assertFalse(dataset["publication_approved"])
+                self.assertFalse(proposal_path(run, source).parent.exists())
+    def test_one_row_contract_handles_unicode_counts_optional_clocks_and_exact_literals(self):
+        cases = (
+            (
+                "ROW|Zoë 王|09:01|alpha|END\n\nROW|李 小龙||beta|END\n",
+                [("Zoë 王", "09:01", "alpha"), ("李 小龙", None, "beta")],
+            ),
+            (
+                "ROW|Renée|9:01 AM|one|END\nROW|Miyu|9:01:02 AM|two|END\n"
+                "ROW|Óscar|09:02|three|END\n",
+                [("Renée", "9:01 AM", "one"), ("Miyu", "9:01:02 AM", "two"),
+                 ("Óscar", "09:02", "three")],
+            ),
+        )
+        for text, expected in cases:
+            with self.subTest(count=len(expected)), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source, run = root / "rows.txt", root / "run"
+                source.write_text(text, encoding="utf-8", newline="")
+                self.assertEqual(run_failure(source, "--out", run), INTERPRETATION.UNSUPPORTED_CODE)
+                plan = proposal_for(
+                    source, recordForm="row", prefix="ROW|", separator="|", suffix="|END",
+                    fields=["speaker", "timestamp", "body"], blankLines="record_separator",
+                )
+                write_proposal(run, source, plan)
+                result = run_main(source, "--out", run, "--date", "2026-08-30")
+                dataset = json.loads((Path(result["meetings"][0]["output"]) / "meeting.json")
+                                     .read_text(encoding="utf-8"))
+                self.assertEqual([(row["speaker"], row["timestamp"], row["text"])
+                                  for row in dataset["records"]], expected)
+    def test_common_three_field_rows_pause_then_import_through_one_contract(self):
+        cases = ((",", "Alice,09:00,first idea\nBob,09:05,second idea\n"),
+                 (";", "Alice;09:00;first idea\nBob;09:05;second idea\n"),
+                 ("\t", "Alice\t09:00\tfirst idea\nBob\t09:05\tsecond idea\n"),
+                 (" - ", "Alice - 09:00 - first idea\nBob - 09:05 - second idea\n"))
+        for separator, text in cases:
+            with self.subTest(separator=repr(separator)), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source, run = root / "weak.txt", root / "run"
+                source.write_text(text, encoding="utf-8", newline="")
+                self.assertEqual(run_failure(source, "--out", run), INTERPRETATION.UNSUPPORTED_CODE)
+                write_proposal(run, source, proposal_for(
+                    source, recordForm="row", prefix="", separator=separator, suffix="",
+                    fields=["speaker", "timestamp", "body"], blankLines="record_separator"))
+                result = run_main(source, "--out", run, "--date", "2026-08-30")
+                dataset = json.loads((Path(result["meetings"][0]["output"]) / "meeting.json")
+                                     .read_text(encoding="utf-8"))
+                self.assertEqual([(row["speaker"], row["timestamp"], row["text"])
+                                  for row in dataset["records"]],
+                                 [("Alice", "09:00", "first idea"),
+                                  ("Bob", "09:05", "second idea")])
+    def test_multifield_labeled_headers_override_only_legacy_partial_match(self):
+        for separator in (" | ", " / ", " - "):
+            text = (f"Speaker: Alice{separator}Time: 09:00\nBody: first idea\n"
+                    f"Speaker: Bob{separator}Time: 09:05\nBody: second idea\n")
+            with self.subTest(separator=separator), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source, run = root / "labels.txt", root / "run"
+                source.write_text(text, encoding="utf-8")
+                self.assertEqual(run_failure(source, "--out", run), INTERPRETATION.UNSUPPORTED_CODE)
+                write_proposal(run, source, proposal_for(
+                    source, prefix="Speaker: ", separator=f"{separator}Time: ", suffix=""))
+                result = run_main(source, "--out", run)
+                dataset = json.loads((Path(result["meetings"][0]["output"]) / "meeting.json")
+                                     .read_text(encoding="utf-8"))
+                self.assertEqual([(row["speaker"], row["text"]) for row in dataset["records"]],
+                                 [("Alice", "Body: first idea"), ("Bob", "Body: second idea")])
+        for known, expected in (("Alice: hello\nBob: bye\n", "speaker-labeled"),
+                                ("0:01Speaker Ahello\n0:02Speaker Bbye\n", "timestamped")):
+            self.assertEqual(MODULE.parse_lines(known)[1], expected)
+            self.assertFalse(INTERPRETATION.legacy_override_structure(known))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "known.txt"
+            source.write_text("Speaker A: body | pipe\ncontinuation - dash\nSpeaker B: second\n",
+                              encoding="utf-8")
+            result = run_main(source, "--out", root / "run")
+            self.assertEqual(result["meetings"][0]["detected_format"], "speaker-labeled")
+    def test_plain_notes_and_malformed_known_or_unknown_structures_keep_boundaries(self):
+        plain = (
+            "Checkpoint Review 14:30\nThe release continues tomorrow.\n",
+            "- first note\n- second note\n- third note\n",
+            "ordinary, comma prose, without a clock\nsecond, comma prose, remains notes\n",
+        )
+        for text in plain:
+            with self.subTest(text=text):
+                records, detected = MODULE.parse_lines(text)
+                self.assertEqual(detected, "plain")
+                self.assertEqual(INTERPRETATION.classify_plain_structure(text), "plain")
+                self.assertTrue(records)
+
+        invalid = {
+            "known malformed": "[Alice Stone] 09:00\none\n[Bob Reed] 25:61\ntwo\n",
+            "orphan preamble": "orphan\n<<< Alice | 09:00 >>>\none\n<<< Bob | 09:01 >>>\ntwo\n",
+            "incomplete": "<<< Alice | 09:00 >>>\none\n<<< Bob | 09:01 >>>\n",
+            "adjacent": "<<< Alice | 09:00 >>>\n<<< Bob | 09:01 >>>\ntwo\n",
+            "mixed": "ROW|A|one|END\nALT[A]one\nROW|B|two|END\nALT[B]two\n",
+            "nested": "<<< Alice | 09:00 >>>\nNEST[A]one\n<<< Bob | 09:01 >>>\nNEST[B]two\n",
+            "partial comma": "Alice,09:00,one\nBob,09:05\n",
+            "partial semicolon": "Alice;09:00;one\nBob;09:05\n",
+            "inconsistent tab": "Alice\t09:00\tone\nBob\tnot-a-clock\ttwo\n",
+        }
+        for name, text in invalid.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source, run = root / "invalid.txt", root / "run"
+                source.write_text(text, encoding="utf-8")
+                self.assertEqual(run_failure(source, "--out", run), MODULE.STRUCTURAL_FAILURE_CODE)
+                self.assertFalse((run / ".meeting-interpretation").exists())
+                self.assertFalse((run / "meetings").exists())
+    def test_plan_contract_rejects_foreign_ambiguous_and_non_declarative_inputs(self):
+        source = self.HEADER_TEXT.encode("utf-8")
+        digest = hashlib.sha256(source).hexdigest()
+        base = {
+            "sourceDigest": digest, "recordForm": "header_body",
+            "prefix": "<<< Speaker: ", "separator": " | ", "suffix": " >>>",
+            "fields": ["speaker", "timestamp"], "blankLines": "body",
+        }
+        invalid_plans = {
+            "digest mismatch": dict(base, sourceDigest="0" * 64),
+            "extra regex": dict(base, regex=".*"),
+            "extra code": dict(base, code="return records"),
+            "extra path": dict(base, path="/tmp/parser"),
+            "extra transform": dict(base, transform="trim"),
+            "control token": dict(base, prefix="bad\nmarker"),
+            "other control": dict(base, separator="\x00"),
+            "tab outside separator": dict(base, prefix="\t"),
+            "surrogate token": dict(base, prefix="\ud800"),
+            "oversize token": dict(base, prefix="x" * 65),
+            "wrong header fields": dict(base, fields=["body", "speaker"]),
+            "unknown field": dict(base, fields=["speaker", "identity"]),
+        }
+        for name, plan in invalid_plans.items():
+            with self.subTest(name=name), self.assertRaises(INTERPRETATION.PlanError):
+                INTERPRETATION._load_plan(json.dumps(plan).encode(), digest)
+        with self.assertRaises(INTERPRETATION.PlanError):
+            INTERPRETATION._load_plan(b"{" + b"x" * INTERPRETATION.PROPOSAL_LIMIT, digest)
+        duplicate = json.dumps(base).replace('"recordForm": "header_body"',
+                                              '"recordForm": "row", "recordForm": "header_body"')
+        with self.assertRaises(INTERPRETATION.PlanError):
+            INTERPRETATION._load_plan(duplicate.encode(), digest)
+
+        row = dict(base, recordForm="row", prefix="ROW|", separator="|", suffix="|END",
+                   fields=["speaker", "timestamp", "body"], blankLines="record_separator")
+        bad_sources = (
+            b"ROW|A|09:00|one|END\nROW|B|08:59|two|END\n",  # decreasing
+            b"ROW|A|not-a-clock|one|END\nROW|B|09:01|two|END\n",
+            b"ROW|A|09:00||END\nROW|B|09:01|two|END\n",  # missing body
+            b"ROW|A|09:00|one|extra|END\nROW|B|09:01|two|END\n",  # ambiguous split
+            b"ROW|A|09:00|one|END\nforeign line\nROW|B|09:01|two|END\n",
+        )
+        for raw in bad_sources:
+            with self.subTest(raw=raw), self.assertRaises(INTERPRETATION.PlanError):
+                INTERPRETATION.apply_plan(raw, row)
+    def test_rejection_state_is_idempotent_durable_exhaustive_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, run = root / "source.txt", root / "run"
+            source.write_text(self.HEADER_TEXT, encoding="utf-8")
+            args = (source, "--out", run, "--meeting-id", "stateful")
+            self.assertEqual(run_failure(*args), INTERPRETATION.UNSUPPORTED_CODE)
+            path = proposal_path(run, source)
+            state_path = path.with_name("state.json")
+            initial_state = state_path.read_bytes()
+            first = proposal_for(source, regex=".*")
+            write_proposal(run, source, first)
+            self.assertEqual(run_failure(*args), INTERPRETATION.CORRECTABLE_CODE)
+            state_after_first = state_path.read_bytes()
+            restarted = subprocess.run(
+                [sys.executable, str(MODULE_PATH), *(str(value) for value in args)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            self.assertEqual((restarted.returncode, restarted.stdout, restarted.stderr.strip()),
+                             (1, "", INTERPRETATION.CORRECTABLE_CODE))
+            self.assertEqual(state_path.read_bytes(), state_after_first)
+            self.assertEqual(json.loads(state_after_first)["rejectedCorrections"], 0)
+            write_proposal(run, source, proposal_for(source, sourceDigest="0" * 64))
+            self.assertEqual(run_failure(*args), INTERPRETATION.CORRECTABLE_CODE)
+            self.assertEqual(json.loads(state_path.read_text())["rejectedCorrections"], 1)
+            write_proposal(run, source, proposal_for(source, prefix="wrong"))
+            self.assertEqual(run_failure(*args), INTERPRETATION.EXHAUSTED_CODE)
+            exhausted = json.loads(state_path.read_text())
+            self.assertEqual((exhausted["status"], exhausted["rejectedCorrections"]),
+                             ("exhausted", 2))
+            write_proposal(run, source, proposal_for(source))
+            self.assertEqual(run_failure(*args), INTERPRETATION.EXHAUSTED_CODE)
+            self.assertFalse((run / "meetings" / "stateful").exists())
+
+            state_path.write_bytes(b'{"corrupt":true}\n')
+            before = state_path.read_bytes()
+            self.assertEqual(run_failure(*args), INTERPRETATION.STATE_INVALID_CODE)
+            self.assertEqual(state_path.read_bytes(), before)
+            marker = f'"sourceDigest": "{hashlib.sha256(source.read_bytes()).hexdigest()}"'.encode()
+            state_path.write_bytes(initial_state.replace(marker, marker + b",\n  " + marker))
+            before = state_path.read_bytes()
+            self.assertEqual(run_failure(*args), INTERPRETATION.STATE_INVALID_CODE)
+            self.assertEqual(state_path.read_bytes(), before)
+
+    def test_proposal_io_and_cleanup_fail_closed_without_harming_publication(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.txt"
+            source.write_text(self.HEADER_TEXT, encoding="utf-8")
+            with mock.patch.object(INTERPRETATION, "_atomic_json", side_effect=OSError):
+                self.assertEqual(run_failure(source, "--out", root / "run"),
+                                 INTERPRETATION.STATE_INVALID_CODE)
+            self.assertFalse((root / "run" / "meetings").exists())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, run = root / "source.txt", root / "run"
+            source.write_text(self.HEADER_TEXT, encoding="utf-8")
+            args = (source, "--out", run, "--meeting-id", "safe")
+            self.assertEqual(run_failure(*args), INTERPRETATION.UNSUPPORTED_CODE)
+            path = proposal_path(run, source)
+            path.write_bytes(b"x" * (INTERPRETATION.PROPOSAL_LIMIT + 1))
+            self.assertEqual(run_failure(*args), INTERPRETATION.CORRECTABLE_CODE)
+            self.assertFalse((run / "meetings" / "safe").exists())
+            write_proposal(run, source, proposal_for(source, prefix="wrong"))
+            with mock.patch.object(INTERPRETATION, "_atomic_json", side_effect=OSError):
+                self.assertEqual(run_failure(*args), INTERPRETATION.STATE_INVALID_CODE)
+            state_path = path.with_name("state.json")
+            state_path.write_bytes(b"x" * (INTERPRETATION.STATE_LIMIT + 1))
+            before = state_path.read_bytes()
+            self.assertEqual(run_failure(*args), INTERPRETATION.STATE_INVALID_CODE)
+            self.assertEqual(state_path.read_bytes(), before)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, run = root / "source.txt", root / "run"
+            source.write_text(self.HEADER_TEXT, encoding="utf-8")
+            args = (source, "--out", run, "--meeting-id", "safe")
+            self.assertEqual(run_failure(*args), INTERPRETATION.UNSUPPORTED_CODE)
+            write_proposal(run, source, proposal_for(source))
+            original = Path.read_bytes
+            def fail_proposal(path):
+                if path.name == "proposal.json":
+                    raise OSError
+                return original(path)
+            with mock.patch.object(Path, "read_bytes", fail_proposal):
+                self.assertEqual(run_failure(*args), INTERPRETATION.STATE_INVALID_CODE)
+            self.assertFalse((run / "meetings" / "safe").exists())
+            with mock.patch.object(MODULE, "finish_success", side_effect=OSError):
+                result = run_main(*args)
+            meeting = Path(result["meetings"][0]["output"])
+            self.assertEqual({path.name for path in meeting.iterdir()},
+                             {"meeting.json", "raw.md", "timestamped.txt"})
+            self.assertTrue(proposal_path(run, source).parent.is_dir())
+    def test_success_removes_only_own_preparation_and_is_byte_deterministic(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "same-source.txt"
+            source.write_text(self.HEADER_TEXT, encoding="utf-8")
+            artifacts = []
+            foreign = None
+            for name in ("first", "second"):
+                run = root / name
+                args = (source, "--out", run, "--meeting-id", "same",
+                        "--title", "Same", "--date", "2026-08-30")
+                self.assertEqual(run_failure(*args), INTERPRETATION.UNSUPPORTED_CODE)
+                if name == "first":
+                    foreign = run / ".meeting-interpretation" / ("f" * 64)
+                    foreign.mkdir(parents=True)
+                    (foreign / "state.json").write_text("foreign", encoding="utf-8")
+                write_proposal(run, source, proposal_for(source))
+                result = run_main(*args)
+                meeting = Path(result["meetings"][0]["output"])
+                artifacts.append(tuple((meeting / item).read_bytes()
+                                       for item in ("meeting.json", "raw.md", "timestamped.txt")))
+                self.assertFalse(proposal_path(run, source).parent.exists())
+            self.assertEqual(artifacts[0], artifacts[1])
+            self.assertTrue(foreign.is_dir())
+
+
 class ImportMeetingTopologyTest(unittest.TestCase):
     def test_speaker_time_import_preserves_schema_privacy_and_exact_fields(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -326,7 +703,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             )
             self.assertTrue(dataset["contains_unredacted_source_text"])
             self.assertEqual(dataset["review_status"], "pending")
-            self.assertFalse(dataset["publication_approved"])
+            self.assertEqual((dataset["publication_approved"], "generated_at" in dataset), (False, True))
 
     def test_hostile_structural_failure_emits_only_safe_code_and_no_artifacts(self):
         with tempfile.TemporaryDirectory(prefix="HOSTILE_PATH_SENTINEL_") as temporary:
