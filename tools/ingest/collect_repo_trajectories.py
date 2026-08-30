@@ -145,6 +145,7 @@ class SessionCwdScan:
     bytes_scanned: int = 0
     malformed_records: int = 0
     bound_reached: bool = False
+    read_failed: bool = False
 
 
 def _structured_cwds(record: dict, system: str) -> list[str]:
@@ -199,6 +200,19 @@ def session_cwds(
                     continue
                 if not isinstance(record, dict):
                     continue
+                record_type = record.get("type")
+                payload = record.get("payload")
+                if (
+                    (system == "claude" and "cwd" in record
+                     and not isinstance(record.get("cwd"), str))
+                    or (system == "codex" and record_type in CODEX_CWD_RECORD_TYPES and (
+                        ("cwd" in record and not isinstance(record.get("cwd"), str))
+                        or ("payload" in record and not isinstance(payload, dict))
+                        or (isinstance(payload, dict) and "cwd" in payload
+                            and not isinstance(payload.get("cwd"), str))
+                    ))
+                ):
+                    result.malformed_records += 1
                 for cwd in _structured_cwds(record, system):
                     result.cwds.add(cwd)
                     if repo is not None and is_inside(cwd, repo):
@@ -212,8 +226,16 @@ def session_cwds(
                 except OSError:
                     result.bound_reached = True
     except OSError:
-        pass
+        result.read_failed = True
     return result
+
+
+def cwd_relations(scan: SessionCwdScan, repo: Path) -> list[str]:
+    """Normalize one complete bounded metadata scan into its path-free receipt."""
+    relations = {cwd_relation(cwd, repo) for cwd in scan.cwds}
+    if not scan.cwds or scan.malformed_records or scan.bound_reached or scan.read_failed:
+        relations.add("missing_unparseable")
+    return sorted(relations)
 
 
 WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -971,6 +993,7 @@ def main(argv=None) -> int:
                 semantic_source_registry,
                 claimed_trajectory_ids,
             )
+            entry["cwd_relations"] = cwd_relations(session_cwds(session, system), repo)
             trajectories.append(entry)
             done += 1
             pct = 10 + 75 * done / max(1, total)

@@ -110,7 +110,9 @@ def write_trajectory(run: Path, trajectory_id: str, texts: list[str]) -> list[st
             "trajectories": [],
         }
     )
-    index["trajectories"].append({"trajectory_id": trajectory_id, "ok": True})
+    index["trajectories"].append({
+        "trajectory_id": trajectory_id, "ok": True, "cwd_relations": ["exact"],
+    })
     index["trajectory_count"] = len(index["trajectories"])
     index_path.write_text(json.dumps(index), encoding="utf-8")
     return [event["event_id"] for event in events]

@@ -17,7 +17,7 @@ assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
 
 
-def write_trajectory(run: Path, trajectory_id: str) -> Path:
+def write_trajectory(run: Path, trajectory_id: str, cwd_relations=("exact",)) -> Path:
     directory = run / "trajectories" / trajectory_id
     directory.mkdir(parents=True)
     contribution_id = f"evt-{hashlib.sha256(trajectory_id.encode('utf-8')).hexdigest()}"
@@ -59,7 +59,9 @@ def write_trajectory(run: Path, trajectory_id: str) -> Path:
             "trajectories": [],
         }
     )
-    index["trajectories"].append({"trajectory_id": trajectory_id, "ok": True})
+    index["trajectories"].append({
+        "trajectory_id": trajectory_id, "ok": True, "cwd_relations": list(cwd_relations),
+    })
     index["trajectory_count"] = len(index["trajectories"])
     index_path.write_text(json.dumps(index), encoding="utf-8")
     return directory
@@ -242,6 +244,113 @@ class BuildProjectMapTests(unittest.TestCase):
                     ValueError, "trajectory (index authority|index membership)",
                 ):
                     MODULE.source_inventory(run)
+
+    def test_collector_membership_selects_current_and_excludes_foreign_everywhere(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            current = {
+                "traj-exact": ("exact",),
+                "traj-child": ("child",),
+                "traj-both": ("child", "exact"),
+            }
+            foreign = {
+                "traj-sibling": ("sibling",),
+                "traj-unrelated": ("sibling", "unrelated"),
+            }
+            for trajectory_id, relations in {**current, **foreign}.items():
+                write_trajectory(run, trajectory_id, relations)
+
+            selected = MODULE.indexed_trajectory_directories(run)
+            self.assertEqual([path.name for path in selected], sorted(current))
+            self.assertEqual(len(list((run / "trajectories").iterdir())), 5)
+            ids, sources, _ = MODULE.source_inventory(run)
+            self.assertEqual({source["id"] for source in sources}, set(current))
+            project_map = MODULE.canonical_project_map(
+                run, "Synthetic Project", "Filtered.",
+                [{"id": "unit-current", "kind": "discussion", "members": ids}],
+            )
+            self.assertEqual(project_map["source_authority"]["sourceCount"], 3)
+            self.assertEqual(project_map["semantic_manifest"]["units"][0]["members"], ids)
+
+    def test_pure_foreign_collector_run_is_valid_zero_current_history(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            write_trajectory(run, "traj-foreign", ("sibling", "unrelated"))
+            self.assertEqual(MODULE.indexed_trajectory_directories(run), [])
+            project_map = MODULE.canonical_project_map(
+                run, "Synthetic Project", "No current history.", [],
+            )
+            self.assertEqual(project_map["source_authority"]["sourceCount"], 0)
+            self.assertEqual(project_map["semantic_manifest"]["units"], [])
+
+    def test_ambiguous_and_legacy_collector_receipts_need_user_resolution(self):
+        cases = {
+            "mixed": ["exact", "unrelated"],
+            "parent": ["parent"],
+            "missing": ["missing_unparseable"],
+            "legacy": None,
+        }
+        for name, relations in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                run = Path(temporary)
+                write_trajectory(run, "traj-one")
+                index_path = run / "index.json"
+                index = json.loads(index_path.read_text(encoding="utf-8"))
+                if relations is None:
+                    index["trajectories"][0].pop("cwd_relations")
+                else:
+                    index["trajectories"][0]["cwd_relations"] = relations
+                index_path.write_text(json.dumps(index), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    ValueError, f"^{MODULE.PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION}$",
+                ):
+                    MODULE.indexed_trajectory_directories(run)
+
+    def test_malformed_collector_receipts_remain_ordinary_invalid_input(self):
+        cases = (None, "exact", [], ["unknown"], ["exact", "exact"], ["exact", "child"], [1])
+        for relations in cases:
+            with self.subTest(relations=relations), tempfile.TemporaryDirectory() as temporary:
+                run = Path(temporary)
+                write_trajectory(run, "traj-one")
+                index_path = run / "index.json"
+                index = json.loads(index_path.read_text(encoding="utf-8"))
+                index["trajectories"][0]["cwd_relations"] = relations
+                index_path.write_text(json.dumps(index), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "^trajectory index authority is invalid$"):
+                    MODULE.indexed_trajectory_directories(run)
+
+    def test_foreign_filter_never_hides_inexact_physical_membership(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            write_trajectory(run, "traj-foreign", ("unrelated",))
+            (run / "trajectories" / "traj-extra").mkdir()
+            with self.assertRaisesRegex(ValueError, "trajectory index membership is not exact"):
+                MODULE.indexed_trajectory_directories(run)
+
+    def test_unresolved_cli_preserves_destination_and_emits_only_fixed_outcome(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            write_trajectory(run, "traj-one")
+            destination = run / "project-map.json"
+            destination.write_bytes(MODULE.transport_json_bytes(MODULE.canonical_project_map(
+                run, "Synthetic Project", "Safe summary.", [], finalize=False,
+            )))
+            before = destination.read_bytes()
+            index_path = run / "index.json"
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index["trajectories"][0]["cwd_relations"] = ["parent"]
+            index_path.write_text(json.dumps(index), encoding="utf-8")
+            result = subprocess.run([
+                sys.executable, str(MODULE_PATH), str(run),
+                "--primary-project", "HOSTILE_SENTINEL", "--summary", "example.invalid",
+            ], capture_output=True, text=True, encoding="utf-8", check=False)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(
+                result.stderr.splitlines(), [MODULE.PROJECT_MEMBERSHIP_NEEDS_USER_RESOLUTION],
+            )
+            self.assertEqual(destination.read_bytes(), before)
+            self.assertNotIn("HOSTILE_SENTINEL", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
 
     def test_trajectory_index_contract_is_bound_to_its_exact_producer(self):
         mutations = {

@@ -169,6 +169,36 @@ class BoundedMetadataScanTest(unittest.TestCase):
             scan = MODULE.session_cwds(path, "codex", REPO)
             self.assertFalse(scan.cwds)
 
+    def test_complete_scan_receipt_covers_all_relations_and_incomplete_evidence(self):
+        cases = (
+            (MODULE.SessionCwdScan(cwds={EXACT}), ["exact"]),
+            (MODULE.SessionCwdScan(cwds={CHILD}), ["child"]),
+            (MODULE.SessionCwdScan(cwds={EXACT, CHILD}), ["child", "exact"]),
+            (MODULE.SessionCwdScan(cwds={SIBLING, r"C:\elsewhere"}), ["sibling", "unrelated"]),
+            (MODULE.SessionCwdScan(cwds={PARENT}), ["parent"]),
+            (MODULE.SessionCwdScan(), ["missing_unparseable"]),
+            (MODULE.SessionCwdScan(cwds={EXACT}, bound_reached=True),
+             ["exact", "missing_unparseable"]),
+            (MODULE.SessionCwdScan(cwds={EXACT}, read_failed=True),
+             ["exact", "missing_unparseable"]),
+        )
+        for scan, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(MODULE.cwd_relations(scan, REPO), expected)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary, "session.jsonl")
+            path.write_bytes((json.dumps(codex_record(EXACT))
+                              + "\nnot-json-without-membership-metadata\n").encode())
+            self.assertEqual(MODULE.cwd_relations(MODULE.session_cwds(path, "codex"), REPO),
+                             ["exact"])
+            with path.open("ab") as handle:
+                handle.write(b'{"cwd":\n')
+            self.assertEqual(
+                MODULE.cwd_relations(MODULE.session_cwds(path, "codex"), REPO),
+                ["exact", "missing_unparseable"],
+            )
+
 
 class DiscoveryContractTest(unittest.TestCase):
     def test_default_global_windows_user_store_is_discovered(self):
@@ -602,6 +632,8 @@ class CollectorMainBoundaryTest(unittest.TestCase):
             write_jsonl(session, [codex_session_meta(str(repo), "approved")])
 
             def fake_extract(session_path, system, out_root, masking_home, user, semantic_source_registry, claimed_trajectory_ids):
+                with session_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(codex_record(str(root / "foreign"))) + "\n")
                 return {
                     "trajectory_id": session_path.stem,
                     "system": system,
@@ -624,6 +656,8 @@ class CollectorMainBoundaryTest(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertEqual([call.args[0] for call in extracted.call_args_list], [session.resolve()])
             self.assertEqual([call.args[3] for call in extracted.call_args_list], [source_home.resolve()])
+            index = json.loads((out / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(index["trajectories"][0]["cwd_relations"], ["exact", "sibling"])
 
     def test_missing_explicit_source_home_fails_before_session_extraction(self):
         with tempfile.TemporaryDirectory() as temporary:
