@@ -40,6 +40,7 @@ from push_redactions import _RejectRedirects, validate_base_url
 from source_privacy_receipt import (
     SOURCE_AUTHORITY_KEYS,
     assert_literal_physical_path,
+    bind_worker_assignment,
     canonical_bundle_bytes,
     dialogue_authority,
     validate_source_authority,
@@ -165,6 +166,7 @@ def fetch_source_authority(base_url: str, workflow_run_id: str) -> dict:
 
 def install_dialogue_output(out: pathlib.Path, authority: dict, bundles: list[dict]) -> None:
     try:
+        bundles = [bind_worker_assignment(bundle) for bundle in bundles]
         records = [(bundle, canonical_bundle_bytes(bundle)) for bundle in bundles]
         dialogue = dialogue_authority(records)
     except (TypeError, ValueError):

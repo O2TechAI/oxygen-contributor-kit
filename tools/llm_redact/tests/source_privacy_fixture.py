@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -14,10 +13,10 @@ if str(LLM_REDACT_ROOT) not in sys.path:
 
 from source_privacy_receipt import (  # noqa: E402
     apply_spans,
+    bind_worker_assignment,
     canonical_json,
     canonical_bundle_bytes,
     dialogue_authority,
-    digest_value,
     finalize_review,
 )
 
@@ -45,7 +44,7 @@ def bundle(
     text: str = TEXT,
     event_id: str = EVENT_ID,
 ) -> dict:
-    return {
+    return bind_worker_assignment({
         "trajectory": trajectory,
         "document_kind": "trajectory",
         "turns": [{
@@ -58,7 +57,7 @@ def bundle(
             "text": text,
         }],
         "chars": len(text),
-    }
+    })
 
 
 def write_dialogue(root: Path, bundles: list[dict], *, source_revision: int = 3) -> Path:
@@ -86,12 +85,9 @@ def write_findings(
     root.mkdir()
     findings_by_document = findings_by_document or {}
     for value in bundles:
-        item_ids = [turn["item_id"] for turn in value["turns"]]
         payload = {
             "trajectory": value["trajectory"],
-            "input_digest": hashlib.sha256(canonical_bundle_bytes(value)).hexdigest(),
-            "reviewed_item_ids": item_ids,
-            "reviewed_items_digest": digest_value(item_ids),
+            "input_digest": value["input_digest"],
             "findings": findings_by_document.get(value["trajectory"], []),
             "reviewed_turns": len(value["turns"]),
         }
@@ -126,6 +122,7 @@ def write_redacted_output(root: Path, review: dict) -> tuple[Path, Path]:
     categories: dict[str, int] = {}
     for source in review["bundles"]:
         output = json.loads(json.dumps(source))
+        output.pop("input_digest")
         for turn in output["turns"]:
             spans = review["byDocument"][output["trajectory"]].get(turn["event_id"], [])
             turn["redactions"] = spans

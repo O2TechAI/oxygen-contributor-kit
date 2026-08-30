@@ -64,6 +64,7 @@ Return **only** a JSON object, no prose before or after, no markdown fence:
 ```
 {
   "trajectory": "<the trajectory id you were given>",
+  "input_digest": "<copy input_digest from the assignment exactly>",
   "findings": [
     {
       "event_id": "evt-000123",
@@ -80,6 +81,9 @@ Return **only** a JSON object, no prose before or after, no markdown fence:
   "notes": "anything you could not resolve"
 }
 ```
+
+`input_digest` is immutable assignment authority. Copy it exactly from the input file; do not
+calculate, alter, or omit it. The finalizer rejects output bound to any other assignment.
 
 Rules for spans:
 

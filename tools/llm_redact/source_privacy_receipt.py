@@ -52,8 +52,7 @@ RECEIPT_CORE_KEYS = {
 }
 RECEIPT_KEYS = RECEIPT_CORE_KEYS | {"receiptDigest"}
 FINDINGS_REQUIRED_KEYS = {
-    "trajectory", "input_digest", "reviewed_item_ids",
-    "reviewed_items_digest", "findings", "reviewed_turns",
+    "trajectory", "input_digest", "findings", "reviewed_turns",
 }
 FINDING_KEYS = {
     "event_id", "start", "end", "category", "confidence", "reason",
@@ -62,6 +61,7 @@ FINDING_KEYS = {
 TURN_INPUT_KEYS = {
     "event_id", "document_id", "item_id", "sequence", "role", "timestamp", "text",
 }
+BUNDLE_INPUT_KEYS = {"trajectory", "document_kind", "turns", "chars"}
 REDACTED_TURN_KEYS = TURN_INPUT_KEYS | {"redactions", "redacted_text"}
 REDACTION_KEYS = {
     "start", "end", "category", "confidence", "reason",
@@ -89,6 +89,15 @@ def digest_bytes(value: bytes) -> str:
 
 def digest_value(value: Any) -> str:
     return digest_bytes(canonical_json(value).encode("utf-8"))
+
+
+def bind_worker_assignment(bundle: dict[str, Any]) -> dict[str, Any]:
+    if set(bundle) != BUNDLE_INPUT_KEYS:
+        raise ValueError("dialogue bundle is invalid")
+    return {
+        **bundle,
+        "input_digest": digest_bytes(canonical_bundle_bytes(bundle)),
+    }
 
 
 def positive_integer(value: Any) -> bool:
@@ -200,10 +209,10 @@ def _turn_authority(turn: Any) -> dict[str, Any]:
 
 
 def bundle_authority(bundle: Any, raw: bytes) -> dict[str, Any]:
-    if not isinstance(bundle, dict) or set(bundle) != {
-        "trajectory", "document_kind", "turns", "chars",
-    }:
+    if not isinstance(bundle, dict) or set(bundle) != BUNDLE_INPUT_KEYS | {"input_digest"}:
         raise ValueError("dialogue bundle is invalid")
+    assignment = {key: bundle[key] for key in BUNDLE_INPUT_KEYS}
+    assignment_bytes = canonical_bundle_bytes(assignment)
     document_id = bundle.get("trajectory")
     document_kind = bundle.get("document_kind")
     turns = bundle.get("turns")
@@ -214,6 +223,9 @@ def bundle_authority(bundle: Any, raw: bytes) -> dict[str, Any]:
         or document_kind not in {"trajectory", "meeting"}
         or not isinstance(turns, list) or not turns
         or not nonnegative_integer(bundle.get("chars"))
+        or not isinstance(bundle.get("input_digest"), str)
+        or DIGEST.fullmatch(bundle["input_digest"]) is None
+        or bundle["input_digest"] != digest_bytes(assignment_bytes)
     ):
         raise ValueError("dialogue bundle is invalid")
     authorities = [_turn_authority(turn) for turn in turns]
@@ -238,8 +250,8 @@ def bundle_authority(bundle: Any, raw: bytes) -> dict[str, Any]:
     return {
         "documentId": document_id,
         "documentKind": document_kind,
-        "inputByteLength": len(raw),
-        "inputDigest": digest_bytes(raw),
+        "inputByteLength": len(assignment_bytes),
+        "inputDigest": bundle["input_digest"],
         "turns": authorities,
     }
 
@@ -468,12 +480,7 @@ def finalize_review(dialogue_root: Path, findings_root: Path) -> dict[str, Any]:
             or worker["reviewed_turns"] != len(bundle["turns"])
         ):
             raise ValueError("worker review authority is missing, foreign, or stale")
-        item_ids = [turn["item_id"] for turn in bundle["turns"]]
-        if (
-            worker.get("reviewed_item_ids") != item_ids
-            or worker.get("reviewed_items_digest") != digest_value(item_ids)
-            or not isinstance(worker.get("findings"), list)
-        ):
+        if not isinstance(worker.get("findings"), list):
             raise ValueError("worker reviewed item set is incomplete or foreign")
         turns_by_id = {turn["event_id"]: turn for turn in bundle["turns"]}
         by_event = validate_findings(worker["findings"], turns_by_id, document_id, rejects)

@@ -194,7 +194,11 @@ def collect_spans(redacted: pathlib.Path, receipt: dict) -> list[dict]:
             bundle_spans.extend(
                 transport_redaction(original_turn, redaction) for redaction in normalized
             )
-        original_bundle = {**bundle, "turns": original_turns}
+        original_bundle = {
+            **bundle,
+            "turns": original_turns,
+            "input_digest": authority["inputDigest"],
+        }
         try:
             actual_authority = bundle_authority(
                 original_bundle, canonical_bundle_bytes(original_bundle),

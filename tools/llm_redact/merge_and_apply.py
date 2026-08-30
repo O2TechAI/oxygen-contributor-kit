@@ -89,6 +89,7 @@ def main() -> int:
         redacted_dir.mkdir()
         for source_bundle in review["bundles"]:
             bundle = copy.deepcopy(source_bundle)
+            bundle.pop("input_digest")
             traj = bundle["trajectory"]
             by_event = review["byDocument"][traj]
             applied = 0
