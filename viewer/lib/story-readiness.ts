@@ -170,6 +170,10 @@ export type StoryEvidenceRow = {
   eventType?: string | null;
   actorId?: string | null;
   actorType?: string | null;
+  parentActorId?: string | null;
+  interactionDirection?: string | null;
+  relationId?: string | null;
+  relations?: { type: string; target: string }[];
   reviewedNarrative?: string;
 };
 
@@ -1059,24 +1063,14 @@ const normalizedCopy = (value: string) => value.toLowerCase()
   .replace(/[^a-z0-9\p{L}]+/gu, " ")
   .trim();
 
-const ACTOR_TYPES = new Set([
-  "human", "user", "assistant", "ai", "agent", "implementation agent", "research agent",
-  "reviewer", "operator", "speaker", "owner", "project owner", "technical lead",
-  "data contributor", "contributor", "participant",
-]);
-const ACTOR_EVENTS = new Set([
-  "message", "record", "speech", "instruction", "approval", "disagreement", "decision",
-  "assignment", "agent action", "reviewer action", "operator action", "ownership",
-]);
-
 function actorSignature(row: StoryEvidenceRow) {
-  const actorType = normalizedCopy(row.actorType || "");
-  const eventType = normalizedCopy(row.eventType || "");
-  if (actorType === "tool" || actorType === "system") {
-    if (!row.actorId?.trim() || !ACTOR_EVENTS.has(eventType)) return "";
-  } else if (!ACTOR_TYPES.has(actorType) && !(row.actorId?.trim() && ACTOR_EVENTS.has(eventType))) return "";
-  const actorId = normalizedCopy(row.actorId || "");
-  return JSON.stringify([actorType || "actor", actorId || eventType]);
+  const actorType = (row.actorType || "").trim().toLowerCase();
+  const eventType = (row.eventType || "").trim().toLowerCase();
+  if (actorType === "tool" || actorType === "system" || eventType === "system"
+    || ["action_label", "artifact", "version_control", "git", "agent_event", "user_event"].includes(eventType)
+    || /^tool(?:_|$)/u.test(eventType)
+    || eventType.endsWith("_action") || eventType.endsWith(" action")) return "";
+  return row.actorId?.trim() ? row.actorId : "";
 }
 
 const genericStoryPhases = new Set([

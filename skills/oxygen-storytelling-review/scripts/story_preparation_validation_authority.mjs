@@ -30,6 +30,14 @@ import { directPathEntry } from "./direct_path_entry.mjs";
 export const MAX_STORY_VALIDATION_AUTHORITY_BYTES = 12_000_000;
 export const MAX_STORY_REVIEW_SOURCE_BYTES = 64_000_000;
 export const MAX_STORY_REVIEWED_NARRATIVE_BYTES = 24_000_000;
+const opaqueActorId = /^actor-[0-9a-f]{64}$/u;
+const opaqueEventId = /^event-[0-9a-f]{64}$/u;
+const interactionDirections = new Set([
+  "human_to_agent", "agent_to_human", "agent_to_subagent", "subagent_to_agent",
+  "agent_to_agent", "agent_internal_reasoning", "subagent_internal_reasoning",
+  "agent_internal_progress", "subagent_internal_progress",
+]);
+const relationTypes = new Set(["reply_to", "produced", "result_of", "observed"]);
 
 async function directDirectory(parent, name, optional = false) {
   const candidate = resolve(parent, name);
@@ -68,6 +76,10 @@ function sourceRow(value) {
     || (value.eventType !== null && typeof value.eventType !== "string")
     || (value.actorId !== null && typeof value.actorId !== "string")
     || (value.actorType !== null && typeof value.actorType !== "string")
+    || (value.parentActorId !== null && typeof value.parentActorId !== "string")
+    || (value.interactionDirection !== null && typeof value.interactionDirection !== "string")
+    || (value.relationId !== null && typeof value.relationId !== "string")
+    || !Array.isArray(value.relations)
     || (value.timestamp !== null && typeof value.timestamp !== "string")) {
     fail("REVIEWED_SOURCE_INVALID");
   }
@@ -104,10 +116,17 @@ async function trajectoryRows(root, budget) {
       const payload = isObject(event?.payload) ? event.payload : {};
       const eventType = typeof event?.event_type === "string" ? event.event_type : null;
       const actorType = typeof actor.type === "string" ? actor.type : null;
-      if (actor.id !== undefined
-        || (eventType === "message"
-          ? !["user", "assistant"].includes(actorType) || payload.role !== actorType
-          : eventType !== "action_label" || actorType !== "tool")) {
+      const parentActorId = actor.parent_id ?? null;
+      const direction = payload.interaction_direction ?? null;
+      const relations = event?.relations;
+      if (!exactKeys(actor, parentActorId === null ? ["id", "type"] : ["id", "type", "parent_id"])
+        || !opaqueActorId.test(actor.id || "") || !sourceText(actorType)
+        || (parentActorId !== null && !opaqueActorId.test(parentActorId))
+        || (direction !== null && !interactionDirections.has(direction))
+        || !opaqueEventId.test(event?.relation_id || "") || !Array.isArray(relations)
+        || relations.some((relation) => !isObject(relation)
+          || !exactKeys(relation, ["type", "target"])
+          || !relationTypes.has(relation.type) || !opaqueEventId.test(relation.target || ""))) {
         fail("REVIEWED_SOURCE_INVALID");
       }
       rows.push(sourceRow({
@@ -115,8 +134,12 @@ async function trajectoryRows(root, budget) {
         documentId: name,
         sequence: event?.sequence,
         eventType,
-        actorId: null,
+        actorId: actor.id,
         actorType,
+        parentActorId,
+        interactionDirection: direction,
+        relationId: event.relation_id,
+        relations,
         timestamp: typeof event?.timestamp === "string" ? event.timestamp : null,
         content: payload.text,
       }));
@@ -152,13 +175,17 @@ async function meetingRows(root, budget) {
         documentId: name,
         sequence,
         eventType: "record",
-        actorId: record.speaker === "participant" ? "participant" : null,
+        actorId: record.speaker,
         actorType: "human",
+        parentActorId: null,
+        interactionDirection: null,
+        relationId: null,
+        relations: [],
         timestamp: typeof (record.timestamp ?? record.started_at) === "string"
           ? (record.timestamp ?? record.started_at) : null,
         content: record.text,
       }));
-      if (record.speaker !== "participant") fail("REVIEWED_SOURCE_INVALID");
+      if (!opaqueActorId.test(record.speaker || "")) fail("REVIEWED_SOURCE_INVALID");
     }
   }
   return rows;
@@ -179,19 +206,16 @@ async function reviewedSourceRows(reviewRootInput, semantic) {
   if (!rows.length || new Set(rows.map((row) => row.id)).size !== rows.length) {
     fail("REVIEWED_SOURCE_INVALID");
   }
+  const relationIds = rows.map((row) => row.relationId).filter(Boolean);
+  const relationIdSet = new Set(relationIds);
+  if (relationIdSet.size !== relationIds.length
+    || rows.some((row) => row.relations.some((relation) => !relationIdSet.has(relation.target)))) {
+    fail("REVIEWED_SOURCE_INVALID");
+  }
   const semanticIds = semantic.units.flatMap((unit) => unit.members).sort(compareUtf8);
   const sourceIds = rows.map((row) => row.id).sort(compareUtf8);
   if (!canonicalJsonEqual(sourceIds, semanticIds)) fail("REVIEWED_SOURCE_AUTHORITY_STALE");
   return rows;
-}
-
-function equalityTokens(rows) {
-  const signatures = [...new Set(rows.map((row) => JSON.stringify([
-    row.actorType || "", row.actorId || "", row.actorId ? "" : row.eventType || "",
-  ])))].sort(compareUtf8);
-  return new Map(signatures.map((signature, index) => [
-    signature, `actor-${String(index + 1).padStart(6, "0")}`,
-  ]));
 }
 
 function projectEvidence(rows, sourcePrivacy) {
@@ -205,13 +229,9 @@ function projectEvidence(rows, sourcePrivacy) {
       spans.get(row.item_id).push(row);
     }
   }
-  const tokens = equalityTokens(rows);
   const evidence = [];
   const reviewedNarrative = [];
   for (const row of rows) {
-    const signature = JSON.stringify([
-      row.actorType || "", row.actorId || "", row.actorId ? "" : row.eventType || "",
-    ]);
     evidence.push({
       id: row.id,
       documentId: row.documentId,
@@ -219,7 +239,11 @@ function projectEvidence(rows, sourcePrivacy) {
       timestamp: row.timestamp,
       eventType: row.eventType,
       actorType: row.actorType,
-      actorEquivalence: tokens.get(signature),
+      actorEquivalence: row.actorId,
+      parentActorEquivalence: row.parentActorId,
+      interactionDirection: row.interactionDirection,
+      relationId: row.relationId,
+      relations: row.relations,
     });
     reviewedNarrative.push({
       id: row.id,
@@ -228,7 +252,11 @@ function projectEvidence(rows, sourcePrivacy) {
       timestamp: row.timestamp,
       eventType: row.eventType,
       actorType: row.actorType,
-      actorEquivalence: tokens.get(signature),
+      actorEquivalence: row.actorId,
+      parentActorEquivalence: row.parentActorId,
+      interactionDirection: row.interactionDirection,
+      relationId: row.relationId,
+      relations: row.relations,
       narrative: applyActiveRedactions(row.content, spans.get(row.id) || []),
     });
   }
@@ -244,6 +272,10 @@ export function storyEvidenceRows(authority) {
     eventType: row.eventType,
     actorType: row.actorType,
     actorId: row.actorEquivalence,
+    parentActorId: row.parentActorEquivalence,
+    interactionDirection: row.interactionDirection,
+    relationId: row.relationId,
+    relations: row.relations,
   }));
 }
 

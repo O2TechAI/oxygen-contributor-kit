@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -232,7 +233,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             output = root / "prepared"
             event = lambda label: {
                 "event_id": synthetic_event_id(label), "event_type": "message",
-                "actor": {"type": "human"}, "payload": {"text": label},
+                "actor": {"id": "source-human", "type": "human"}, "payload": {"text": label},
             }
             write_source_trajectory(source, "traj-current", [event("current")])
             write_source_trajectory(source, "traj-foreign", [event("foreign")])
@@ -257,7 +258,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             output = root / "HOSTILE_SENTINEL-example.invalid-output"
             write_source_trajectory(source, "traj-one", [{
                 "event_id": synthetic_event_id("one"), "event_type": "message",
-                "actor": {"type": "human"}, "payload": {"text": "safe"},
+                "actor": {"id": "source-human", "type": "human"}, "payload": {"text": "safe"},
             }])
             write_semantic_project_map(source)
             index_path = source / "index.json"
@@ -306,7 +307,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             output = root / "review"
             directory = write_source_trajectory(source, "traj-safe", [{
                 "event_id": "evt-safe", "event_type": "message",
-                "actor": {"type": "user"}, "payload": {"text": "safe synthetic text"},
+                "actor": {"id": "source-user", "type": "user"}, "payload": {"text": "safe synthetic text"},
             }])
             manifest_path = directory / "manifest.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -334,7 +335,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                     "event_id": f"evt-{event_type}",
                     "sequence": 0,
                     "event_type": event_type,
-                    "actor": {"type": actor_type},
+                    "actor": {"id": f"source-{actor_type}", "type": actor_type},
                     "timestamp": "2026-01-02T03:04:05Z",
                     "payload": {"text": f"reviewable {event_type}"},
                 }
@@ -357,7 +358,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 result = MODULE.normalize_event({
                     "event_id": f"evt-{direction}",
                     "event_type": "message",
-                    "actor": {"type": "ai"},
+                    "actor": {"id": "source-ai", "type": "ai"},
                     "payload": {
                         "role": role,
                         "interaction_direction": direction,
@@ -366,6 +367,81 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 }, "traj-1", 1)
                 self.assertEqual(result["event_type"], "message")
                 self.assertEqual(result["payload"]["role"], role)
+
+    def test_actor_equality_parent_direction_and_relations_are_opaque(self):
+        source = [{
+            "event_id": "evt-parent", "event_type": "message",
+            "actor": {"id": "parent.agent", "type": "ai", "parent_agent_id": None},
+            "payload": {"role": "user", "interaction_direction": "agent_to_subagent", "text": "delegate"},
+            "relations": [],
+        }, {
+            "event_id": "evt-sub-one", "event_type": "message",
+            "actor": {"id": "sub.agent-one", "type": "ai", "parent_agent_id": "parent.agent"},
+            "payload": {"role": "assistant", "interaction_direction": "subagent_to_agent", "text": "one"},
+            "relations": [{"type": "reply_to", "event_id": "RAW-RELATION-TARGET"}],
+        }, {
+            "event_id": "evt-sub-one-again", "event_type": "message",
+            "actor": {"id": "sub.agent-one", "type": "ai", "parent_agent_id": "parent.agent"},
+            "payload": {"role": "assistant", "interaction_direction": "subagent_to_agent", "text": "again"},
+            "relations": [],
+        }, {
+            "event_id": "evt-sub-two", "event_type": "message",
+            "actor": {"id": "sub-agent-one", "type": "ai", "parent_agent_id": "parent.agent"},
+            "payload": {"role": "assistant", "interaction_direction": "subagent_to_agent", "text": "two"},
+            "relations": [],
+        }]
+        reviewed = [MODULE.normalize_event(event, "traj-topology", index)
+                    for index, event in enumerate(source, 1)]
+        parent, first, repeated, second = reviewed
+        self.assertRegex(parent["actor"]["id"], r"^actor-[0-9a-f]{64}$")
+        self.assertEqual(first["actor"]["id"], repeated["actor"]["id"])
+        self.assertNotEqual(first["actor"]["id"], second["actor"]["id"])
+        self.assertEqual(first["actor"]["parent_id"], parent["actor"]["id"])
+        self.assertEqual(first["payload"]["interaction_direction"], "subagent_to_agent")
+        self.assertRegex(first["relations"][0]["target"], r"^event-[0-9a-f]{64}$")
+        encoded = json.dumps(reviewed)
+        for sentinel in ("parent.agent", "sub.agent-one", "sub-agent-one", "RAW-RELATION-TARGET"):
+            self.assertNotIn(sentinel, encoded)
+
+    def test_missing_source_actor_id_fails_before_review_output(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            directory = write_source_trajectory(source, "traj-missing-actor", [{
+                "event_id": synthetic_event_id("missing-actor"),
+                "event_type": "message",
+                "actor": {"id": "temporary", "type": "ai"},
+                "payload": {"role": "assistant", "text": "safe reviewed text"},
+            }])
+            events_path = directory / "events.jsonl"
+            event = json.loads(events_path.read_text(encoding="utf-8"))
+            event["actor"] = {"type": "ai", "parent_agent_id": "RAW-PARENT-SENTINEL"}
+            events_path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+            manifest_path = directory / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["contribution_projection"]["projected_universe_digest"] = MODULE.digest_events([event])
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            write_semantic_project_map(source)
+
+            result = subprocess.run([
+                sys.executable, str(MODULE_PATH), "--run", str(source), "--out", str(output),
+            ], capture_output=True, text=True, encoding="utf-8", check=False)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr.strip(), MODULE.INPUT_PROJECTION_INVALID)
+            self.assertNotIn("RAW-PARENT-SENTINEL", result.stdout + result.stderr)
+            self.assertFalse(output.exists())
+            for invalid_id in ("", " ", 7):
+                with self.subTest(invalid_id=invalid_id), self.assertRaisesRegex(
+                    SystemExit, f"^{MODULE.INPUT_PROJECTION_INVALID}$",
+                ):
+                    MODULE.normalize_event({
+                        "event_id": "evt-invalid-actor", "event_type": "message",
+                        "actor": {"id": invalid_id, "type": "user"},
+                        "payload": {"role": "user", "text": "safe"},
+                    }, "traj-invalid-actor", 1)
 
     def test_nonsemantic_and_malformed_events_use_fixed_labels(self):
         cases = [
@@ -386,7 +462,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                     "sequence": 0,
                     "event_type": event_type,
                     "timestamp": "2026-01-02T03:04:05Z",
-                    "actor": {"type": "unknown"},
+                    "actor": {"id": "source-unknown", "type": "unknown"},
                     "payload": payload,
                     "executor": {"tool": "shell"},
                 }, "traj-1", 2)
@@ -406,12 +482,13 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 {
                     "event_id": "evt-1",
                     "event_type": "message",
-                    "actor": {"type": "assistant"},
+                    "actor": {"id": "source-assistant", "type": "assistant"},
                     "payload": {"text": "联系李四，token 不应在工具输出中暴露"},
                 },
                 {
                     "event_id": "evt-2",
                     "event_type": "tool_result",
+                    "actor": {"id": "source-tool", "type": "tool"},
                     "payload": {"stdout": "token=secret-value"},
                 },
             ]
@@ -446,7 +523,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                     "event_id": "evt-user",
                     "sequence": 7,
                     "event_type": "speech",
-                    "actor": {"type": "speaker"},
+                    "actor": {"id": "source-speaker", "type": "speaker"},
                     "timestamp": "2026-01-02T03:04:05Z",
                     "payload": {"text": "safe synthetic request"},
                 },
@@ -454,7 +531,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                     "event_id": "evt-agent",
                     "sequence": 8,
                     "event_type": "reasoning",
-                    "actor": {"type": "ai"},
+                    "actor": {"id": "source-ai", "type": "ai"},
                     "timestamp": "2026-01-02T03:04:06Z",
                     "payload": {"text": "safe synthetic reasoning"},
                 },
@@ -462,7 +539,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                     "event_id": "evt-tool",
                     "sequence": 9,
                     "event_type": "tool_result",
-                    "actor": {"type": "tool"},
+                    "actor": {"id": "source-tool", "type": "tool"},
                     "payload": {"stdout": "SECRET"},
                 },
             ]
@@ -536,7 +613,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             ("tampered-events", lambda _, directory: (directory / "events.jsonl").write_text(
                 json.dumps({
                     "event_id": "evt-safe", "event_type": "message",
-                    "actor": {"type": "user"}, "payload": {"text": "tampered"},
+                    "actor": {"id": "source-user", "type": "user"}, "payload": {"text": "tampered"},
                 }) + "\n", encoding="utf-8"
             )),
         ]
@@ -560,7 +637,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             output = root / "review"
             event = {
                 "event_id": "evt-safe", "event_type": "message",
-                "actor": {"type": "user"}, "payload": {"text": "safe synthetic text"},
+                "actor": {"id": "source-user", "type": "user"}, "payload": {"text": "safe synthetic text"},
             }
             write_source_trajectory(source, "traj-a-valid", [event])
             invalid = write_source_trajectory(source, "traj-z-invalid", [event])
@@ -581,7 +658,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 write_source_trajectory(source, "traj-current", [{
                     "event_id": "evt-safe",
                     "event_type": "message",
-                    "actor": {"type": "human"},
+                    "actor": {"id": "source-human", "type": "human"},
                     "payload": {"text": "safe synthetic text"},
                 }])
                 if mutation == "failed":
@@ -629,7 +706,9 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             self.assertEqual(prepared["records"], [{
                 "record_id": "source-record-id",
                 "order": 1,
-                "speaker": "participant",
+                "speaker": MODULE._opaque_id(
+                    "actor", ["meeting", "private-meeting-id", "Named Person"],
+                ),
                 "text": "reviewable text",
             }])
             self.assertNotIn("Private title", json.dumps(prepared))
@@ -671,7 +750,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             write_source_trajectory(source, "traj-one", [{
                 "event_id": event_id,
                 "event_type": "tool_result",
-                "actor": {"type": "tool"},
+                "actor": {"id": "source-tool", "type": "tool"},
                 "payload": {"stdout": "private synthetic tool output"},
             }])
             original = write_semantic_project_map(source)
@@ -721,7 +800,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             write_source_trajectory(source, "traj-mixed", [{
                 "event_id": event_id,
                 "event_type": "message",
-                "actor": {"type": "user"},
+                "actor": {"id": "source-user", "type": "user"},
                 "payload": {"text": "safe synthetic request"},
             }])
             write_meeting(source, "private-meeting")
@@ -788,10 +867,10 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 second_id = synthetic_event_id("invalid-two")
                 write_source_trajectory(source, "traj-invalid", [{
                     "event_id": first_id, "event_type": "message",
-                    "actor": {"type": "user"}, "payload": {"text": "one"},
+                    "actor": {"id": "source-user", "type": "user"}, "payload": {"text": "one"},
                 }, {
                     "event_id": second_id, "event_type": "message",
-                    "actor": {"type": "assistant"}, "payload": {"text": "two"},
+                    "actor": {"id": "source-assistant", "type": "assistant"}, "payload": {"text": "two"},
                 }])
                 project_map = write_semantic_project_map(source)
                 mutate(project_map)
@@ -911,9 +990,33 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 )
                 self.assertTrue(all(
                     set(record) == {"record_id", "order", "speaker", "text"}
-                    and record["speaker"] == "participant"
+                    and re.fullmatch(r"actor-[0-9a-f]{64}", record["speaker"])
                     for record in meeting["dataset"]["records"]
                 ))
+
+    def test_meeting_actor_equality_is_scoped_without_invented_identity(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            for meeting_id in ("meeting-alpha", "meeting-beta"):
+                write_meeting(source, meeting_id, records=[
+                    {"record_id": "rec-1", "order": 1, "speaker": "Speaker 1", "text": "A"},
+                    {"record_id": "rec-2", "order": 2, "speaker": "Speaker 2", "text": "B"},
+                    {"record_id": "rec-3", "order": 3, "speaker": "Speaker 1", "text": "A again"},
+                    {"record_id": "rec-4", "order": 4, "text": "unknown one"},
+                    {"record_id": "rec-5", "order": 5, "text": "unknown two"},
+                ])
+            MODULE.prepare_meetings(MODULE.discover_meetings(source), output)
+            meetings = [json.loads(path.read_text(encoding="utf-8")) for path in
+                        sorted((output / "meetings").glob("*/meeting.json"))]
+            for meeting in meetings:
+                speakers = [record["speaker"] for record in meeting["records"]]
+                self.assertEqual(speakers[0], speakers[2])
+                self.assertNotEqual(speakers[0], speakers[1])
+                self.assertNotEqual(speakers[3], speakers[4])
+            self.assertNotEqual(meetings[0]["records"][0]["speaker"], meetings[1]["records"][0]["speaker"])
+            self.assertNotIn("Speaker 1", json.dumps(meetings))
 
     def test_unicode_record_order_permutations_produce_identical_reviewed_bytes(self):
         with TemporaryDirectory() as temp:
