@@ -4,6 +4,7 @@ import { mkdir, open, rename, rm } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import {
   deriveStoryReleaseTargetCatalog,
+  insightAuthorityValue,
 } from "../../../viewer/lib/story-preparation.ts";
 import {
   canonicalAuthorityJson,
@@ -380,6 +381,7 @@ function lessonProjection(rows) {
   return rows.flatMap((row) => row.story.insights.map((insight) => ({
     storyKey: row.story.key,
     insightId: insight.id,
+    insightAuthorityDigest: canonicalDigest(insightAuthorityValue(row.story.key, insight)),
     ...(insight.title === undefined ? {} : { title: insight.title }),
     background: insight.background,
     directlyAcquiredExperience: insight.directlyAcquiredExperience,
@@ -391,15 +393,15 @@ async function preparePreference(candidatesPath, contextPath, root) {
   const rows = candidateRows(await readBounded(candidatesPath), true);
   const context = await readBounded(contextPath);
   if (!exactKeys(context, [
-    "schema", "reusableLessons", "insightIdentities", "reviewedEvidence", "autoRemoved",
+    "schema", "reusableLessons", "insightScope", "reviewedEvidence", "autoRemoved",
   ]) || context.schema !== "oxygen.preference-context" || !Array.isArray(context.reusableLessons)
-    || !Array.isArray(context.insightIdentities) || !Array.isArray(context.reviewedEvidence)) {
+    || !Array.isArray(context.insightScope) || !Array.isArray(context.reviewedEvidence)) {
     fail("PREFERENCE_CONTEXT_INVALID");
   }
   const lessons = lessonProjection(rows);
-  const identities = lessons.map((lesson) => ({ storyKey: lesson.storyKey, insightId: lesson.insightId }));
+  const identities = lessons.map(({ storyKey, insightId, insightAuthorityDigest }) => ({ storyKey, insightId, insightAuthorityDigest }));
   if (canonicalAuthorityJson(context.reusableLessons) !== canonicalAuthorityJson(lessons)
-    || canonicalAuthorityJson(context.insightIdentities) !== canonicalAuthorityJson(identities)) {
+    || canonicalAuthorityJson(context.insightScope) !== canonicalAuthorityJson(identities)) {
     fail("PREFERENCE_CONTEXT_STALE");
   }
   return installLane(root, "preference", canonicalDigest(lessons), [{

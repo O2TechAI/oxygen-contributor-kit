@@ -19,6 +19,11 @@ import {
   workflowRunErrorResponse,
 } from "../../../lib/workflow-run-server";
 import { validActivatedSourceRevision } from "../../../lib/authority-validation.mjs";
+import {
+  createPreferenceLifecycleState,
+  readCurrentPreferenceLifecycle,
+} from "../../../lib/story-release-server";
+import { canonicalAuthorityJson } from "../../../lib/story-readiness";
 
 const SIGNALS = new Set([
   "repeated_correction", "long_exchange", "late_rejection", "decision_reversal",
@@ -26,10 +31,10 @@ const SIGNALS = new Set([
 ]);
 const BODY_KEYS = new Set([
   "workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount",
-  "setAside", "probes", "bulkDecisions", "autoRemoved",
+  "setAside", "insightScope", "probes", "bulkDecisions", "autoRemoved",
 ]);
 const PROBE_KEYS = new Set([
-  "id", "documentId", "documentKind", "eventIds", "timestamp", "signal", "score",
+  "id", "storyKey", "insightId", "insightAuthorityDigest", "documentId", "documentKind", "eventIds", "timestamp", "signal", "score",
   "turns", "recap", "question", "options", "presentations", "allowOther", "allowSkip",
 ]);
 const BULK_KEYS = new Set(["id", "kind", "count", "question", "evidenceSample", "presentations"]);
@@ -38,7 +43,8 @@ const DIGEST = /^[0-9a-f]{64}$/;
 
 type PreferenceOption = { id: string; text: string };
 type AcceptedProbe = {
-  id: string; documentId: string; documentKind: string; eventIds: string[];
+  id: string; storyKey: string; insightId: string; insightAuthorityDigest: string;
+  documentId: string; documentKind: string; eventIds: string[];
   timestamp: string | null; signal: string; score: number; turns: number;
   recap: string; question: string; options: PreferenceOption[];
   presentations: ProbePresentations; allowOther: boolean; allowSkip: boolean;
@@ -64,6 +70,10 @@ const stableId = (value: unknown): value is string => (
 const nonNegativeInteger = (value: unknown): value is number => (
   Number.isSafeInteger(value) && Number(value) >= 0
 );
+const insightBinding = (value: unknown) => isObject(value)
+  && Object.keys(value).length === 3
+  && stableId(value.storyKey) && stableId(value.insightId)
+  && typeof value.insightAuthorityDigest === "string" && DIGEST.test(value.insightAuthorityDigest);
 
 function normalizeOptions(value: unknown): PreferenceOption[] | null {
   if (!Array.isArray(value) || (value.length !== 2 && value.length !== 3)) return null;
@@ -79,10 +89,11 @@ function normalizeOptions(value: unknown): PreferenceOption[] | null {
   return options;
 }
 
-function normalizeProbe(value: unknown): AcceptedProbe | null {
+export function normalizeProbe(value: unknown): AcceptedProbe | null {
   if (!isObject(value) || Object.keys(value).length !== PROBE_KEYS.size
     || !onlyKnownKeys(value, PROBE_KEYS)
-    || !stableId(value.id) || !stableId(value.documentId)
+    || !stableId(value.id) || !insightBinding({ storyKey:value.storyKey, insightId:value.insightId,
+      insightAuthorityDigest:value.insightAuthorityDigest }) || !stableId(value.documentId)
     || !validPreferenceDocumentKind(value.documentKind)
     || !Array.isArray(value.eventIds) || value.eventIds.length === 0
     || value.eventIds.length > MAX_PREFERENCE_EVIDENCE_IDS
@@ -99,6 +110,9 @@ function normalizeProbe(value: unknown): AcceptedProbe | null {
   if (!presentations) return null;
   return {
     id: value.id,
+    storyKey: value.storyKey as string,
+    insightId: value.insightId as string,
+    insightAuthorityDigest: value.insightAuthorityDigest as string,
     documentId: value.documentId,
     documentKind: value.documentKind,
     eventIds: [...value.eventIds],
@@ -136,8 +150,9 @@ function normalizeBulkDecision(value: unknown): AcceptedBulkDecision | null {
   };
 }
 
-const preferenceQuestionAuthority = (probe: AcceptedProbe) => ({
-  id: probe.id, documentId: probe.documentId, documentKind: probe.documentKind,
+export const preferenceQuestionAuthority = (probe: AcceptedProbe) => ({
+  id: probe.id, storyKey: probe.storyKey, insightId: probe.insightId,
+  insightAuthorityDigest: probe.insightAuthorityDigest, documentId: probe.documentId, documentKind: probe.documentKind,
   eventIds: probe.eventIds, timestamp: probe.timestamp, signal: probe.signal,
   score: probe.score, turns: probe.turns, recap: probe.recap, question: probe.question,
   options: probe.options, presentations: probe.presentations,
@@ -159,9 +174,7 @@ export async function GET() {
       AND probe_run.status='complete' AND probe_run.stage='preference'
       AND workflow.story_source_revision>0 AND probe_run.source_revision>0
       AND probe_run.source_revision=workflow.story_source_revision)`;
-  const [probes, bulk, runs] = await db.batch([
-    db.prepare(`SELECT * FROM probes WHERE ${currentAuthority}
-      ORDER BY score DESC,created_at ASC`).bind(authority.workflowRunId),
+  const [bulk, runs] = await db.batch([
     db.prepare(`SELECT * FROM probe_bulk_decisions WHERE ${currentAuthority}
       ORDER BY count DESC`).bind(authority.workflowRunId),
     db.prepare(`SELECT probe_run.* FROM probe_runs probe_run
@@ -172,8 +185,10 @@ export async function GET() {
         AND probe_run.source_revision=workflow.story_source_revision`)
       .bind(authority.workflowRunId),
   ]);
+  const lifecycle = await readCurrentPreferenceLifecycle(db, authority.workflowRunId);
   return Response.json({
-    probes: (probes.results || []).map((row) => {
+    lifecycleCurrent: lifecycle.ok,
+    probes: lifecycle.probes.map((row) => {
       const probe = row as Record<string, unknown>;
       return { ...probe,
         event_ids: JSON.parse(String(probe.event_ids_json || "[]")),
@@ -206,6 +221,7 @@ export async function POST(request: Request) {
     || typeof body.outputDigest !== "string" || !DIGEST.test(body.outputDigest)
     || !nonNegativeInteger(body.outputCount)
     || !nonNegativeInteger(body.setAside)
+    || !Array.isArray(body.insightScope) || !body.insightScope.every(insightBinding)
     || !Array.isArray(body.probes) || !Array.isArray(body.bulkDecisions)
     || body.probes.length + body.bulkDecisions.length > MAX_PREFERENCE_QUESTIONS) {
     return Response.json({ error: "Invalid Preference batch" }, { status: 400 });
@@ -217,8 +233,14 @@ export async function POST(request: Request) {
   }
   const acceptedProbes = probes as AcceptedProbe[];
   const acceptedBulk = bulkDecisions as AcceptedBulkDecision[];
+  const insightScope = body.insightScope as Array<{ storyKey: string; insightId: string; insightAuthorityDigest: string }>;
   const ids = [...acceptedProbes, ...acceptedBulk].map((item) => item.id);
-  if (new Set(ids).size !== ids.length || body.outputCount !== ids.length) {
+  const scope = new Map(insightScope.map((item) => [`${item.storyKey}\0${item.insightId}`, item.insightAuthorityDigest]));
+  const bindings = acceptedProbes.map((item) => `${item.storyKey}\0${item.insightId}`);
+  if (new Set(ids).size !== ids.length || scope.size !== insightScope.length
+    || new Set(bindings).size !== bindings.length
+    || acceptedProbes.some((item) => scope.get(`${item.storyKey}\0${item.insightId}`) !== item.insightAuthorityDigest)
+    || body.outputCount !== ids.length) {
     return Response.json({ error: "Invalid Preference question count or identity" }, { status: 400 });
   }
   if (body.outputCount === 0 && body.setAside !== 0) {
@@ -268,6 +290,10 @@ export async function POST(request: Request) {
   }
 
   const now = new Date().toISOString();
+  const oldProbes = (await db.prepare("SELECT * FROM probes ORDER BY id").all<Record<string, unknown>>()).results;
+  const lifecycle = await createPreferenceLifecycleState(insightScope, acceptedProbes, oldProbes || []);
+  const lifecycleJson = canonicalAuthorityJson(lifecycle);
+  const lifecycleDigest = await storyPreparationDigest(lifecycle);
   const leaseSql = `EXISTS (SELECT 1 FROM workflow_runs
     WHERE id=? AND story_generation_status='running' AND story_source_revision=?)`;
   const leaseBindings = [body.workflowRunId, body.sourceRevision];
@@ -275,6 +301,8 @@ export async function POST(request: Request) {
     db.prepare(`DELETE FROM probes WHERE ${leaseSql}`).bind(...leaseBindings),
     db.prepare(`DELETE FROM probe_bulk_decisions WHERE ${leaseSql}`).bind(...leaseBindings),
     db.prepare(`DELETE FROM probe_runs WHERE workflow_run_id=? AND ${leaseSql}`)
+      .bind(body.workflowRunId, ...leaseBindings),
+    db.prepare(`DELETE FROM preference_lifecycle_authorities WHERE workflow_run_id=? AND ${leaseSql}`)
       .bind(body.workflowRunId, ...leaseBindings),
     ...acceptedProbes.map((probe) => db.prepare(
       `INSERT INTO probes
@@ -305,6 +333,11 @@ export async function POST(request: Request) {
       body.outputCount, body.outputCount, body.setAside, JSON.stringify(autoRemoved), now, now, now,
       ...leaseBindings,
     ),
+    db.prepare(`INSERT INTO preference_lifecycle_authorities
+      (workflow_run_id,source_revision,active_story_digest,story_session_version,state_json,state_digest,updated_at)
+      SELECT ?,?,NULL,0,?,?,? WHERE ${leaseSql}`).bind(
+      body.workflowRunId, body.sourceRevision, lifecycleJson, lifecycleDigest, now, ...leaseBindings,
+    ),
     db.prepare(`SELECT json_extract(CASE WHEN
       ${leaseSql}
       AND EXISTS (SELECT 1 FROM probe_runs
@@ -312,6 +345,9 @@ export async function POST(request: Request) {
           AND input_digest=? AND output_digest=? AND output_count=?
           AND status='complete' AND stage='preference' AND generated=? AND set_aside=?)
       AND (SELECT COUNT(*) FROM probes) + (SELECT COUNT(*) FROM probe_bulk_decisions)=?
+      AND EXISTS (SELECT 1 FROM preference_lifecycle_authorities
+        WHERE workflow_run_id=? AND source_revision=? AND active_story_digest IS NULL
+          AND state_digest=? AND state_json=?)
       THEN '{}' ELSE '' END,'$.preference_authority') AS preference_authority_assertion`).bind(
       ...leaseBindings,
       body.workflowRunId,
@@ -323,6 +359,10 @@ export async function POST(request: Request) {
       body.outputCount,
       body.setAside,
       body.outputCount,
+      body.workflowRunId,
+      body.sourceRevision,
+      lifecycleDigest,
+      lifecycleJson,
     ),
   ];
   try {

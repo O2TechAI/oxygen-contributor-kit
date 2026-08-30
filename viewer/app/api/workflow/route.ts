@@ -37,6 +37,10 @@ import {
   readCoveragePrivacyAuthority,
 } from "../../../lib/story-coverage-privacy-authority";
 import { validActivatedSourceRevision } from "../../../lib/authority-validation.mjs";
+import {
+  validatePreferenceLifecycleRow,
+  type PreferenceLifecycleRow,
+} from "../../../lib/story-release-server";
 
 const EVENTS = new Set([
   "target_confirmed",
@@ -71,7 +75,7 @@ async function readPreferenceBatchAuthority(
   workflowRunId: string,
   sourceRevision: number,
 ): Promise<PreferenceBatchAuthority | null> {
-  const [run, probeRows, bulkRows] = await Promise.all([
+  const [run, probeRows, bulkRows, lifecycleRow] = await Promise.all([
     db.prepare(`SELECT workflow_run_id,source_revision,input_digest,output_digest,
         output_count,status,stage FROM probe_runs WHERE workflow_run_id=?`)
       .bind(workflowRunId).first<Record<string, unknown>>(),
@@ -80,6 +84,9 @@ async function readPreferenceBatchAuthority(
         FROM probes ORDER BY id`).all<Record<string, unknown>>(),
     db.prepare(`SELECT id,kind,count,question,evidence_sample_json,presentations_json
         FROM probe_bulk_decisions ORDER BY id`).all<Record<string, unknown>>(),
+    db.prepare(`SELECT workflow_run_id,source_revision,active_story_digest,story_session_version,
+        state_json,state_digest FROM preference_lifecycle_authorities WHERE workflow_run_id=?`)
+      .bind(workflowRunId).first<PreferenceLifecycleRow>(),
   ]);
   if (!validActivatedSourceRevision(sourceRevision)
     || !run || run.workflow_run_id !== workflowRunId
@@ -88,8 +95,16 @@ async function readPreferenceBatchAuthority(
     || run.status !== "complete" || run.stage !== "preference"
     || typeof run.input_digest !== "string" || typeof run.output_digest !== "string") return null;
   try {
+    const lifecycle = await validatePreferenceLifecycleRow(
+      lifecycleRow, workflowRunId, sourceRevision, null,
+    );
+    if (!lifecycle || lifecycle.questions.length !== probeRows.results.length) return null;
+    const bindingById = new Map(lifecycle.questions.map((question) => [question.id, question]));
     const probes = (probeRows.results || []).map((row) => ({
       id: String(row.id),
+      storyKey: bindingById.get(String(row.id))?.storyKey,
+      insightId: bindingById.get(String(row.id))?.insightId,
+      insightAuthorityDigest: bindingById.get(String(row.id))?.insightAuthorityDigest,
       documentId: String(row.document_id),
       documentKind: String(row.document_kind),
       eventIds: JSON.parse(String(row.event_ids_json)),
@@ -121,6 +136,8 @@ async function readPreferenceBatchAuthority(
       inputDigest: run.input_digest,
       outputDigest,
       outputCount,
+      insightScope: lifecycle.generationScope,
+      lifecycleDigest: lifecycleRow!.state_digest,
     };
   } catch {
     return null;
@@ -569,6 +586,22 @@ export async function POST(request: Request) {
         preferenceAuthority.outputCount,
         ...leaseBindings,
       ));
+      statements.push(
+        db.prepare(`UPDATE preference_lifecycle_authorities
+          SET source_revision=?,active_story_digest=?,story_session_version=0,updated_at=?
+          WHERE workflow_run_id=? AND source_revision=? AND active_story_digest IS NULL
+            AND state_digest=? AND ${leaseSql}`).bind(
+          leasedRevision + 1, digest, now, workflowRunId, leasedRevision,
+          preferenceAuthority.lifecycleDigest,
+          ...leaseBindings,
+        ),
+        db.prepare(`SELECT json_extract(CASE WHEN EXISTS (
+          SELECT 1 FROM preference_lifecycle_authorities
+          WHERE workflow_run_id=? AND source_revision=? AND active_story_digest=? AND state_digest=?
+        ) THEN '{}' ELSE '' END,'$.preference_lifecycle') AS preference_lifecycle_assertion`).bind(
+          workflowRunId, leasedRevision + 1, digest, preferenceAuthority.lifecycleDigest,
+        ),
+      );
       if (!await publishActivatedStorySourceMutation(
         db,
         statements,

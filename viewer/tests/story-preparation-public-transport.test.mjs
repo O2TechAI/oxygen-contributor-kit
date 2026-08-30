@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,6 +27,7 @@ const finalize = join(scripts, "finalize_story_preparation.mjs");
 const preferenceScripts = join(repository, "skills", "oxygen-elicit-contributor-preferences", "scripts");
 const preparePreferenceContext = join(preferenceScripts, "prepare_preference_context.py");
 const validateProbes = join(preferenceScripts, "validate_probes.py");
+const localReview = join(repository, "skills", "oxygen-organize-review-export", "scripts", "run_local_review.py");
 const digest = (value) => createHash("sha256").update(canonicalAuthorityJson(value)).digest("hex");
 const json = (path, value) => writeFile(path, JSON.stringify(value), "utf8");
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
@@ -38,6 +41,56 @@ function runOk(command, args) {
   assert.equal(result.status, 0, result.stderr);
   return result;
 }
+
+async function runAsync(command, args) {
+  const child = spawn(command, args, { cwd: repository, stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const [status] = await once(child, "close");
+  return { status, stderr };
+}
+
+test("Preference regeneration CLI parser rejects hostile response shapes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "preference-regeneration-cli-"));
+  const binding = { workflowRunId: "loopback-run" };
+  let mode = "valid";
+  const server = createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (mode === "invalid-export") response.end(JSON.stringify({ schema: "oxygen.preference-regeneration-context", binding: [] }));
+    else if (mode === "invalid-import") response.end("[]");
+    else response.end(JSON.stringify(request.method === "POST"
+      ? { workflowRunId: binding.workflowRunId, status: "complete", regenerated: 0 }
+      : { schema: "oxygen.preference-regeneration-context", binding }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const common = [localReview, "--attach-url", url, "--workflow-run-id", binding.workflowRunId];
+  try {
+    const context = join(root, "context.json"),bundle = join(root, "bundle.json");
+    assert.equal((await runAsync("python", [...common, "--preference-regeneration-export", context])).status, 0);
+    await json(bundle, { schema: "oxygen.preference-regeneration-import", binding });
+    assert.equal((await runAsync("python", [...common, "--preference-regeneration-import", bundle])).status, 0);
+    mode = "invalid-export";
+    assert.match(
+      (await runAsync("python", [
+        ...common, "--preference-regeneration-export", join(root, "bad.json"),
+      ])).stderr,
+      /^VIEWER_RESPONSE_INVALID: The local Viewer returned an invalid response\.\r?\n$/u,
+    );
+    mode = "invalid-import";
+    assert.match(
+      (await runAsync("python", [
+        ...common, "--preference-regeneration-import", bundle,
+      ])).stderr,
+      /^VIEWER_RESPONSE_INVALID: The local Viewer returned an invalid response\.\r?\n$/u,
+    );
+  } finally {
+    server.close();
+    await once(server, "close");
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 const laneDirectory = {
   story: "story", insight: "insight", story_privacy: "story-privacy", preference: "preference",
@@ -480,11 +533,14 @@ async function createFlow({
   ));
 
   const preferenceCandidates = join(root, "preference-candidates.json");
+  const preferenceAuthority = await readJson(preferenceContext);
+  const preferenceBinding = preferenceAuthority.insightScope[0];
   await json(preferenceCandidates, completedZero ? {
     probes: [], bulkDecisions: [], setAside: 0,
   } : {
     probes: [{
       id: "probe-canary",
+      ...preferenceBinding,
       documentId,
       documentKind,
       eventIds: privacy.eventIds.slice(0, preferenceEvidenceCount),
