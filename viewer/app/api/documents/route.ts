@@ -8,8 +8,10 @@ import {
   STORY_SOURCE_WRITE_STATUS,
   abortStorySourceMutation,
   beginStorySourceMutation,
+  isStorySourceWriteInProgress,
   publishFinalizedCorpusSourceMutation,
 } from "../../../lib/story-source-publication";
+import { validActivatedSourceRevision } from "../../../lib/authority-validation.mjs";
 
 type NormalizedItem = {
   id: string;
@@ -263,6 +265,100 @@ function corpusErrorResponse(error: unknown) {
   return null;
 }
 
+async function exactCurrentCorpusResponse(
+  db: Awaited<ReturnType<typeof getLocalDatabase>>,
+  workflowRunId: string,
+  corpus: NormalizedFinalizedCorpus,
+  corpusDigest: string,
+) {
+  return db.transaction(async () => {
+    const source = await db.prepare(`SELECT r.story_generation_status,r.story_source_revision,
+        m.corpus_revision,m.corpus_digest,m.document_count,m.item_count
+      FROM workflow_runs r LEFT JOIN finalized_corpus_manifests m ON m.workflow_run_id=r.id
+      WHERE r.id=?`).bind(workflowRunId).first<Record<string, unknown>>();
+    if (!source || isStorySourceWriteInProgress(source.story_generation_status)
+      || !validActivatedSourceRevision(Number(source.story_source_revision))
+      || !validActivatedSourceRevision(Number(source.corpus_revision))
+      || source.corpus_digest !== corpusDigest
+      || Number(source.document_count) !== corpus.documents.length
+      || Number(source.item_count) !== corpus.itemCount) return null;
+    const [{ results: documentRows }, { results: itemRows }] = await Promise.all([
+      db.prepare(`SELECT id,kind,title,source_user,source_system,source_timestamp,item_count,
+          metadata_json,original_envelope_json FROM documents ORDER BY id`)
+        .all<Record<string, unknown>>(),
+      db.prepare(`SELECT id,document_id,sequence,event_type,actor_id,actor_type,timestamp,
+          content,original_json FROM items ORDER BY id`).all<Record<string, unknown>>(),
+    ]);
+    if (Number(source.document_count) !== documentRows.length
+      || Number(source.item_count) !== itemRows.length) return null;
+    try {
+      const itemsByDocument = new Map<string, Record<string, unknown>[]>();
+      for (const row of itemRows) {
+        const documentId = String(row.document_id);
+        const items = itemsByDocument.get(documentId) || [];
+        items.push(row);
+        itemsByDocument.set(documentId, items);
+      }
+      const storedDocumentIds = new Set(documentRows.map((row) => String(row.id)));
+      if (documentRows.some((row) => !itemsByDocument.has(String(row.id))
+        && Number(row.item_count) !== 0)
+        || [...itemsByDocument].some(([documentId]) => !storedDocumentIds.has(documentId))) return null;
+      const stored = normalizeFinalizedCorpus({
+        documents: documentRows.map((row) => ({
+          document: {
+            id: row.id,
+            kind: row.kind,
+            title: row.title,
+            sourceUser: row.source_user,
+            sourceSystem: row.source_system,
+            sourceTimestamp: row.source_timestamp,
+            metadata: JSON.parse(String(row.metadata_json)),
+            envelope: JSON.parse(String(row.original_envelope_json)),
+            itemCount: Number(row.item_count),
+          },
+          items: (itemsByDocument.get(String(row.id)) || []).map((item) => ({
+            id: item.id,
+            sequence: Number(item.sequence),
+            eventType: item.event_type,
+            actorId: item.actor_id,
+            actorType: item.actor_type,
+            timestamp: item.timestamp,
+            content: item.content,
+            original: JSON.parse(String(item.original_json)),
+          })),
+        })),
+      });
+      const storedDocuments = new Map(stored.documents.map((document) => [document.id, document]));
+      if (documentRows.some((row) => {
+        const document = storedDocuments.get(String(row.id));
+        return !document
+          || row.metadata_json !== document.metadataJson
+          || row.original_envelope_json !== document.originalEnvelopeJson;
+      })) return null;
+      const storedItems = new Map(stored.documents.flatMap((document) => (
+        document.items.map((item) => [item.id, item] as const)
+      )));
+      if (itemRows.some((row) => row.original_json !== storedItems.get(String(row.id))?.originalJson)) {
+        return null;
+      }
+      const storedDigest = await finalizedCorpusDigest(stored);
+      if (stored.canonicalPayload !== corpus.canonicalPayload
+        || storedDigest !== corpusDigest
+        || source.corpus_digest !== storedDigest) return null;
+      return {
+        finalized: true,
+        corpusRevision: Number(source.corpus_revision),
+        corpusDigest: storedDigest,
+        documentCount: stored.documents.length,
+        itemCount: stored.itemCount,
+      };
+    } catch (error) {
+      if (error instanceof CorpusValidationError || error instanceof SyntaxError) return null;
+      throw error;
+    }
+  });
+}
+
 export async function GET() {
   const db = await getLocalDatabase();
   const authority = await requireEstablishedWorkflowRun(db);
@@ -309,6 +405,13 @@ export async function POST(request: Request) {
   if (authority.state !== WORKFLOW_RUN_AUTHORITY.exactRun) {
     return workflowRunErrorResponse(authority);
   }
+  const current = await exactCurrentCorpusResponse(
+    db,
+    authority.workflowRunId,
+    corpus,
+    corpusDigest,
+  );
+  if (current) return Response.json(current);
   const now = new Date().toISOString();
   if (!await beginStorySourceMutation(db, authority.workflowRunId, now)) {
     return Response.json({ error: "Another Story source mutation is already running" }, { status: 409 });
