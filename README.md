@@ -224,21 +224,21 @@ python3 tools/llm_redact/prepare_ai_review_run.py \
 # 5. See what a redaction pass would actually be reviewing.
 python3 tools/llm_redact/audit_coverage.py work/my-review
 
-# 6. Extract only conversational turns for the configured model.
+# 6. Attach the reviewed boundary before creating dialogue assignments or a receipt.
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-review \
+  --attach-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
+
+# 7. Extract only conversational turns from that current reviewed authority.
 python3 tools/llm_redact/extract_dialogue.py work/my-review --out work/my-dialogue \
   --base-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
 
-# 7. After the model writes one findings JSON per bundle, validate and merge.
+# 8. After the model writes one findings JSON per bundle, validate and merge.
 python3 tools/llm_redact/verify_coverage.py \
   --dialogue work/my-dialogue --findings work/my-findings \
   --receipt "$SOURCE_PRIVACY_RECEIPT"
 python3 tools/llm_redact/merge_and_apply.py \
   --dialogue work/my-dialogue --findings work/my-findings --out work/my-redaction \
   --receipt "$SOURCE_PRIVACY_RECEIPT"
-
-# 8. Reattach the reviewed boundary to the same Viewer.
-python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-review \
-  --attach-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
 
 # 9. Push validated spans into that exact Viewer.
 python3 tools/llm_redact/push_redactions.py \
@@ -278,6 +278,11 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
 python .\tools\llm_redact\prepare_ai_review_run.py `
   --run "$Run" --out "$Review"
 python .\tools\llm_redact\audit_coverage.py "$Review"
+
+# Attach the reviewed boundary before creating dialogue assignments or a receipt.
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
+
 python .\tools\llm_redact\extract_dialogue.py "$Review" `
   --out "$Dialogue" --base-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
@@ -287,15 +292,16 @@ python .\tools\llm_redact\verify_coverage.py `
 python .\tools\llm_redact\merge_and_apply.py `
   --dialogue "$Dialogue" --findings "$Findings" --out "$Redaction" --receipt "$Receipt"
 
-# 4. Reattach the safe reviewed boundary to the already-running Viewer.
-python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
-
-# 5. In another PowerShell terminal, push only validated findings.
+# 4. In another PowerShell terminal, push only validated findings.
 python .\tools\llm_redact\push_redactions.py `
   --redacted "$Redaction\redacted" `
   --base-url "$Viewer" --receipt "$Receipt"
 ```
+
+Do not make a source-bearing attach between dialogue extraction and the corresponding push. It
+changes the current source authority, so the existing assignments, findings, receipt, and
+merged output are stale. Extract new assignments from the current Viewer and repeat review and
+validation; do not re-sign, hand-edit, or reuse the old receipt.
 
 Optional Windows audio uses a project-local environment only. Install its optional dependencies
 there before use; text meeting import does not need them:

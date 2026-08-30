@@ -193,12 +193,12 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
 
 Attach mode verifies ownership of the exact workflow run, requires a finalized semantic manifest,
 imports the project map and source records, and atomically publishes Organization authority in the
-existing Viewer. Reattach the prepared reviewed run
-after privacy-boundary preparation, and reattach again when validated Story metadata changes;
-these are idempotent updates to the same canonical runtime, not new Viewers.
-When the reattach changes only organization or staged Story metadata, the Viewer preserves the
-completed Privacy pass because its reviewed source identity is unchanged. Any source-bearing item
-change marks that pass stale and requires Privacy to complete again before Story activation.
+existing Viewer. The supported Source Privacy sequence is: prepare the reviewed run, audit its
+boundary, attach it to the owned current Viewer, extract dialogue from that run and current Viewer
+authority, complete model review, verify coverage, merge and apply, then push the validated spans.
+Do not make a source-bearing attach between dialogue extraction and that push. If one occurs, the
+old assignments, findings, receipt, and merged output are stale; extract current assignments and
+repeat review and validation instead of re-signing, hand-editing, or reusing the old receipt.
 
 For a downstream reviewed artifact that already satisfies the same canonical plural meeting
 contract, the launcher accepts the run directly and starts a fresh Viewer. This is also an owned
