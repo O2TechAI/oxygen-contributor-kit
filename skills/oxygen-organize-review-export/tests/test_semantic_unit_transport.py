@@ -217,6 +217,28 @@ def write_worker_results(output: Path, unit_for_id) -> None:
 
 
 class SemanticUnitTransportTests(unittest.TestCase):
+    def test_worker_clis_map_missing_inputs_to_fixed_safe_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "HOSTILE_SENTINEL_https_example.invalid_exception-body"
+            cases = (
+                ([sys.executable, str(SCRIPTS / "finalize_semantic_units.py"),
+                  str(missing), str(missing)], "SEMANTIC_FINALIZATION_INVALID"),
+                ([sys.executable, str(SCRIPTS / "record_semantic_worker.py"),
+                  str(missing), "shard-1", str(missing)], "SEMANTIC_WORKER_RECORD_INVALID"),
+            )
+            for command, code in cases:
+                with self.subTest(code=code):
+                    result = subprocess.run(
+                        command, capture_output=True, text=True, encoding="utf-8", check=False,
+                    )
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(result.stderr, f"{code}\n")
+                    self.assertTrue(all(fragment not in result.stderr for fragment in (
+                        str(missing), "HOSTILE_SENTINEL", "example.invalid", "Traceback",
+                        "FileNotFoundError", "No such file or directory", "cannot find",
+                    )))
+
     def test_project_map_envelope_is_producer_owned(self):
         with mock.patch.object(builder, "source_inventory", return_value=([], [], {})):
             project_map = builder.canonical_project_map(
@@ -467,7 +489,7 @@ class SemanticUnitTransportTests(unittest.TestCase):
                 command, capture_output=True, text=True, encoding="utf-8", check=False,
             )
             self.assertNotEqual(immutable.returncode, 0)
-            self.assertIn("immutable semantic worker artifact already differs", immutable.stderr)
+            self.assertEqual(immutable.stderr, "SEMANTIC_WORKER_RECORD_INVALID\n")
             self.assertEqual(output_path.read_bytes(), output_before)
             self.assertEqual(receipt_path.read_bytes(), receipt_before)
             self.assertEqual(shard_input.read_bytes(), input_before)
@@ -807,7 +829,7 @@ class SemanticUnitTransportTests(unittest.TestCase):
             }), encoding="utf-8")
             result = run_builder(run)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("re-collect", result.stderr)
+            self.assertEqual(result.stderr, "PROJECT_MAP_INPUT_INVALID\n")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

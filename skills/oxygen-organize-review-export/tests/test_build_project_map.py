@@ -106,6 +106,22 @@ def semantic_source_digest(ids, source_digests):
 
 
 class BuildProjectMapTests(unittest.TestCase):
+    def test_cli_maps_missing_run_to_fixed_safe_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "HOSTILE_SENTINEL_https_example.invalid_exception-body"
+            result = subprocess.run([
+                sys.executable, str(MODULE_PATH), str(missing),
+                "--primary-project", "Synthetic Project", "--summary", "Safe summary.",
+            ], capture_output=True, text=True, encoding="utf-8", check=False)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "PROJECT_MAP_INPUT_INVALID\n")
+        self.assertTrue(all(fragment not in result.stderr for fragment in (
+            str(missing), "HOSTILE_SENTINEL", "example.invalid", "Traceback",
+            "FileNotFoundError", "No such file or directory", "cannot find",
+        )))
+
     def test_semantic_kind_is_open_lower_snake_case_with_fixed_safe_failures(self):
         valid_kinds = (
             "direction_change",

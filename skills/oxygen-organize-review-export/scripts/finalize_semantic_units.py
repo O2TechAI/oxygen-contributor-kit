@@ -335,7 +335,7 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except ValueError as error:
-        if str(error) == SEMANTIC_WORKER_KIND_INVALID:
+    except Exception as error:
+        if isinstance(error, ValueError) and str(error) == SEMANTIC_WORKER_KIND_INVALID:
             raise SystemExit(SEMANTIC_WORKER_KIND_INVALID) from None
-        raise
+        raise SystemExit("SEMANTIC_FINALIZATION_INVALID") from None
