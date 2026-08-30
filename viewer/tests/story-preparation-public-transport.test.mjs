@@ -271,7 +271,8 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = null,
     turn_id: `turn-${suffix}`,
     sequence: index + 1,
     event_type: "message",
-    actor: { type: actorType },
+    actor: { id: `actor-${digest([documentId, actorType])}`, type: actorType },
+    relation_id: `event-${digest([documentId, `event-${suffix}`])}`,
     timestamp: null,
     payload: { role: actorType, text: `${language === "es"
       ? `observación segura revisada ${suffix}` : `safe reviewed canary ${suffix}`}${
@@ -647,6 +648,92 @@ test("finalized Coverage owner IDs form indivisible self-contained Story bundles
     assert.doesNotMatch(workerBytes, /sourcePrivacy|redactions|provider|model|PRIVATE-SENTINEL/u);
   } finally {
     await value.cleanup();
+  }
+});
+
+test("Story preparation preserves validated opaque actor topology and rejects raw shapes pre-authority", async () => {
+  const root = await mkdtemp(join(tmpdir(), "story-actor-topology-"));
+  try {
+    const semantic = semanticAuthority();
+    const projectMap = {
+      primary_project: semantic.projectId, summary: "Synthetic.",
+      projects: [{ name: semantic.projectId, event_count: 2, reason: "Reviewed boundary." }],
+      source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: 2 },
+      semantic_units: semantic.units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
+      semantic_manifest: semantic,
+    };
+    const semanticPath = join(root, "semantic.json");
+    await json(semanticPath, semantic);
+    const boundary = await reviewedBoundary(root, projectMap, semantic);
+    const eventsPath = join(boundary.review, "trajectories", "doc-canary", "events.jsonl");
+    const events = (await readFile(eventsPath, "utf8")).trim().split("\n").map(JSON.parse);
+    const parent = `actor-${digest("parent")}`;
+    events[0].actor = { id: `actor-${digest("alice.smith")}`, type: "field researcher", parent_id: parent };
+    events[0].event_type = "field_note";
+    events[0].payload.interaction_direction = "agent_to_subagent";
+    events[0].relations = [{ type: "reply_to", target: events[1].relation_id }];
+    events[1].actor = { id: `actor-${digest("alice-smith")}`, type: "研究员", parent_id: parent };
+    events[1].event_type = "观察记录";
+    events[1].payload.interaction_direction = "subagent_to_agent";
+    const writeEvents = () => writeFile(eventsPath, `${events.map(JSON.stringify).join("\n")}\n`, "utf8");
+    await writeEvents();
+    const privacy = await readJson(boundary.sourcePrivacy);
+    privacy.job.source_digest = await computeSourceDigest(events.map((event) => ({
+      id: event.event_id, document_id: event.trajectory_id, sequence: event.sequence,
+      event_type: event.event_type, actor_type: event.actor.type,
+      timestamp: event.timestamp, content: event.payload.text,
+    })));
+    await json(boundary.sourcePrivacy, privacy);
+
+    for (const [name, mutate] of [
+      ["raw", (event) => { event.actor.id = "RAW-ACTOR-SENTINEL"; }],
+      ["raw-parent", (event) => { event.actor.parent_id = "RAW-PARENT-SENTINEL"; }],
+      ["unknown-shape", (event) => { event.actor.display_name = "RAW-NAME-SENTINEL"; }],
+    ]) {
+      const original = structuredClone(events[0].actor);
+      mutate(events[0]);
+      await writeEvents();
+      const transport = join(root, `invalid-${name}`);
+      const rejected = run(process.execPath, [prepare, "prepare", "story", semanticPath,
+        boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /^REVIEWED_SOURCE_INVALID\r?\n$/u);
+      assert.doesNotMatch(`${rejected.stdout}${rejected.stderr}`, /RAW-/u);
+      assert.equal(existsSync(join(transport, "story", "validation-authority.json")), false);
+      events[0].actor = original;
+    }
+    for (const [name, mutate] of [
+      ["foreign-relation", (rows) => { rows[0].relations[0].target = `event-${"f".repeat(64)}`; }],
+      ["duplicate-relation-id", (rows) => { rows[1].relation_id = rows[0].relation_id; }],
+    ]) {
+      const original = structuredClone(events);
+      mutate(events);
+      await writeEvents();
+      const transport = join(root, `invalid-${name}`);
+      const rejected = run(process.execPath, [prepare, "prepare", "story", semanticPath,
+        boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /^REVIEWED_SOURCE_INVALID\r?\n$/u);
+      assert.equal(existsSync(join(transport, "story", "validation-authority.json")), false);
+      assert.equal(existsSync(join(transport, "story", "records")), false);
+      events.splice(0, events.length, ...original);
+    }
+    await writeEvents();
+    const transport = join(root, "valid");
+    runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+    const authority = await readJson(join(transport, "story", "validation-authority.json"));
+    assert.notEqual(authority.evidence[0].actorEquivalence, authority.evidence[1].actorEquivalence);
+    assert.equal(authority.evidence[0].parentActorEquivalence, parent);
+    assert.equal(authority.evidence[1].parentActorEquivalence, parent);
+    assert.equal(authority.evidence[0].interactionDirection, "agent_to_subagent");
+    assert.deepEqual(authority.evidence[0].relations, [{
+      type: "reply_to", target: events[1].relation_id,
+    }]);
+    const input = await readFile(join(transport, "story", "inputs", "story-0001.json"), "utf8");
+    assert.doesNotMatch(input, /alice\.smith|alice-smith|RAW-/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

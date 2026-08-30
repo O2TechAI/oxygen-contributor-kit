@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -38,6 +39,7 @@ function allInsights() {
 }
 
 const evidenceReference = (documentId, eventId) => ({ documentId, eventId });
+const opaqueActorId = (value) => `actor-${createHash("sha256").update(value).digest("hex")}`;
 
 function buildStoryFixture(caseId) {
   const fixture = storyFirstSemanticCases.find((item) => item.id === caseId);
@@ -48,7 +50,7 @@ function buildStoryFixture(caseId) {
     id: item.id,
     documentId,
     eventType: "message",
-    actorId: item.actorId,
+    actorId: opaqueActorId(item.actorId),
     actorType: "human",
     reviewedNarrative: item.text,
   }));
@@ -305,6 +307,56 @@ test("story Chapter readiness keeps People mandatory and evidence-supported", ()
   assert.deepEqual(validateStorySourcePackage(
     [rowWithSource(candidateRows[0], inventedPerson)], evidenceRows,
   ), { ok: false, code: "STORY_PEOPLE_INVALID" });
+});
+
+test("People use exact actor IDs, accept open labels, and exclude machine evidence", () => {
+  let selected;
+  for (const fixture of storyFirstSemanticCases) {
+    const built = buildStoryFixture(fixture.id);
+    const index = built.candidateRows.findIndex((row) => sourceFromRow(row).people.length >= 2);
+    if (index !== -1) {
+      selected = { ...built, candidateRows: [built.candidateRows[index]] };
+      break;
+    }
+  }
+  assert.ok(selected);
+  const source = sourceFromRow(selected.candidateRows[0]);
+  const referenced = new Set([
+    source.evidence.primary, ...source.evidence.supporting,
+  ].map((reference) => reference.eventId));
+  const rows = selected.evidenceRows.filter((row) => referenced.has(row.id));
+  const identities = ["actor.alpha", "actor-alpha"];
+  source.people.forEach((person, index) => {
+    for (const reference of person.evidence) {
+      const row = rows.find((candidate) => candidate.id === reference.eventId);
+      row.actorId = identities[index] ?? opaqueActorId(`extra-${index}`);
+      row.actorType = index === 0 ? "field researcher" : "研究员";
+      row.eventType = index === 0 ? "field_note" : "观察记录";
+    }
+  });
+  const candidate = rowWithSource(selected.candidateRows[0], source);
+  assert.equal(validateStorySourcePackage([candidate], rows).ok, true);
+
+  const collapsed = structuredClone(rows);
+  for (const row of collapsed) {
+    if (row.actorId === "actor-alpha") row.actorId = "actor.alpha";
+  }
+  assert.deepEqual(validateStorySourcePackage([candidate], collapsed), {
+    ok: false, code: "STORY_PEOPLE_INVALID",
+  });
+
+  const targetId = source.people[0].evidence[0].eventId;
+  for (const [field, value] of [
+    ["actorType", "tool"], ["actorType", "system"], ["eventType", "action_label"],
+    ["eventType", "tool_result"], ["eventType", "artifact"],
+    ["eventType", "agent_event"], ["eventType", "reviewer_action"],
+  ]) {
+    const machine = structuredClone(rows);
+    machine.find((row) => row.id === targetId)[field] = value;
+    assert.deepEqual(validateStorySourcePackage([candidate], machine), {
+      ok: false, code: "STORY_PEOPLE_INVALID",
+    });
+  }
 });
 
 test("story Phase labels are bounded and Phase identity is contiguous", () => {

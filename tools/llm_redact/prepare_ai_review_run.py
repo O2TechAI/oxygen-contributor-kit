@@ -10,6 +10,7 @@ metadata cannot accidentally enter the downloadable package.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -90,6 +91,13 @@ INPUT_SEMANTIC_AUTHORITY_INVALID = "INPUT_SEMANTIC_AUTHORITY_INVALID"
 AI_REVIEW_INPUT_INVALID = "AI_REVIEW_INPUT_INVALID"
 AI_REVIEW_OUTPUT_INVALID = "AI_REVIEW_OUTPUT_INVALID"
 AI_REVIEW_OUTPUT_EXISTS = "AI_REVIEW_OUTPUT_EXISTS"
+INTERACTION_DIRECTIONS = {
+    "human_to_agent", "agent_to_human", "agent_to_subagent", "subagent_to_agent",
+    "agent_to_agent", "agent_internal_reasoning", "subagent_internal_reasoning",
+    "agent_internal_progress", "subagent_internal_progress",
+}
+RELATION_TYPES = {"reply_to", "produced", "result_of", "observed"}
+ACTOR_KEYS = {"id", "type", "parent_agent_id"}
 
 
 def safe_source_system(value: object) -> str:
@@ -107,6 +115,83 @@ def write_json(path: Path, value: object) -> None:
         json.dumps(value, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def _opaque_id(kind: str, value: object) -> str:
+    canonical = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return f"{kind}-{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _identity_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str) or not value.strip() or len(value.encode("utf-8")) > 300
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise SystemExit(INPUT_PROJECTION_INVALID)
+    return value
+
+
+def _review_actor(event: dict, trajectory_id: str, actor_type: str) -> dict:
+    source_actor = event.get("actor")
+    if source_actor is None:
+        source_actor = {}
+    if not isinstance(source_actor, dict) or not set(source_actor).issubset(ACTOR_KEYS):
+        raise SystemExit(INPUT_PROJECTION_INVALID)
+    source_type = _identity_text(source_actor.get("type")) or actor_type
+    source_id = _identity_text(source_actor.get("id"))
+    if source_id is None:
+        raise SystemExit(INPUT_PROJECTION_INVALID)
+    parent_id = _identity_text(source_actor.get("parent_agent_id"))
+    source = event.get("source") if isinstance(event.get("source"), dict) else {}
+    scope = {
+        "trajectory": trajectory_id,
+        "source": [source.get(key) for key in ("system", "session_id", "origin")],
+    }
+    actor = {
+        "id": _opaque_id(
+            "actor", {**scope, "type": source_type, "id": source_id, "parent": parent_id},
+        ),
+        "type": actor_type,
+    }
+    if parent_id is not None:
+        actor["parent_id"] = _opaque_id(
+            "actor", {**scope, "type": "ai", "id": parent_id, "parent": None},
+        )
+    return actor
+
+
+def _review_direction(event: dict) -> str | None:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    source = event.get("source") if isinstance(event.get("source"), dict) else {}
+    values = [value for value in (
+        payload.get("interaction_direction"), source.get("interaction_direction"),
+    ) if value is not None]
+    if len(set(values)) > 1 or any(value not in INTERACTION_DIRECTIONS for value in values):
+        raise SystemExit(INPUT_PROJECTION_INVALID)
+    return values[0] if values else None
+
+
+def _review_relations(event: dict, trajectory_id: str) -> list[dict]:
+    relations = event.get("relations", [])
+    if not isinstance(relations, list):
+        raise SystemExit(INPUT_PROJECTION_INVALID)
+    reviewed = []
+    for relation in relations:
+        if not isinstance(relation, dict) or set(relation) != {"type", "event_id"}:
+            raise SystemExit(INPUT_PROJECTION_INVALID)
+        relation_type = relation.get("type")
+        target = _identity_text(relation.get("event_id"))
+        if relation_type not in RELATION_TYPES or target is None:
+            raise SystemExit(INPUT_PROJECTION_INVALID)
+        reviewed.append({
+            "type": relation_type,
+            "target": _opaque_id("event", [trajectory_id, target]),
+        })
+    return reviewed
 
 
 def conversation(event: dict) -> tuple[str, str] | None:
@@ -138,22 +223,28 @@ def normalize_event(event: dict, trajectory_id: str, index: int) -> dict:
         "turn_id": None,
         "sequence": index if sequence is None else sequence,
         "event_type": "action_label",
-        "actor": {"type": "tool"},
+        "actor": _review_actor(event, trajectory_id, "tool"),
+        "relation_id": _opaque_id("event", [trajectory_id, event_id]),
         # The release policy permits only the fixed action kind for
         # non-conversational events; source timestamps are not part of it.
         "timestamp": None,
         "payload": {"action_type": "other", "text": LABEL_TEXT["other"]},
-        "relations": [],
+        "relations": _review_relations(event, trajectory_id),
     }
     message = conversation(event)
     if message:
         role, text = message
+        actor = _review_actor(event, trajectory_id, role)
+        direction = _review_direction(event)
+        payload = {"role": role, "text": text}
+        if direction is not None:
+            payload["interaction_direction"] = direction
         base.update(
             turn_id=str(event.get("turn_id") or f"turn-{index:06d}"),
             event_type="message",
-            actor={"type": role},
+            actor=actor,
             timestamp=event.get("timestamp"),
-            payload={"role": role, "text": text},
+            payload=payload,
         )
         return base
     source_type = str(event.get("event_type") or "other").lower()
@@ -339,7 +430,9 @@ def _record_sequence(record: dict) -> int:
     return value
 
 
-def _validated_meeting_records(meeting_id: str, records: list[dict]) -> list[tuple[int, str, str]]:
+def _validated_meeting_records(
+    meeting_id: str, records: list[dict],
+) -> list[tuple[int, str, str, str]]:
     try:
         contribution_ids = project_map_authority.meeting_contribution_ids(meeting_id, records)
     except (TypeError, ValueError):
@@ -355,8 +448,19 @@ def _validated_meeting_records(meeting_id: str, records: list[dict]) -> list[tup
         text = record.get("text")
         if not isinstance(text, str) or not text.strip():
             raise SystemExit(INPUT_MEETING_INVALID)
-        prepared.append((_record_sequence(record), record_id, text))
-    sequences = [sequence for sequence, _, _ in prepared]
+        speaker = record.get("speaker")
+        if speaker is not None and (
+            not isinstance(speaker, str) or not speaker.strip()
+            or len(speaker.encode("utf-8")) > 300
+            or any(ord(character) < 32 or ord(character) == 127 for character in speaker)
+        ):
+            raise SystemExit(INPUT_MEETING_INVALID)
+        actor_seed = speaker if speaker is not None else {"record": record_id}
+        prepared.append((
+            _record_sequence(record), record_id,
+            _opaque_id("actor", ["meeting", meeting_id, actor_seed]), text,
+        ))
+    sequences = [sequence for sequence, _, _, _ in prepared]
     if sorted(sequences) != list(range(1, len(prepared) + 1)):
         raise SystemExit(INPUT_MEETING_INVALID)
     return sorted(prepared)
@@ -436,13 +540,13 @@ def prepare_meeting(
     source_warnings = meeting.get("warnings")
     warning_count = len(source_warnings) if isinstance(source_warnings, list) else 0
     records = []
-    for sequence, record_id, text in _validated_meeting_records(
+    for sequence, record_id, speaker, text in _validated_meeting_records(
         source_meeting_id, meeting.get("records") or [],
     ):
         records.append({
             "record_id": record_id,
             "order": sequence,
-            "speaker": "participant",
+            "speaker": speaker,
             "text": text,
         })
     destination = output / "meetings" / source_meeting_id
