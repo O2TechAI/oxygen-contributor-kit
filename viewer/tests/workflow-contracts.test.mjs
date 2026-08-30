@@ -135,6 +135,52 @@ test("reviewed Story has no numeric quota and Preferences stays inside the revie
   assert.match(agents, /Never[\s\S]{0,180}upload automatically[\s\S]{0,80}publish automatically/);
 });
 
+test("public docs align Preference timing and the final-export Privacy boundary", async () => {
+  const [readme, sop, viewerReadme, productContract, privacyContract, checklist] = await Promise.all([
+    read("README.md"),
+    read("SOP.md"),
+    read("viewer/README.md"),
+    read("skills/oxygen-storytelling-review/references/product-contract.md"),
+    read("skills/oxygen-storytelling-review/references/privacy-evidence-boundary.md"),
+    read("skills/oxygen-storytelling-review/references/validation-checklist.md"),
+  ]);
+
+  for (const document of [sop, productContract, checklist]) {
+    assertOrdered(document, [
+      "Preference-question generation",
+      "Project Story human review",
+      "Preference answers",
+    ]);
+  }
+  assert.match(readme, /before Story review opens[\s\S]{0,160}unanswered[\s\S]{0,100}explicit contributor action after review/i);
+  assert.doesNotMatch(readme, /after Story review/iu);
+  assert.doesNotMatch(readme, /Raw inputs, working files, model findings, and review metadata stay local/iu);
+  assert.doesNotMatch(readme, /Three tabs, all local/iu);
+
+  assert.doesNotMatch(viewerReadme, /interface intentionally contains only organization progress/iu);
+  const currentViewerSurfaces = [
+    /workflow\s+progress/iu, /Project\s+Story\s+Timeline/iu, /Phases/iu, /Milestones/iu,
+    /Chapter\s+Story/iu, /Insights/iu, /Privacy\s+choices/iu, /Preferences/iu, /All\s+set/iu,
+    /Release\s+Preview/iu, /HTML\/ZIP/iu,
+  ];
+  for (const document of [readme, viewerReadme]) {
+    for (const surfacePattern of currentViewerSurfaces) {
+      assert.match(document, surfacePattern);
+    }
+  }
+
+  for (const document of [readme, sop, productContract, privacyContract, checklist]) {
+    assert.match(document, /contributor-selected[\s\S]{0,80}(?:Agent\/model )?provider[\s\S]{0,120}raw or private project\s+material/iu);
+    assert.match(document, /do(?:es)? not automatically upload or[\s\S]{0,20}publish/iu);
+  }
+  assert.match(privacyContract, /must not silently switch providers or send Privacy-derived data to a second endpoint/iu);
+  assert.match(privacyContract, /hard Privacy boundary applies to the exact contributor-reviewed final export bytes/iu);
+  assert.match(privacyContract, /Detection[\s\S]{0,40}anonymization are best effort[\s\S]{0,60}final human review is mandatory/iu);
+  assert.match(privacyContract, /meaning-preserving anonymization rather than blank deletion/iu);
+  assert.match(privacyContract, /exact noncredential public\s+occurrence[\s\S]{0,80}explicit reviewed contributor choice/iu);
+  assert.match(productContract, /Final package reconstruction is\s+provider-free[\s\S]{0,100}does not make the entire workflow provider-free/iu);
+});
+
 test("fresh parent Story-worker assignments convey both writing contracts before bounded input", async () => {
   const assignmentMarker = "Every `story`-lane subagent assignment must convey this ordered contract before dispatch:";
   const narrativePath = "skills/oxygen-storytelling-review/references/narrative-writing-contract.md";

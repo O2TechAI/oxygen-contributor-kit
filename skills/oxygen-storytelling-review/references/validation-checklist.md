@@ -31,7 +31,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Coverage draft rows are exactly `{unitId, disposition, ownerId}` or `{unitId, disposition, exclusionReason}`.
 - [ ] No Story JSON contains raw member lists, per-event negative ledgers, Privacy candidates, source originals, prompts, hidden reasoning, or Preference answers.
 - [ ] Story/Release Privacy candidates remain explanatory metadata outside `oxygen.story`; the Agent supplies one proposal for every release target and the server-owned authority stores target choices.
-- [ ] Preferences are generated from reusable lessons/Insights, may be prepared before human review opens, remain unanswered until explicit contributor action, and are not stored in the Story review session.
+- [ ] Preference questions are generated from reusable Insight candidates before Project Story human review opens, remain unanswered until explicit contributor action after review, and are not stored in the Story review session.
 
 ## Human Pauses
 
@@ -44,7 +44,10 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 
 ## Release Preview And Package
 
+- [ ] Public disclosure distinguishes contributor-selected provider processing of raw or private project material during Organization/Story authoring from no automatic upload or publication; Oxygen does not silently switch providers or send Privacy-derived data to a second endpoint.
+- [ ] The hard Privacy boundary is limited to exact contributor-reviewed final export bytes; detection and anonymization are best effort, final human review is mandatory, and provider-free package reconstruction is not described as a provider-free workflow.
 - [ ] Final Chapter Privacy/Release Preview uses the current server-owned target authority and exposes exactly these choices: accept the Agent proposal, edit anonymized text, or make an exact noncredential occurrence public.
+- [ ] Final release uses meaning-preserving anonymization rather than blank deletion; an exact noncredential public occurrence is public only through an explicit reviewed contributor choice.
 - [ ] Required Release Preview shows only the release-safe projection for deterministic/confirmed safe content.
 - [ ] `needs_confirmation` source Privacy items show only the minimum permitted local original, current safe projection, safe uncertainty reason, and Keep/Redact.
 - [ ] Only `needs_confirmation` rows are decision-editable; category/status/reason mutation, deletion, and soft deletion are not final contributor actions.
@@ -54,6 +57,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] HTML and ZIP contain materially equivalent safe Story content from the same server-owned serialized bytes.
 - [ ] ZIP member scan rejects absolute paths, `..`, symlinks, credentials, local databases, logs, private review artifacts, caches, `node_modules`, and virtual environments.
 - [ ] Package manifest keeps `publication_approved=false`.
+- [ ] The localhost Viewer, working artifacts, and final package flow do not automatically upload or publish data.
 
 ## Clean-Room Gate
 

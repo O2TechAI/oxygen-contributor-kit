@@ -37,8 +37,9 @@
 Point your coding agent at this repo and say:
 
 > Use the Oxygen Contributor Kit for this repository. Collect only my in-scope local history,
-> organize it by project, prepare the privacy review, build Project Story, pause for my Story
-> review, then show Preferences and Release Preview and finish with a downloadable ZIP.
+> organize it by project, prepare the privacy review, build Project Story and Preference questions,
+> pause for my Story review, then collect my Preference answers, show Release Preview, and finish
+> with a downloadable ZIP.
 > Do not upload or publish anything.
 
 The agent starts with [AGENTS.md](AGENTS.md), then opens each owning Skill when its stage begins.
@@ -79,11 +80,15 @@ from publication. `publication_approved` remains `false` throughout this local-o
 ## Local boundary
 
 - The Viewer binds to localhost. No password, because nothing else should be able to reach it.
-- Raw inputs, working files, model findings, and review metadata stay local.
+- The localhost Viewer, working artifacts, and final package flow do not automatically upload or
+  publish data. `publication_approved=false` remains unchanged.
+- During Organization and Story authoring, the contributor-selected current coding Agent/model
+  provider may process raw or private project material so semantic meaning and narrative quality
+  survive. Oxygen does not silently switch providers or send Privacy-derived data to a second
+  endpoint.
 - Credential-shaped files are skipped at collection time, not filtered out later.
-- The model backend sends **only conversational turns**, and only to the model you have already
-  configured. Code, tool calls, tool output, and artifacts are stripped before that point and are
-  never sent.
+- The source Privacy backend sends **only conversational turns** to the configured model. Code,
+  tool calls, tool output, and artifacts are stripped before that separate review step.
 
 ---
 
@@ -119,14 +124,9 @@ wrong input reports a healthy hit count while reviewing almost none of it.
 
 ## The Viewer
 
-Three tabs, all local:
-
-- **Timeline** — the combined project timeline and its milestones.
-- **Release preview** — every event that would ship, original beside release version. Change a
-  span's category or delete it; both take effect immediately. Deletion is soft, so the decision
-  stays auditable.
-- **Preferences** — the probe batch, with evidence IDs. An unanswered or cleared probe records
-  **no** preference; silence is never read as agreement.
+The existing local Viewer shell carries workflow progress and Organization progress; the Project
+Story Timeline with Phases and Milestones; Chapter Story and Insights; Privacy choices;
+Preferences; All set; Release Preview; and HTML/ZIP handoff.
 
 Editing reviewed Story text invalidates only the affected Story Privacy targets. When the Viewer
 shows `preparation_required`, use the single documented refresh sequence in
@@ -189,8 +189,8 @@ Run in this order:
    already-reviewed project history into an evidence-linked, bilingual Project Story with
    iterative human confirmation that remains separate from publication.
 4. **[`oxygen-elicit-contributor-preferences`](skills/oxygen-elicit-contributor-preferences/SKILL.md)**
-   — after Story review, generates or validates evidence-grounded probes from the same
-   privacy-prepared reviewed input, without inventing preferences.
+   — before Story review opens, generates or validates evidence-grounded questions from reusable
+   Insight candidates. Questions remain unanswered until explicit contributor action after review.
 
 Supporting tools live in [`tools/llm_redact/`](tools/llm_redact/) (model backend, validators,
 audits) and [`tools/ingest/`](tools/ingest/) (collection and import).

@@ -149,6 +149,17 @@ another lane's failure as success.
 
 Reuse the existing repository Viewer and contracts. Do not build a second frontend, second workflow runner, schema adapter, local database repair tool, or provider client inside the launcher.
 
+The contributor-selected current coding Agent/model provider may process raw or private project
+material during Organization and Story authoring. Oxygen must not silently switch providers or send
+Privacy-derived data to a second endpoint. The localhost Viewer, working artifacts, and final
+package flow do not automatically upload or publish data. Final package reconstruction is
+provider-free; that does not make the entire workflow provider-free or guarantee that raw/private
+material stays on the machine.
+
+The hard Privacy boundary is the exact contributor-reviewed final export bytes. Detection and
+anonymization are best effort, final human review is mandatory, and the detailed release rules live
+in `privacy-evidence-boundary.md`.
+
 The required final Viewer must preserve:
 
 - local-only loopback access;

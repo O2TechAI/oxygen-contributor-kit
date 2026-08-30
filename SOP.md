@@ -86,7 +86,12 @@ then complete §§8–9.
 - Never read or package credential files, private keys, tokens, cookies, browser profiles,
   system/developer prompts, or hidden model reasoning.
 - Use only the contributor's configured model/API access. Do not require a bundled Oxygen key.
-- Keep raw inputs, working files, redaction cases, and review metadata local.
+- The contributor-selected current coding Agent/model provider may process raw or private project
+  material during Organization and Story authoring. Oxygen must not silently switch providers or
+  send Privacy-derived data to a second endpoint.
+- The localhost Viewer, working artifacts, and final package flow do not automatically upload or
+  publish data. Final package reconstruction is provider-free, but the whole workflow is not
+  necessarily provider-free or entirely on-machine.
 - Download, ZIP creation, review, and publication are separate actions. None implies another.
 
 Immediately after confirming the target, start the canonical progress-first Viewer **before any
