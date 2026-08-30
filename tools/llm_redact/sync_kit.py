@@ -7,16 +7,12 @@ names, and never
 follows or overwrites a symlink at the destination.
 """
 import argparse
-from contextlib import contextmanager, nullcontext
-import ctypes
-import hashlib
 import os
 import pathlib
 import shutil
 import stat
 import sys
 import tempfile
-import time
 
 TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(TOOLS_ROOT) not in sys.path:
@@ -30,7 +26,6 @@ EXCLUDE_NAMES = {
 }
 EXCLUDE_FILES = {"redaction-diff.html"}
 LOCAL_STATE_SUFFIXES = (".db", ".sqlite", ".sqlite3", ".log")
-SYNC_BUSY = "SYNC_BUSY"
 
 
 def should_skip(path: pathlib.Path) -> bool:
@@ -93,41 +88,13 @@ def _regular_target_metadata(path: pathlib.Path) -> os.stat_result | None:
     return metadata
 
 
-def file_fingerprint(path: pathlib.Path) -> tuple[int, int, int, str]:
-    """Return rename-stable physical identity plus exact bytes for one sync leaf."""
-    metadata = _regular_target_metadata(path)
-    if metadata is None:
-        raise FileNotFoundError(path)
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    digest = hashlib.sha256()
-    descriptor = os.open(path, flags)
-    with os.fdopen(descriptor, "rb") as handle:
-        before = os.fstat(handle.fileno())
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_nlink != 1
-            or (before.st_dev, before.st_ino) != (metadata.st_dev, metadata.st_ino)
-        ):
-            raise ValueError("sync target changed before inspection")
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-        after = os.fstat(handle.fileno())
-    if (
-        (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-        != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-    ):
-        raise ValueError("sync target changed during inspection")
-    return after.st_dev, after.st_ino, after.st_size, digest.hexdigest()
-
-
 def _source_tree_entries(
     source: pathlib.Path,
-) -> list[tuple[pathlib.Path, os.stat_result]]:
+) -> list[tuple[pathlib.Path, os.stat_result | None]]:
     """Enumerate without following an unvalidated directory entry."""
     root_metadata = source.lstat()
     pending = [(source, (root_metadata.st_dev, root_metadata.st_ino))]
-    entries: list[tuple[pathlib.Path, os.stat_result]] = []
+    entries: list[tuple[pathlib.Path, os.stat_result | None]] = []
     while pending:
         directory, expected = pending.pop()
         metadata = directory.lstat()
@@ -142,6 +109,9 @@ def _source_tree_entries(
         except OSError:
             raise ValueError("sync source directory cannot be inspected") from None
         for path in children:
+            if should_skip(path.relative_to(source)):
+                entries.append((path, None))
+                continue
             child_metadata = path.lstat()
             if _is_link_or_reparse(path, child_metadata):
                 raise ValueError("sync source contains an alias")
@@ -155,76 +125,8 @@ def _source_tree_entries(
     return sorted(entries, key=lambda entry: entry[0].relative_to(source).as_posix())
 
 
-@contextmanager
-def _sync_lock(destination: pathlib.Path):
-    """Serialize repository-owned sync writers without creating a lock artifact."""
-    _physical_sync_path(destination)
-    metadata = destination.lstat()
-    if _is_link_or_reparse(destination, metadata) or not stat.S_ISDIR(metadata.st_mode):
-        raise ValueError("sync destination is invalid")
-    identity = (metadata.st_dev, metadata.st_ino)
-    if os.name == "nt":
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
-        kernel32.CreateMutexW.restype = ctypes.c_void_p
-        kernel32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_ulong)
-        kernel32.WaitForSingleObject.restype = ctypes.c_ulong
-        kernel32.ReleaseMutex.argtypes = (ctypes.c_void_p,)
-        kernel32.ReleaseMutex.restype = ctypes.c_bool
-        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
-        kernel32.CloseHandle.restype = ctypes.c_bool
-        lock_name = "Local\\OxygenKitSync-" + hashlib.sha256(
-            f"{identity[0]}:{identity[1]}".encode("ascii")
-        ).hexdigest()
-        handle = kernel32.CreateMutexW(None, False, lock_name)
-        if not handle:
-            raise OSError(ctypes.get_last_error(), "cannot create sync lock")
-        acquired = False
-        try:
-            result = kernel32.WaitForSingleObject(handle, 0)
-            if result not in {0x00000000, 0x00000080}:  # acquired or abandoned
-                if result == 0x00000102:
-                    raise ValueError(SYNC_BUSY)
-                raise OSError(ctypes.get_last_error(), "cannot acquire sync lock")
-            acquired = True
-            current = destination.lstat()
-            if (
-                _is_link_or_reparse(destination, current)
-                or not stat.S_ISDIR(current.st_mode)
-                or (current.st_dev, current.st_ino) != identity
-            ):
-                raise ValueError("sync destination changed before locking")
-            yield
-        finally:
-            if acquired:
-                kernel32.ReleaseMutex(handle)
-            kernel32.CloseHandle(handle)
-        return
-
-    try:
-        import fcntl
-    except ImportError:
-        raise OSError("required sync lock is unavailable") from None
-    descriptor = os.open(
-        destination,
-        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
-    )
-    try:
-        opened = os.fstat(descriptor)
-        if (opened.st_dev, opened.st_ino) != identity or not stat.S_ISDIR(opened.st_mode):
-            raise ValueError("sync destination changed before locking")
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise ValueError(SYNC_BUSY) from None
-        yield
-    finally:
-        os.close(descriptor)
-
-
 def _copy_into_open_stage(
     source: pathlib.Path,
-    temporary: pathlib.Path,
     stage_handle,
     source_metadata: os.stat_result,
 ) -> None:
@@ -275,26 +177,6 @@ def _owned_stage_metadata(
     return metadata
 
 
-def _replace_existing_atomic(
-    temporary: pathlib.Path,
-    target: pathlib.Path,
-    expected: tuple[int, int, int, str],
-) -> None:
-    """Install one complete sibling while the destination-wide sync lock is held."""
-    attempts = 50 if os.name == "nt" else 1
-    for attempt in range(attempts):
-        current = _regular_target_metadata(target)
-        if current is None or file_fingerprint(target) != expected:
-            raise ValueError("sync target changed during publication")
-        try:
-            os.replace(temporary, target)
-            return
-        except PermissionError:
-            if attempt + 1 == attempts:
-                raise
-            time.sleep(0.01)
-
-
 def _atomic_copy_entry(source: pathlib.Path, target: pathlib.Path) -> None:
     source_metadata = source.lstat()
     if _is_link_or_reparse(source, source_metadata) or not stat.S_ISREG(source_metadata.st_mode):
@@ -303,7 +185,6 @@ def _atomic_copy_entry(source: pathlib.Path, target: pathlib.Path) -> None:
     if not parent.is_dir():
         raise ValueError("sync target parent is invalid")
     prior = _regular_target_metadata(target)
-    prior_fingerprint = file_fingerprint(target) if prior is not None else None
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{target.name}.", suffix=".sync", dir=parent,
     )
@@ -313,7 +194,7 @@ def _atomic_copy_entry(source: pathlib.Path, target: pathlib.Path) -> None:
     try:
         with os.fdopen(descriptor, "wb") as stage_handle:
             descriptor = -1
-            _copy_into_open_stage(source, temporary, stage_handle, source_metadata)
+            _copy_into_open_stage(source, stage_handle, source_metadata)
             if hasattr(os, "fchmod"):
                 os.fchmod(
                     stage_handle.fileno(),
@@ -333,8 +214,16 @@ def _atomic_copy_entry(source: pathlib.Path, target: pathlib.Path) -> None:
         if prior is None:
             rename_noreplace(temporary, target)
         else:
-            assert prior_fingerprint is not None
-            _replace_existing_atomic(temporary, target, prior_fingerprint)
+            current = _regular_target_metadata(target)
+            if current is None or not os.path.samestat(prior, current) or (
+                prior.st_size,
+                prior.st_mtime_ns,
+            ) != (
+                current.st_size,
+                current.st_mtime_ns,
+            ):
+                raise ValueError("sync target changed during publication")
+            os.replace(temporary, target)
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -361,40 +250,38 @@ def main() -> int:
         dest = _physical_sync_path(dest)
     copied, skipped, preserved = 0, 0, []
 
-    lock = _sync_lock(dest) if not args.dry_run else nullcontext()
-    with lock:
-        for path, source_metadata in _source_tree_entries(src):
-            relative = path.relative_to(src)
-            if should_skip(relative):
-                skipped += 1
-                continue
-            target = dest / relative
+    for path, source_metadata in _source_tree_entries(src):
+        relative = path.relative_to(src)
+        if should_skip(relative):
+            skipped += 1
+            continue
+        target = dest / relative
 
-            # A symlink already at the destination is environment wiring, not
-            # content. Leave it exactly as found.
-            try:
-                target_metadata = target.lstat()
-            except FileNotFoundError:
-                target_metadata = None
-            if target_metadata is not None and _is_link_or_reparse(target, target_metadata):
-                if stat.S_ISDIR(source_metadata.st_mode):
-                    raise ValueError("sync target directory is aliased")
-                preserved.append(str(relative))
-                continue
-
+        # A symlink already at the destination is environment wiring, not
+        # content. Leave it exactly as found.
+        try:
+            target_metadata = target.lstat()
+        except FileNotFoundError:
+            target_metadata = None
+        if target_metadata is not None and _is_link_or_reparse(target, target_metadata):
             if stat.S_ISDIR(source_metadata.st_mode):
-                if not args.dry_run:
-                    _physical_sync_path(target.parent)
-                    target.mkdir(parents=True, exist_ok=True)
-                    physical_target = _physical_sync_path(target)
-                    if not physical_target.is_dir():
-                        raise ValueError("sync target directory is invalid")
-                continue
-            if not stat.S_ISREG(source_metadata.st_mode):
-                raise ValueError("sync source contains a special entry")
+                raise ValueError("sync target directory is aliased")
+            preserved.append(str(relative))
+            continue
+
+        if stat.S_ISDIR(source_metadata.st_mode):
             if not args.dry_run:
-                _atomic_copy_entry(path, target)
-            copied += 1
+                _physical_sync_path(target.parent)
+                target.mkdir(parents=True, exist_ok=True)
+                physical_target = _physical_sync_path(target)
+                if not physical_target.is_dir():
+                    raise ValueError("sync target directory is invalid")
+            continue
+        if not stat.S_ISREG(source_metadata.st_mode):
+            raise ValueError("sync source contains a special entry")
+        if not args.dry_run:
+            _atomic_copy_entry(path, target)
+        copied += 1
 
     print(f"copied {copied} file(s), skipped {skipped} excluded path(s)")
     if preserved:

@@ -182,6 +182,7 @@ test("reserved Story namespace reaches activation/session classification and str
   ]) assert.equal(isReservedStoryOrganizationReason(value), true);
   assert.equal(isReservedStoryOrganizationReason("ordinary story project metadata"), false);
   assert.equal(releaseOrganizationReason("ordinary story project metadata"), "ordinary story project metadata");
+  assert.equal(releaseOrganizationReason(valid.organization_reason), "Reviewed project Story");
   const releasedUnknown = releaseOrganizationReason(unknown.organization_reason);
   assert.equal(releasedUnknown, "Reviewed project Story");
   assert.doesNotMatch(releasedUnknown, new RegExp(`${ORIGINAL_SENTINEL}|${EVIDENCE_SENTINEL}`));

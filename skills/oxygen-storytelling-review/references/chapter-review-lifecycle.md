@@ -42,7 +42,7 @@ type StoryReviewSession = {
 
 It does not store Preference answers, source redaction spans, Story source candidates, coverage manifests, release originals, evidence payloads, hidden prompts, or private notes.
 
-Current source-bound hydration accepts only sessions matching the active workflow run and exact `oxygen.story` Chapter set. On this base, nonempty top-level `privacyDecisions` are not restored during hydration; do not claim Story/Release Privacy is complete unless an implemented candidate authority provides and applies those decisions.
+Current source-bound hydration accepts only sessions matching the active workflow run and exact `oxygen.story` Chapter set. Top-level `privacyDecisions` must remain empty because Story/Release Privacy target choices live only in the current server-owned target authority.
 
 ## Chapter Review State
 
@@ -119,7 +119,7 @@ Do not expose a new Delete/Revise/Add creation window. Exact Evidence is never e
 
 ## Apply Review
 
-Apply review may run only when required Privacy decisions are complete for the implemented candidate authority and Evidence can be verified.
+Apply review may run only when every required Story Privacy target has a current selected value in the server-owned authority and Evidence can be verified.
 
 It must:
 
@@ -128,7 +128,7 @@ It must:
 - reject stale, overlapping, duplicated, malformed, cross-Chapter, or unsupported work atomically;
 - mark unsupported Add/direct factual work as `needs_evidence`;
 - increment the Chapter revision on success;
-- record applied annotation/edit IDs and applied Privacy decisions in revision history;
+- record applied annotation/edit IDs in revision history while leaving Story-session Privacy maps empty;
 - preserve useful detail, failure, uncertainty, Evidence semantics, and human intent;
 - keep publication false.
 
@@ -149,7 +149,7 @@ All set is available only when:
 - stage is `revision_ready`;
 - the latest revision has been presented for human inspection;
 - no pending, reverted-active, or `needs_evidence` annotation/direct edit remains;
-- every required implemented Privacy candidate has a Keep/Redact decision applied in the current revision;
+- every required Story Privacy target has a current selected value in the server-owned authority;
 - no Insight blocker remains;
 - actual Evidence references were verified by the latest successful Apply.
 
@@ -165,7 +165,7 @@ Reopen review changes only:
 human_confirmed -> reviewing
 ```
 
-Reopen preserves revision provenance, Story content, Privacy decisions, Insights, and publication separation. Another Apply/All set cycle remains possible.
+Reopen preserves revision provenance, Story content, server-owned Privacy target choices, Insights, and publication separation. Another Apply/All set cycle remains possible.
 
 ## Release Boundary
 
@@ -177,7 +177,7 @@ Test at minimum:
 
 1. initial revision 1 and false publication state;
 2. direct edit returns stage to reviewing;
-3. Privacy blocks Apply and All set when required current candidates are unresolved;
+3. Privacy blocks Apply and All set when required current targets lack a selected value;
 4. first Apply creates revision 2;
 5. revision 2 can be edited again;
 6. second Apply creates revision 3;

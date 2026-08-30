@@ -200,11 +200,10 @@ async function seedConcurrentPrivacyState(db, establishWorkflowRun, computeSourc
     db.prepare(`INSERT INTO story_privacy_authorities
       (workflow_run_id,source_revision,active_story_digest,server_version,
        reviewed_story_digest,target_catalog_json,target_catalog_digest,changed_target_digest,
-       changed_target_count,receipt_digest,batch_digest,candidate_digest,candidate_count,imported_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+       changed_target_count,receipt_digest,proposal_digest,proposal_count,imported_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
         workflowRunId, sourceRevision, activeStoryDigest, 1, "b".repeat(64), "[]",
-        "c".repeat(64), "d".repeat(64), 0, "e".repeat(64), "f".repeat(64),
-        "1".repeat(64), 1, oldTime,
+        "c".repeat(64), "d".repeat(64), 0, "e".repeat(64), "f".repeat(64), 0, oldTime,
       ),
     db.prepare(`INSERT INTO project_release_confirmations
       (workflow_run_id,review_gate_digest,confirmed_at)

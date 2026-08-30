@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { storyPreparationDigest } from "../../../viewer/lib/story-preparation.ts";
 import {
@@ -8,6 +8,7 @@ import {
   validNonnegativeAuthorityCounter,
 } from "../../../viewer/lib/authority-validation.mjs";
 import { directPathEntry } from "./direct_path_entry.mjs";
+import { publishDirectoryNoReplace } from "./atomic_publish.mjs";
 
 const [snapshotInput, outputInput] = process.argv.slice(2);
 const hex = /^[0-9a-f]{64}$/;
@@ -54,7 +55,7 @@ try { snapshot = JSON.parse(await readFile(snapshotPath, "utf8")); } catch { fai
 const bindingKeys = [
   "workflowRunId", "sourceRevision", "activeStoryDigest", "serverVersion",
   "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest",
-  "changedTargetCount", "previousCandidateDigest",
+  "changedTargetCount", "previousAuthorityDigest",
 ];
 if (!exact(snapshot, ["schema", "binding", "targetTransitions", "changedTargets"])
   || snapshot.schema !== "oxygen.reviewed-story-privacy-snapshot"
@@ -68,7 +69,7 @@ if (!exact(snapshot, ["schema", "binding", "targetTransitions", "changedTargets"
   || snapshot.targetTransitions.length === 0 || snapshot.targetTransitions.length > 4_000
   || ![snapshot.binding.activeStoryDigest, snapshot.binding.reviewedStoryDigest,
     snapshot.binding.targetCatalogDigest, snapshot.binding.changedTargetDigest,
-    snapshot.binding.previousCandidateDigest].every((value) => typeof value === "string" && hex.test(value))) {
+    snapshot.binding.previousAuthorityDigest].every((value) => typeof value === "string" && hex.test(value))) {
   fail("SNAPSHOT_INVALID");
 }
 const transitions = [];
@@ -99,7 +100,6 @@ for (const target of snapshot.changedTargets) {
     || await storyPreparationDigest(target.content) !== target.contentDigest) fail("TARGET_INVALID");
   targets.push(target);
 }
-targets.sort((left, right) => compareUtf8(left.id, right.id));
 if (new Set(targets.map((target) => target.id)).size !== targets.length
   || targets.length !== currentTransition.size
   || targets.some((target) => !currentTransition.has(target.id))) fail("TARGET_SET_INVALID");
@@ -134,7 +134,6 @@ try {
       targetIds: shardTargetsValue.map((target) => target.id),
       inputPath,
       inputDigest,
-      receiptPath: `${id}.receipt.json`,
     });
   }
   const manifestCore = {
@@ -147,7 +146,7 @@ try {
   };
   const manifest = { ...manifestCore, manifestDigest: await storyPreparationDigest(manifestCore) };
   await writeFile(resolve(temporary, "manifest.json"), `${JSON.stringify(manifest)}\n`, { flag: "wx" });
-  await rename(temporary, output);
+  publishDirectoryNoReplace(temporary, output, fail);
   console.log(JSON.stringify({ output, manifestDigest: manifest.manifestDigest,
     changedTargetCount: transitions.length, scanTargetCount: targets.length, shardCount: shards.length }));
 } catch (error) {

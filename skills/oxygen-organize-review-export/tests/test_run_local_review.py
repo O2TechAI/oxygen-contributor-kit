@@ -119,7 +119,8 @@ def ready_authority(workflow_run_id="run-1", *, probes=None, bulk_decisions=None
     }
     preparation = {
         "schema": "oxygen.story-preparation", "workflowRunId": workflow_run_id,
-        "sourceRevision": 7, "storyPrivacyCandidates": [],
+        "sourceRevision": 7,
+        "storyPrivacy": {"candidates": [], "targetProposals": []},
         "receipts": [
             receipt("story"), receipt("insight"), receipt("story_privacy"),
             receipt("preference", inputDigest=preference["inputDigest"],
@@ -1012,16 +1013,179 @@ class LauncherUnitTest(unittest.TestCase):
 
     def test_attach_url_is_strictly_local_and_origin_only(self):
         self.assertEqual(
-            MODULE.normalize_local_viewer_url("http://127.0.0.1:3298/"),
+            MODULE.normalize_local_viewer_url("http://127.0.0.1:3298"),
             "http://127.0.0.1:3298",
+        )
+        self.assertEqual(
+            MODULE.normalize_local_viewer_url("http://localhost:1"),
+            "http://localhost:1",
         )
         for value in (
             "https://127.0.0.1:3298",
             "http://example.com:3298",
             "http://127.0.0.1:3298/api/workflow",
+            "http://127.0.0.1:3298/",
+            "http://127.0.0.1:03298",
+            "http://127.0.0.1:65536",
+            "http://LOCALHOST:3298",
+            "http://localhost:3298?x=1",
+            "http://localhost:3298#fragment",
+            "http://user@localhost:3298",
+            "http://127.0.0.1:3298@example.com:80",
+            " http://localhost:3298",
         ):
             with self.subTest(value=value), self.assertRaises(SystemExit):
                 MODULE.normalize_local_viewer_url(value)
+
+    def test_story_privacy_export_and_import_use_fixed_routes_and_no_clobber_files(self):
+        snapshot = {
+            "schema": "oxygen.reviewed-story-privacy-snapshot",
+            "binding": {"workflowRunId": "run-1"},
+            "targetTransitions": [],
+            "changedTargets": [],
+        }
+        authority = {"workflowRunId": "run-1", "status": "completed_empty", "candidates": []}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "snapshot.json"
+            bundle_path = root / "bundle.json"
+            bundle_path.write_text(json.dumps({
+                "schema": "oxygen.reviewed-story-privacy-import",
+                "binding": {"workflowRunId": "run-1"},
+            }), encoding="utf-8")
+            calls = []
+
+            def request(_opener, url, *, method="GET", body=None):
+                calls.append((url, method, body))
+                return snapshot if method == "GET" else authority
+
+            with (
+                mock.patch.object(MODULE, "request_json", side_effect=request),
+                mock.patch.object(MODULE, "local_viewer_opener", return_value=mock.sentinel.opener),
+                mock.patch("builtins.print"),
+            ):
+                exported = MODULE.export_story_privacy_snapshot(
+                    "http://127.0.0.1:3210", "run-1", output,
+                )
+                self.assertEqual(exported["story_privacy"], "snapshot_exported")
+                self.assertEqual(json.loads(output.read_text(encoding="utf-8")), snapshot)
+                with self.assertRaisesRegex(SystemExit, "STORY_PRIVACY_EXPORT_EXISTS"):
+                    MODULE.export_story_privacy_snapshot(
+                        "http://127.0.0.1:3210", "run-1", output,
+                    )
+                imported = MODULE.import_story_privacy_bundle(
+                    "http://127.0.0.1:3210", "run-1", bundle_path,
+                )
+                self.assertEqual(imported["story_privacy"], "bundle_imported")
+
+            self.assertEqual(calls[0][:2], (
+                "http://127.0.0.1:3210/api/story-privacy/export?workflowRunId=run-1", "GET",
+            ))
+            self.assertEqual(calls[1], (
+                "http://127.0.0.1:3210/api/story-privacy/import", "POST",
+                json.loads(bundle_path.read_text(encoding="utf-8")),
+            ))
+
+    def test_story_privacy_mode_rejects_origin_before_reading_any_path(self):
+        with (
+            mock.patch.object(sys, "argv", [
+                "run_local_review.py", "--attach-url", "http://127.0.0.1:3210@example.com:80",
+                "--workflow-run-id", "run-1", "--story-privacy-import", "PRIVATE_SENTINEL.json",
+            ]),
+            mock.patch.object(MODULE, "_direct_unique_file") as opened,
+        ):
+            with self.assertRaisesRegex(SystemExit, "VIEWER_ORIGIN_INVALID"):
+                MODULE.main()
+        opened.assert_not_called()
+
+    def test_story_privacy_direct_helpers_reject_origin_before_any_path_access(self):
+        hostile = "http://127.0.0.1:3210@example.com:80"
+        with mock.patch.object(MODULE, "_story_privacy_export_path") as export_path:
+            with self.assertRaisesRegex(SystemExit, "VIEWER_ORIGIN_INVALID"):
+                MODULE.export_story_privacy_snapshot(hostile, "run-1", Path("PRIVATE.json"))
+        export_path.assert_not_called()
+        with mock.patch.object(MODULE, "_direct_unique_file") as import_path:
+            with self.assertRaisesRegex(SystemExit, "VIEWER_ORIGIN_INVALID"):
+                MODULE.import_story_privacy_bundle(hostile, "run-1", Path("PRIVATE.json"))
+        import_path.assert_not_called()
+
+    def test_story_privacy_export_rejects_foreign_snapshot_without_output(self):
+        snapshot = {
+            "schema": "oxygen.reviewed-story-privacy-snapshot",
+            "binding": {"workflowRunId": "foreign-run"},
+            "targetTransitions": [],
+            "changedTargets": [],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "snapshot.json"
+            with (
+                mock.patch.object(MODULE, "request_json", return_value=snapshot),
+                mock.patch.object(MODULE, "local_viewer_opener", return_value=mock.sentinel.opener),
+            ):
+                with self.assertRaisesRegex(SystemExit, "VIEWER_RESPONSE_INVALID"):
+                    MODULE.export_story_privacy_snapshot(
+                        "http://127.0.0.1:3210", "run-1", output,
+                    )
+            self.assertFalse(output.exists())
+
+    def test_story_privacy_import_maps_malformed_binding_and_response_to_fixed_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "PRIVATE_SENTINEL_bundle.json"
+            source.write_text(json.dumps({
+                "schema": "oxygen.reviewed-story-privacy-import", "binding": "malformed",
+            }), encoding="utf-8")
+            with mock.patch.object(MODULE, "request_json") as request:
+                with self.assertRaisesRegex(SystemExit, "STORY_PRIVACY_IMPORT_INVALID") as error:
+                    MODULE.import_story_privacy_bundle(
+                        "http://127.0.0.1:3210", "run-1", source,
+                    )
+            request.assert_not_called()
+            self.assertNotIn(str(source), str(error.exception))
+
+            source.write_text(json.dumps({
+                "schema": "oxygen.reviewed-story-privacy-import",
+                "binding": {"workflowRunId": "run-1"},
+            }), encoding="utf-8")
+            with (
+                mock.patch.object(MODULE, "request_json", return_value={
+                    "workflowRunId": "run-1", "candidates": "malformed",
+                }),
+                mock.patch.object(MODULE, "local_viewer_opener", return_value=mock.sentinel.opener),
+            ):
+                with self.assertRaisesRegex(SystemExit, "VIEWER_RESPONSE_INVALID"):
+                    MODULE.import_story_privacy_bundle(
+                        "http://127.0.0.1:3210", "run-1", source,
+                    )
+
+    def test_story_privacy_export_rejects_an_ancestor_directory_alias(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            physical = root / "physical"
+            physical.mkdir()
+            (physical / "nested").mkdir()
+            alias = root / "alias"
+            try:
+                alias.symlink_to(physical, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"directory symlink unavailable: {error}")
+            with self.assertRaisesRegex(SystemExit, "STORY_PRIVACY_EXPORT_FAILED"):
+                MODULE._story_privacy_export_path(alias / "nested" / "snapshot.json")
+            self.assertFalse((physical / "nested" / "snapshot.json").exists())
+
+    def test_story_privacy_opener_has_no_proxy_redirect_or_ambient_cookie_authority(self):
+        opener = MODULE.local_viewer_opener()
+        proxy_handlers = [handler for handler in opener.handlers
+                          if isinstance(handler, MODULE.urllib.request.ProxyHandler)]
+        redirect_handlers = [handler for handler in opener.handlers
+                             if isinstance(handler, MODULE._NoLocalViewerRedirect)]
+        cookie_handlers = [handler for handler in opener.handlers
+                           if isinstance(handler, MODULE.urllib.request.HTTPCookieProcessor)]
+        # An inert ProxyHandler({}) suppresses urllib's environment-derived default
+        # and is intentionally omitted from the installed handler list.
+        self.assertEqual(proxy_handlers, [])
+        self.assertEqual(len(redirect_handlers), 1)
+        self.assertEqual(len(cookie_handlers), 1)
+        self.assertEqual(list(cookie_handlers[0].cookiejar), [])
 
     def test_attach_verifies_stable_workflow_run_before_import(self):
         with (

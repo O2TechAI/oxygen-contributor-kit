@@ -529,6 +529,14 @@ class SemanticUnitTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "disagree on semantic authority"):
             finalizer.compose(proposals, ["item-a", "item-b"])
 
+    def test_unrelated_records_may_remain_distinct_singleton_units(self):
+        proposals = [
+            {"id": "unit-a", "kind": "discussion", "members": ["item-a"]},
+            {"id": "unit-b", "kind": "laboratory_observation", "members": ["item-b"]},
+        ]
+
+        self.assertEqual(finalizer.compose(proposals, ["item-a", "item-b"]), proposals)
+
     def test_current_ingest_sanitizer_closes_every_worker_secret_rule(self):
         unsafe = (
             list(generated_quoted_assignments())

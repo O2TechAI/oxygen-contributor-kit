@@ -21,6 +21,13 @@ invocation. The Viewer owns cleanup when it stops. **Download HTML** exports a r
 raw event envelopes. ZIP export is blocked until the AI pass completes with zero rejected spans.
 Neither action uploads data, and there is no online deployment path.
 
+When a reviewed Story edit makes Story Privacy `preparation_required`, do not edit SQLite or
+authority JSON. Keep this Viewer running and follow the canonical export -> prepare -> finalize ->
+import commands in the parent [`SOP.md`](../SOP.md#refresh-story-privacy-after-a-story-edit). The
+import is bound to the exact workflow run, source revision, reviewed Story digest, target catalog,
+and prior target-choice authority digest. Release Preview then uses the exact contributor-selected
+bytes for both HTML and ZIP; credentials cannot be made public by an exact-span override.
+
 One Viewer state directory owns at most one established workflow run for its lifetime. Start a new
 Viewer through the launcher, with a fresh state directory, for another project or workflow; reusing
 one state directory as multi-run history is unsupported.

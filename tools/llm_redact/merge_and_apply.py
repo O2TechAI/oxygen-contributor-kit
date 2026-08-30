@@ -115,7 +115,10 @@ def main() -> int:
         }
         with (temporary / "report.json").open("xb") as handle:
             handle.write(canonical_bundle_bytes(report))
-        rename_noreplace(temporary, literal_out)
+        try:
+            rename_noreplace(temporary, literal_out)
+        except FileExistsError:
+            raise SystemExit("SOURCE_PRIVACY_MERGE_OUTPUT_EXISTS") from None
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)

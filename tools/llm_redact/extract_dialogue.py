@@ -28,10 +28,12 @@ from ingest.human_source_projection import (
 from prepare_ai_review_run import (
     AI_REVIEW_EVENT_SCHEMA,
     AI_REVIEW_MEETING_SCHEMA,
+    AI_REVIEW_RUN_SCHEMA,
     AI_REVIEW_TRAJECTORY_SCHEMA,
     POLICY_ID,
     digest_events,
     discover_meetings,
+    project_map_authority,
     validated_trajectory,
 )
 from push_redactions import _RejectRedirects, validate_base_url
@@ -116,20 +118,13 @@ def extract_bundles(run: pathlib.Path) -> list[dict]:
     except (OSError, RuntimeError, ValueError):
         raise SystemExit("SOURCE_PRIVACY_DIALOGUE_INPUT_INVALID") from None
     bundles = []
-    trajectories = run / "trajectories"
-    if trajectories.exists() or trajectories.is_symlink():
-        try:
-            trajectories = assert_literal_physical_path(trajectories).resolve(strict=True)
-            trajectory_dirs = sorted(trajectories.iterdir())
-            for traj_dir in trajectory_dirs:
-                if not traj_dir.is_dir():
-                    continue
-                traj_dir = assert_literal_physical_path(traj_dir).resolve(strict=True)
-                assert_literal_physical_path(traj_dir / "manifest.json")
-                assert_literal_physical_path(traj_dir / "events.jsonl")
-                bundles.append(extract_one(traj_dir))
-        except (OSError, RuntimeError, ValueError):
-            raise SystemExit("SOURCE_PRIVACY_DIALOGUE_INPUT_INVALID") from None
+    try:
+        for traj_dir in project_map_authority.indexed_trajectory_directories(run):
+            assert_literal_physical_path(traj_dir / "manifest.json")
+            assert_literal_physical_path(traj_dir / "events.jsonl")
+            bundles.append(extract_one(traj_dir))
+    except (OSError, RuntimeError, ValueError):
+        raise SystemExit("SOURCE_PRIVACY_DIALOGUE_INPUT_INVALID") from None
     for meeting in discover_meetings(
         run,
         expected_schema=AI_REVIEW_MEETING_SCHEMA,
@@ -198,7 +193,10 @@ def install_dialogue_output(out: pathlib.Path, authority: dict, bundles: list[di
         }
         with (temporary / "index.json").open("xb") as handle:
             handle.write(canonical_bundle_bytes(index))
-        rename_noreplace(temporary, literal)
+        try:
+            rename_noreplace(temporary, literal)
+        except FileExistsError:
+            raise SystemExit("SOURCE_PRIVACY_DIALOGUE_OUTPUT_EXISTS") from None
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)

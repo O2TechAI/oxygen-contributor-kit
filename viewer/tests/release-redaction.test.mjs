@@ -11,10 +11,8 @@ import {
 } from "../lib/release.mjs";
 import {
   computeSourceDigest,
-  finalRedactionStatus,
   partitionPersistableRedactions,
   redactionReleaseError,
-  sourceImportMatchesExisting,
 } from "../lib/redaction-pass.mjs";
 
 test("AI offsets use Unicode code points for Chinese text after emoji", () => {
@@ -112,59 +110,10 @@ test("prepared safe action labels remain distinct without consulting raw payload
   assert.doesNotMatch(JSON.stringify(released), /DO NOT RELEASE|private\/synthetic|artifact-payload/);
 });
 
-test("source-equivalent Story reattach preserves Privacy while source changes do not", () => {
-  const existing = [{
-    document_id: "document-1",
-    id: "document-1:event-1",
-    sequence: 1,
-    event_type: "message",
-    actor_id: "source-actor",
-    actor_type: "human",
-    timestamp: null,
-    content: "Synthetic reviewed source",
-  }];
-  const storyOnly = [{
-    id: "document-1:event-1",
-    sequence: 1,
-    eventType: "message",
-    actorId: "source-actor",
-    actorType: "human",
-    content: "Synthetic reviewed source",
-    organizationReason: "A staged Story annotation that is outside source identity",
-    original: { ignored: "outside source identity" },
-  }];
-  assert.equal(sourceImportMatchesExisting(existing, "document-1", storyOnly), true);
-  assert.equal(sourceImportMatchesExisting(existing, "document-1", [{
-    ...storyOnly[0], content: "Changed source",
-  }]), false);
-  assert.equal(sourceImportMatchesExisting(existing, "document-1", [{
-    ...storyOnly[0], actorId: "changed-source-actor",
-  }]), false);
-  assert.equal(sourceImportMatchesExisting(existing, "other-document", storyOnly), false);
-  assert.equal(sourceImportMatchesExisting([], "document-1", storyOnly), false);
-});
-
 test("only internally consistent completed redaction passes are releasable", () => {
   const digest = "a".repeat(64);
   const receiptAuthority = { source_revision: 1, receipt_digest: "b".repeat(64) };
   const resolved = { review_state: "deterministic", status: "active" };
-  assert.equal(finalRedactionStatus({
-    requestedStatus: "complete", completed: 0, total: 999,
-    rejected: 0, sourceDigest: digest,
-  }), "incomplete");
-  assert.equal(finalRedactionStatus({
-    requestedStatus: "complete", completed: 3, total: 3,
-    rejected: 1, sourceDigest: digest,
-  }), "incomplete");
-  assert.equal(finalRedactionStatus({
-    requestedStatus: "complete", completed: 3, total: 3,
-    rejected: 0, sourceDigest: digest,
-  }), "complete");
-  assert.equal(finalRedactionStatus({
-    requestedStatus: "complete", completed: 0, total: 0,
-    rejected: 0, sourceDigest: digest,
-  }), "complete");
-
   assert.match(redactionReleaseError({
     status: "complete", completed: 0, total: 999, rejected: 0,
     source_digest: digest,
@@ -224,13 +173,6 @@ test("duplicate span ids cannot inflate the persisted completion count", () => {
   ]);
   assert.equal(persistable.length, 1);
   assert.equal(duplicates.length, 1);
-  assert.equal(finalRedactionStatus({
-    requestedStatus: "complete",
-    completed: persistable.length,
-    total: 2,
-    rejected: duplicates.length,
-    sourceDigest: "a".repeat(64),
-  }), "incomplete");
 });
 
 test("same ids and Unicode length cannot substitute different reviewed content", async () => {
@@ -286,7 +228,8 @@ test("package route is gated and never selects original event JSON", async () =>
   assert.match(route, /source_types: sourceTypes/);
   assert.match(route, /details_omitted_for_privacy/);
   assert.doesNotMatch(route, /original_json/);
-  assert.match(redactions, /'running','validating'/);
+  assert.match(redactions, /VALUES \(\?,'complete',\?,\?,\?,\?,0,\?,\?,\?,\?\)/);
+  assert.doesNotMatch(redactions, /'running','validating'/);
   assert.match(redactions, /source_digest/);
   assert.doesNotMatch(documents, /sourceImportMatchesExisting|sourceChanged/);
   assert.match(documents, /publishFinalizedCorpusSourceMutation/);

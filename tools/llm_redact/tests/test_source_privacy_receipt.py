@@ -156,6 +156,32 @@ class SourcePrivacyReceiptTest(unittest.TestCase):
                     MERGE.main()
                 self.assertFalse(output.exists())
 
+    def test_merge_late_collision_preserves_owner_and_returns_fixed_error(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            dialogue, findings, _, _ = finalized_fixture(root)
+            receipt = root / "receipt.json"
+            self.assertEqual(self._verify(dialogue, findings, receipt), 0)
+            output = root / "merged"
+
+            def collide(_stage: Path, final: Path) -> None:
+                final.mkdir()
+                (final / "owner.txt").write_text("owner", encoding="utf-8")
+                raise FileExistsError
+
+            argv = [
+                "merge_and_apply.py", "--dialogue", str(dialogue),
+                "--findings", str(findings), "--out", str(output),
+                "--receipt", str(receipt),
+            ]
+            with mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(MERGE, "rename_noreplace", side_effect=collide), \
+                    self.assertRaisesRegex(SystemExit, "^SOURCE_PRIVACY_MERGE_OUTPUT_EXISTS$"):
+                MERGE.main()
+
+            self.assertEqual((output / "owner.txt").read_text(encoding="utf-8"), "owner")
+            self.assertEqual(list(root.glob(".merged.*.tmp")), [])
+
 
 if __name__ == "__main__":
     unittest.main()

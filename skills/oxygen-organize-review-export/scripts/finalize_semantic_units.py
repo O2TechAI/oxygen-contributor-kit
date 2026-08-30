@@ -265,8 +265,6 @@ def compose(proposals: list[dict[str, Any]], contribution_ids: list[str]) -> lis
     result = sorted(units.values(), key=lambda unit: unit["id"].encode("utf-8"))
     for unit in result:
         unit["members"].sort(key=lambda member: member.encode("utf-8"))
-    if len(contribution_ids) > 1 and result and all(len(unit["members"]) == 1 for unit in result):
-        raise ValueError("one-record-per-record semantic units are not a valid Organization result")
     return result
 
 

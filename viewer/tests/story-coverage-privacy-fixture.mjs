@@ -25,6 +25,7 @@ export async function seedCoveragePrivacyAuthority(db, {
   stories,
   now,
   projectId = "test-project",
+  redactions = [],
 }) {
   const itemResult = await db.prepare(`SELECT id,document_id,sequence,event_type,actor_id,
     actor_type,timestamp,content,original_json,organization_reason
@@ -130,10 +131,21 @@ export async function seedCoveragePrivacyAuthority(db, {
     VALUES (?,1,?,?,?,?)`).bind(
     workflowRunId, corpusDigest, documentCount, itemCount, now,
   ).run();
+  for (const [index, redaction] of redactions.entries()) {
+    await db.prepare(`INSERT INTO redactions
+      (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
+       review_state,uncertainty_reason,status,created_by,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,'active',?,?,?)`).bind(
+        `synthetic-source-redaction-${index + 1}`,
+        redaction.itemId, redaction.documentId, redaction.startOffset, redaction.endOffset,
+        redaction.category, redaction.confidence, redaction.reason, redaction.reviewState,
+        redaction.uncertaintyReason, redaction.createdBy, now, now,
+      ).run();
+  }
   const sourcePrivacyReceipt = await buildSourcePrivacyReceipt(db, {
     workflowRunId,
     sourceRevision,
-    redactions: [],
+    redactions,
   });
   await db.prepare(`INSERT INTO semantic_manifests
     (workflow_run_id,project_id,revision,source_revision,source_digest,universe_digest,
@@ -176,8 +188,9 @@ export async function seedCoveragePrivacyAuthority(db, {
   const sourcePrivacyJobId = `privacy-${workflowRunId}`;
   await db.prepare(`INSERT INTO redaction_jobs
     (id,status,stage,model,completed,total,rejected,source_digest,started_at,updated_at,completed_at)
-    VALUES (?,'complete','privacy',NULL,0,0,0,?,?,?,?)`).bind(
-    sourcePrivacyJobId, sourcePrivacyReceipt.sourceDigest, now, now, now,
+    VALUES (?,'complete','privacy',NULL,?,?,0,?,?,?,?)`).bind(
+    sourcePrivacyJobId, redactions.length, redactions.length,
+    sourcePrivacyReceipt.sourceDigest, now, now, now,
   ).run();
   await installSourcePrivacyReceipt(db, {
     jobId: sourcePrivacyJobId,

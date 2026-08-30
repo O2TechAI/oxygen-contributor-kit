@@ -149,7 +149,7 @@ function buildConfirmedReview(source) {
   return markChapterReady(human.state, context(source, human.state));
 }
 
-// Story/Release Privacy target roundtrip is deferred until Wave B supplies its real candidate authority.
+// Story/Release Privacy target choices live in the separate server-owned authority.
 test("Story edit and review data survive Apply, canonical session JSON, hydration, and reviewed Story reconstruction", () => {
   const source = parseStorySource(`${STORY_PREFIX}${JSON.stringify(sourceFixture())}`);
   assert.ok(source);

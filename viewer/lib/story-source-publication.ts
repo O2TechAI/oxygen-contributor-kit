@@ -37,6 +37,10 @@ export function activeStoryPrivacyInvalidationStatements(
       .bind(workflowRunId, workflowRunId),
     db.prepare(`DELETE FROM story_privacy_authorities
       WHERE workflow_run_id=? AND ${activeGuard}`).bind(workflowRunId, workflowRunId),
+    db.prepare(`DELETE FROM story_privacy_candidates
+      WHERE workflow_run_id=? AND ${activeGuard}`).bind(workflowRunId, workflowRunId),
+    db.prepare(`DELETE FROM story_privacy_targets
+      WHERE workflow_run_id=? AND ${activeGuard}`).bind(workflowRunId, workflowRunId),
     db.prepare(`UPDATE workflow_runs
       SET story_generation_status='blocked',active_story_digest=NULL,updated_at=?
       WHERE id=? AND story_generation_status='ready_for_human_review'`)
@@ -265,7 +269,7 @@ export async function publishActivatedStorySourceMutation(
         AND (SELECT COUNT(*) FROM story_preparation_receipts
           WHERE workflow_run_id=? AND source_revision=?
             AND lane IN ('story','insight','story_privacy','preference'))=4
-        AND (SELECT COUNT(*) FROM story_privacy_candidates
+        AND (SELECT COUNT(*) FROM story_privacy_targets
           WHERE workflow_run_id=?)=?
         AND EXISTS (SELECT 1 FROM probe_runs
           WHERE workflow_run_id=? AND source_revision=?

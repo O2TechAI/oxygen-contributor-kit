@@ -187,6 +187,12 @@ class UnicodeWorkflowTest(unittest.TestCase):
                     "cross_trajectory_semantic_replay_count": 0,
                 },
             }), encoding="utf-8")
+            (run / "index.json").write_text(json.dumps({
+                "schema": "oxygen.ai-review-run",
+                "tool": "prepare_ai_review_run",
+                "trajectory_count": 1,
+                "trajectories": [{"trajectory_id": "traj-unicode", "ok": True}],
+            }), encoding="utf-8")
             dialogue = Path(temporary, "dialogue output")
             source_authority = {
                 "workflowRunId": "unicode-run",

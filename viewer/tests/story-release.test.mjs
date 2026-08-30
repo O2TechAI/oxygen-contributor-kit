@@ -52,6 +52,7 @@ import {
 } from "../lib/story-readiness.ts";
 import { STORY_PREFIX } from "../lib/timeline.ts";
 import {
+  deriveStoryReleaseTargetContents,
   deriveStoryReleaseTargetCatalog,
   storyPreparationDigest,
 } from "../lib/story-preparation.ts";
@@ -222,7 +223,7 @@ test("multiple accepted AI Insights, rejection, optional title, and four-part Qu
   assert.doesNotMatch(JSON.stringify(projected), /"(?:anchorStoryBlockId|documentId|eventId|evidence|origin|appliedVersion|revisionHistory)"/);
 });
 
-test("AI source Quote has its own release Privacy target and suppression never substitutes Story prose", () => {
+test("AI source Quote uses its own exact release Privacy target", () => {
   const currentSource = source([insight("insight-quote-target")]);
   const quoteTarget = `${currentSource.key}::insight:insight-quote-target:quote`;
   assert.ok(deriveStoryReleaseTargetCatalog([currentSource]).some((target) => (
@@ -232,9 +233,9 @@ test("AI source Quote has its own release Privacy target and suppression never s
   const release = buildReviewedStoryRelease(
     [currentSource],
     { [currentSource.key]: reviewedState(currentSource) },
-    { redact: (copy) => copy, suppressedTargets: new Set([quoteTarget]) },
+    { project: (target, copy) => target === quoteTarget ? "Anonymous quotation" : copy },
   );
-  assert.deepEqual(releaseInsights(release), []);
+  assert.equal(releaseInsights(release)[0].quote, "Anonymous quotation");
   assert.deepEqual(release.chapters[0].en.story.blocks.map((block) => block.text),
     currentSource.story.blocks.map((block) => block.text));
 });
@@ -243,10 +244,15 @@ test("human-approved Insight releases with stable identity and no review provena
   const currentSource = source([]);
   const human = humanContent(currentSource);
   const state = reviewedState(currentSource, {}, [["human:release-boundary", human]]);
-  const release = buildReviewedStoryRelease([currentSource], { [currentSource.key]: state });
+  const quoteTarget = `${currentSource.key}::insight:human:release-boundary:quote`;
+  const release = buildReviewedStoryRelease(
+    [currentSource],
+    { [currentSource.key]: state },
+    { project: (target, copy) => target === quoteTarget ? "Anonymous human quotation" : copy },
+  );
   assert.deepEqual(releaseInsights(release), [{
     background: human.background,
-    quote: "approved Story text",
+    quote: "Anonymous human quotation",
     directlyAcquiredExperience: human.directlyAcquiredExperience,
     principle: human.principle,
   }]);
@@ -269,40 +275,6 @@ test("human Insight release ordering is UTF-8 byte stable across insertion order
   assert.deepEqual(releaseInsights(JSON.parse(leftBytes)).map((item) => item.background), [
     "accented-first", "cjk-second",
   ]);
-});
-
-test("human Quote Privacy is exact: selected bytes fail closed and redaction elsewhere does not broaden", () => {
-  const privacy = { redact: (copy) => copy.replaceAll(PRIVATE, '<redacted category="secret"/>') };
-
-  const elsewhere = source([]);
-  elsewhere.story.blocks[1].text = `The approved Story text states the safe boundary. ${PRIVATE}`;
-  const elsewhereHuman = humanContent(elsewhere);
-  const elsewhereRelease = buildReviewedStoryRelease(
-    [elsewhere],
-    { [elsewhere.key]: reviewedState(elsewhere, {}, [["human:elsewhere", elsewhereHuman]]) },
-    privacy,
-  );
-  assert.deepEqual(releaseInsights(elsewhereRelease), []);
-  assert.doesNotMatch(JSON.stringify(elsewhereRelease), new RegExp(PRIVATE));
-
-  const selected = source([]);
-  selected.story.blocks[1].text = `The approved ${PRIVATE} Story text states the safe boundary.`;
-  const start = selected.story.blocks[1].text.indexOf(PRIVATE);
-  const selectedHuman = humanContent(selected, {
-    quote: {
-      chapterKey: selected.key,
-      storyBlockId: "story-block-safe",
-      selection: { start, end: start + PRIVATE.length, text: PRIVATE },
-      baseRevision: 2,
-    },
-  });
-  const selectedRelease = buildReviewedStoryRelease(
-    [selected],
-    { [selected.key]: reviewedState(selected, {}, [["human:selected-private", selectedHuman]]) },
-    privacy,
-  );
-  assert.deepEqual(releaseInsights(selectedRelease), []);
-  assert.doesNotMatch(JSON.stringify(selectedRelease), new RegExp(PRIVATE));
 });
 
 test("pending, missing, and edited-without-reaccept story Insight state blocks release", () => {
@@ -330,37 +302,19 @@ test("pending, missing, and edited-without-reaccept story Insight state blocks r
   }).chapters, []);
 });
 
-test("Privacy precedes projection and redacted Quote anchors are omitted without substitution", () => {
-  const currentSource = source([
-    insight("insight-private-anchor", "story-block-private"),
-    insight("insight-safe-anchor", "story-block-safe", { background: `Background ${PRIVATE}` }),
-  ], { title: `Title ${PRIVATE}` });
-  const state = reviewedState(currentSource);
-  const privacy = { redact: (copy) => copy.replaceAll(PRIVATE, '<redacted category="secret"/>') };
-  const release = buildReviewedStoryRelease([currentSource], { [currentSource.key]: state }, privacy);
-  const serialized = serializeReviewedStoryRelease(release);
-  assert.ok(serialized);
-  assert.doesNotMatch(serialized, new RegExp(PRIVATE));
-  assert.deepEqual(release.chapters[0].en.story.blocks.map((block) => block.text), [
-    "The approved Story text states the safe boundary.",
-  ]);
-  assert.deepEqual(releaseInsights(release), []);
-  assert.equal(release.chapters[0].en.title, "[Redacted]");
-});
-
 test("story sanitizer strips every non-product field and canonicalizes Insight order", () => {
-  const currentSource = source([insight("insight-b"), insight("insight-a")]);
+  const currentSource = source([insight("insight-b"), insight("insight-a")], {}, "Safe detail");
   const release = buildReviewedStoryRelease(
     [currentSource],
     { [currentSource.key]: reviewedState(currentSource) },
-    { redact: (copy) => copy.replaceAll(PRIVATE, '<redacted category="secret"/>') },
   );
   const untrusted = structuredClone(release);
   untrusted.privateEvidence = PRIVATE;
   untrusted.chapters[0].anchors = [PRIVATE];
   untrusted.chapters[0].zh = { title: PRIVATE };
   untrusted.chapters[0].en.people[0].id = PRIVATE;
-  untrusted.chapters[0].en.story.blocks[0].insights[0].origin = "source_ai";
+  untrusted.chapters[0].en.story.blocks.find((block) => block.insights.length > 0)
+    .insights[0].origin = "source_ai";
   const sanitized = sanitizeReviewedStoryRelease(untrusted);
   assert.ok(sanitized);
   assert.equal(releaseInsights(sanitized).length, 2);
@@ -377,7 +331,8 @@ async function sha256(value) {
 
 class FakeStoryReleaseDb {
   constructor({ items, run, session, redactionJob, redactions = [], receipts, probeRun,
-    releaseConfirmation, completeness, sourcePrivacyReceipt, finalizedCorpus }) {
+    releaseConfirmation, completeness, sourcePrivacyReceipt, finalizedCorpus,
+    storyPrivacyCandidates = [], storyPrivacyTargets = [] }) {
     this.items = items;
     this.runs = new Map([[run.id, run]]);
     this.session = session;
@@ -389,6 +344,8 @@ class FakeStoryReleaseDb {
     this.probeRun = probeRun;
     this.releaseConfirmation = releaseConfirmation;
     this.completeness = completeness;
+    this.storyPrivacyCandidates = storyPrivacyCandidates;
+    this.storyPrivacyTargets = storyPrivacyTargets;
   }
 
   prepare(sql) {
@@ -426,7 +383,12 @@ class FakeStoryReleaseDb {
           return { results: structuredClone(this.completeness.coverageRows) };
         }
         if (/FROM story_privacy_authorities/.test(sql)) return { results: [] };
-        if (/FROM story_privacy_candidates/.test(sql)) return { results: [] };
+        if (/FROM story_privacy_candidates/.test(sql)) {
+          return { results: structuredClone(this.storyPrivacyCandidates) };
+        }
+        if (/FROM story_privacy_targets/.test(sql)) {
+          return { results: structuredClone(this.storyPrivacyTargets) };
+        }
         if (/FROM probe_runs/.test(sql)) return { results: this.probeRun ? [structuredClone(this.probeRun)] : [] };
         if (/FROM probes/.test(sql)) return { results: [] };
         if (/FROM probe_bulk_decisions/.test(sql)) return { results: [] };
@@ -629,10 +591,58 @@ async function serverFixture({
   };
   const emptyDigest = await storyPreparationDigest([]);
   const completeDigest = await storyPreparationDigest([{ id: item.id, story: currentSource }]);
-  const catalog = deriveStoryReleaseTargetCatalog([currentSource]);
+  const completedAt = "2026-08-25T00:00:09.000Z";
+  const targetContents = deriveStoryReleaseTargetContents([currentSource]);
+  assert.ok(targetContents);
+  const catalog = targetContents.map(({ id, storyKey, target }) => ({ id, storyKey, target }));
+  const privateTargetId = `${currentSource.key}::story:story-block-private`;
+  const privacyCandidates = initiallyRedacted ? [{
+    id: "story-private-detail",
+    reviewState: "deterministic",
+    title: "Private source detail",
+    whyFlagged: "The exact private source fragment has a bounded Agent proposal.",
+    uncertaintyReason: null,
+    releaseTargets: [privateTargetId],
+  }] : [];
+  const targetProposals = await Promise.all(targetContents.map(async (target) => {
+    const targetContentDigest = await storyPreparationDigest(target.content);
+    if (!initiallyRedacted || target.id !== privateTargetId) {
+      return { targetId: target.id, targetContentDigest, proposedText: target.content, occurrences: [] };
+    }
+    const start = Array.from("The ").length;
+    const end = start + Array.from(storyPrivate).length;
+    const replacement = "[Private detail abstracted]";
+    return {
+      targetId: target.id,
+      targetContentDigest,
+      proposedText: `The ${replacement} was removed.`,
+      occurrences: [{
+        originalStartOffset: start,
+        originalEndOffset: end,
+        proposalStartOffset: start,
+        proposalEndOffset: start + Array.from(replacement).length,
+        category: "sensitive",
+      }],
+    };
+  }));
+  const privacy = { candidates: privacyCandidates, targetProposals };
+  const storyPrivacyCandidates = privacyCandidates.map((candidate) => ({
+    workflow_run_id: RUN_ID,
+    candidate_id: candidate.id,
+    candidate_json: JSON.stringify(candidate),
+  }));
+  const storyPrivacyTargets = targetProposals.map((proposal) => ({
+    workflow_run_id: RUN_ID,
+    target_id: proposal.targetId,
+    target_content_digest: proposal.targetContentDigest,
+    proposed_text: proposal.proposedText,
+    occurrences_json: JSON.stringify(proposal.occurrences),
+    selected_text: proposal.proposedText,
+    public_overrides_json: "[]",
+    decided_at: completedAt,
+  }));
   const scopeDigest = await storyPreparationDigest(catalog.map((target) => target.id));
   const otherDigest = "a".repeat(64);
-  const completedAt = "2026-08-25T00:00:09.000Z";
   const receipts = [
     { workflow_run_id: RUN_ID, lane: "story", source_revision: SOURCE_REVISION,
       input_digest: otherDigest, scope_digest: otherDigest, scope_count: 1,
@@ -643,7 +653,8 @@ async function serverFixture({
       output_count: sourceInsights.length, completed_at: completedAt },
     { workflow_run_id: RUN_ID, lane: "story_privacy", source_revision: SOURCE_REVISION,
       input_digest: completeDigest, scope_digest: scopeDigest, scope_count: catalog.length,
-      output_digest: emptyDigest, output_count: 0, completed_at: completedAt },
+      output_digest: await storyPreparationDigest(privacy), output_count: targetProposals.length,
+      completed_at: completedAt },
     { workflow_run_id: RUN_ID, lane: "preference", source_revision: SOURCE_REVISION,
       input_digest: emptyDigest, scope_digest: emptyDigest, scope_count: 0,
       output_digest: emptyDigest, output_count: 0, completed_at: completedAt },
@@ -703,6 +714,8 @@ async function serverFixture({
       status: "complete", stage: "preference", model: null, generated: 0, set_aside: 0,
     },
     releaseConfirmation: null,
+    storyPrivacyCandidates,
+    storyPrivacyTargets,
     completeness: {
       semantic,
       manifestRow: {
@@ -927,8 +940,26 @@ test("server accepts only the canonical contracts and rechecks run, version, sou
   assert.equal(release.ok, true);
   assert.equal(release.story.schema, REVIEWED_STORY_SCHEMA);
   assert.equal(release.story.publication_approved, false);
-  assert.deepEqual(releaseInsights(release.story).map((item) => item.background), ["Background insight-safe-anchor"]);
+  assert.deepEqual(releaseInsights(release.story).map((item) => item.background), [
+    "Background insight-private-anchor", "Background insight-safe-anchor",
+  ]);
+  assert.equal(release.story.chapters[0].en.story.blocks[0].text,
+    "The [Private detail abstracted] was removed.");
   assert.doesNotMatch(release.serializedStory, new RegExp(`${PRIVATE}|documentId|eventId|story-block-|source_ai`));
+
+  const pendingRow = db.storyPrivacyTargets[0];
+  const selectedText = pendingRow.selected_text;
+  const decidedAt = pendingRow.decided_at;
+  pendingRow.selected_text = null;
+  pendingRow.decided_at = null;
+  assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request())).code,
+    RELEASE_ERROR.storyPrivacyPending);
+  pendingRow.selected_text = selectedText;
+  pendingRow.decided_at = decidedAt;
+  const missingTarget = db.storyPrivacyTargets.pop();
+  assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request())).code,
+    RELEASE_ERROR.preparationInvalid);
+  db.storyPrivacyTargets.push(missingTarget);
 
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db,
     request({ workflowRunId: "wrong-run" }))).code, RELEASE_ERROR.runConflict);
@@ -1016,19 +1047,22 @@ test("missing, unknown, or pending Privacy blocks release while confirmed keep a
   assert.match(kept.serializedStory, new RegExp(PRIVATE));
   assert.equal(kept.story.chapters[0].en.story.blocks[0].text, `The ${PRIVATE} was removed.`);
 
-  const redactFixture = await serverFixture({ initiallyRedacted: false });
+  const redactFixture = await serverFixture();
   const redactItem = redactFixture.db.items[0];
   assert.match(redactItem.content, new RegExp(PRIVATE), "the private sentinel must exist in the reconstructed input");
   assert.match(redactItem.organization_reason, new RegExp(PRIVATE), "the private sentinel must exist in the Story source input");
   redactFixture.db.redactionJob.completed = 1;
   redactFixture.db.redactionJob.total = 1;
   redactFixture.db.redactions = [{
-    ...keepFixture.db.redactions[0],
+    ...redactFixture.db.redactions[0],
     id: "review-redact",
     item_id: redactItem.id,
     document_id: redactItem.document_id,
     review_state: "confirmed_redact",
     status: "active",
+    reason: LOCAL_REVIEW_REASON_SENTINEL,
+    uncertainty_reason: LOCAL_UNCERTAINTY_SENTINEL,
+    created_by: "contributor",
   }];
   await rebindFakeSourcePrivacyReceipt(redactFixture);
   await rebindFixtureCoveragePrivacy(redactFixture);
@@ -1143,33 +1177,19 @@ test("anchored Story Privacy mutation before finalization cannot release stale Q
   assert.doesNotMatch(JSON.stringify(result), new RegExp(PRIVATE_STORY_QUOTE_SENTINEL));
 });
 
-test("a contributor review decision during Story assembly fails the snapshot race closed", async () => {
+test("a Story Privacy target choice during assembly fails the snapshot race closed", async () => {
   const fixture = await serverFixture();
-  fixture.db.redactions[0] = {
-    ...fixture.db.redactions[0],
-    id: "decision-race",
-    document_id: fixture.db.items[0].document_id,
-    review_state: "confirmed_redact",
-    uncertainty_reason: LOCAL_UNCERTAINTY_SENTINEL,
-    reason: LOCAL_REVIEW_REASON_SENTINEL,
-    created_by: "contributor",
-    created_at: "2026-08-25T00:00:03.000Z",
-    updated_at: "2026-08-25T00:00:03.000Z",
-  };
-  await rebindFakeSourcePrivacyReceipt(fixture);
-  await rebindFixtureCoveragePrivacy(fixture);
-  await refreshFakeGate(fixture.db);
+  const target = fixture.db.storyPrivacyTargets.find((row) => (
+    row.target_id === "chapter-release::overview"
+  ));
+  assert.ok(target);
   const result = await reconstructReviewedStoryReleaseFromDatabase(
     fixture.db,
     request(),
     {
       beforeFinalPrivacyCheck: () => {
-        fixture.db.redactions[0] = {
-          ...fixture.db.redactions[0],
-          review_state: "confirmed_keep",
-          status: "removed",
-          updated_at: "2026-08-25T00:00:04.000Z",
-        };
+        target.selected_text = "Late contributor-selected bytes";
+        target.decided_at = "2026-08-25T00:00:20.000Z";
       },
     },
   );
@@ -1179,13 +1199,35 @@ test("a contributor review decision during Story assembly fails the snapshot rac
   ));
 });
 
+test("a confirmation timestamp mutation during assembly fails closed", async () => {
+  const fixture = await serverFixture();
+  const result = await reconstructReviewedStoryReleaseFromDatabase(
+    fixture.db,
+    request(),
+    {
+      beforeFinalPrivacyCheck: () => {
+        fixture.db.releaseConfirmation.confirmed_at = "2026-08-25T00:00:20.000Z";
+      },
+    },
+  );
+  assert.equal(result.code, RELEASE_ERROR.privacyConflict);
+});
+
 test("story HTML and ZIP use the same canonical reviewed release bytes", async () => {
   const safeHtmlEscapeSentinel = "SAFE_HTML_ESCAPE_</script><script>";
+  const exactSelectedBytes = "EXACT_AGENT_SELECTED_BYTES";
   const { db } = await serverFixture({
     sourceInsights: [insight("insight-html-escape", "story-block-safe", {
       background: safeHtmlEscapeSentinel,
     })],
   });
+  const selectedTarget = db.storyPrivacyTargets.find((row) => (
+    row.target_id === "chapter-release::overview"
+  ));
+  assert.ok(selectedTarget);
+  selectedTarget.selected_text = exactSelectedBytes;
+  selectedTarget.decided_at = "2026-08-25T00:00:20.000Z";
+  await refreshFakeGate(db);
   const release = await reconstructReviewedStoryReleaseFromDatabase(db, request());
   assert.equal(release.ok, true);
   const htmlModule = await import("../app/api/organization/export/route.ts");
@@ -1196,6 +1238,9 @@ test("story HTML and ZIP use the same canonical reviewed release bytes", async (
   const zipEntry = reviewedStoryPackageEntry(release.story);
   assert.equal(zipEntry.name, "story/reviewed-project-story.json");
   assert.equal(zipEntry.data, release.serializedStory);
+  assert.match(release.serializedStory, new RegExp(exactSelectedBytes));
+  assert.match(html, new RegExp(exactSelectedBytes));
+  assert.match(zipEntry.data, new RegExp(exactSelectedBytes));
   assert.match(zipEntry.data, new RegExp(safeHtmlEscapeSentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.equal(html.includes(safeHtmlEscapeSentinel), false, "HTML embedding must escape script-sensitive JSON copy");
   assert.deepEqual(JSON.parse(embedded), JSON.parse(zipEntry.data));

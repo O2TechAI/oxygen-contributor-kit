@@ -68,3 +68,19 @@ def rename_noreplace(source: Path, destination: Path) -> None:
     """Atomically rename one sibling entry without replacing the destination."""
     _same_parent(source, destination)
     _rename_noreplace(source, destination)
+
+
+def _main(arguments: list[str]) -> int:
+    if len(arguments) != 2:
+        return 64
+    try:
+        rename_noreplace(Path(arguments[0]), Path(arguments[1]))
+    except FileExistsError:
+        return 17
+    except OSError:
+        return 18
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main(sys.argv[1:]))

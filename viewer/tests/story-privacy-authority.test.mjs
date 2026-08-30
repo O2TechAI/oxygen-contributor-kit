@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { storyPreparationDigest } from "../lib/story-preparation.ts";
+import {
+  deriveStoryReleaseTargetContents,
+  normalizeStoryPrivacyOutput,
+  storyPreparationDigest,
+} from "../lib/story-preparation.ts";
 import { seedCoveragePrivacyAuthority } from "./story-coverage-privacy-fixture.mjs";
 
 registerHooks({
@@ -24,7 +28,7 @@ registerHooks({
 
 const RUN_ID = "story-privacy-run";
 const SOURCE_REVISION = 7;
-const EMPTY_DIGEST = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
+const DECIDED_AT = "2041-01-01T00:00:00.000Z";
 const utf8Sort = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
 
 function story(key) {
@@ -51,15 +55,8 @@ function story(key) {
 }
 
 const STORIES = [story("a"), story("b")];
-const STORY_ROWS = STORIES.map((source) => ({
-  id: `doc:${source.key}`,
-  summary: `oxygen.story:${JSON.stringify(source)}`,
-}));
-let ACTIVE_DIGEST = await storyPreparationDigest(STORY_ROWS);
-let STORY_PRIVACY_INPUT_DIGEST = await storyPreparationDigest(STORIES.map((source) => ({
-  id: `doc:${source.key}`,
-  story: source,
-})));
+let ACTIVE_DIGEST = "";
+let STORY_PRIVACY_INPUT_DIGEST = "";
 
 const deterministic = {
   id: "deterministic-candidate",
@@ -72,7 +69,7 @@ const deterministic = {
 const crossChapter = {
   id: "candidate-cross-chapter",
   reviewState: "needs_confirmation",
-  title: "One global decision",
+  title: "One candidate, two target choices",
   whyFlagged: "The candidate affects two Chapters.",
   uncertaintyReason: "Contributor confirmation is required.",
   releaseTargets: ["a::title", "b::story:block-b"],
@@ -94,57 +91,136 @@ const astralId = {
   releaseTargets: ["b::title"],
 };
 
+async function proposalFor(target, category) {
+  const targetContentDigest = await storyPreparationDigest(target.content);
+  if (!category) {
+    return {
+      targetId: target.id,
+      targetContentDigest,
+      proposedText: target.content,
+      occurrences: [],
+    };
+  }
+  const original = Array.from(target.content);
+  let originalEndOffset = original.length;
+  while (originalEndOffset > 0 && !/[\p{L}\p{N}_-]/u.test(original[originalEndOffset - 1])) {
+    originalEndOffset -= 1;
+  }
+  let originalStartOffset = originalEndOffset;
+  while (originalStartOffset > 0 && /[\p{L}\p{N}_-]/u.test(original[originalStartOffset - 1])) {
+    originalStartOffset -= 1;
+  }
+  assert.ok(originalStartOffset < originalEndOffset);
+  const proposedText = "Anonymous";
+  const proposal = [
+    ...original.slice(0, originalStartOffset),
+    ...Array.from(proposedText),
+    ...original.slice(originalEndOffset),
+  ].join("");
+  return {
+    targetId: target.id,
+    targetContentDigest,
+    proposedText: proposal,
+    occurrences: [{
+      originalStartOffset,
+      originalEndOffset,
+      proposalStartOffset: originalStartOffset,
+      proposalEndOffset: originalStartOffset + Array.from(proposedText).length,
+      category,
+    }],
+  };
+}
+
+async function replaceAuthority(db, candidates, { credentialTargets = [] } = {}) {
+  const targets = deriveStoryReleaseTargetContents(STORIES);
+  assert.ok(targets);
+  const categories = new Map(candidates.flatMap((candidate) => candidate.releaseTargets)
+    .map((targetId) => [targetId, credentialTargets.includes(targetId)
+      ? "credential" : "private-identity"]));
+  const privacy = await normalizeStoryPrivacyOutput({
+    candidates,
+    targetProposals: await Promise.all(targets
+      .map((target) => proposalFor(target, categories.get(target.id)))),
+  }, targets);
+  assert.ok(privacy);
+  const pending = new Set(privacy.candidates
+    .filter((candidate) => candidate.reviewState === "needs_confirmation")
+    .flatMap((candidate) => candidate.releaseTargets));
+
+  await db.prepare("DELETE FROM story_privacy_candidates WHERE workflow_run_id=?").bind(RUN_ID).run();
+  await db.prepare("DELETE FROM story_privacy_targets WHERE workflow_run_id=?").bind(RUN_ID).run();
+  await db.prepare("DELETE FROM story_privacy_authorities WHERE workflow_run_id=?").bind(RUN_ID).run();
+  await db.prepare("DELETE FROM story_preparation_receipts WHERE workflow_run_id=? AND lane='story_privacy'")
+    .bind(RUN_ID).run();
+  await db.prepare(`INSERT INTO story_preparation_receipts
+    (workflow_run_id,lane,source_revision,input_digest,scope_digest,scope_count,
+     output_digest,output_count,completed_at) VALUES (?,'story_privacy',?,?,?,?,?,?,?)`).bind(
+    RUN_ID,
+    SOURCE_REVISION,
+    STORY_PRIVACY_INPUT_DIGEST,
+    await storyPreparationDigest(targets.map((target) => target.id)),
+    targets.length,
+    await storyPreparationDigest(privacy),
+    privacy.targetProposals.length,
+    DECIDED_AT,
+  ).run();
+  for (const candidate of privacy.candidates) {
+    await db.prepare(`INSERT INTO story_privacy_candidates
+      (workflow_run_id,candidate_id,candidate_json) VALUES (?,?,?)`)
+      .bind(RUN_ID, candidate.id, JSON.stringify(candidate)).run();
+  }
+  for (const proposal of privacy.targetProposals) {
+    const unresolved = pending.has(proposal.targetId);
+    await db.prepare(`INSERT INTO story_privacy_targets
+      (workflow_run_id,target_id,target_content_digest,proposed_text,occurrences_json,
+       selected_text,public_overrides_json,decided_at) VALUES (?,?,?,?,?,?,'[]',?)`).bind(
+      RUN_ID,
+      proposal.targetId,
+      proposal.targetContentDigest,
+      proposal.proposedText,
+      JSON.stringify(proposal.occurrences),
+      unresolved ? null : proposal.proposedText,
+      unresolved ? null : DECIDED_AT,
+    ).run();
+  }
+  return privacy;
+}
+
 async function insertAuthority(db, candidates) {
   await db.prepare(`INSERT INTO workflow_runs
     (id,story_generation_status,story_source_revision,active_story_digest,created_at,updated_at)
     VALUES (?,'ready_for_human_review',?,?,?,?)`)
-    .bind(RUN_ID, SOURCE_REVISION, ACTIVE_DIGEST, "2041-01-01T00:00:00.000Z", "2041-01-01T00:00:00.000Z").run();
+    .bind(RUN_ID, SOURCE_REVISION, "0".repeat(64), DECIDED_AT, DECIDED_AT).run();
   await db.prepare(`INSERT INTO documents
     (id,kind,title,item_count,imported_at,updated_at)
-    VALUES ('doc','trajectory','Synthetic source',?,?,?)`).bind(
-    STORIES.length, "2041-01-01T00:00:00.000Z", "2041-01-01T00:00:00.000Z",
-  ).run();
+    VALUES ('doc','trajectory','Synthetic source',?,?,?)`)
+    .bind(STORIES.length, DECIDED_AT, DECIDED_AT).run();
   for (const [sequence, source] of STORIES.entries()) {
     await db.prepare(`INSERT INTO items
       (id,document_id,sequence,timestamp,content,original_json,organization_reason,
        event_type,actor_id,actor_type)
       VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(
-      `doc:${source.key}`, "doc", sequence + 1, null, "private source", "{}",
+      `doc:${source.key}`,
+      "doc",
+      sequence + 1,
+      null,
+      "private source",
+      "{}",
       `oxygen.story:${JSON.stringify(source)}`,
-      "message", `contributor-${source.key}`, "human",
+      "message",
+      `contributor-${source.key}`,
+      "human",
     ).run();
   }
   const seeded = await seedCoveragePrivacyAuthority(db, {
     workflowRunId: RUN_ID,
     sourceRevision: SOURCE_REVISION,
     stories: STORIES,
-    now: "2041-01-01T00:00:00.000Z",
+    now: DECIDED_AT,
   });
   ACTIVE_DIGEST = seeded.activeStoryDigest;
   STORY_PRIVACY_INPUT_DIGEST = seeded.storyPrivacyInputDigest;
-  STORIES.forEach((source, index) => {
-    STORY_ROWS[index].summary = `oxygen.story:${JSON.stringify(source)}`;
-  });
-  return replaceCandidates(db, candidates);
-}
-
-async function replaceCandidates(db, candidates) {
-  const ordered = structuredClone(candidates).sort((left, right) => utf8Sort(left.id, right.id));
-  const digest = await storyPreparationDigest(ordered);
-  await db.prepare("DELETE FROM story_privacy_candidates WHERE workflow_run_id=?").bind(RUN_ID).run();
-  await db.prepare("DELETE FROM story_preparation_receipts WHERE workflow_run_id=? AND lane='story_privacy'")
-    .bind(RUN_ID).run();
-  await db.prepare(`INSERT INTO story_preparation_receipts
-    (workflow_run_id,lane,source_revision,input_digest,scope_digest,scope_count,
-     output_digest,output_count,completed_at) VALUES (?,'story_privacy',?,?,?,?,?,?,?)`)
-    .bind(RUN_ID, SOURCE_REVISION, STORY_PRIVACY_INPUT_DIGEST, "e".repeat(64), 1,
-      digest, ordered.length, "2041-01-01T00:00:00.000Z").run();
-  for (const candidate of ordered) {
-    await db.prepare(`INSERT INTO story_privacy_candidates
-      (workflow_run_id,candidate_id,candidate_json) VALUES (?,?,?)`)
-      .bind(RUN_ID, candidate.id, JSON.stringify(candidate)).run();
-  }
-  return digest;
+  return replaceAuthority(db, candidates);
 }
 
 const get = (route, workflowRunId = RUN_ID) => route.GET(new Request(
@@ -154,18 +230,33 @@ const patch = (route, id, body) => route.PATCH(new Request(
   `http://localhost/api/story-privacy/${encodeURIComponent(id)}`,
   { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
 ), { params: Promise.resolve({ id }) });
+const targetChoice = (authority, targetId, choice = { editedText: null, publicOverrides: [] }) => {
+  const target = authority.targets.find((value) => value.targetId === targetId);
+  assert.ok(target);
+  return {
+    workflowRunId: authority.workflowRunId,
+    sourceRevision: authority.sourceRevision,
+    activeStoryDigest: authority.activeStoryDigest,
+    authorityDigest: authority.authorityDigest,
+    targetContentDigest: target.targetContentDigest,
+    ...choice,
+  };
+};
+const targetRow = (db, targetId) => db.prepare(`SELECT target_content_digest,proposed_text,
+  occurrences_json,selected_text,public_overrides_json,decided_at
+  FROM story_privacy_targets WHERE workflow_run_id=? AND target_id=?`).bind(RUN_ID, targetId).first();
 
-test("Story Privacy routes expose only current flat authority and fail closed", async () => {
+test("Story Privacy routes expose one exact target-choice authority and fail closed", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "oxygen-story-privacy-authority-"));
   const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
   process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
   try {
-    const [{ getLocalDatabase }, collectionRoute, candidateRoute] = await Promise.all([
+    const [{ getLocalDatabase }, collectionRoute, targetRoute] = await Promise.all([
       import("../db/index.ts"),
       import("../app/api/story-privacy/route.ts"),
       import("../app/api/story-privacy/[id]/route.ts"),
     ]);
-    assert.equal("DELETE" in candidateRoute, false);
+    assert.equal("DELETE" in targetRoute, false);
     const db = await getLocalDatabase();
     const candidates = [astralId, crossChapter, deterministic, privateUseId];
     await insertAuthority(db, candidates);
@@ -174,191 +265,185 @@ test("Story Privacy routes expose only current flat authority and fail closed", 
     assert.equal(currentResponse.status, 200);
     assert.equal(currentResponse.headers.get("cache-control"), "no-store, max-age=0");
     const current = await currentResponse.json();
-    const candidateDigest = current.candidateDigest;
-    assert.deepEqual(current, {
-      workflowRunId: RUN_ID,
-      sourceRevision: SOURCE_REVISION,
-      activeStoryDigest: ACTIVE_DIGEST,
-      candidateDigest,
-      status: "completed_with_candidates",
-      candidates: [crossChapter, deterministic, privateUseId, astralId]
-        .sort((left, right) => utf8Sort(left.id, right.id))
-        .map((candidate) => ({ ...candidate, decision: null, decisionVersion: 0, decidedAt: null })),
-    });
-    assert.equal(current.candidates.filter((candidate) => candidate.id === crossChapter.id).length, 1);
-    assert.equal(JSON.stringify(current).includes("PRIVATE_SOURCE_SENTINEL"), false);
-    assert.equal(JSON.stringify(current).includes("candidate_json"), false);
-    assert.deepEqual(Object.keys(current.candidates[0]).sort(), [
-      "decidedAt", "decision", "decisionVersion", "id", "releaseTargets", "reviewState",
-      "title", "uncertaintyReason", "whyFlagged",
+    assert.deepEqual(Object.keys(current).sort(), [
+      "activeStoryDigest", "authorityDigest", "candidates", "sourceRevision",
+      "status", "targets", "workflowRunId",
     ].sort());
-    await db.prepare(`UPDATE story_privacy_candidates
-      SET decision='keep',decision_version=1,decided_at='2041-01-02T00:00:00.000Z'
-      WHERE candidate_id=?`).bind(deterministic.id).run();
-    assert.equal((await get(collectionRoute)).status, 409);
-    await db.prepare(`UPDATE story_privacy_candidates
-      SET decision=NULL,decision_version=0,decided_at=NULL WHERE candidate_id=?`)
-      .bind(deterministic.id).run();
+    assert.equal(current.workflowRunId, RUN_ID);
+    assert.equal(current.sourceRevision, SOURCE_REVISION);
+    assert.equal(current.activeStoryDigest, ACTIVE_DIGEST);
+    assert.match(current.authorityDigest, /^[0-9a-f]{64}$/u);
+    assert.equal(current.status, "completed_with_candidates");
+    assert.deepEqual(current.candidates, candidates
+      .sort((left, right) => utf8Sort(left.id, right.id))
+      .map((candidate) => ({
+        ...candidate,
+        resolved: candidate.reviewState === "deterministic",
+      })));
+    assert.equal(current.targets.length, deriveStoryReleaseTargetContents(STORIES).length);
+    assert.equal(current.targets.find((target) => target.targetId === "a::overview").selectedText,
+      "Anonymous");
+    assert.equal(current.targets.find((target) => target.targetId === "a::title").selectedText, null);
+    assert.deepEqual(Object.keys(current.targets[0]).sort(), [
+      "decidedAt", "edited", "occurrences", "originalText", "proposedText",
+      "selectedText", "targetContentDigest", "targetId",
+    ].sort());
+    assert.equal(JSON.stringify(current).includes("candidate_json"), false);
+    assert.equal(JSON.stringify(current).includes("PRIVATE_PROVIDER_SENTINEL"), false);
 
-    const binding = {
-      workflowRunId: RUN_ID,
-      sourceRevision: SOURCE_REVISION,
-      activeStoryDigest: ACTIVE_DIGEST,
-      candidateDigest,
-      expectedVersion: 0,
-      decision: "keep",
-    };
-    const undecided = {
-      decision: null, decision_version: 0, decided_at: null,
-    };
-    await db.prepare("UPDATE workflow_runs SET active_story_digest=? WHERE id=?")
-      .bind("f".repeat(64), RUN_ID).run();
-    assert.equal((await get(collectionRoute)).status, 409);
-    assert.equal((await patch(candidateRoute, crossChapter.id, binding)).status, 409);
-    assert.deepEqual(await db.prepare(`SELECT decision,decision_version,decided_at
-      FROM story_privacy_candidates WHERE candidate_id=?`).bind(crossChapter.id).first(), undecided);
-    await db.prepare("UPDATE workflow_runs SET active_story_digest=? WHERE id=?")
-      .bind(ACTIVE_DIGEST, RUN_ID).run();
-
-    const mutatedStory = { ...STORIES[0], overview: "Changed Story text with the same release targets." };
-    await db.prepare("UPDATE items SET organization_reason=? WHERE id=?")
-      .bind(`oxygen.story:${JSON.stringify(mutatedStory)}`, STORY_ROWS[0].id).run();
-    assert.equal((await get(collectionRoute)).status, 409);
-    assert.equal((await patch(candidateRoute, crossChapter.id, binding)).status, 409);
-    assert.deepEqual(await db.prepare(`SELECT decision,decision_version,decided_at
-      FROM story_privacy_candidates WHERE candidate_id=?`).bind(crossChapter.id).first(), undecided);
-    await db.prepare("UPDATE items SET organization_reason=? WHERE id=?")
-      .bind(STORY_ROWS[0].summary, STORY_ROWS[0].id).run();
-
-    assert.equal((await patch(candidateRoute, deterministic.id, binding)).status, 409);
-    assert.equal((await patch(candidateRoute, "missing-candidate", binding)).status, 404);
-
+    const firstTarget = "a::title";
+    const originalRow = await targetRow(db, firstTarget);
     for (const invalid of [
-      { ...binding, decision: "toggle" },
-      { ...binding, expectedVersion: 1 },
-      { ...binding, decidedAt: "1999-01-01T00:00:00.000Z" },
-      { ...binding, clear: true },
-      { ...binding, candidateDigest: "not-a-digest" },
-      Object.fromEntries(Object.entries(binding).filter(([key]) => key !== "activeStoryDigest")),
+      { ...targetChoice(current, firstTarget), extra: true },
+      { ...targetChoice(current, firstTarget), authorityDigest: "not-a-digest" },
+      { ...targetChoice(current, firstTarget), editedText: "Public", publicOverrides: [{
+        originalStartOffset: 0, originalEndOffset: 1, category: "private-identity",
+      }] },
+      Object.fromEntries(Object.entries(targetChoice(current, firstTarget))
+        .filter(([key]) => key !== "activeStoryDigest")),
     ]) {
-      assert.equal((await patch(candidateRoute, crossChapter.id, invalid)).status, 400);
+      assert.equal((await patch(targetRoute, firstTarget, invalid)).status, 400);
+      assert.deepEqual(await targetRow(db, firstTarget), originalRow);
     }
     for (const stale of [
-      { ...binding, sourceRevision: SOURCE_REVISION - 1 },
-      { ...binding, activeStoryDigest: "f".repeat(64) },
-      { ...binding, candidateDigest: "0".repeat(64) },
+      { ...targetChoice(current, firstTarget), sourceRevision: SOURCE_REVISION - 1 },
+      { ...targetChoice(current, firstTarget), activeStoryDigest: "f".repeat(64) },
+      { ...targetChoice(current, firstTarget), authorityDigest: "f".repeat(64) },
     ]) {
-      assert.equal((await patch(candidateRoute, crossChapter.id, stale)).status, 409);
+      assert.equal((await patch(targetRoute, firstTarget, stale)).status, 409);
+      assert.deepEqual(await targetRow(db, firstTarget), originalRow);
     }
+    assert.equal((await patch(targetRoute, firstTarget, {
+      ...targetChoice(current, firstTarget),
+      targetContentDigest: "f".repeat(64),
+    })).status, 404);
+    assert.equal((await patch(targetRoute, "missing-target", targetChoice(current, firstTarget))).status, 404);
+    assert.deepEqual(await targetRow(db, firstTarget), originalRow);
 
-    const started = Date.now();
-    const keptResponse = await patch(candidateRoute, crossChapter.id, binding);
-    assert.equal(keptResponse.status, 200);
-    const kept = await keptResponse.json();
-    assert.equal(kept.decision, "keep");
-    assert.equal(kept.decisionVersion, 1);
-    assert.ok(Date.parse(kept.decidedAt) >= started);
-    assert.notEqual(kept.decidedAt, "1999-01-01T00:00:00.000Z");
-    assert.equal((await patch(candidateRoute, crossChapter.id, binding)).status, 409);
-    const persistedKeep = await db.prepare(`SELECT decision,decision_version,decided_at
-      FROM story_privacy_candidates WHERE candidate_id=?`).bind(crossChapter.id).first();
-    assert.deepEqual(persistedKeep, {
-      decision: "keep", decision_version: 1, decided_at: kept.decidedAt,
-    });
+    await db.prepare(`INSERT INTO project_release_confirmations
+      (workflow_run_id,review_gate_digest,confirmed_at) VALUES (?,?,?)`)
+      .bind(RUN_ID, "1".repeat(64), DECIDED_AT).run();
+    await db.prepare(`CREATE TRIGGER fail_story_privacy_confirmation_delete
+      BEFORE DELETE ON project_release_confirmations
+      WHEN OLD.workflow_run_id='story-privacy-run'
+      BEGIN SELECT RAISE(ABORT,'injected rollback'); END`).run();
+    assert.equal((await patch(targetRoute, firstTarget, targetChoice(current, firstTarget))).status, 409);
+    assert.deepEqual(await targetRow(db, firstTarget), originalRow);
+    assert.equal(Number((await db.prepare(`SELECT COUNT(*) AS count
+      FROM project_release_confirmations WHERE workflow_run_id=?`).bind(RUN_ID).first()).count), 1);
+    await db.prepare("DROP TRIGGER fail_story_privacy_confirmation_delete").run();
 
-    const redactBinding = { ...binding, decision: "redact" };
-    assert.equal((await patch(candidateRoute, privateUseId.id, redactBinding)).status, 200);
-    assert.equal((await patch(candidateRoute, privateUseId.id, binding)).status, 409);
+    const concurrentChoices = await Promise.all([
+      patch(targetRoute, firstTarget, targetChoice(current, firstTarget)),
+      patch(targetRoute, firstTarget, targetChoice(current, firstTarget)),
+    ]);
+    assert.deepEqual(concurrentChoices.map((response) => response.status).sort(), [200, 409]);
+    const firstResponse = concurrentChoices.find((response) => response.status === 200);
+    assert.ok(firstResponse);
+    const first = await firstResponse.json();
+    assert.notEqual(first.authorityDigest, current.authorityDigest);
+    assert.equal(first.candidates.find((candidate) => candidate.id === crossChapter.id).resolved, false);
+    assert.equal(first.candidates.find((candidate) => candidate.id === privateUseId.id).resolved, true);
+    assert.equal(first.targets.find((target) => target.targetId === firstTarget).selectedText,
+      "Chapter Anonymous");
+    assert.equal(Number((await db.prepare(`SELECT COUNT(*) AS count
+      FROM project_release_confirmations WHERE workflow_run_id=?`).bind(RUN_ID).first()).count), 0);
 
-    const zeroDigest = await replaceCandidates(db, []);
-    assert.equal(zeroDigest, EMPTY_DIGEST);
+    const secondTarget = "b::story:block-b";
+    const secondReview = first.targets.find((target) => target.targetId === secondTarget);
+    assert.ok(secondReview);
+    const publicOverrides = secondReview.occurrences.map((occurrence) => ({
+      originalStartOffset: occurrence.originalStartOffset,
+      originalEndOffset: occurrence.originalEndOffset,
+      category: occurrence.category,
+    }));
+    const secondResponse = await patch(targetRoute, secondTarget, targetChoice(first, secondTarget, {
+      editedText: null,
+      publicOverrides,
+    }));
+    assert.equal(secondResponse.status, 200);
+    const second = await secondResponse.json();
+    assert.equal(second.candidates.find((candidate) => candidate.id === crossChapter.id).resolved, true);
+    const published = second.targets.find((target) => target.targetId === secondTarget);
+    assert.equal(published.selectedText, published.originalText);
+    assert.equal(published.edited, false);
+    assert.ok(published.occurrences.every((occurrence) => occurrence.isPublic));
+
+    const editedResponse = await patch(targetRoute, firstTarget, targetChoice(second, firstTarget, {
+      editedText: "Public wording",
+      publicOverrides: [],
+    }));
+    assert.equal(editedResponse.status, 200);
+    const edited = await editedResponse.json();
+    assert.equal(edited.targets.find((target) => target.targetId === firstTarget).selectedText,
+      "Public wording");
+    assert.equal(edited.targets.find((target) => target.targetId === firstTarget).edited, true);
+    const restoredResponse = await patch(targetRoute, firstTarget, targetChoice(edited, firstTarget));
+    assert.equal(restoredResponse.status, 200);
+    const restored = await restoredResponse.json();
+    assert.equal(restored.targets.find((target) => target.targetId === firstTarget).selectedText,
+      "Chapter Anonymous");
+    assert.equal(restored.targets.find((target) => target.targetId === firstTarget).edited, false);
+
+    const credentialTarget = "a::overview";
+    const credentialCandidate = {
+      ...crossChapter,
+      id: "credential-candidate",
+      releaseTargets: [credentialTarget],
+    };
+    await replaceAuthority(db, [credentialCandidate], { credentialTargets: [credentialTarget] });
+    const credentialAuthority = await get(collectionRoute).then((response) => response.json());
+    const credentialReview = credentialAuthority.targets
+      .find((target) => target.targetId === credentialTarget);
+    assert.ok(credentialReview);
+    assert.equal(credentialReview.occurrences[0].canPublish, false);
+    const credentialRow = await targetRow(db, credentialTarget);
+    const credentialOverride = credentialReview.occurrences.map((occurrence) => ({
+      originalStartOffset: occurrence.originalStartOffset,
+      originalEndOffset: occurrence.originalEndOffset,
+      category: occurrence.category,
+    }));
+    assert.equal((await patch(targetRoute, credentialTarget, targetChoice(
+      credentialAuthority,
+      credentialTarget,
+      { editedText: null, publicOverrides: credentialOverride },
+    ))).status, 409);
+    assert.equal((await patch(targetRoute, credentialTarget, targetChoice(
+      credentialAuthority,
+      credentialTarget,
+      { editedText: "Bearer eyJabcdefgh.abcdefghijkl.abcdefghijkl", publicOverrides: [] },
+    ))).status, 409);
+    assert.deepEqual(await targetRow(db, credentialTarget), credentialRow);
+
+    await replaceAuthority(db, []);
     const emptyResponse = await get(collectionRoute);
     assert.equal(emptyResponse.status, 200);
     const emptyAuthority = await emptyResponse.json();
-    assert.match(emptyAuthority.candidateDigest, /^[0-9a-f]{64}$/u);
-    assert.deepEqual(emptyAuthority, {
-      workflowRunId: RUN_ID,
-      sourceRevision: SOURCE_REVISION,
-      activeStoryDigest: ACTIVE_DIGEST,
-      candidateDigest: emptyAuthority.candidateDigest,
-      status: "completed_empty",
-      candidates: [],
-    });
-    await db.prepare("DELETE FROM story_preparation_receipts WHERE workflow_run_id=?").bind(RUN_ID).run();
-    assert.equal((await get(collectionRoute)).status, 409);
+    assert.equal(emptyAuthority.status, "completed_empty");
+    assert.deepEqual(emptyAuthority.candidates, []);
+    assert.equal(emptyAuthority.targets.length, deriveStoryReleaseTargetContents(STORIES).length);
+    assert.ok(emptyAuthority.targets.every((target) => target.selectedText === target.originalText
+      && target.proposedText === target.originalText && target.occurrences.length === 0));
 
-    const validDigest = await replaceCandidates(db, [crossChapter]);
-    const receipt = await db.prepare(`SELECT * FROM story_preparation_receipts
-      WHERE workflow_run_id=? AND lane='story_privacy'`).bind(RUN_ID).first();
-    const candidateRow = await db.prepare(`SELECT candidate_json FROM story_privacy_candidates
-      WHERE workflow_run_id=? AND candidate_id=?`).bind(RUN_ID, crossChapter.id).first();
-    const assertClosed = async (mutate, restore) => {
+    const assertCorruptionClosed = async (mutate) => {
+      await replaceAuthority(db, [crossChapter]);
       await mutate();
       assert.equal((await get(collectionRoute)).status, 409);
-      await restore();
     };
-    await assertClosed(
-      () => db.prepare("UPDATE story_preparation_receipts SET source_revision=? WHERE workflow_run_id=?")
-        .bind(SOURCE_REVISION - 1, RUN_ID).run(),
-      () => db.prepare("UPDATE story_preparation_receipts SET source_revision=? WHERE workflow_run_id=?")
-        .bind(SOURCE_REVISION, RUN_ID).run(),
-    );
-    await assertClosed(
-      () => db.prepare("UPDATE story_preparation_receipts SET input_digest=? WHERE workflow_run_id=?")
-        .bind("1".repeat(64), RUN_ID).run(),
-      () => db.prepare("UPDATE story_preparation_receipts SET input_digest=? WHERE workflow_run_id=?")
-        .bind(STORY_PRIVACY_INPUT_DIGEST, RUN_ID).run(),
-    );
-    await assertClosed(
-      () => db.prepare("UPDATE workflow_runs SET story_generation_status='blocked' WHERE id=?").bind(RUN_ID).run(),
-      () => db.prepare("UPDATE workflow_runs SET story_generation_status='ready_for_human_review' WHERE id=?")
-        .bind(RUN_ID).run(),
-    );
-    await assertClosed(
-      () => db.prepare("UPDATE workflow_runs SET active_story_digest=NULL WHERE id=?").bind(RUN_ID).run(),
-      () => db.prepare("UPDATE workflow_runs SET active_story_digest=? WHERE id=?").bind(ACTIVE_DIGEST, RUN_ID).run(),
-    );
-    await assertClosed(
-      () => db.prepare("UPDATE story_preparation_receipts SET output_count=2 WHERE workflow_run_id=?")
-        .bind(RUN_ID).run(),
-      () => db.prepare("UPDATE story_preparation_receipts SET output_count=1 WHERE workflow_run_id=?")
-        .bind(RUN_ID).run(),
-    );
-    await assertClosed(
-      () => db.prepare("UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=?")
-        .bind("1".repeat(64), RUN_ID).run(),
-      () => db.prepare("UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=?")
-        .bind(validDigest, RUN_ID).run(),
-    );
-    await assertClosed(
-      () => db.prepare("UPDATE story_privacy_candidates SET candidate_json='{' WHERE candidate_id=?")
-        .bind(crossChapter.id).run(),
-      () => db.prepare("UPDATE story_privacy_candidates SET candidate_json=? WHERE candidate_id=?")
-        .bind(candidateRow.candidate_json, crossChapter.id).run(),
-    );
-    const arbitraryCandidate = { ...crossChapter, providerOutput: "PRIVATE_PROVIDER_SENTINEL" };
-    await db.prepare("UPDATE story_privacy_candidates SET candidate_json=? WHERE candidate_id=?")
-      .bind(JSON.stringify(arbitraryCandidate), crossChapter.id).run();
-    await db.prepare("UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=?")
-      .bind(await storyPreparationDigest([arbitraryCandidate]), RUN_ID).run();
-    assert.equal((await get(collectionRoute)).status, 409);
-    await db.prepare("UPDATE story_privacy_candidates SET candidate_json=? WHERE candidate_id=?")
-      .bind(candidateRow.candidate_json, crossChapter.id).run();
-    await db.prepare("UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=?")
-      .bind(receipt.output_digest, RUN_ID).run();
-    const foreignTarget = { ...crossChapter, releaseTargets: ["foreign::title"] };
-    await db.prepare("UPDATE story_privacy_candidates SET candidate_json=? WHERE candidate_id=?")
-      .bind(JSON.stringify(foreignTarget), crossChapter.id).run();
-    await db.prepare("UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=?")
-      .bind(await storyPreparationDigest([foreignTarget]), RUN_ID).run();
-    assert.equal((await get(collectionRoute)).status, 409);
-    await db.prepare("UPDATE story_privacy_candidates SET candidate_json=? WHERE candidate_id=?")
-      .bind(candidateRow.candidate_json, crossChapter.id).run();
-    await db.prepare("UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=?")
-      .bind(receipt.output_digest, RUN_ID).run();
+    await assertCorruptionClosed(() => db.prepare(`UPDATE story_preparation_receipts
+      SET output_count=output_count+1 WHERE workflow_run_id=? AND lane='story_privacy'`)
+      .bind(RUN_ID).run());
+    await assertCorruptionClosed(() => db.prepare(`UPDATE story_privacy_candidates
+      SET candidate_json='{' WHERE workflow_run_id=? AND candidate_id=?`)
+      .bind(RUN_ID, crossChapter.id).run());
+    await assertCorruptionClosed(() => db.prepare(`UPDATE story_privacy_targets
+      SET target_content_digest=? WHERE workflow_run_id=? AND target_id=?`)
+      .bind("f".repeat(64), RUN_ID, firstTarget).run());
+    await replaceAuthority(db, [crossChapter]);
 
     assert.equal((await get(collectionRoute, "foreign-run")).status, 404);
-    await db.prepare(`INSERT INTO workflow_runs (id,created_at,updated_at) VALUES ('second-run','x','x')`).run();
+    await db.prepare("INSERT INTO workflow_runs (id,created_at,updated_at) VALUES ('second-run','x','x')")
+      .run();
     assert.equal((await get(collectionRoute)).status, 409);
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();

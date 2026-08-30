@@ -72,6 +72,7 @@ export async function buildPackageFromDatabase(
   if (initialReconstruction.serializedStory !== reviewedStoryJson) {
     return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
   }
+  await options.afterInitialStoryReconstruction?.();
   const privacySnapshot = await capturePackageReleasePrivacySnapshot(db);
   const redactionJob = privacySnapshot.redactionJob;
   const preliminaryError = redactionReleaseError(
@@ -142,7 +143,6 @@ export async function buildPackageFromDatabase(
   }
 
   const sensitiveFragments: Array<{ text: string; category: string }> = [];
-  let releaseError = "";
   const items = itemResult.results.map((row: Record<string, unknown>, index: number) => {
     const id = canonicalId("event", index);
     const originalId = String(row.id);
@@ -156,13 +156,12 @@ export async function buildPackageFromDatabase(
         id,
         documentIds.get(originalDocumentId) || "document-unknown",
       ) as ReleaseEvent;
-    } catch (error) {
-      releaseError = error instanceof Error ? error.message : "invalid redaction state";
+    } catch {
       return null;
     }
   });
-  if (releaseError || items.some((item: ReleaseEvent | null) => item === null)) {
-    return Response.json({ error: `ZIP export blocked: ${releaseError}` }, { status: 409 });
+  if (items.some((item: ReleaseEvent | null) => item === null)) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
   }
   // Organization labels and summaries repeat across tens of thousands of events.
   // Cache by source text so the same AI-confirmed fragment set is not rebuilt and

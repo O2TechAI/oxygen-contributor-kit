@@ -50,10 +50,10 @@ Organize
 upstream source Privacy preparation producing the reviewed input boundary
 build Project Story using bounded semantic workers
 independent global sparse Insight pass
-Story/Release Privacy candidate preparation
+Story/Release Privacy total proposal preparation
 Preference-question generation
 Project Story human review
-Privacy Keep/Redact decisions
+Privacy target choices
 Preference answers
 All set
 local reviewed release
@@ -63,7 +63,7 @@ The Story stage may use conceptual passes inside Build Project Story, but it mus
 
 ## Review Readiness
 
-Opening Project Story for human review requires terminal results for Story generation, the independent global sparse Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation. Completed-zero is a valid terminal result for the Insight and Preference lanes when no warranted Insight or valid question exists.
+Opening Project Story for human review requires terminal results for Story generation, the independent global sparse Insight pass, Story/Release Privacy total proposal preparation, and Preference-question generation. Completed-zero is a valid terminal result for the Insight and Preference lanes when no warranted Insight or valid question exists.
 
 The composed launcher requires coverage, Story candidates, a deterministic Preference bundle, and
 an `oxygen.story-preparation` manifest at `--story-event ready`. It validates the exact four
@@ -161,9 +161,9 @@ The required final Viewer must preserve:
 - HTML/ZIP download actions;
 - publication separation.
 
-Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer. Current
-candidate authority may be completed-empty or contain decision candidates; unresolved candidates
-and stale authority fail closed before final release confirmation or export.
+Chapter Privacy/Release Preview is implemented in the canonical Viewer. Current target-choice
+authority may be completed-empty or contain candidate metadata and release targets; missing target
+choices and stale authority fail closed before final release confirmation or export.
 
 Project-specific Story prose, Privacy excerpts, generated candidates, preference answers, screenshots, and runtime database state remain local run artifacts. They must not be hardcoded in reusable Skill, Viewer, or test source.
 

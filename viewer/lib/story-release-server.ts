@@ -1,6 +1,5 @@
 import type { getLocalDatabase } from "../db";
 import { computeSourceDigest, redactionReleaseError } from "./redaction-pass.mjs";
-import { activeRedactionFragments, redactKnownFragments } from "./release.mjs";
 import {
   buildReviewedStoryRelease,
   sanitizeReviewedStoryRelease,
@@ -26,10 +25,8 @@ import {
   validateReleaseSourcePrivacyReceipt,
   type ReleaseSnapshotTestOptions,
 } from "./release-privacy-snapshot.ts";
-import type { StoryReleaseTarget } from "./timeline.ts";
 import {
   readStoryPrivacyAuthority,
-  type StoryPrivacyCandidateResponse,
 } from "./story-privacy-authority.ts";
 import {
   validActivatedSourceRevision,
@@ -55,14 +52,6 @@ type ReleaseItemRow = {
   timestamp?: string | null;
   content?: string;
   organization_reason?: string;
-};
-
-type ReleaseRedactionRow = {
-  item_id?: string;
-  start_offset?: number;
-  end_offset?: number;
-  category?: string;
-  status?: string;
 };
 
 type ReleaseSessionRow = {
@@ -171,7 +160,8 @@ async function sha256(value: string) {
 }
 
 const digestPattern = /^[0-9a-f]{64}$/;
-const preparationLanes = ["insight", "preference", "story", "story_privacy"];
+const corePreparationLanes = ["insight", "preference", "story"];
+const preparationLanes = [...corePreparationLanes, "story_privacy"];
 
 function exactTimestamp(value: unknown): value is string {
   if (typeof value !== "string" || !value) return false;
@@ -182,11 +172,13 @@ function validPreparationAndPreference(
   snapshot: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
   workflowRunId: string,
   sourceRevision: number,
-  privacyCandidates: StoryPrivacyCandidateResponse[],
 ) {
   const receipts = snapshot.preparationReceiptRows;
-  if (receipts.length !== 4
-    || receipts.map((row) => String(row.lane)).sort().join("|") !== preparationLanes.join("|")) {
+  const lanes = receipts.map((row) => String(row.lane));
+  const exactBootstrap = sameKeys(lanes, preparationLanes);
+  const exactCurrentImport = sameKeys(lanes, corePreparationLanes)
+    && snapshot.storyPrivacyAuthorityRows.length === 1;
+  if (!exactBootstrap && !exactCurrentImport) {
     return false;
   }
   for (const receipt of receipts) {
@@ -200,8 +192,6 @@ function validPreparationAndPreference(
       || !validCounter(Number(receipt.output_count))
       || !exactTimestamp(receipt.completed_at)) return false;
   }
-  void privacyCandidates;
-
   const preferenceReceipt = receipts.find((row) => row.lane === "preference")!;
   const probeRun = snapshot.probeRun;
   if (!probeRun || probeRun.workflow_run_id !== workflowRunId || probeRun.id !== workflowRunId
@@ -229,6 +219,19 @@ function exactReleaseConfirmationBinding(
     && row?.workflow_run_id === request.workflowRunId
     && row.review_gate_digest === reviewGateDigest
     && exactTimestamp(row.confirmed_at);
+}
+
+function sameReleaseConfirmation(
+  left: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
+  right: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
+) {
+  const a = left.releaseConfirmationRows;
+  const b = right.releaseConfirmationRows;
+  return a.length === b.length && a.every((row, index) => (
+    row.workflow_run_id === b[index]?.workflow_run_id
+    && row.review_gate_digest === b[index]?.review_gate_digest
+    && row.confirmed_at === b[index]?.confirmed_at
+  ));
 }
 
 function readReleaseSessionRecord(row: ReleaseSessionRow | null): ReleaseSessionRecord {
@@ -363,41 +366,29 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     || storyPrivacy.authority.status === "preparation_required") {
     return failure(RELEASE_ERROR.preparationInvalid, boundedMetadata);
   }
-  const privacyCandidates = storyPrivacy.authority.candidates;
-  if (privacyCandidates.some((candidate) => (
-    candidate.reviewState === "needs_confirmation" && candidate.decision === null
-  ))) return failure(RELEASE_ERROR.storyPrivacyPending, boundedMetadata);
+  if (storyPrivacy.authority.targets.some((target) => target.selectedText === null)) {
+    return failure(RELEASE_ERROR.storyPrivacyPending, boundedMetadata);
+  }
   if (!validPreparationAndPreference(
     initialSnapshot,
     request.workflowRunId,
     activeSourceRevision,
-    privacyCandidates,
   )) return failure(RELEASE_ERROR.preferencePending, boundedMetadata);
-  const suppressedTargets = new Set<StoryReleaseTarget>();
-  for (const candidate of privacyCandidates) {
-    if (candidate.reviewState === "deterministic" || candidate.decision === "redact") {
-      for (const target of candidate.releaseTargets) suppressedTargets.add(target);
-    }
-  }
-
-  const redactionsByItem = new Map<string, ReleaseRedactionRow[]>();
-  for (const span of initialSnapshot.redactionRows as ReleaseRedactionRow[]) {
-    const itemId = String(span.item_id || "");
-    redactionsByItem.set(itemId, [...(redactionsByItem.get(itemId) || []), span]);
-  }
-  let fragments: Array<{ text: string; category: string }> = [];
-  try {
-    fragments = items.flatMap((item) => activeRedactionFragments(
-      String(item.content || ""),
-      redactionsByItem.get(item.id) || [],
-    ));
-  } catch {
-    return failure(RELEASE_ERROR.stateInvalid, boundedMetadata);
-  }
+  const targetById = new Map(storyPrivacy.authority.targets.map((target) => (
+    [target.targetId, target]
+  )));
+  let projectionInvalid = targetById.size !== storyPrivacy.authority.targets.length;
   const built = buildReviewedStoryRelease(exactSources, hydrated.chapterReviews, {
-    redact: (copy) => redactKnownFragments(copy, fragments),
-    suppressedTargets,
+    project: (target, copy) => {
+      const choice = targetById.get(target);
+      if (!choice || choice.originalText !== copy || choice.selectedText === null) {
+        projectionInvalid = true;
+        return "";
+      }
+      return choice.selectedText;
+    },
   });
+  if (projectionInvalid) return failure(RELEASE_ERROR.preparationInvalid, boundedMetadata);
   const story = sanitizeReviewedStoryRelease(built);
   const serializedStory = serializeReviewedStoryRelease(story);
   if (!story || !serializedStory || story.chapters.length !== expectedKeys.length) {
@@ -418,6 +409,7 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
   const finalSnapshot = await captureStoryReleasePrivacySnapshot(db, request.workflowRunId);
   const finalPackageSnapshot = await capturePackageReleasePrivacySnapshot(db);
   if (finalSnapshot.digest !== initialSnapshot.digest
+    || !sameReleaseConfirmation(initialSnapshot, finalSnapshot)
     || finalPackageSnapshot.digest !== initialPackageSnapshot.digest
     || (!options.allowUnsetReleaseConfirmation
       && !exactReleaseConfirmationBinding(finalSnapshot, request, reviewGateDigest))) {

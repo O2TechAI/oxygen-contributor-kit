@@ -15,6 +15,7 @@ type SnapshotRow = Record<string, unknown>;
 type BatchResult = { results?: SnapshotRow[] };
 
 export type ReleaseSnapshotTestOptions = {
+  afterInitialStoryReconstruction?: () => void | Promise<void>;
   beforeFinalPrivacyCheck?: () => void | Promise<void>;
   exportedAt?: string;
 };
@@ -49,14 +50,19 @@ const preparationReceiptsSql = `SELECT workflow_run_id,lane,source_revision,inpu
   scope_digest,scope_count,output_digest,output_count,completed_at
   FROM story_preparation_receipts WHERE workflow_run_id=? ORDER BY lane`;
 
-const storyPrivacyCandidatesSql = `SELECT workflow_run_id,candidate_id,candidate_json,
-  decision,decision_version,decided_at FROM story_privacy_candidates
+const storyPrivacyCandidatesSql = `SELECT workflow_run_id,candidate_id,candidate_json
+  FROM story_privacy_candidates
   WHERE workflow_run_id=? ORDER BY candidate_id`;
 
 const storyPrivacyAuthoritySql = `SELECT workflow_run_id,source_revision,active_story_digest,
   server_version,reviewed_story_digest,target_catalog_json,target_catalog_digest,
-  changed_target_digest,changed_target_count,receipt_digest,batch_digest,candidate_digest,
-  candidate_count,imported_at FROM story_privacy_authorities WHERE workflow_run_id=?`;
+  changed_target_digest,changed_target_count,receipt_digest,proposal_digest,
+  proposal_count,imported_at FROM story_privacy_authorities WHERE workflow_run_id=?`;
+
+const storyPrivacyTargetsSql = `SELECT workflow_run_id,target_id,target_content_digest,
+  proposed_text,occurrences_json,selected_text,public_overrides_json,decided_at
+  FROM story_privacy_targets
+  WHERE workflow_run_id=? ORDER BY target_id`;
 
 const releaseProbeRunSql = `SELECT workflow_run_id,id,source_revision,input_digest,output_digest,
   output_count,status,stage,model,generated,set_aside,auto_removed_json,started_at,updated_at,
@@ -134,6 +140,7 @@ export async function computeReviewGateDigest(
       receiptRows: storySnapshot.preparationReceiptRows,
       storyPrivacyAuthorityRows: storySnapshot.storyPrivacyAuthorityRows,
       storyPrivacyCandidateRows: storySnapshot.storyPrivacyCandidateRows,
+      storyPrivacyTargetRows: storySnapshot.storyPrivacyTargetRows,
     },
     preferences: {
       probeRunRows: storySnapshot.probeRunRows,
@@ -248,6 +255,7 @@ export async function captureStoryReleasePrivacySnapshot(
     db.prepare(preparationReceiptsSql).bind(workflowRunId),
     db.prepare(storyPrivacyAuthoritySql).bind(workflowRunId),
     db.prepare(storyPrivacyCandidatesSql).bind(workflowRunId),
+    db.prepare(storyPrivacyTargetsSql).bind(workflowRunId),
     db.prepare(releaseProbeRunSql).bind(workflowRunId),
     db.prepare(releaseProbesSql),
     db.prepare(releaseBulkSql),
@@ -265,10 +273,11 @@ export async function captureStoryReleasePrivacySnapshot(
   const preparationReceiptRows = rows(results, 9);
   const storyPrivacyAuthorityRows = rows(results, 10);
   const storyPrivacyCandidateRows = rows(results, 11);
-  const probeRunRows = rows(results, 12);
-  const probeRows = rows(results, 13);
-  const bulkRows = rows(results, 14);
-  const releaseConfirmationRows = rows(results, 15);
+  const storyPrivacyTargetRows = rows(results, 12);
+  const probeRunRows = rows(results, 13);
+  const probeRows = rows(results, 14);
+  const bulkRows = rows(results, 15);
+  const releaseConfirmationRows = rows(results, 16);
   const value = {
     authorityRows,
     runRows,
@@ -281,6 +290,7 @@ export async function captureStoryReleasePrivacySnapshot(
     preparationReceiptRows,
     storyPrivacyAuthorityRows,
     storyPrivacyCandidateRows,
+    storyPrivacyTargetRows,
     probeRunRows,
     probeRows,
     bulkRows,

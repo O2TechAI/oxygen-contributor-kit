@@ -840,11 +840,12 @@ export function StoryChapterEditor({
               : storyPrivacyCandidates.length === 0 ? <p><b>0 / 0 for this Chapter.</b> No release Privacy candidate targets this Chapter.</p>
                 : <ul>{storyPrivacyCandidates.map((candidate) => <li key={candidate.id}>
                   <b>{candidate.title}</b>
-                  <span>{candidate.reviewState === "deterministic" ? "Automatically redacted"
-                    : candidate.decision === "keep" ? "Kept by contributor"
-                      : candidate.decision === "redact" ? "Redacted by contributor" : "Needs confirmation"}</span>
+                  <span>{candidate.resolved
+                    ? candidate.reviewState === "deterministic" ? "Automatically anonymized"
+                      : "Contributor choice recorded"
+                    : "Needs confirmation"}</span>
                 </li>)}</ul>}
-            <p>Raw Evidence and unavailable originals are never reconstructed here. Cross-Chapter findings keep one global identity and decision.</p>
+            <p>Raw Evidence and unavailable originals are never reconstructed here. Cross-Chapter findings keep one global identity and target choice.</p>
             <button onClick={onOpenStoryPrivacy}>Open global Release Preview</button>
           </div>
         </section>

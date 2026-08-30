@@ -6,8 +6,8 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 
 - [ ] Active Story candidates use `oxygen.story:` and `schema: "oxygen.story"`.
 - [ ] Workflow progress reaches Review Story only through activation with `storySourceSchema: "oxygen.story"` and `storySessionSchema: "oxygen.story-review-session"`.
-- [ ] Public workflow order is Collect -> Organize -> upstream source Privacy preparation -> build Project Story using bounded semantic workers -> independent global sparse Insight pass -> Story/Release Privacy candidate preparation -> Preference-question generation -> Project Story human review -> Privacy Keep/Redact decisions -> Preference answers -> All set -> local reviewed release.
-- [ ] Review Story opens only after terminal results for Story generation, global Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation; completed-zero is explicit where valid.
+- [ ] Public workflow order is Collect -> Organize -> upstream source Privacy preparation -> build Project Story using bounded semantic workers -> independent global sparse Insight pass -> Story/Release Privacy total proposal preparation -> Preference-question generation -> Project Story human review -> Privacy target choices -> Preference answers -> All set -> local reviewed release.
+- [ ] Review Story opens only after terminal results for Story generation, global Insight pass, Story/Release Privacy total proposal preparation, and Preference-question generation; completed-zero is explicit where valid.
 - [ ] Launcher ready requires coverage, Story candidates, deterministic Preference bundle, and `oxygen.story-preparation` manifest; missing or extra authority fails before HTTP.
 - [ ] Preference bundle import to `/api/probes` precedes the exact `/api/workflow` Review Story activation; completed-zero is valid and failed import prevents activation.
 - [ ] Story generation order inside the Story lane is complete reviewed history -> Chapter arcs -> complete Story -> validation -> adjacent Phase grouping -> independent Insight pass -> zero or more Insights.
@@ -30,12 +30,12 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Semantic coverage authority represents or explicitly excludes every unit exactly once.
 - [ ] Coverage draft rows are exactly `{unitId, disposition, ownerId}` or `{unitId, disposition, exclusionReason}`.
 - [ ] No Story JSON contains raw member lists, per-event negative ledgers, Privacy candidates, source originals, prompts, hidden reasoning, or Preference answers.
-- [ ] Story/Release Privacy candidates are not claimed unless an implemented authority provides them outside `oxygen.story`.
+- [ ] Story/Release Privacy candidates remain explanatory metadata outside `oxygen.story`; the Agent supplies one proposal for every release target and the server-owned authority stores target choices.
 - [ ] Preferences are generated from reusable lessons/Insights, may be prepared before human review opens, remain unanswered until explicit contributor action, and are not stored in the Story review session.
 
 ## Human Pauses
 
-- [ ] Unresolved Privacy Keep/Redact decisions pause the Agent.
+- [ ] Unresolved Privacy target choices pause the Agent.
 - [ ] Preference answers pause for contributor action.
 - [ ] Story review pauses when Review Story opens.
 - [ ] All set is an explicit contributor action.
@@ -44,7 +44,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 
 ## Release Preview And Package
 
-- [ ] Final decision-only Chapter Privacy/Release Preview uses the canonical current candidate authority and exposes only Keep/Redact decisions.
+- [ ] Final Chapter Privacy/Release Preview uses the current server-owned target authority and exposes exactly these choices: accept the Agent proposal, edit anonymized text, or make an exact noncredential occurrence public.
 - [ ] Required Release Preview shows only the release-safe projection for deterministic/confirmed safe content.
 - [ ] `needs_confirmation` source Privacy items show only the minimum permitted local original, current safe projection, safe uncertainty reason, and Keep/Redact.
 - [ ] Only `needs_confirmation` rows are decision-editable; category/status/reason mutation, deletion, and soft deletion are not final contributor actions.
@@ -72,7 +72,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Narrow Chapter screenshot with no horizontal overflow.
 - [ ] Desktop Chapter screenshot showing right-side separate Insight companion cards aligned to Story paragraphs when Insights exist.
 - [ ] Story Edit Mode screenshot with notes and Undo/Redo.
-- [ ] Privacy screenshots use current candidate authority and the canonical final surface.
+- [ ] Privacy screenshots use the current target-choice authority and the canonical final surface.
 - [ ] Preferences screenshot with unanswered and answered states.
 - [ ] Final Release Preview screenshot.
 - [ ] Reviewed HTML and ZIP safe-content equivalence evidence.

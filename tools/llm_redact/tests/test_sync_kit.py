@@ -132,6 +132,27 @@ class SyncKitFilesystemTest(unittest.TestCase):
                 (external / "sentinel.bin").read_bytes(), b"external sentinel",
             )
 
+    def test_excluded_directory_alias_is_ignored(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            destination = root / "destination"
+            external = root / "external"
+            source.mkdir()
+            destination.mkdir()
+            external.mkdir()
+            (source / "ordinary.txt").write_bytes(b"copied")
+            (external / "sentinel.bin").write_bytes(b"external sentinel")
+            directory_link_or_skip(self, source / ".git", external)
+
+            self.assertEqual(run_sync(source, destination), 0)
+
+            self.assertEqual((destination / "ordinary.txt").read_bytes(), b"copied")
+            self.assertFalse((destination / ".git").exists())
+            self.assertEqual(
+                (external / "sentinel.bin").read_bytes(), b"external sentinel",
+            )
+
     def test_copy_failure_leaves_existing_target_unchanged_and_cleans_stage(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -204,20 +225,20 @@ class SyncKitFilesystemTest(unittest.TestCase):
             (source / "owned.txt").write_bytes(b"new bytes")
             target = destination / "owned.txt"
             target.write_bytes(b"old bytes")
-            real_fingerprint = MODULE.file_fingerprint
-            target_fingerprint_calls = 0
+            real_metadata = MODULE._regular_target_metadata
+            target_metadata_calls = 0
 
-            def observe_fingerprint(path: Path):
-                nonlocal target_fingerprint_calls
+            def observe_metadata(path: Path):
+                nonlocal target_metadata_calls
                 if path == target:
-                    target_fingerprint_calls += 1
-                    if target_fingerprint_calls == 2:
+                    target_metadata_calls += 1
+                    if target_metadata_calls == 2:
                         competitor = target.with_suffix(".competitor")
                         competitor.write_bytes(b"concurrent owner bytes")
                         os.replace(competitor, target)
-                return real_fingerprint(path)
+                return real_metadata(path)
 
-            with mock.patch.object(MODULE, "file_fingerprint", side_effect=observe_fingerprint):
+            with mock.patch.object(MODULE, "_regular_target_metadata", side_effect=observe_metadata):
                 with self.assertRaisesRegex(ValueError, "changed during publication"):
                     run_sync(source, destination)
 
@@ -237,22 +258,22 @@ class SyncKitFilesystemTest(unittest.TestCase):
             target.write_bytes(b"old bytes")
             external = root / "external.bin"
             external.write_bytes(b"external sentinel bytes")
-            real_fingerprint = MODULE.file_fingerprint
+            real_metadata = MODULE._regular_target_metadata
             rejected_links = []
-            target_fingerprint_calls = 0
+            target_metadata_calls = 0
 
-            def observe_fingerprint(path: Path):
-                nonlocal target_fingerprint_calls
+            def observe_metadata(path: Path):
+                nonlocal target_metadata_calls
                 if path == target:
-                    target_fingerprint_calls += 1
-                    if target_fingerprint_calls == 2:
+                    target_metadata_calls += 1
+                    if target_metadata_calls == 2:
                         target.unlink()
                         target.symlink_to(external)
                 if path.is_symlink():
                     rejected_links.append(path)
-                return real_fingerprint(path)
+                return real_metadata(path)
 
-            with mock.patch.object(MODULE, "file_fingerprint", side_effect=observe_fingerprint):
+            with mock.patch.object(MODULE, "_regular_target_metadata", side_effect=observe_metadata):
                 with self.assertRaises(OSError):
                     run_sync(source, destination)
 
@@ -274,16 +295,16 @@ class SyncKitFilesystemTest(unittest.TestCase):
             external.chmod(stat.S_IREAD)
             before_mode = external.stat().st_mode
 
-            real_copy = MODULE._copy_into_open_stage
+            real_stage_metadata = MODULE._owned_stage_metadata
 
-            def substitute(copy_source, staging, stage_handle, source_metadata):
+            def substitute(staging, created_identity):
                 staging_path = Path(staging)
                 staging_path.unlink()
                 os.link(external, staging_path)
-                real_copy(copy_source, staging_path, stage_handle, source_metadata)
+                return real_stage_metadata(staging_path, created_identity)
 
             try:
-                with mock.patch.object(MODULE, "_copy_into_open_stage", side_effect=substitute):
+                with mock.patch.object(MODULE, "_owned_stage_metadata", side_effect=substitute):
                     with self.assertRaisesRegex(ValueError, "staging entry changed identity"):
                         run_sync(source, destination)
 
@@ -351,55 +372,6 @@ class SyncKitFilesystemTest(unittest.TestCase):
             self.assertIn(old, observed)
             self.assertIn(new, observed)
             self.assertTrue(all(value in {old, new} for value in observed))
-
-    def test_destination_lock_rejects_second_sync_writer(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / "source"
-            destination = root / "destination"
-            source.mkdir()
-            destination.mkdir()
-            (source / "owned.txt").write_bytes(b"new bytes")
-            script = "\n".join((
-                "import importlib.util, pathlib, sys",
-                "spec = importlib.util.spec_from_file_location('sync_lock_child', sys.argv[1])",
-                "module = importlib.util.module_from_spec(spec)",
-                "spec.loader.exec_module(module)",
-                "with module._sync_lock(pathlib.Path(sys.argv[2])):",
-                "    print('ready', flush=True)",
-                "    sys.stdin.readline()",
-            ))
-            child = subprocess.Popen(
-                [sys.executable, "-c", script, str(MODULE_PATH), str(destination)],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-            )
-            try:
-                assert child.stdout is not None
-                ready = child.stdout.readline().strip()
-                if ready != "ready":
-                    assert child.stderr is not None
-                    self.fail(f"lock child failed: {ready} {child.stderr.read()}")
-                with self.assertRaisesRegex(ValueError, MODULE.SYNC_BUSY):
-                    run_sync(source, destination)
-                self.assertFalse((destination / "owned.txt").exists())
-                child.kill()
-                child.wait(timeout=10)
-                self.assertEqual(run_sync(source, destination), 0)
-                self.assertEqual((destination / "owned.txt").read_bytes(), b"new bytes")
-            finally:
-                if child.poll() is None:
-                    child.kill()
-                    child.wait(timeout=10)
-                if child.stdin is not None:
-                    child.stdin.close()
-                if child.stdout is not None:
-                    child.stdout.close()
-                if child.stderr is not None:
-                    child.stderr.close()
 
     def test_existing_leaf_symlink_is_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:

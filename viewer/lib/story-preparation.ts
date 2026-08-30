@@ -39,12 +39,32 @@ export type StoryPreparationPrivacyCandidate = {
   releaseTargets: StoryReleaseTarget[];
 };
 
+export type StoryPreparationPrivacyTargetProposal = {
+  targetId: StoryReleaseTarget;
+  targetContentDigest: string;
+  proposedText: string;
+  occurrences: Array<{
+    originalStartOffset: number;
+    originalEndOffset: number;
+    proposalStartOffset: number;
+    proposalEndOffset: number;
+    category: string;
+  }>;
+};
+
+export type StoryPreparationPrivacyOutput = {
+  candidates: StoryPreparationPrivacyCandidate[];
+  targetProposals: StoryPreparationPrivacyTargetProposal[];
+};
+
+export type StoryReleaseTargetContent = StoryReleaseTargetDescriptor & { content: string };
+
 export type StoryPreparationManifest = {
   schema: typeof STORY_PREPARATION_SCHEMA;
   workflowRunId: string;
   sourceRevision: number;
   receipts: StoryPreparationReceipt[];
-  storyPrivacyCandidates: StoryPreparationPrivacyCandidate[];
+  storyPrivacy: StoryPreparationPrivacyOutput;
 };
 
 export type PreferenceBatchAuthority = {
@@ -66,7 +86,7 @@ export type StoryPreparationContext = {
 
 export type StoryPreparationAuthority = {
   receipts: StoryPreparationReceipt[];
-  privacyCandidates: StoryPreparationManifest["storyPrivacyCandidates"];
+  privacy: StoryPreparationManifest["storyPrivacy"];
   preference: PreferenceBatchAuthority;
 };
 
@@ -94,6 +114,18 @@ const stableId = (value: unknown): value is string => (
 const safeText = (value: unknown): value is string => (
   nonEmptyString(value) && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
 );
+const scalarText = (value: unknown): value is string => {
+  if (!safeText(value)) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const point = value.charCodeAt(index);
+    if (point >= 0xd800 && point <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (point >= 0xdc00 && point <= 0xdfff) return false;
+  }
+  return true;
+};
 const exactNonNegativeInteger = (value: unknown): value is number => (
   Number.isSafeInteger(value) && Number(value) >= 0
 );
@@ -133,26 +165,58 @@ export function storyReleaseTargetId(
   return `${storyKey}${targetSeparator}${target}` as StoryReleaseTarget;
 }
 
-function storyTargetNames(story: StorySource): StoryReleaseTargetName[] {
-  const targets: StoryReleaseTargetName[] = ["phase", "title", "overview"];
-  if (story.transition) targets.push("transition:before", "transition:after");
+function storyTargetValues(story: StorySource): Array<{ target: StoryReleaseTargetName; content: string }> {
+  const targets: Array<{ target: StoryReleaseTargetName; content: string }> = [
+    { target:"phase", content:story.phase.label },
+    { target:"title", content:story.title },
+    { target:"overview", content:story.overview },
+  ];
+  if (story.transition) targets.push(
+    { target:"transition:before", content:story.transition.before },
+    { target:"transition:after", content:story.transition.after },
+  );
   for (const person of story.people) {
     targets.push(
-      `people:${person.id}:releaseLabel`,
-      `people:${person.id}:role`,
-      `people:${person.id}:description`,
+      { target:`people:${person.id}:releaseLabel`, content:person.releaseLabel },
+      { target:`people:${person.id}:role`, content:person.role },
+      { target:`people:${person.id}:description`, content:person.description },
     );
   }
-  for (const block of story.story.blocks) targets.push(`story:${block.id}`);
-  if (story.story.uncertainty !== undefined) targets.push("uncertainty");
+  for (const block of story.story.blocks) {
+    targets.push({ target:`story:${block.id}`, content:block.text });
+  }
+  if (story.story.uncertainty !== undefined) {
+    targets.push({ target:"uncertainty", content:story.story.uncertainty });
+  }
   for (const insight of story.insights) {
-    if (insight.title !== undefined) targets.push(`insight:${insight.id}:title`);
+    if (insight.title !== undefined) {
+      targets.push({ target:`insight:${insight.id}:title`, content:insight.title });
+    }
     targets.push(
-      `insight:${insight.id}:background`,
-      `insight:${insight.id}:quote`,
-      `insight:${insight.id}:directlyAcquiredExperience`,
-      `insight:${insight.id}:principle`,
+      { target:`insight:${insight.id}:background`, content:insight.background },
+      { target:`insight:${insight.id}:quote`, content:insight.quote.text },
+      { target:`insight:${insight.id}:directlyAcquiredExperience`,
+        content:insight.directlyAcquiredExperience },
+      { target:`insight:${insight.id}:principle`, content:insight.principle },
     );
+  }
+  return targets;
+}
+
+export function deriveStoryReleaseTargetContents(
+  stories: StorySource[],
+): StoryReleaseTargetContent[] | null {
+  const targets: StoryReleaseTargetContent[] = [];
+  const ids = new Set<string>();
+  for (const story of stories) {
+    if (!stableId(story.key)) return null;
+    for (const value of storyTargetValues(story)) {
+      if (!stableId(value.target) || typeof value.content !== "string") return null;
+      const id = storyReleaseTargetId(story.key, value.target);
+      if (ids.has(id)) return null;
+      ids.add(id);
+      targets.push({ id, storyKey:story.key, target:value.target, content:value.content });
+    }
   }
   return targets;
 }
@@ -160,19 +224,8 @@ function storyTargetNames(story: StorySource): StoryReleaseTargetName[] {
 export function deriveStoryReleaseTargetCatalog(
   stories: StorySource[],
 ): StoryReleaseTargetDescriptor[] | null {
-  const catalog: StoryReleaseTargetDescriptor[] = [];
-  const ids = new Set<string>();
-  for (const story of stories) {
-    if (!stableId(story.key)) return null;
-    for (const target of storyTargetNames(story)) {
-      if (!stableId(target)) return null;
-      const id = storyReleaseTargetId(story.key, target);
-      if (ids.has(id)) return null;
-      ids.add(id);
-      catalog.push({ id, storyKey: story.key, target });
-    }
-  }
-  return catalog;
+  return deriveStoryReleaseTargetContents(stories)?.map(({ id, storyKey, target }) => ({ id, storyKey, target }))
+    || null;
 }
 
 function parseStories(rows: StoryCandidateRow[]) {
@@ -226,27 +279,38 @@ function parseReceipt(value: unknown): StoryPreparationReceipt | null {
   return value as StoryPreparationReceipt;
 }
 
-function parsePrivacyCandidates(
+export async function normalizeStoryPrivacyOutput(
   value: unknown,
-  targetCatalog: StoryReleaseTargetDescriptor[],
-): StoryPreparationManifest["storyPrivacyCandidates"] | null {
-  if (!Array.isArray(value)) return null;
-  const validTargets = new Set(targetCatalog.map((target) => target.id));
+  targetCatalog: StoryReleaseTargetContent[],
+): Promise<StoryPreparationPrivacyOutput | null> {
+  if (!isObject(value) || !onlyKeys(value, ["candidates", "targetProposals"])
+    || !Array.isArray(value.candidates) || !Array.isArray(value.targetProposals)) return null;
+  const validTargets = new Map(targetCatalog.map((target) => [target.id, target.content]));
   const targetOrder = new Map(targetCatalog.map((target, index) => [target.id, index]));
-  const seenCandidateIds = new Set<string>();
+  const targetDigests = new Map(await Promise.all(targetCatalog.map(async (target) => (
+    [target.id, await storyPreparationDigest(target.content)] as const
+  ))));
   const candidates: StoryPreparationPrivacyCandidate[] = [];
-  for (const candidate of value) {
+  const seenCandidateIds = new Set<string>();
+  const flaggedTargets = new Set<StoryReleaseTarget>();
+  for (const candidate of value.candidates) {
     if (!isObject(candidate) || !onlyKeys(candidate, [
       "id", "reviewState", "title", "whyFlagged", "uncertaintyReason", "releaseTargets",
-    ]) || !stableId(candidate.id) || seenCandidateIds.has(candidate.id)
+    ]) || !stableId(candidate.id) || candidate.id.length > 1_000 || seenCandidateIds.has(candidate.id)
       || (candidate.reviewState !== "deterministic" && candidate.reviewState !== "needs_confirmation")
-      || !safeText(candidate.title) || !safeText(candidate.whyFlagged)
+      || !safeText(candidate.title) || candidate.title.length > 500
+      || !safeText(candidate.whyFlagged) || candidate.whyFlagged.length > 4_000
       || (candidate.reviewState === "deterministic" && candidate.uncertaintyReason !== null)
-      || (candidate.reviewState === "needs_confirmation" && !safeText(candidate.uncertaintyReason))
+      || (candidate.reviewState === "needs_confirmation" && (!safeText(candidate.uncertaintyReason)
+        || candidate.uncertaintyReason.length > 4_000))
       || !Array.isArray(candidate.releaseTargets) || candidate.releaseTargets.length === 0
-      || !candidate.releaseTargets.every((target) => (
-        typeof target === "string" && validTargets.has(target as StoryReleaseTarget)
-      )) || new Set(candidate.releaseTargets).size !== candidate.releaseTargets.length) return null;
+      || candidate.releaseTargets.length > 2_000
+      || candidate.releaseTargets.some((target) => typeof target !== "string"
+        || !validTargets.has(target as StoryReleaseTarget))
+      || new Set(candidate.releaseTargets).size !== candidate.releaseTargets.length) return null;
+    const releaseTargets = (candidate.releaseTargets as StoryReleaseTarget[])
+      .slice().sort((left, right) => Number(targetOrder.get(left)) - Number(targetOrder.get(right)));
+    releaseTargets.forEach((target) => flaggedTargets.add(target));
     seenCandidateIds.add(candidate.id);
     candidates.push({
       id: candidate.id,
@@ -254,13 +318,87 @@ function parsePrivacyCandidates(
       title: candidate.title,
       whyFlagged: candidate.whyFlagged,
       uncertaintyReason: candidate.uncertaintyReason as string | null,
-      releaseTargets: [...candidate.releaseTargets]
-        .sort((left, right) => Number(targetOrder.get(left as StoryReleaseTarget))
-          - Number(targetOrder.get(right as StoryReleaseTarget))) as StoryReleaseTarget[],
+      releaseTargets,
     });
   }
   candidates.sort((left, right) => compareUtf8(left.id, right.id));
-  return candidates;
+  const seenTargets = new Set<StoryReleaseTarget>();
+  const proposals: StoryPreparationPrivacyTargetProposal[] = [];
+  for (const proposal of value.targetProposals) {
+    if (!isObject(proposal) || !onlyKeys(proposal, [
+      "targetId", "targetContentDigest", "proposedText", "occurrences",
+    ]) || typeof proposal.targetId !== "string"
+      || !validTargets.has(proposal.targetId as StoryReleaseTarget)
+      || seenTargets.has(proposal.targetId as StoryReleaseTarget)
+      || proposal.targetContentDigest !== targetDigests.get(proposal.targetId as StoryReleaseTarget)
+      || !scalarText(proposal.proposedText) || proposal.proposedText.length > 1_000_000
+      || !Array.isArray(proposal.occurrences) || proposal.occurrences.length > 4_000) return null;
+    const occurrences: StoryPreparationPrivacyTargetProposal["occurrences"] = [];
+    for (const occurrence of proposal.occurrences) {
+      if (!isObject(occurrence) || !onlyKeys(occurrence, [
+        "originalStartOffset", "originalEndOffset", "proposalStartOffset", "proposalEndOffset",
+        "category",
+      ]) || !Number.isSafeInteger(occurrence.originalStartOffset)
+        || Number(occurrence.originalStartOffset) < 0
+        || !Number.isSafeInteger(occurrence.originalEndOffset)
+        || Number(occurrence.originalEndOffset) <= Number(occurrence.originalStartOffset)
+        || !Number.isSafeInteger(occurrence.proposalStartOffset)
+        || Number(occurrence.proposalStartOffset) < 0
+        || !Number.isSafeInteger(occurrence.proposalEndOffset)
+        || Number(occurrence.proposalEndOffset) <= Number(occurrence.proposalStartOffset)
+        || typeof occurrence.category !== "string"
+        || !/^[a-z0-9][a-z0-9-]{0,63}$/u.test(occurrence.category)) return null;
+      occurrences.push({
+        originalStartOffset: Number(occurrence.originalStartOffset),
+        originalEndOffset: Number(occurrence.originalEndOffset),
+        proposalStartOffset: Number(occurrence.proposalStartOffset),
+        proposalEndOffset: Number(occurrence.proposalEndOffset),
+        category: occurrence.category,
+      });
+    }
+    occurrences.sort((left, right) => left.originalStartOffset - right.originalStartOffset
+      || left.originalEndOffset - right.originalEndOffset
+      || left.proposalStartOffset - right.proposalStartOffset
+      || left.proposalEndOffset - right.proposalEndOffset
+      || compareUtf8(left.category, right.category));
+    const originalPoints = Array.from(validTargets.get(proposal.targetId as StoryReleaseTarget) || "");
+    const proposalPoints = Array.from(proposal.proposedText);
+    let originalCursor = 0;
+    let proposalCursor = 0;
+    for (const occurrence of occurrences) {
+      if (occurrence.originalEndOffset > originalPoints.length
+        || occurrence.proposalEndOffset > proposalPoints.length
+        || occurrence.originalStartOffset < originalCursor
+        || occurrence.proposalStartOffset < proposalCursor
+        || originalPoints.slice(originalCursor, occurrence.originalStartOffset).join("")
+          !== proposalPoints.slice(proposalCursor, occurrence.proposalStartOffset).join("")
+        || originalPoints.slice(occurrence.originalStartOffset, occurrence.originalEndOffset).join("")
+          === proposalPoints.slice(occurrence.proposalStartOffset, occurrence.proposalEndOffset).join("")) {
+        return null;
+      }
+      originalCursor = occurrence.originalEndOffset;
+      proposalCursor = occurrence.proposalEndOffset;
+    }
+    if (originalPoints.slice(originalCursor).join("") !== proposalPoints.slice(proposalCursor).join("")
+      || (occurrences.length === 0
+        && validTargets.get(proposal.targetId as StoryReleaseTarget) !== proposal.proposedText)) return null;
+    const targetId = proposal.targetId as StoryReleaseTarget;
+    seenTargets.add(targetId);
+    proposals.push({
+      targetId,
+      targetContentDigest: proposal.targetContentDigest as string,
+      proposedText: proposal.proposedText,
+      occurrences,
+    });
+  }
+  if (seenTargets.size !== targetCatalog.length) return null;
+  proposals.sort((left, right) => Number(targetOrder.get(left.targetId))
+    - Number(targetOrder.get(right.targetId)));
+  const changedTargets = new Set(proposals.filter((proposal) => proposal.occurrences.length > 0)
+    .map((proposal) => proposal.targetId));
+  if (changedTargets.size !== flaggedTargets.size
+    || [...changedTargets].some((target) => !flaggedTargets.has(target))) return null;
+  return { candidates, targetProposals: proposals };
 }
 
 const mismatch = (code: string): StoryPreparationValidation => ({ ok: false, code });
@@ -270,7 +408,7 @@ export async function validateStoryPreparationManifest(
   context: StoryPreparationContext,
 ): Promise<StoryPreparationValidation> {
   if (!isObject(input) || !onlyKeys(input, [
-    "schema", "workflowRunId", "sourceRevision", "receipts", "storyPrivacyCandidates",
+    "schema", "workflowRunId", "sourceRevision", "receipts", "storyPrivacy",
   ]) || input.schema !== STORY_PREPARATION_SCHEMA
     || input.workflowRunId !== context.workflowRunId
     || !validActivatedSourceRevision(context.sourceRevision)
@@ -302,13 +440,14 @@ export async function validateStoryPreparationManifest(
   }))).sort((left, right) => (
     compareUtf8(left.storyKey, right.storyKey) || compareUtf8(left.insightId, right.insightId)
   ));
-  const targetCatalog = deriveStoryReleaseTargetCatalog(stories);
-  if (!targetCatalog) return mismatch("STORY_PREPARATION_TARGET_CATALOG_INVALID");
-  const privacyCandidates = parsePrivacyCandidates(
-    input.storyPrivacyCandidates,
-    targetCatalog,
+  const targetContents = deriveStoryReleaseTargetContents(stories);
+  if (!targetContents) return mismatch("STORY_PREPARATION_TARGET_CATALOG_INVALID");
+  const targetCatalog = targetContents.map(({ id, storyKey, target }) => ({ id, storyKey, target }));
+  const privacy = await normalizeStoryPrivacyOutput(
+    input.storyPrivacy,
+    targetContents,
   );
-  if (!privacyCandidates) return mismatch("STORY_PREPARATION_PRIVACY_CANDIDATES_INVALID");
+  if (!privacy) return mismatch("STORY_PREPARATION_PRIVACY_INVALID");
   if (!context.preference
     || context.preference.workflowRunId !== context.workflowRunId
     || !validActivatedSourceRevision(context.preference.sourceRevision)
@@ -349,8 +488,8 @@ export async function validateStoryPreparationManifest(
       inputDigest: await storyPreparationDigest(completeStoryOutput),
       scopeDigest: await storyPreparationDigest(targetCatalog.map((target) => target.id)),
       scopeCount: targetCatalog.length,
-      outputDigest: await storyPreparationDigest(privacyCandidates),
-      outputCount: privacyCandidates.length,
+      outputDigest: await storyPreparationDigest(privacy),
+      outputCount: privacy.targetProposals.length,
     },
     preference: {
       lane: "preference",
@@ -379,7 +518,7 @@ export async function validateStoryPreparationManifest(
     ok: true,
     authority: {
       receipts: STORY_PREPARATION_LANES.map((lane) => expected[lane]),
-      privacyCandidates,
+      privacy,
       preference: context.preference,
     },
   };

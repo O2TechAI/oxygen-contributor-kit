@@ -505,6 +505,8 @@ export async function POST(request: Request) {
           WHERE workflow_run_id=? AND ${leaseSql}`).bind(workflowRunId, ...leaseBindings),
         db.prepare(`DELETE FROM story_privacy_candidates
           WHERE workflow_run_id=? AND ${leaseSql}`).bind(workflowRunId, ...leaseBindings),
+        db.prepare(`DELETE FROM story_privacy_targets
+          WHERE workflow_run_id=? AND ${leaseSql}`).bind(workflowRunId, ...leaseBindings),
       );
       const receiptPayload = JSON.stringify(preparation.receipts);
       statements.push(db.prepare(`INSERT INTO story_preparation_receipts
@@ -520,14 +522,36 @@ export async function POST(request: Request) {
         receiptPayload,
         ...leaseBindings,
       ));
-      const privacyRows = preparation.privacyCandidates.map((candidate) => ({
+      const privacyCandidates = preparation.privacy.candidates.map((candidate) => ({
         candidateId: candidate.id,
         candidateJson: JSON.stringify(candidate),
       }));
-      const privacyPayload = JSON.stringify(privacyRows);
       statements.push(db.prepare(`INSERT INTO story_privacy_candidates
           (workflow_run_id,candidate_id,candidate_json)
           SELECT ?,json_extract(value,'$.candidateId'),json_extract(value,'$.candidateJson')
+          FROM json_each(?) WHERE ${leaseSql}`).bind(
+        workflowRunId,
+        JSON.stringify(privacyCandidates),
+        ...leaseBindings,
+      ));
+      const pendingTargets = new Set(preparation.privacy.candidates
+        .filter((candidate) => candidate.reviewState === "needs_confirmation")
+        .flatMap((candidate) => candidate.releaseTargets));
+      const privacyRows = preparation.privacy.targetProposals.map((proposal) => ({
+        targetId: proposal.targetId,
+        targetContentDigest: proposal.targetContentDigest,
+        proposedText: proposal.proposedText,
+        occurrencesJson: JSON.stringify(proposal.occurrences),
+        selectedText: pendingTargets.has(proposal.targetId) ? null : proposal.proposedText,
+        decidedAt: pendingTargets.has(proposal.targetId) ? null : now,
+      }));
+      const privacyPayload = JSON.stringify(privacyRows);
+      statements.push(db.prepare(`INSERT INTO story_privacy_targets
+          (workflow_run_id,target_id,target_content_digest,proposed_text,occurrences_json,
+           selected_text,public_overrides_json,decided_at)
+          SELECT ?,json_extract(value,'$.targetId'),json_extract(value,'$.targetContentDigest'),
+            json_extract(value,'$.proposedText'),json_extract(value,'$.occurrencesJson'),
+            json_extract(value,'$.selectedText'),'[]',json_extract(value,'$.decidedAt')
           FROM json_each(?) WHERE ${leaseSql}`).bind(
         workflowRunId,
         privacyPayload,

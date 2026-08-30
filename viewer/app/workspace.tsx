@@ -12,9 +12,9 @@ import {
   storyPrivacyAuthorityComplete,
   storyPrivacyCandidateResolved,
   StoryPrivacyRequestGate,
-  type StoryPrivacyCandidate,
-  type StoryPrivacyDecision,
   type StoryPrivacyState,
+  type StoryPrivacyTarget,
+  type StoryPrivacyTargetChoice,
 } from "./story-privacy-ui";
 import { ProbePanel, type Probe, type BulkDecision, type ProbeRun } from "./probe-panel";
 import {
@@ -577,12 +577,8 @@ export function InlineWorkspace({
       setStoryPrivacy({ status:"loading", authority:null, message:"" });
       void loadStoryPrivacy("", true);
     }, 0);
-    const polling = setInterval(() => {
-      void loadStoryPrivacy();
-    }, 2000);
     return () => {
       clearTimeout(start);
-      clearInterval(polling);
       storyPrivacyRequests.retire();
     };
   }, [loadStoryPrivacy, storyPrivacyEligible, storyPrivacyRequests, workflowRunId]);
@@ -600,39 +596,50 @@ export function InlineWorkspace({
   const storyPrivacyReleaseReady = presentedStoryPrivacy.status === "ready"
     && storyPrivacyAuthorityComplete(currentStoryPrivacyAuthority);
 
-  const decideStoryPrivacy = async (candidate: StoryPrivacyCandidate, decision: StoryPrivacyDecision) => {
+  const decideStoryPrivacyTarget = async (
+    target: StoryPrivacyTarget,
+    choice: StoryPrivacyTargetChoice,
+  ) => {
     const authority = currentStoryPrivacyAuthority;
-    if (!authority || candidate.reviewState !== "needs_confirmation"
-      || candidate.decision !== null || candidate.decisionVersion !== 0) return;
-    setStoryPrivacyBusy(candidate.id);
+    if (!authority || authority.status === "preparation_required"
+      || !authority.targets.some((value) => value.targetId === target.targetId
+        && value.targetContentDigest === target.targetContentDigest)) return;
+    setStoryPrivacyBusy(target.targetId);
     setStoryPrivacy({ status:"ready", authority, message:"" });
     try {
-      const response = await fetch(`/api/story-privacy/${encodeURIComponent(candidate.id)}`, {
+      const response = await fetch(`/api/story-privacy/${encodeURIComponent(target.targetId)}`, {
         method:"PATCH",
         headers:{ "content-type":"application/json" },
         body:JSON.stringify({
           workflowRunId:authority.workflowRunId,
           sourceRevision:authority.sourceRevision,
           activeStoryDigest:authority.activeStoryDigest,
-          candidateDigest:authority.candidateDigest,
-          expectedVersion:0,
-          decision,
+          authorityDigest:authority.authorityDigest,
+          targetContentDigest:target.targetContentDigest,
+          editedText:choice.editedText,
+          publicOverrides:choice.publicOverrides,
         }),
       });
-      const payload = await response.json().catch(() => ({})) as { error?: string };
+      const payload: unknown = await response.json().catch(() => ({}));
       if (response.status === 409) {
         setStoryPrivacy({ status:"loading", authority:null, message:"" });
-        await loadStoryPrivacy("The authority changed while deciding. The durable current result is shown; no mutation was retried.", true);
+        await loadStoryPrivacy("The target authority changed while saving. The durable current result is shown; no mutation was retried.", true);
         return;
       }
-      if (!response.ok) throw new Error(payload.error || "Story Privacy decision was not accepted");
-      setStoryPrivacy({ status:"loading", authority:null, message:"" });
-      await loadStoryPrivacy("Decision saved to the current Story Privacy authority.", true);
-    } catch (value) {
+      const next = parseStoryPrivacyAuthority(payload);
+      if (!response.ok || !next || next.workflowRunId !== authority.workflowRunId) {
+        const error = payload && typeof payload === "object" && "error" in payload
+          ? String((payload as { error?: unknown }).error || "") : "";
+        throw new Error(error || "Story Privacy target choice was not accepted");
+      }
       setStoryPrivacy({
-        status:"error", authority:null,
-        message:value instanceof Error ? value.message : "Story Privacy decision was not accepted",
+        status:"ready",
+        authority:next,
+        message:"Target choice saved to the exact current release authority.",
       });
+    } catch (value) {
+      setStoryPrivacy({ status:"error", authority:null,
+        message:value instanceof Error ? value.message : "Story Privacy target choice was not accepted" });
     } finally {
       setStoryPrivacyBusy("");
     }
@@ -1163,7 +1170,10 @@ export function InlineWorkspace({
             </> : view === "redaction" ? (isProject ? <StoryPrivacyReview
               state={presentedStoryPrivacy}
               busyId={storyPrivacyBusy}
-              onDecision={(candidate,decision) => { void decideStoryPrivacy(candidate,decision); }}
+              onTargetChoice={(target,choice) => {
+                void decideStoryPrivacyTarget(target,choice);
+              }}
+              onRefresh={() => { void loadStoryPrivacy("Checking the exact current imported result…", true); }}
             /> : <RedactionCompare
               job={redactionJob}
               redactions={redactions}

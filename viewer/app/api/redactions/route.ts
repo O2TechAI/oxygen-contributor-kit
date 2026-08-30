@@ -355,9 +355,10 @@ export async function POST(request: Request) {
           `INSERT INTO redaction_jobs
             (id,status,stage,model,completed,total,rejected,source_digest,
              started_at,updated_at,completed_at)
-           VALUES (?,'running','validating',?,0,?,?,NULL,?,?,NULL)`
+           VALUES (?,'complete',?,?,?,?,0,?,?,?,?)`
         ).bind(
-          jobId, job.model || null, total, reportedRejected, now, now,
+          jobId, job.stage, job.model || null, persistable.length, total,
+          snapshot.sourceDigest, now, now, now,
         ),
         db.prepare(`INSERT INTO source_privacy_receipts
           (job_id,workflow_run_id,source_revision,source_digest,receipt_digest,
@@ -369,13 +370,7 @@ export async function POST(request: Request) {
           `INSERT INTO redactions
             (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
              review_state,uncertainty_reason,status,created_by,created_at,updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,'active',?,?,?)
-           ON CONFLICT(id) DO UPDATE SET
-             start_offset=excluded.start_offset,end_offset=excluded.end_offset,
-             category=excluded.category,confidence=excluded.confidence,
-             reason=excluded.reason,review_state=excluded.review_state,
-             uncertainty_reason=excluded.uncertainty_reason,status='active',
-             updated_at=excluded.updated_at`
+           VALUES (?,?,?,?,?,?,?,?,?,?,'active',?,?,?)`
         ).bind(
           span.id || crypto.randomUUID(), span.itemId, span.documentId,
           span.startOffset, span.endOffset, span.category,
@@ -383,14 +378,6 @@ export async function POST(request: Request) {
           span.reviewState, span.uncertaintyReason ?? null,
           span.createdBy ?? "llm", now, now,
         )),
-        db.prepare(
-          `UPDATE redaction_jobs
-            SET status='complete',stage=?,completed=?,total=?,rejected=0,
-                source_digest=?,updated_at=?,completed_at=?
-           WHERE id=?`
-        ).bind(
-          job.stage, persistable.length, total, snapshot.sourceDigest, now, now, jobId,
-        ),
         ...activeStoryPrivacyInvalidationStatements(db, authority.workflowRunId, now),
         db.prepare(`SELECT CASE WHEN EXISTS (
             SELECT 1 FROM redaction_jobs j JOIN source_privacy_receipts p ON p.job_id=j.id

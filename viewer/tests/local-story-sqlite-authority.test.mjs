@@ -77,7 +77,7 @@ async function sha256(value) {
 }
 
 async function activationSnapshot(db) {
-  const [run, semantic, coverage, items, receipts, candidates, probeRun] = await Promise.all([
+  const [run, semantic, coverage, items, receipts, candidates, targets, probeRun] = await Promise.all([
     db.prepare(`SELECT story_generation_status,story_generation_completed,
       story_generation_total,story_source_revision,active_story_digest,updated_at
       FROM workflow_runs WHERE id=?`).bind(RUN_ID).first(),
@@ -90,6 +90,8 @@ async function activationSnapshot(db) {
       WHERE workflow_run_id=? ORDER BY lane`).bind(RUN_ID).all(),
     db.prepare(`SELECT candidate_id,candidate_json FROM story_privacy_candidates
       WHERE workflow_run_id=? ORDER BY candidate_id`).bind(RUN_ID).all(),
+    db.prepare(`SELECT target_id FROM story_privacy_targets
+      WHERE workflow_run_id=? ORDER BY target_id`).bind(RUN_ID).all(),
     db.prepare(`SELECT source_revision,output_digest,output_count FROM probe_runs
       WHERE workflow_run_id=?`).bind(RUN_ID).first(),
   ]);
@@ -100,6 +102,7 @@ async function activationSnapshot(db) {
     items: items.results,
     receipts: receipts.results,
     candidates: candidates.results,
+    targets: targets.results,
     probeRun,
   };
 }
@@ -236,6 +239,12 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
         "privacy-authority",
         JSON.stringify({ id: "privacy-authority" }),
       ),
+      db.prepare(`INSERT INTO story_privacy_targets
+        (workflow_run_id,target_id,target_content_digest,proposed_text,occurrences_json,
+         selected_text,public_overrides_json,decided_at) VALUES (?,?,?,?,?,?,'[]',?)`).bind(
+        RUN_ID, "story-authority::title", "3".repeat(64), "Safe title", "[]",
+        "Safe title", ACTIVATED_AT,
+      ),
       db.prepare(`UPDATE probe_runs SET source_revision=?
         WHERE workflow_run_id=? AND source_revision=?`).bind(
         INITIAL_SOURCE_REVISION + 1,
@@ -304,6 +313,7 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
       candidate_id: "privacy-authority",
       candidate_json: JSON.stringify({ id: "privacy-authority" }),
     }]);
+    assert.deepEqual(activated.targets, [{ target_id: "story-authority::title" }]);
     assert.deepEqual(activated.probeRun, {
       source_revision: INITIAL_SOURCE_REVISION + 1,
       output_digest: EMPTY_DIGEST,
@@ -430,7 +440,7 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
         finalizeCoverageManifestAuthority,
         readCoverageManifestAuthority,
       },
-      { deriveStoryReleaseTargetCatalog, storyPreparationDigest },
+      { deriveStoryReleaseTargetContents, storyPreparationDigest },
       { computeSourceDigest },
       { loadWorkflowProgress },
     ] = await Promise.all([
@@ -589,8 +599,9 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     const stories = [storySource];
     const storyOutput = [{ id: STORY_ITEM_ID, story: { ...storySource, insights: [] } }];
     const completeStoryOutput = [{ id: STORY_ITEM_ID, story: storySource }];
-    const targetCatalog = deriveStoryReleaseTargetCatalog(stories);
-    assert.ok(targetCatalog);
+    const targetContents = deriveStoryReleaseTargetContents(stories);
+    assert.ok(targetContents);
+    const targetCatalog = targetContents.map(({ id, storyKey, target }) => ({ id, storyKey, target }));
     const privacyCandidates = [{
       id: "privacy-route",
       reviewState: "deterministic",
@@ -599,6 +610,32 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       uncertaintyReason: null,
       releaseTargets: ["story-authority::title"],
     }];
+    const targetProposals = await Promise.all(targetContents.map(async (target) => {
+      const proposal = {
+        targetId: target.id,
+        targetContentDigest: await storyPreparationDigest(target.content),
+        proposedText: target.content,
+        occurrences: [],
+      };
+      if (target.id !== "story-authority::title") return proposal;
+      const original = Array.from(target.content);
+      const replaced = Array.from("authority");
+      const replacement = Array.from("boundary");
+      const start = original.length - replaced.length;
+      assert.equal(original.slice(start).join(""), replaced.join(""));
+      return {
+        ...proposal,
+        proposedText: [...original.slice(0, start), ...replacement].join(""),
+        occurrences: [{
+          originalStartOffset: start,
+          originalEndOffset: original.length,
+          proposalStartOffset: start,
+          proposalEndOffset: start + replacement.length,
+          category: "private-detail",
+        }],
+      };
+    }));
+    const storyPrivacy = { candidates: privacyCandidates, targetProposals };
     const preferenceInputDigest = await storyPreparationDigest([]);
     await db.prepare(`INSERT INTO probe_runs
       (workflow_run_id,id,source_revision,input_digest,output_digest,output_count,
@@ -626,12 +663,13 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
         inputDigest: await storyPreparationDigest(completeStoryOutput),
         scopeDigest: await storyPreparationDigest(targetCatalog.map((target) => target.id)),
         scopeCount: targetCatalog.length,
-        outputDigest: await storyPreparationDigest(privacyCandidates), outputCount: 1,
+        outputDigest: await storyPreparationDigest(storyPrivacy),
+        outputCount: targetProposals.length,
       }, {
         lane: "preference", status: "complete", inputDigest: preferenceInputDigest,
         scopeDigest: EMPTY_DIGEST, scopeCount: 0, outputDigest: EMPTY_DIGEST, outputCount: 0,
       }],
-      storyPrivacyCandidates: privacyCandidates,
+      storyPrivacy,
     };
     const body = {
       workflowRunId: RUN_ID,
@@ -852,6 +890,7 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       candidate_id: "privacy-route",
       candidate_json: JSON.stringify(privacyCandidates[0]),
     }]);
+    assert.equal(activated.targets.length, targetCatalog.length);
     assert.equal(activated.probeRun.source_revision, INITIAL_SOURCE_REVISION + 1);
     assert.equal(activated.probeRun.output_digest, EMPTY_DIGEST);
     assert.equal(activated.probeRun.output_count, 0);

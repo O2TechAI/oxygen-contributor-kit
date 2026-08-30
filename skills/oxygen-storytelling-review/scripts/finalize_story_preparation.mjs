@@ -3,7 +3,8 @@ import { rename, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import {
   canonicalPreferenceQuestionBatch,
-  deriveStoryReleaseTargetCatalog,
+  deriveStoryReleaseTargetContents,
+  normalizeStoryPrivacyOutput,
   storyPreparationDigest,
   validateStoryPreparationManifest,
 } from "../../../viewer/lib/story-preparation.ts";
@@ -124,26 +125,6 @@ function finalCandidates(value) {
   if (new Set(rows.map((row) => row.id)).size !== rows.length
     || new Set(rows.map((row) => row.story.key)).size !== rows.length) fail("FINAL_STORY_IDENTITIES_INVALID");
   return rows;
-}
-
-function normalizedPrivacy(value, catalog) {
-  if (!Array.isArray(value)) fail("PRIVACY_OUTPUT_INVALID");
-  const valid = new Set(catalog.map((target) => target.id));
-  const order = new Map(catalog.map((target, index) => [target.id, index]));
-  const result = [];
-  for (const candidate of value) {
-    rejectMetadata(candidate);
-    if (!exactKeys(candidate, ["id", "reviewState", "title", "whyFlagged", "uncertaintyReason", "releaseTargets"])
-      || !stableId(candidate.id) || !["deterministic", "needs_confirmation"].includes(candidate.reviewState)
-      || !stableId(candidate.title) || !stableId(candidate.whyFlagged)
-      || (candidate.reviewState === "deterministic" && candidate.uncertaintyReason !== null)
-      || (candidate.reviewState === "needs_confirmation" && !stableId(candidate.uncertaintyReason))
-      || !Array.isArray(candidate.releaseTargets) || candidate.releaseTargets.length === 0
-      || candidate.releaseTargets.some((target) => !valid.has(target))
-      || new Set(candidate.releaseTargets).size !== candidate.releaseTargets.length) fail("PRIVACY_OUTPUT_INVALID");
-    result.push({ ...candidate, releaseTargets: [...candidate.releaseTargets].sort((a, b) => order.get(a) - order.get(b)) });
-  }
-  return dedupe(result, (item) => item.id).sort((a, b) => utf8(a.id, b.id));
 }
 
 function dedupe(items, identity) {
@@ -349,8 +330,9 @@ async function finalize(args) {
   }));
   const { base, complete, insightCount } = expectedStoryOutputs(rows);
   const storyKeys = rows.map((row) => row.story.key).sort(utf8);
-  const catalog = deriveStoryReleaseTargetCatalog(rows.map((row) => row.story));
-  if (!catalog) fail("PRIVACY_CATALOG_INVALID");
+  const targetContents = deriveStoryReleaseTargetContents(rows.map((row) => row.story));
+  if (!targetContents) fail("PRIVACY_CATALOG_INVALID");
+  const catalog = targetContents.map(({ content: _content, ...target }) => target);
   const lessons = rows.flatMap((row) => row.story.insights.map((insight) => ({
     storyKey: row.story.key,
     insightId: insight.id,
@@ -407,8 +389,19 @@ async function finalize(args) {
   const privacyAuthority = await readLaneAuthority(shardRootInput, "story_privacy");
   if (privacyAuthority.manifest.inputDigest !== completeDigest) fail("PRIVACY_INPUT_STALE");
   sameIds(privacyAuthority.manifest.unitIds, catalog.map((target) => target.id), "PRIVACY_SCOPE_STALE");
-  const privacy = normalizedPrivacy(privacyAuthority.output, catalog);
-  if (privacyAuthority.outputCount !== privacy.length) fail("PRIVACY_RECEIPT_STALE");
+  const privacyParts = privacyAuthority.outputs;
+  if (privacyParts.some((part) => !part || typeof part !== "object" || Array.isArray(part)
+    || !Array.isArray(part.candidates) || !Array.isArray(part.targetProposals))) {
+    fail("PRIVACY_OUTPUT_INVALID");
+  }
+  const privacyInput = {
+    candidates: privacyParts.flatMap((part) => part.candidates),
+    targetProposals: privacyParts.flatMap((part) => part.targetProposals),
+  };
+  rejectMetadata(privacyInput);
+  const privacy = await normalizeStoryPrivacyOutput(privacyInput, targetContents);
+  if (!privacy) fail("PRIVACY_OUTPUT_INVALID");
+  if (privacyAuthority.outputCount !== privacy.targetProposals.length) fail("PRIVACY_RECEIPT_STALE");
   const preferenceUniverse = rows.flatMap((row) => row.story.insights.map((insight) => ({
     storyKey: row.story.key, insightId: insight.id,
   }))).sort((a, b) => utf8(a.storyKey, b.storyKey) || utf8(a.insightId, b.insightId));
@@ -430,12 +423,12 @@ async function finalize(args) {
       outputDigest: await storyPreparationDigest(insightCount === 0 ? [] : complete), outputCount: insightCount },
     { lane: "story_privacy", status: "complete", inputDigest: completeDigest,
       scopeDigest: await storyPreparationDigest(catalog.map((target) => target.id)), scopeCount: catalog.length,
-      outputDigest: await storyPreparationDigest(privacy), outputCount: privacy.length },
+      outputDigest: await storyPreparationDigest(privacy), outputCount: privacy.targetProposals.length },
     { lane: "preference", status: "complete", inputDigest: preferenceInputDigest,
       scopeDigest: await storyPreparationDigest(preferenceUniverse), scopeCount: preferenceUniverse.length,
       outputDigest, outputCount: questions.length },
   ];
-  const manifest = { schema: "oxygen.story-preparation", workflowRunId, sourceRevision, receipts, storyPrivacyCandidates: privacy };
+  const manifest = { schema: "oxygen.story-preparation", workflowRunId, sourceRevision, receipts, storyPrivacy: privacy };
   const core = await validateStoryPreparationManifest(manifest, {
     workflowRunId,
     sourceRevision,

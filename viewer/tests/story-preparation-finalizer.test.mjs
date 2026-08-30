@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   canonicalPreferenceQuestionBatch,
   deriveStoryReleaseTargetCatalog,
+  deriveStoryReleaseTargetContents,
 } from "../lib/story-preparation.ts";
 
 const root = resolve(import.meta.dirname, "../..");
@@ -84,6 +85,35 @@ function bulkDecision() {
   return {
     id: "bulk-a", kind: "privacy", count: 1, question: "Keep this reviewed group?",
     evidenceSample: ["event:z"], presentations: { zh: { question: "保留这组已审阅内容吗？" } },
+  };
+}
+
+function privacyOutput(stories, candidates) {
+  const targets = deriveStoryReleaseTargetContents(stories);
+  assert.ok(targets);
+  const flagged = new Set(candidates.flatMap((candidate) => candidate.releaseTargets));
+  return {
+    candidates,
+    targetProposals: targets.map((target) => {
+      if (!flagged.has(target.id)) return {
+        targetId: target.id, targetContentDigest: digest(target.content),
+        proposedText: target.content, occurrences: [],
+      };
+      const replacement = "Anonymous";
+      const original = Array.from(target.content);
+      const start = original.findLastIndex((point) => /[\p{L}\p{N}]/u.test(point));
+      assert.notEqual(start, -1);
+      return {
+        targetId: target.id,
+        targetContentDigest: digest(target.content),
+        proposedText: original.slice(0, start).join("") + replacement + original.slice(start + 1).join(""),
+        occurrences: [{
+          originalStartOffset: start, originalEndOffset: start + 1,
+          proposalStartOffset: start, proposalEndOffset: start + Array.from(replacement).length,
+          category: "private-identity",
+        }],
+      };
+    }),
   };
 }
 
@@ -165,7 +195,7 @@ async function fixture({
     insight: (reverse ? [...canonicalStories].reverse() : canonicalStories).map((story) => ({
       storyKey: story.key, insights: story.insights,
     })),
-    story_privacy: privacyCandidates,
+    story_privacy: privacyOutput(canonicalStories, privacyCandidates),
     preference,
   };
   const validationAuthority = {
@@ -239,7 +269,8 @@ async function fixture({
       inputDigest: inputs[lane], workerInputDigest, unitIds: laneUnits,
       outputPath: `${directoryName}/records/${shardId}/output.json`, outputDigest: digest(output),
       outputCount: lane === "insight" ? canonicalStories.reduce((total, story) => total + story.insights.length, 0)
-        : lane === "preference" ? preference.outputCount : output.length,
+        : lane === "preference" ? preference.outputCount
+          : lane === "story_privacy" ? output.targetProposals.length : output.length,
     });
   }
   return { directory, shards, output: join(directory, "output.json"), rows, cleanup: () => rm(directory, { recursive: true, force: true }) };
@@ -286,8 +317,8 @@ test("four lanes finalize exact public Story rows with reordered shards and cros
     assert.equal(one, await readFile(second.output, "utf8"));
     const result = JSON.parse(one);
     assert.equal(result.receipts.length, 4);
-    assert.equal(result.storyPrivacyCandidates.length, 1);
-    assert.deepEqual(result.storyPrivacyCandidates[0].releaseTargets, ["z::title", "é::story:block-é"]);
+    assert.equal(result.storyPrivacy.candidates.length, 1);
+    assert.deepEqual(result.storyPrivacy.candidates[0].releaseTargets, ["z::title", "é::story:block-é"]);
     const preferenceReceipt = result.receipts.find((receipt) => receipt.lane === "preference");
     assert.equal(preferenceReceipt.scopeCount, 2);
     assert.equal(preferenceReceipt.outputCount, 2);
@@ -365,7 +396,7 @@ test("the sole public Story candidate input rejects every enriched or extra fiel
   });
 });
 
-test("completed-zero Insight, Story Privacy, and Preference lanes are explicit terminal results", async () => {
+test("completed-zero Insight/Preference and zero-candidate total Privacy are explicit", async () => {
   const emptyInsight = await fixture({ insightIds: [null, null], privacy: false, questions: false });
   const emptyQuestions = await fixture({ privacy: false, questions: false });
   try {
@@ -374,7 +405,10 @@ test("completed-zero Insight, Story Privacy, and Preference lanes are explicit t
     assert.equal(emptyInsightRun.status, 0, emptyInsightRun.stderr);
     assert.equal(emptyQuestionsRun.status, 0, emptyQuestionsRun.stderr);
     const manifest = await readJson(emptyQuestions.output);
-    assert.equal(manifest.receipts.find((receipt) => receipt.lane === "story_privacy").outputCount, 0);
+    assert.equal(manifest.storyPrivacy.candidates.length, 0);
+    assert.equal(manifest.receipts.find((receipt) => receipt.lane === "story_privacy").outputCount,
+      manifest.storyPrivacy.targetProposals.length);
+    assert.ok(manifest.storyPrivacy.targetProposals.length > 0);
     assert.equal(manifest.receipts.find((receipt) => receipt.lane === "preference").outputCount, 0);
   } finally { await emptyInsight.cleanup(); await emptyQuestions.cleanup(); }
 });
@@ -489,8 +523,8 @@ test("conflicting identities and forbidden worker metadata fail without replacin
       await writeFile(value.output, "preserve-this-byte-for-byte", "utf8");
       const path = join(value.shards, "story-privacy", "records", "story-privacy-0001", "output.json");
       const data = await readJson(path);
-      if (mode === "conflict") data.push({ ...data[0], title: "Different" });
-      else data[0].provider = "forbidden";
+      if (mode === "conflict") data.candidates.push({ ...data.candidates[0], title: "Different" });
+      else data.candidates[0].provider = "forbidden";
       await json(path, data);
       assert.notEqual(run(value).status, 0);
       assert.equal(await readFile(value.output, "utf8"), "preserve-this-byte-for-byte");
