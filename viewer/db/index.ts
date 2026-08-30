@@ -3,6 +3,72 @@ import { join } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 
+const storyPrivacyCandidatesStatement = `CREATE TABLE IF NOT EXISTS story_privacy_candidates (
+  workflow_run_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
+  candidate_json TEXT NOT NULL,
+  PRIMARY KEY (workflow_run_id, candidate_id)
+)`;
+const storyPrivacyAuthoritiesStatement = `CREATE TABLE IF NOT EXISTS story_privacy_authorities (
+  workflow_run_id TEXT PRIMARY KEY,
+  source_revision INTEGER NOT NULL CHECK(source_revision > 0),
+  active_story_digest TEXT NOT NULL,
+  server_version INTEGER NOT NULL CHECK(server_version >= 0),
+  reviewed_story_digest TEXT NOT NULL,
+  target_catalog_json TEXT NOT NULL,
+  target_catalog_digest TEXT NOT NULL,
+  changed_target_digest TEXT NOT NULL,
+  changed_target_count INTEGER NOT NULL CHECK(changed_target_count >= 0),
+  receipt_digest TEXT NOT NULL,
+  proposal_digest TEXT NOT NULL,
+  proposal_count INTEGER NOT NULL CHECK(proposal_count >= 0),
+  imported_at TEXT NOT NULL
+)`;
+const storyPrivacyTargetsStatement = `CREATE TABLE IF NOT EXISTS story_privacy_targets (
+  workflow_run_id TEXT NOT NULL, target_id TEXT NOT NULL,
+  target_content_digest TEXT NOT NULL,
+  proposed_text TEXT NOT NULL,
+  occurrences_json TEXT NOT NULL CHECK(json_valid(occurrences_json)),
+  selected_text TEXT,
+  public_overrides_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(public_overrides_json)),
+  decided_at TEXT,
+  CHECK (
+    (selected_text IS NULL AND public_overrides_json='[]' AND decided_at IS NULL)
+    OR
+    (selected_text IS NOT NULL AND decided_at IS NOT NULL)
+  ),
+  PRIMARY KEY (workflow_run_id, target_id)
+)`;
+
+const legacyStoryPrivacyCandidatesStatement = `CREATE TABLE story_privacy_candidates (
+  workflow_run_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
+  candidate_json TEXT NOT NULL,
+  decision TEXT CHECK(decision IN ('keep','redact')),
+  decision_version INTEGER NOT NULL DEFAULT 0 CHECK(decision_version IN (0,1)),
+  decided_at TEXT,
+  CHECK (
+    (decision IS NULL AND decision_version=0 AND decided_at IS NULL)
+    OR
+    (decision IS NOT NULL AND decision_version=1 AND decided_at IS NOT NULL)
+  ),
+  PRIMARY KEY (workflow_run_id, candidate_id)
+)`;
+const legacyStoryPrivacyAuthoritiesStatement = `CREATE TABLE story_privacy_authorities (
+  workflow_run_id TEXT PRIMARY KEY,
+  source_revision INTEGER NOT NULL CHECK(source_revision > 0),
+  active_story_digest TEXT NOT NULL,
+  server_version INTEGER NOT NULL CHECK(server_version >= 0),
+  reviewed_story_digest TEXT NOT NULL,
+  target_catalog_json TEXT NOT NULL,
+  target_catalog_digest TEXT NOT NULL,
+  changed_target_digest TEXT NOT NULL,
+  changed_target_count INTEGER NOT NULL CHECK(changed_target_count >= 0),
+  receipt_digest TEXT NOT NULL,
+  batch_digest TEXT NOT NULL,
+  candidate_digest TEXT NOT NULL,
+  candidate_count INTEGER NOT NULL CHECK(candidate_count >= 0),
+  imported_at TEXT NOT NULL
+)`;
+
 const statements = [
   `CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL,
@@ -110,6 +176,12 @@ const statements = [
     source_digest TEXT,
     started_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS source_privacy_receipts (
+    job_id TEXT PRIMARY KEY, workflow_run_id TEXT NOT NULL UNIQUE,
+    source_revision INTEGER NOT NULL CHECK(source_revision > 0),
+    source_digest TEXT NOT NULL, receipt_digest TEXT NOT NULL,
+    receipt_json TEXT NOT NULL, created_at TEXT NOT NULL
+  )`,
   // Preference probes: one question per friction moment. `answer` stays NULL
   // until the contributor answers -- an unanswered probe must never be read as
   // a confirmed preference.
@@ -151,44 +223,128 @@ const statements = [
     completed_at TEXT NOT NULL,
     PRIMARY KEY (workflow_run_id, lane)
   )`,
-  `CREATE TABLE IF NOT EXISTS story_privacy_candidates (
-    workflow_run_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
-    candidate_json TEXT NOT NULL,
-    decision TEXT CHECK(decision IN ('keep','redact')),
-    decision_version INTEGER NOT NULL DEFAULT 0 CHECK(decision_version IN (0,1)),
-    decided_at TEXT,
-    CHECK (
-      (decision IS NULL AND decision_version=0 AND decided_at IS NULL)
-      OR
-      (decision IS NOT NULL AND decision_version=1 AND decided_at IS NOT NULL)
-    ),
-    PRIMARY KEY (workflow_run_id, candidate_id)
-  )`,
-  // One unversioned Story Privacy contract covers both activation (review
-  // session version 0) and every reviewed-Story replacement. Candidate rows
-  // remain the globally decided projection; this row binds the whole set.
-  `CREATE TABLE IF NOT EXISTS story_privacy_authorities (
-    workflow_run_id TEXT PRIMARY KEY,
-    source_revision INTEGER NOT NULL CHECK(source_revision > 0),
-    active_story_digest TEXT NOT NULL,
-    server_version INTEGER NOT NULL CHECK(server_version >= 0),
-    reviewed_story_digest TEXT NOT NULL,
-    target_catalog_json TEXT NOT NULL,
-    target_catalog_digest TEXT NOT NULL,
-    changed_target_digest TEXT NOT NULL,
-    changed_target_count INTEGER NOT NULL CHECK(changed_target_count >= 0),
-    receipt_digest TEXT NOT NULL,
-    batch_digest TEXT NOT NULL,
-    candidate_digest TEXT NOT NULL,
-    candidate_count INTEGER NOT NULL CHECK(candidate_count >= 0),
-    imported_at TEXT NOT NULL
-  )`,
+  storyPrivacyCandidatesStatement,
+  // One unversioned Story Privacy contract covers activation and each reviewed
+  // Story replacement. Agent-authored proposals are the only text proposals.
+  storyPrivacyAuthoritiesStatement,
+  // One row binds the Agent proposal and the exact contributor-selected bytes.
+  storyPrivacyTargetsStatement,
   `CREATE TABLE IF NOT EXISTS project_release_confirmations (
     workflow_run_id TEXT PRIMARY KEY,
     review_gate_digest TEXT NOT NULL,
     confirmed_at TEXT NOT NULL
   )`,
 ];
+
+const STORY_PRIVACY_SCHEMA_REFRESH_REQUIRED = "STORY_PRIVACY_SCHEMA_UNSUPPORTED: Story Privacy SQLite state is unknown or partially migrated; restore a known PR10/current backup before reopening Oxygen.";
+const storyPrivacyTableNames = [
+  "story_privacy_candidates",
+  "story_privacy_authorities",
+  "story_privacy_targets",
+] as const;
+type StoryPrivacySchemaState = "fresh" | "current" | "legacy";
+type SchemaArtifact = { type: string; name: string; tbl_name: string; sql: string | null };
+
+function normalizeSchemaSql(sql: string) {
+  return sql.replace(/\s+/gu, " ").trim()
+    .replace(/^CREATE TABLE IF NOT EXISTS /u, "CREATE TABLE ");
+}
+
+function schemaSignature(rows: SchemaArtifact[]) {
+  return JSON.stringify(rows.map((row) => ({
+    type: row.type,
+    name: row.name,
+    tbl_name: row.tbl_name,
+    sql: row.sql === null ? null : normalizeSchemaSql(row.sql),
+  })).sort((left, right) => (
+    `${left.type}\0${left.name}`.localeCompare(`${right.type}\0${right.name}`)
+  )));
+}
+
+function expectedSchemaSignature(definitions: Array<readonly [string, string]>) {
+  return schemaSignature(definitions.flatMap(([name, sql]) => ([
+    { type: "index", name: `sqlite_autoindex_${name}_1`, tbl_name: name, sql: null },
+    { type: "table", name, tbl_name: name, sql },
+  ])));
+}
+
+const currentStoryPrivacySignature = expectedSchemaSignature([
+  [storyPrivacyTableNames[0], storyPrivacyCandidatesStatement],
+  [storyPrivacyTableNames[1], storyPrivacyAuthoritiesStatement],
+  [storyPrivacyTableNames[2], storyPrivacyTargetsStatement],
+]);
+const legacyStoryPrivacySignature = expectedSchemaSignature([
+  [storyPrivacyTableNames[0], legacyStoryPrivacyCandidatesStatement],
+  [storyPrivacyTableNames[1], legacyStoryPrivacyAuthoritiesStatement],
+]);
+const legacyWithEmptyTargetSignature = expectedSchemaSignature([
+  [storyPrivacyTableNames[0], legacyStoryPrivacyCandidatesStatement],
+  [storyPrivacyTableNames[1], legacyStoryPrivacyAuthoritiesStatement],
+  [storyPrivacyTableNames[2], storyPrivacyTargetsStatement],
+]);
+
+function storyPrivacySchemaError() {
+  return new Error(STORY_PRIVACY_SCHEMA_REFRESH_REQUIRED);
+}
+
+function storyPrivacySchemaState(database: DatabaseSync): StoryPrivacySchemaState {
+  const artifacts = database.prepare(`SELECT type,name,tbl_name,sql FROM sqlite_schema
+    WHERE lower(name) GLOB 'story_privacy_*' OR lower(tbl_name) GLOB 'story_privacy_*'
+    ORDER BY type,name`).all() as unknown as SchemaArtifact[];
+  if (artifacts.length === 0) return "fresh";
+  const signature = schemaSignature(artifacts);
+  if (signature === currentStoryPrivacySignature) return "current";
+  if (signature === legacyStoryPrivacySignature) return "legacy";
+  if (signature === legacyWithEmptyTargetSignature) {
+    const row = database.prepare("SELECT COUNT(*) AS count FROM story_privacy_targets").get() as
+      | { count?: number | bigint }
+      | undefined;
+    if (Number(row?.count) === 0) return "legacy";
+  }
+  throw storyPrivacySchemaError();
+}
+
+function refreshLegacyStoryPrivacySchema(database: DatabaseSync) {
+  let transactionOpen = false;
+  try {
+    database.exec("BEGIN IMMEDIATE");
+    transactionOpen = true;
+    if (storyPrivacySchemaState(database) === "legacy") {
+      database.exec(`DELETE FROM project_release_confirmations
+        WHERE workflow_run_id IN (
+          SELECT workflow_run_id FROM story_privacy_candidates
+          UNION
+          SELECT workflow_run_id FROM story_privacy_authorities
+          UNION
+          SELECT workflow_run_id FROM story_preparation_receipts WHERE lane='story_privacy'
+        );
+        DELETE FROM story_preparation_receipts
+        WHERE lane='story_privacy' AND workflow_run_id IN (
+          SELECT workflow_run_id FROM story_privacy_candidates
+          UNION
+          SELECT workflow_run_id FROM story_privacy_authorities
+          UNION
+          SELECT workflow_run_id FROM story_preparation_receipts WHERE lane='story_privacy'
+        );
+        DROP TABLE IF EXISTS story_privacy_targets;
+        DROP TABLE story_privacy_authorities;
+        DROP TABLE story_privacy_candidates`);
+      database.exec([
+        storyPrivacyCandidatesStatement,
+        storyPrivacyAuthoritiesStatement,
+        storyPrivacyTargetsStatement,
+      ].join(";\n"));
+      if (storyPrivacySchemaState(database) !== "current") throw storyPrivacySchemaError();
+    }
+    database.exec("COMMIT");
+    transactionOpen = false;
+  } catch (error) {
+    if (transactionOpen) {
+      try { database.exec("ROLLBACK"); } catch { /* preserve the initiating failure */ }
+    }
+    throw error;
+  }
+}
 
 type Row = Record<string, unknown>;
 type StatementResult = { success: true; meta: { changes: number }; results?: Row[] };
@@ -313,7 +469,13 @@ export async function getLocalDatabase() {
   if (stateDir !== undefined) mkdirSync(stateDir, { recursive: true });
 
   const database = new DatabaseSync(databasePath);
-  database.exec(statements.join(";\n"));
-  runtime.__oxygenLocalSqlite = new LocalDatabase(database);
-  return runtime.__oxygenLocalSqlite;
+  try {
+    refreshLegacyStoryPrivacySchema(database);
+    database.exec(statements.join(";\n"));
+    runtime.__oxygenLocalSqlite = new LocalDatabase(database);
+    return runtime.__oxygenLocalSqlite;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 }

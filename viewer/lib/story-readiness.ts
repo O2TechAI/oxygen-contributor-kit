@@ -873,7 +873,8 @@ export async function readSemanticManifestAuthority(
 ): Promise<SemanticManifestAuthority | null> {
   const current = await db.prepare(`SELECT 1 AS current FROM semantic_manifests m
       JOIN workflow_runs r ON r.id=m.workflow_run_id
-      WHERE m.workflow_run_id=? AND m.source_revision=r.story_source_revision`)
+      WHERE m.workflow_run_id=? AND m.source_revision>0 AND r.story_source_revision>0
+        AND m.source_revision=r.story_source_revision`)
     .bind(workflowRunId).first<{ current: number }>();
   return current ? readStoredSemanticManifestAuthority(db, workflowRunId) : null;
 }

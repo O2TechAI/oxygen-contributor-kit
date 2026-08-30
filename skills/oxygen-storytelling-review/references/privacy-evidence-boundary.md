@@ -6,7 +6,7 @@ Do not collapse these steps into one ambiguous Privacy phase.
 
 Upstream source Privacy runs before Story generation. It prepares the reviewed input boundary by replacing non-conversational payloads with fixed labels, applying validated redaction spans, and blocking release while source-level review states remain unresolved.
 
-Story/Release Privacy runs after the Story candidate exists. It reviews release-safe Story targets and asks the contributor to Keep or Redact only when an implemented candidate authority supplies those candidates. `oxygen.story` does not contain those candidates. On this base, the Story review context is empty unless production code supplies candidates from another authority; if candidates are required but absent, stop at a readiness gate.
+Story/Release Privacy runs after the Story candidate exists. The Agent authors one meaning-preserving proposal for every release target, while candidates remain explanatory metadata outside `oxygen.story`. The contributor then chooses the exact release bytes through the server-owned target authority; the hydrated Story session does not own those choices.
 
 ## Reviewed Boundary Is The Ceiling
 
@@ -44,8 +44,8 @@ Evidence content stays in its original source language. Do not translate it and 
 
 ## Release Preview Contract
 
-Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer. It
-shows what would be released, not a raw-source browser:
+Chapter Privacy/Release Preview is implemented in the canonical Viewer. It shows what would be
+released, not a raw-source browser:
 
 - Deterministic or contributor-confirmed safe content shows only the current release-safe projection.
 - A `needs_confirmation` source Privacy item shows the minimum permitted local original beside the current safe projection, a safe uncertainty reason, and Keep/Redact.
@@ -62,26 +62,25 @@ Redact
 
 Keep preserves existing safe release context. Redact suppresses the bound release targets. Neither decision deletes source evidence, changes category/status/reason metadata, soft-deletes a row, or authorizes publication. Pending confirmation blocks Story/package release.
 
-Raw Evidence and suppressed content are not exposed through Insight review. Describe this section as
-the required release contract and readiness gate, not as an already verified UI.
+Raw Evidence and suppressed content are not exposed through Insight review.
 
-## Story/Release Candidate Shape
+## Story/Release Target Authority
 
-When current candidate authority exists, a candidate must have a stable ID, safe title/explanation, original availability, safe why-flagged reason, and explicit release targets. An empty target set means local-only or already absent from release copy and must be explicit.
+Candidate rows have stable IDs and safe explanatory metadata only. Every current release target has exactly one Agent-authored meaning-preserving proposal bound to its target-content digest. A missing, stale, invalid, or incomplete target choice blocks the whole Story/package release.
 
-The visible decision is:
+For each target, the visible choice is:
 
 ```text
-Local original or unavailable notice
-Why AI flagged it
-Keep | Redact
+Local original
+Agent-proposed anonymized text
+Use Agent proposal | Edit anonymized text | Make an exact noncredential occurrence public
 ```
 
-Do not display an AI-prescribed rewrite or treat model wording as the contributor decision.
+Credentials are always removed. HTML and ZIP consume the exact same contributor-selected bytes.
 
 ## AI And Human Revision Safety
 
-Apply review may use approved Privacy decisions to remove or suppress release content. It must not regenerate unavailable values, search disallowed sources, turn a Privacy explanation into a Story claim, or return underlying reviewed content merely to certify a user edit.
+Apply review respects the current server-owned Story target authority. It must not regenerate unavailable values, search disallowed sources, turn a Privacy explanation into a Story claim, or return underlying reviewed content merely to certify a user edit.
 
 Unsupported factual additions remain `needs_evidence` until exact permitted evidence supports them. A checkbox or plausible ID alone is not proof.
 
@@ -91,12 +90,12 @@ Verify:
 
 - source Privacy preparation ran on the reviewed input boundary, not raw package output;
 - unresolved source `needs_confirmation` items block release;
-- Story/Release candidates are not assumed to exist inside `oxygen.story`;
+- Story/Release candidate metadata and target proposals do not exist inside `oxygen.story`;
 - every Evidence reference resolves exactly once;
 - excluded semantic units cannot support Story copy;
 - Evidence stays original-language;
 - available originals are minimal and local-only;
 - unavailable originals carry no excerpt, source language, removed value, or raw payload;
-- Keep/Redact decisions are explicit human actions;
+- source Keep/Redact decisions and Story target choices are explicit human actions;
 - release projection strips originals and review metadata;
 - `publication_approved=false` remains false.

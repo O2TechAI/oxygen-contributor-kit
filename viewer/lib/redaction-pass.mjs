@@ -23,45 +23,6 @@ export async function computeSourceDigest(rows) {
     .join("");
 }
 
-/** Compare one import batch with the source-bearing fields already reviewed.
- * Organization labels, Story metadata, and original envelopes are deliberately
- * outside the redaction source identity, so a source-equivalent reattach can
- * retain a completed Privacy pass. */
-export function sourceImportMatchesExisting(existingRows, documentId, incomingItems) {
-  if (!Array.isArray(existingRows) || !Array.isArray(incomingItems)
-      || existingRows.length !== incomingItems.length) return false;
-  const incomingRows = incomingItems.map((item) => ({
-    document_id: documentId,
-    id: item?.id,
-    sequence: item?.sequence,
-    event_type: item?.eventType,
-    actor_id: item?.actorId,
-    actor_type: item?.actorType,
-    timestamp: item?.timestamp,
-    content: item?.content,
-  }));
-  const expected = canonicalSourceRows(incomingRows);
-  const actual = canonicalSourceRows(existingRows);
-  const actorIdentity = (rows) => rows.map((row) => ({
-    document_id: text(row.document_id),
-    id: text(row.id),
-    actor_id: text(row.actor_id),
-  })).sort((a, b) => a.document_id.localeCompare(b.document_id) || a.id.localeCompare(b.id));
-  return JSON.stringify(actual) === JSON.stringify(expected)
-    && JSON.stringify(actorIdentity(existingRows)) === JSON.stringify(actorIdentity(incomingRows));
-}
-
-export function finalRedactionStatus({ requestedStatus, completed, total, rejected, sourceDigest }) {
-  const complete = requestedStatus === "complete"
-    && Number.isInteger(completed) && completed >= 0
-    && Number.isInteger(total) && total >= 0
-    && completed === total
-    && Number.isInteger(rejected) && rejected === 0
-    && Boolean(sourceDigest);
-  if (complete) return "complete";
-  return requestedStatus === "complete" ? "incomplete" : "running";
-}
-
 export function partitionPersistableRedactions(spans) {
   const persistable = [];
   const duplicates = [];
@@ -98,9 +59,15 @@ function redactionReviewReleaseError(redactions) {
     : null;
 }
 
-export function redactionReleaseError(job, currentSourceDigest, redactions = []) {
+export function redactionReleaseError(
+  job,
+  currentSourceDigest,
+  redactions = [],
+  currentSourceRevision,
+) {
   if (!job) return "AI redaction must complete before the contribution ZIP can be built";
-  if (Number(job.rejected || 0) > 0) {
+  const rejected = Number(job.rejected);
+  if (!Number.isSafeInteger(rejected) || rejected !== 0) {
     return "AI redaction contains rejected spans; resolve or rerun it before export";
   }
   if (job.status !== "complete") {
@@ -108,12 +75,20 @@ export function redactionReleaseError(job, currentSourceDigest, redactions = [])
   }
   const completed = Number(job.completed);
   const total = Number(job.total);
-  if (!Number.isInteger(completed) || !Number.isInteger(total)
-      || completed < 0 || total < 0 || completed !== total) {
+  if (!Number.isSafeInteger(completed) || !Number.isSafeInteger(total)
+      || completed < 0 || total < 0 || completed !== total
+      || completed !== redactions.length) {
     return "AI redaction is incomplete; completed and total counts do not match";
   }
   if (!job.source_digest) {
     return "AI redaction source identity is missing; rerun redaction before export";
+  }
+  if (!Number.isSafeInteger(job.source_revision) || job.source_revision <= 0
+      || !/^[0-9a-f]{64}$/u.test(String(job.receipt_digest || ""))
+      || (currentSourceRevision !== undefined
+        && (!Number.isSafeInteger(currentSourceRevision) || currentSourceRevision <= 0
+          || job.source_revision > currentSourceRevision))) {
+    return "AI redaction source receipt is missing or stale; rerun redaction before export";
   }
   if (job.source_digest !== currentSourceDigest) {
     return "AI redaction source changed after review; rerun redaction before export";

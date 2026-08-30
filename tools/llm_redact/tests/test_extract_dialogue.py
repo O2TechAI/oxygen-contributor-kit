@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 import unittest
@@ -19,13 +20,20 @@ def write_meeting(run: Path, meeting_id: str, *, root=False, records=None) -> Pa
     directory = run if root else run / "meetings" / meeting_id
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "meeting.json"
+    meeting_records = records if records is not None else [{
+        "record_id": "record-000001",
+        "text": f"safe synthetic text for {meeting_id}",
+    }]
+    if isinstance(meeting_records, list):
+        meeting_records = [
+            {**record, "sequence_in_meeting": record.get("sequence_in_meeting", index)}
+            if isinstance(record, dict) else record
+            for index, record in enumerate(meeting_records, 1)
+        ]
     path.write_text(json.dumps({
         "schema": MODULE.AI_REVIEW_MEETING_SCHEMA,
         "meeting_id": meeting_id,
-        "records": records if records is not None else [{
-            "record_id": "record-000001",
-            "text": f"safe synthetic text for {meeting_id}",
-        }],
+        "records": meeting_records,
     }), encoding="utf-8")
     return path
 
@@ -54,6 +62,16 @@ def write_trajectory(run: Path) -> None:
             "dropped_event_count": 0,
             "cross_trajectory_semantic_replay_count": 0,
         },
+    }), encoding="utf-8")
+    (run / "index.json").write_text(json.dumps({
+        "schema": MODULE.AI_REVIEW_RUN_SCHEMA,
+        "tool": "prepare_ai_review_run",
+        "trajectory_count": 1,
+        "meeting_count": 0,
+        "source_warning_count": 0,
+        "review_status": "pending",
+        "publication_approved": False,
+        "trajectories": [{"trajectory_id": "traj-safe", "ok": True}],
     }), encoding="utf-8")
 
 
@@ -91,6 +109,20 @@ class ExtractDialogueTest(unittest.TestCase):
             self.assertEqual(bundle["turns"][0]["item_id"], "evt-" + "a" * 64)
             self.assertEqual(bundle["turns"][0]["event_id"], "evt-" + "a" * 64)
 
+    def test_foreign_trajectory_outside_run_index_is_rejected(self):
+        with TemporaryDirectory() as temp:
+            run = Path(temp, "review")
+            write_trajectory(run)
+            shutil.copytree(
+                run / "trajectories" / "traj-safe",
+                run / "trajectories" / "traj-foreign",
+            )
+
+            with self.assertRaisesRegex(
+                SystemExit, "^SOURCE_PRIVACY_DIALOGUE_INPUT_INVALID$",
+            ):
+                MODULE.extract_bundles(run)
+
     def test_root_meeting_is_rejected(self):
         with TemporaryDirectory() as temp:
             run = Path(temp, "review")
@@ -103,7 +135,10 @@ class ExtractDialogueTest(unittest.TestCase):
         with TemporaryDirectory() as temp:
             run = Path(temp, "review")
             run.mkdir()
-            root_meeting = run / "meeting.json"
+            root_meeting = (
+                MODULE.assert_literal_physical_path(run).resolve(strict=True)
+                / "meeting.json"
+            )
             with mock.patch.object(
                 Path, "is_symlink", autospec=True,
                 side_effect=lambda path: path == root_meeting,
@@ -146,12 +181,12 @@ class ExtractDialogueTest(unittest.TestCase):
             turns = MODULE.extract_bundles(run)[0]["turns"]
 
             self.assertEqual(turns[0]["item_id"], "meeting-000001:stable-record")
-            self.assertEqual(turns[0]["event_id"], "stable-record")
+            self.assertEqual(turns[0]["event_id"], "meeting-000001:stable-record")
             self.assertRegex(
                 turns[1]["item_id"],
                 r"^meeting-000001:rec-[0-9a-f]{64}$",
             )
-            self.assertEqual(turns[1]["event_id"], "record-000002")
+            self.assertEqual(turns[1]["event_id"], turns[1]["item_id"])
             self.assertEqual([turn["text"] for turn in turns], [
                 "safe stable record", "safe fallback record",
             ])
@@ -167,8 +202,88 @@ class ExtractDialogueTest(unittest.TestCase):
 
             self.assertEqual(
                 [bundle["trajectory"] for bundle in bundles],
-                ["traj-safe", "meeting-000001", "meeting-000002"],
+                ["meeting-000001", "meeting-000002", "traj-safe"],
             )
+
+    def test_output_identity_is_validated_before_any_staging_write(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            invalid = {
+                "trajectory": "../escaped",
+                "document_kind": "trajectory",
+                "turns": [{
+                    "event_id": "evt-" + "a" * 64,
+                    "document_id": "../escaped",
+                    "item_id": "evt-" + "a" * 64,
+                    "sequence": 1,
+                    "role": "user",
+                    "timestamp": None,
+                    "text": "safe synthetic text",
+                }],
+                "chars": len("safe synthetic text"),
+            }
+            authority = {
+                "workflowRunId": "workflow-safe",
+                "sourceRevision": 1,
+                "finalizedCorpus": {
+                    "revision": 1,
+                    "digest": "c" * 64,
+                    "documentCount": 1,
+                    "itemCount": 1,
+                },
+                "sourceDigest": "d" * 64,
+            }
+
+            with self.assertRaisesRegex(SystemExit, "^SOURCE_PRIVACY_DIALOGUE_INVALID$"):
+                MODULE.install_dialogue_output(root / "out", authority, [invalid])
+
+            self.assertFalse((root / "out").exists())
+            self.assertFalse((root / "escaped.json").exists())
+
+    def test_output_late_collision_preserves_owner_and_returns_fixed_error(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "dialogue"
+            text = "safe synthetic text"
+            bundle = {
+                "trajectory": "traj-safe",
+                "document_kind": "trajectory",
+                "turns": [{
+                    "event_id": "evt-" + "a" * 64,
+                    "document_id": "traj-safe",
+                    "item_id": "evt-" + "a" * 64,
+                    "sequence": 1,
+                    "role": "user",
+                    "timestamp": None,
+                    "text": text,
+                }],
+                "chars": len(text),
+            }
+            authority = {
+                "workflowRunId": "workflow-safe",
+                "sourceRevision": 1,
+                "finalizedCorpus": {
+                    "revision": 1,
+                    "digest": "c" * 64,
+                    "documentCount": 1,
+                    "itemCount": 1,
+                },
+                "sourceDigest": "d" * 64,
+            }
+
+            def collide(_stage: Path, final: Path) -> None:
+                final.mkdir()
+                (final / "owner.txt").write_text("owner", encoding="utf-8")
+                raise FileExistsError
+
+            with mock.patch.object(MODULE, "rename_noreplace", side_effect=collide), \
+                    self.assertRaisesRegex(
+                        SystemExit, "^SOURCE_PRIVACY_DIALOGUE_OUTPUT_EXISTS$",
+                    ):
+                MODULE.install_dialogue_output(output, authority, [bundle])
+
+            self.assertEqual((output / "owner.txt").read_text(encoding="utf-8"), "owner")
+            self.assertEqual(list(root.glob(".dialogue.*.tmp")), [])
 
     def test_duplicate_and_malformed_prepared_meetings_fail_closed(self):
         with TemporaryDirectory() as temp:

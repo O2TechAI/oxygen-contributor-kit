@@ -10,6 +10,7 @@ import test from "node:test";
 import {
   STORY_PREPARATION_EMPTY_ARRAY_DIGEST,
   deriveStoryReleaseTargetCatalog,
+  deriveStoryReleaseTargetContents,
   validateStoryPreparationManifest,
 } from "../lib/story-preparation.ts";
 
@@ -96,9 +97,10 @@ async function authorityFixture({
 } = {}) {
   const storyCandidates = rowsFor(stories);
   const semanticUnitIds = ["unit-a", "unit-b"];
-  const targetCatalog = deriveStoryReleaseTargetCatalog(stories);
-  assert.ok(targetCatalog);
-  const privacy = privacyCandidates ?? [{
+  const targetContents = deriveStoryReleaseTargetContents(stories);
+  assert.ok(targetContents);
+  const targetCatalog = targetContents.map(({ id, storyKey, target }) => ({ id, storyKey, target }));
+  const candidates = privacyCandidates ?? [{
     id: "candidate-cross-chapter",
     reviewState: "needs_confirmation",
     title: "One decision spans Chapters",
@@ -106,6 +108,34 @@ async function authorityFixture({
     uncertaintyReason: "A contributor decision is required.",
     releaseTargets: ["a::title", "b::story:block-b"],
   }];
+  const flagged = new Set(candidates.flatMap((candidate) => candidate.releaseTargets));
+  const privacy = {
+    candidates,
+    targetProposals: targetContents.map((target) => {
+      if (!flagged.has(target.id)) return {
+        targetId: target.id,
+        targetContentDigest: independentDigest(target.content),
+        proposedText: target.content,
+        occurrences: [],
+      };
+      const replacement = "Anonymous";
+      const original = Array.from(target.content);
+      const start = original.findLastIndex((point) => /[\p{L}\p{N}]/u.test(point));
+      assert.notEqual(start, -1);
+      return {
+        targetId: target.id,
+        targetContentDigest: independentDigest(target.content),
+        proposedText: original.slice(0, start).join("") + replacement + original.slice(start + 1).join(""),
+        occurrences: [{
+          originalStartOffset: start,
+          originalEndOffset: start + 1,
+          proposalStartOffset: start,
+          proposalEndOffset: start + Array.from(replacement).length,
+          category: "private-identity",
+        }],
+      };
+    }),
+  };
   const preferenceOutput = preferenceCount === 0 ? [] : [{ id: "question-1" }];
   const lessonOutput = stories.flatMap((source) => source.insights.map((insight) => ({
     storyKey: source.key,
@@ -160,7 +190,7 @@ async function authorityFixture({
     scopeDigest: independentDigest(targetCatalog.map((target) => target.id)),
     scopeCount: targetCatalog.length,
     outputDigest: independentDigest(privacy),
-    outputCount: privacy.length,
+    outputCount: privacy.targetProposals.length,
   }, {
     lane: "preference",
     status: "complete",
@@ -184,7 +214,7 @@ async function authorityFixture({
       workflowRunId: RUN_ID,
       sourceRevision: SOURCE_REVISION,
       receipts,
-      storyPrivacyCandidates: privacy,
+      storyPrivacy: privacy,
     },
     targetCatalog,
   };
@@ -199,8 +229,8 @@ test("exact four terminal digest-bound receipts succeed and one candidate spans 
   assert.deepEqual(result.authority.receipts.map((receipt) => receipt.lane), [
     "story", "insight", "story_privacy", "preference",
   ]);
-  assert.equal(result.authority.privacyCandidates.length, 1);
-  assert.deepEqual(result.authority.privacyCandidates[0].releaseTargets, [
+  assert.equal(result.authority.privacy.candidates.length, 1);
+  assert.deepEqual(result.authority.privacy.candidates[0].releaseTargets, [
     "a::title", "b::story:block-b",
   ]);
 });
@@ -220,7 +250,7 @@ test("fixed zero-Insight final Story structure independently binds Story Privacy
   assert.equal((await validateStoryPreparationManifest(fixture.manifest, fixture.context)).ok, true);
 });
 
-test("Story cannot be zero while Insight, Story Privacy, and Preference complete-zero are explicit", async () => {
+test("Story cannot be zero while zero-candidate Privacy remains total and other zero lanes are explicit", async () => {
   const fixture = await authorityFixture({
     stories: [story("a", { insight: false })],
     privacyCandidates: [],
@@ -229,13 +259,16 @@ test("Story cannot be zero while Insight, Story Privacy, and Preference complete
   const result = await validateStoryPreparationManifest(fixture.manifest, fixture.context);
   assert.equal(result.ok, true, result.code);
   assert.equal(result.authority.receipts.find((receipt) => receipt.lane === "story").outputCount, 1);
-  for (const lane of ["insight", "story_privacy", "preference"]) {
+  for (const lane of ["insight", "preference"]) {
     const receipt = result.authority.receipts.find((item) => item.lane === lane);
     assert.equal(receipt.outputCount, 0);
     assert.equal(receipt.outputDigest, STORY_PREPARATION_EMPTY_ARRAY_DIGEST);
   }
   const privacyReceipt = result.authority.receipts.find((item) => item.lane === "story_privacy");
   assert.notEqual(privacyReceipt.inputDigest, STORY_PREPARATION_EMPTY_ARRAY_DIGEST);
+  assert.equal(privacyReceipt.outputCount, fixture.targetCatalog.length);
+  assert.notEqual(privacyReceipt.outputDigest, STORY_PREPARATION_EMPTY_ARRAY_DIGEST);
+  assert.equal(result.authority.privacy.candidates.length, 0);
   const emptyStory = clone(fixture);
   emptyStory.context.storyCandidates = [];
   assert.equal((await validateStoryPreparationManifest(emptyStory.manifest, emptyStory.context)).ok, false);
@@ -353,7 +386,7 @@ test("Privacy candidate data rejects retired/private fields and invalid uncertai
     "prompt", "provider", "model", "confidence", "rewrite", "reviewLedger",
   ]) await t.test(field, async () => {
     const manifest = clone(fixture.manifest);
-    manifest.storyPrivacyCandidates[0][field] = "PRIVATE-SENTINEL";
+    manifest.storyPrivacy.candidates[0][field] = "PRIVATE-SENTINEL";
     assert.equal((await validateStoryPreparationManifest(manifest, fixture.context)).ok, false);
   });
   for (const mutate of [
@@ -362,7 +395,7 @@ test("Privacy candidate data rejects retired/private fields and invalid uncertai
     (candidate) => { candidate.reviewState = "needs_confirmation"; candidate.uncertaintyReason = ""; },
   ]) {
     const manifest = clone(fixture.manifest);
-    mutate(manifest.storyPrivacyCandidates[0]);
+    mutate(manifest.storyPrivacy.candidates[0]);
     assert.equal((await validateStoryPreparationManifest(manifest, fixture.context)).ok, false);
   }
 });
@@ -374,7 +407,7 @@ test("Privacy target membership rejects old, foreign, duplicate, and empty targe
     ["a::title", "a::title"], [],
   ]) {
     const manifest = clone(fixture.manifest);
-    manifest.storyPrivacyCandidates[0].releaseTargets = targets;
+    manifest.storyPrivacy.candidates[0].releaseTargets = targets;
     assert.equal((await validateStoryPreparationManifest(manifest, fixture.context)).ok, false);
   }
 });
@@ -561,6 +594,18 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       bulkDecisions: [],
       autoRemoved: { total: 0, reversible: true, categories: [] },
     };
+    let revisionZeroBatchCalls = 0;
+    db.batch = async (statements) => {
+      revisionZeroBatchCalls += 1;
+      return realBatch(statements);
+    };
+    assert.equal((await route.POST(new Request("http://localhost/api/probes", {
+      method: "POST", body: JSON.stringify({ ...zero, sourceRevision: 0 }),
+    }))).status, 400);
+    assert.equal(revisionZeroBatchCalls, 0);
+    assert.deepEqual(await sqliteSnapshot(db), answered);
+    db.batch = realBatch;
+
     assert.equal((await route.POST(new Request("http://localhost/api/probes", {
       method: "POST", body: JSON.stringify(zero),
     }))).status, 200);
@@ -649,6 +694,23 @@ test("Preference GET and PATCH expose and mutate only current ready authority", 
     }), { params: Promise.resolve({ id: "current-probe" }) });
     const beforeStalePatch = await db.prepare(`SELECT answer_choice,answer_text,answered_at
       FROM probes WHERE id='current-probe'`).first();
+
+    await db.prepare(`UPDATE workflow_runs SET story_source_revision=0 WHERE id=?`)
+      .bind(RUN_ID).run();
+    await db.prepare(`UPDATE probe_runs SET source_revision=0 WHERE workflow_run_id=?`)
+      .bind(RUN_ID).run();
+    assert.deepEqual(await (await collectionRoute.GET()).json(), {
+      probes: [], bulkDecisions: [], run: null,
+    });
+    assert.equal((await itemRoute.PATCH(new Request("http://localhost/api/probes/current-probe", {
+      method: "PATCH", body: JSON.stringify({ clear: true }),
+    }), { params: Promise.resolve({ id: "current-probe" }) })).status, 409);
+    assert.deepEqual(await db.prepare(`SELECT answer_choice,answer_text,answered_at
+      FROM probes WHERE id='current-probe'`).first(), beforeStalePatch);
+    await db.prepare(`UPDATE workflow_runs SET story_source_revision=? WHERE id=?`)
+      .bind(SOURCE_REVISION, RUN_ID).run();
+    await db.prepare(`UPDATE probe_runs SET source_revision=? WHERE workflow_run_id=?`)
+      .bind(SOURCE_REVISION, RUN_ID).run();
 
     await db.prepare(`UPDATE workflow_runs SET story_source_revision=? WHERE id=?`)
       .bind(SOURCE_REVISION + 1, RUN_ID).run();

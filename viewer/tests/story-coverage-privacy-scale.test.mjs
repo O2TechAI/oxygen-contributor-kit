@@ -11,8 +11,11 @@ import {
   finalizeCoverageManifestAuthority,
   validateSemanticManifestAuthority,
 } from "../lib/story-readiness.ts";
-import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { startWorkflowPolling } from "../lib/workflow-progress.ts";
+import {
+  buildSourcePrivacyReceipt,
+  installSourcePrivacyReceipt,
+} from "./fixtures/source-privacy-receipt.mjs";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -96,7 +99,7 @@ test("24,796-item Coverage Privacy authority is indexed, bounded, and passive-po
 
       await db.prepare(`INSERT INTO documents
         (id,kind,title,item_count,imported_at,updated_at)
-        VALUES ('scale-doc','synthetic','Scale document',?,?,?)`)
+        VALUES ('scale-doc','trajectory','Scale document',?,?,?)`)
         .bind(itemCount, now, now).run();
       await db.prepare(`INSERT INTO workflow_runs
         (id,story_generation_status,story_source_revision,created_at,updated_at)
@@ -138,27 +141,29 @@ test("24,796-item Coverage Privacy authority is indexed, bounded, and passive-po
         for (const [index, record] of records.entries()) {
           await db.prepare(`INSERT INTO items
             (id,document_id,sequence,event_type,actor_type,content,original_json)
-            VALUES (?,'scale-doc',?,'message','system','x','{}')`).bind(record.id, index).run();
+            VALUES (?,'scale-doc',?,'message','system','x','{}')`).bind(record.id, index + 1).run();
           await db.prepare(`INSERT INTO semantic_unit_members
             (item_id,workflow_run_id,unit_id,source_digest) VALUES (?,?,?,?)`).bind(
             record.id, runId, unitByItem.get(record.id), record.sourceDigest,
           ).run();
         }
       });
-      const sourceRows = records.map((record, index) => ({
-        id: record.id,
-        document_id: "scale-doc",
-        sequence: index,
-        event_type: "message",
-        actor_type: "system",
-        timestamp: null,
-        content: "x",
-      }));
+      const sourcePrivacyReceipt = await buildSourcePrivacyReceipt(db, {
+        workflowRunId: runId,
+        sourceRevision: 1,
+        redactions: [],
+      });
       await db.prepare(`INSERT INTO redaction_jobs
         (id,status,stage,model,completed,total,rejected,source_digest,started_at,updated_at,completed_at)
         VALUES ('scale-privacy','complete','privacy',NULL,0,0,0,?,?,?,?)`).bind(
-        await computeSourceDigest(sourceRows), now, now, now,
+        sourcePrivacyReceipt.sourceDigest, now, now, now,
       ).run();
+      await installSourcePrivacyReceipt(db, {
+        jobId: "scale-privacy",
+        workflowRunId: runId,
+        receipt: sourcePrivacyReceipt,
+        at: now,
+      });
 
       const realPrepare = db.prepare.bind(db);
       const realBatch = db.batch.bind(db);

@@ -294,7 +294,7 @@ type StoryReviewSession = {
 
 Do not claim this session stores Preference answers, source Privacy spans, Story source candidates, coverage manifests, release originals, private review notes, prompts, or hidden metadata.
 
-On this base, restored final Story sessions reject nonempty top-level `privacyDecisions` during source-bound hydration. Story/Release Privacy candidates must come from an implemented authority outside `oxygen.story` before they can be treated as review obligations.
+Restored final Story sessions reject nonempty top-level `privacyDecisions` during source-bound hydration. Story/Release Privacy candidate metadata, total target proposals, and contributor target choices live in the implemented server-owned authority outside `oxygen.story`.
 
 ## Reviewed Release
 

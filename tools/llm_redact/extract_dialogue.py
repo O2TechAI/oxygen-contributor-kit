@@ -6,8 +6,12 @@ trajectory, ready to hand to a sub-agent in a single request.
 """
 import argparse
 import json
+import os
 import pathlib
+import shutil
 import sys
+import tempfile
+import urllib.request
 
 TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(TOOLS_ROOT) not in sys.path:
@@ -17,17 +21,28 @@ if str(LLM_REDACT_ROOT) not in sys.path:
     sys.path.insert(0, str(LLM_REDACT_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
+from atomic_rename import rename_noreplace
 from ingest.human_source_projection import (
     meeting_contribution_ids,
 )
 from prepare_ai_review_run import (
     AI_REVIEW_EVENT_SCHEMA,
     AI_REVIEW_MEETING_SCHEMA,
+    AI_REVIEW_RUN_SCHEMA,
     AI_REVIEW_TRAJECTORY_SCHEMA,
     POLICY_ID,
     digest_events,
     discover_meetings,
+    project_map_authority,
     validated_trajectory,
+)
+from push_redactions import _RejectRedirects, validate_base_url
+from source_privacy_receipt import (
+    SOURCE_AUTHORITY_KEYS,
+    assert_literal_physical_path,
+    canonical_bundle_bytes,
+    dialogue_authority,
+    validate_source_authority,
 )
 
 KEEP_EVENT_TYPE = "message"
@@ -42,7 +57,7 @@ def extract_one(traj_dir: pathlib.Path) -> dict:
         manifest_schema=AI_REVIEW_TRAJECTORY_SCHEMA,
         event_schema=AI_REVIEW_EVENT_SCHEMA,
     )
-    for event in events:
+    for index, event in enumerate(events, 1):
         if event.get("event_type") != KEEP_EVENT_TYPE:
             continue
         payload = event.get("payload") or {}
@@ -54,17 +69,17 @@ def extract_one(traj_dir: pathlib.Path) -> dict:
             "event_id": event.get("event_id"),
             "document_id": document_id,
             "item_id": item_id,
+            "sequence": event.get("sequence", index),
             "role": payload.get("role"),
             "timestamp": event.get("timestamp"),
             "text": text,
         })
+    turns.sort(key=lambda turn: (turn["sequence"], turn["item_id"].encode("utf-8")))
     return {"trajectory": document_id, "document_kind": "trajectory", "turns": turns,
             "chars": sum(len(t["text"]) for t in turns)}
 
 
-def extract_meeting(path: pathlib.Path) -> dict | None:
-    dataset = json.loads(path.read_text(encoding="utf-8"))
-    meeting_id = str(dataset.get("meeting_id") or dataset.get("id") or path.parent.name)
+def extract_meeting(dataset: dict, meeting_id: str) -> dict | None:
     records = dataset.get("records") or []
     try:
         item_ids = meeting_contribution_ids(meeting_id, records)
@@ -78,15 +93,17 @@ def extract_meeting(path: pathlib.Path) -> dict | None:
         if not isinstance(text, str) or not text.strip():
             continue
         turns.append({
-            "event_id": str(record.get("record_id") or f"record-{index:06d}"),
+            "event_id": item_id,
             "document_id": meeting_id,
             "item_id": item_id,
+            "sequence": record.get("sequence_in_meeting") or record.get("order") or index,
             "role": "user",
             "timestamp": record.get("timestamp") or record.get("started_at"),
             "text": text,
         })
     if not turns:
         return None
+    turns.sort(key=lambda turn: (turn["sequence"], turn["item_id"].encode("utf-8")))
     return {
         "trajectory": meeting_id,
         "document_kind": "meeting",
@@ -96,19 +113,93 @@ def extract_meeting(path: pathlib.Path) -> dict | None:
 
 
 def extract_bundles(run: pathlib.Path) -> list[dict]:
+    try:
+        run = assert_literal_physical_path(run).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        raise SystemExit("SOURCE_PRIVACY_DIALOGUE_INPUT_INVALID") from None
     bundles = []
-    trajectories = run / "trajectories"
-    if trajectories.is_dir():
-        bundles.extend(
-            extract_one(traj_dir)
-            for traj_dir in sorted(trajectories.iterdir())
-            if traj_dir.is_dir()
-        )
-    for meeting in discover_meetings(run, expected_schema=AI_REVIEW_MEETING_SCHEMA):
-        bundle = extract_meeting(meeting["path"])
+    try:
+        for traj_dir in project_map_authority.indexed_trajectory_directories(run):
+            assert_literal_physical_path(traj_dir / "manifest.json")
+            assert_literal_physical_path(traj_dir / "events.jsonl")
+            bundles.append(extract_one(traj_dir))
+    except (OSError, RuntimeError, ValueError):
+        raise SystemExit("SOURCE_PRIVACY_DIALOGUE_INPUT_INVALID") from None
+    for meeting in discover_meetings(
+        run,
+        expected_schema=AI_REVIEW_MEETING_SCHEMA,
+        require_review_identity=True,
+    ):
+        bundle = extract_meeting(meeting["dataset"], meeting["source_meeting_id"])
         if bundle:
             bundles.append(bundle)
-    return bundles
+    return sorted(bundles, key=lambda bundle: bundle["trajectory"].encode("utf-8"))
+
+
+def fetch_source_authority(base_url: str, workflow_run_id: str) -> dict:
+    origin = validate_base_url(base_url)
+    request = urllib.request.Request(
+        f"{origin}/api/redactions?sourceAuthority=1",
+        headers={"accept": "application/json"},
+        method="GET",
+    )
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _RejectRedirects(),
+    )
+    try:
+        with opener.open(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SystemExit("SOURCE_PRIVACY_AUTHORITY_UNAVAILABLE") from error
+    try:
+        if not isinstance(payload, dict) or set(payload) != {"sourceAuthority"}:
+            raise ValueError
+        authority = validate_source_authority(payload["sourceAuthority"])
+    except ValueError:
+        raise SystemExit("SOURCE_PRIVACY_AUTHORITY_INVALID") from None
+    if authority["workflowRunId"] != workflow_run_id:
+        raise SystemExit("SOURCE_PRIVACY_AUTHORITY_FOREIGN")
+    return authority
+
+
+def install_dialogue_output(out: pathlib.Path, authority: dict, bundles: list[dict]) -> None:
+    try:
+        records = [(bundle, canonical_bundle_bytes(bundle)) for bundle in bundles]
+        dialogue = dialogue_authority(records)
+    except (TypeError, ValueError):
+        raise SystemExit("SOURCE_PRIVACY_DIALOGUE_INVALID") from None
+    document_names = [f"{bundle['trajectory']}.json" for bundle in bundles]
+    folded_names = [name.casefold() for name in document_names]
+    if ("index.json" in folded_names
+            or len(folded_names) != len(set(folded_names))):
+        raise SystemExit("SOURCE_PRIVACY_DIALOGUE_IDENTITY_CONFLICT")
+    try:
+        literal = assert_literal_physical_path(out, allow_missing_leaf=True)
+    except ValueError:
+        raise SystemExit("SOURCE_PRIVACY_DIALOGUE_OUTPUT_INVALID") from None
+    if literal.exists() or literal.is_symlink():
+        raise SystemExit("SOURCE_PRIVACY_DIALOGUE_OUTPUT_EXISTS")
+    temporary = pathlib.Path(tempfile.mkdtemp(
+        prefix=f".{literal.name}.", suffix=".tmp", dir=literal.parent,
+    ))
+    try:
+        for bundle, raw in records:
+            with (temporary / f"{bundle['trajectory']}.json").open("xb") as handle:
+                handle.write(raw)
+        index = {
+            **{key: authority[key] for key in SOURCE_AUTHORITY_KEYS},
+            "dialogue": dialogue,
+        }
+        with (temporary / "index.json").open("xb") as handle:
+            handle.write(canonical_bundle_bytes(index))
+        try:
+            rename_noreplace(temporary, literal)
+        except FileExistsError:
+            raise SystemExit("SOURCE_PRIVACY_DIALOGUE_OUTPUT_EXISTS") from None
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
 
 
 def main() -> int:
@@ -116,34 +207,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", type=pathlib.Path)
     parser.add_argument("--out", type=pathlib.Path, required=True)
+    parser.add_argument("--base-url", required=True)
+    parser.add_argument("--workflow-run-id", required=True)
     args = parser.parse_args()
 
-    index = []
+    authority = fetch_source_authority(args.base_url, args.workflow_run_id)
     bundles = extract_bundles(args.run)
-    args.out.mkdir(parents=True, exist_ok=True)
-    for bundle in bundles:
-        if not bundle["turns"]:
-            continue
-        dest = args.out / f"{bundle['trajectory']}.json"
-        dest.write_text(
-            json.dumps(bundle, ensure_ascii=False, indent=1),
-            encoding="utf-8",
-        )
-        index.append({"trajectory": bundle["trajectory"],
-                      "document_kind": bundle.get("document_kind", "trajectory"),
-                      "turns": len(bundle["turns"]),
-                      "chars": bundle["chars"],
-                      "file": str(dest)})
-    if not index:
+    bundles = [bundle for bundle in bundles if bundle["turns"]]
+    if not bundles:
         raise SystemExit(f"no conversational turns found in {args.run}")
-    (args.out / "index.json").write_text(
-        json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
-    total = sum(item["chars"] for item in index)
-    print(json.dumps({"trajectories": len(index),
-                      "turns": sum(i["turns"] for i in index),
+    install_dialogue_output(args.out, authority, bundles)
+    total = sum(bundle["chars"] for bundle in bundles)
+    print(json.dumps({"trajectories": len(bundles),
+                      "turns": sum(len(bundle["turns"]) for bundle in bundles),
                       "chars": total}, ensure_ascii=False))
-    for item in sorted(index, key=lambda x: -x["chars"]):
-        print(f"  {item['trajectory']}  turns={item['turns']:4d}  chars={item['chars']:7d}")
+    for bundle in sorted(bundles, key=lambda value: -value["chars"]):
+        print(
+            f"  {bundle['trajectory']}  turns={len(bundle['turns']):4d}  "
+            f"chars={bundle['chars']:7d}"
+        )
     return 0
 
 

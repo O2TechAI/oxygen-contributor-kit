@@ -3,6 +3,10 @@ import {
   storyReviewSessionSemanticJson,
   type StoryReviewSession,
 } from "./story-review-session.ts";
+import {
+  validActivatedSourceRevision,
+  validNonnegativeAuthorityCounter,
+} from "./authority-validation.mjs";
 
 export type StoryReviewSessionSaveRequest = {
   workflowRunId: string;
@@ -106,6 +110,10 @@ export class StoryReviewSessionPersistenceQueue {
     session: StoryReviewSession | null;
     persistedAt?: string | null;
   }) {
+    if (!validNonnegativeAuthorityCounter(value.serverVersion)
+      || !validActivatedSourceRevision(value.sourceRevision)) {
+      throw new StoryReviewSessionPersistenceError("STORY_SESSION_STATE_INVALID");
+    }
     this.cancelTimer();
     this.generation += 1;
     this.rejectWaiters(new Error("Story review persistence was reloaded"));
@@ -226,7 +234,8 @@ export class StoryReviewSessionPersistenceQueue {
         : acknowledgement.noChange && (acknowledgement.serverVersion === request.expectedVersion
           || (request.expectedVersion === 0 && acknowledgement.serverVersion === 1));
       if (acknowledgement.sourceRevision !== request.sourceRevision
-        || !Number.isSafeInteger(acknowledgement.serverVersion)
+        || !validActivatedSourceRevision(acknowledgement.sourceRevision)
+        || !validNonnegativeAuthorityCounter(acknowledgement.serverVersion)
         || acknowledgement.saved === acknowledgement.noChange
         || !versionMatches
         || typeof acknowledgement.persistedAt !== "string"
@@ -300,8 +309,8 @@ export async function runDurableStoryReviewHandoff<T>(options: {
     const current = options.currentSession();
     if (!current || !options.persistence.isDurable(current)) continue;
     if (state.status !== "durable"
-      || !Number.isSafeInteger(state.serverVersion) || state.serverVersion < 0
-      || !Number.isSafeInteger(state.sourceRevision) || Number(state.sourceRevision) < 0
+      || !validNonnegativeAuthorityCounter(state.serverVersion)
+      || !validActivatedSourceRevision(state.sourceRevision)
       || current.workflowRunId !== latest.workflowRunId) {
       throw new StoryReviewSessionPersistenceError("STORY_SESSION_STATE_INVALID");
     }

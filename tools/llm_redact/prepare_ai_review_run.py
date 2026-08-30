@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -23,6 +24,7 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 from oxygen_utf8 import configure_utf8_stdio
+from atomic_rename import rename_noreplace
 from ingest.human_source_projection import (
     AI_REVIEW_EVENT_SCHEMA,
     AI_REVIEW_MEETING_SCHEMA,
@@ -80,10 +82,14 @@ SAFE_SOURCE_SYSTEMS = {
     "local-agent-history",
 }
 INPUT_PATH_OUTSIDE_RUN = "INPUT_PATH_OUTSIDE_RUN"
+INPUT_INDEX_INVALID = "INPUT_INDEX_INVALID"
 INPUT_MEETING_INVALID = "INPUT_MEETING_INVALID"
 INPUT_MEETING_ID_DUPLICATE = "INPUT_MEETING_ID_DUPLICATE"
 INPUT_PROJECTION_INVALID = "INPUT_PROJECTION_INVALID"
 INPUT_SEMANTIC_AUTHORITY_INVALID = "INPUT_SEMANTIC_AUTHORITY_INVALID"
+AI_REVIEW_INPUT_INVALID = "AI_REVIEW_INPUT_INVALID"
+AI_REVIEW_OUTPUT_INVALID = "AI_REVIEW_OUTPUT_INVALID"
+AI_REVIEW_OUTPUT_EXISTS = "AI_REVIEW_OUTPUT_EXISTS"
 
 
 def safe_source_system(value: object) -> str:
@@ -216,8 +222,13 @@ def validated_trajectory(
 
 def prepare_trajectories(source: Path, output: Path) -> list[dict]:
     prepared: list[tuple[str, dict, list[dict], dict, int]] = []
-    for events_path in sorted((source / "trajectories").glob("*/events.jsonl")):
-        trajectory_id = events_path.parent.name
+    try:
+        trajectory_directories = project_map_authority.indexed_trajectory_directories(source)
+    except (OSError, RuntimeError, ValueError):
+        raise SystemExit(INPUT_INDEX_INVALID) from None
+    for trajectory_dir in trajectory_directories:
+        events_path = trajectory_dir / "events.jsonl"
+        trajectory_id = trajectory_dir.name
         source_manifest, source_events, source_projection = validated_trajectory(events_path)
         source_warnings = source_manifest.get("warnings")
         warning_count = len(source_warnings) if isinstance(source_warnings, list) else 0
@@ -333,7 +344,10 @@ def _validated_meeting_records(meeting_id: str, records: list[dict]) -> list[tup
         raise SystemExit(INPUT_MEETING_INVALID) from None
     prepared = []
     for record, contribution_id in zip(records, contribution_ids):
-        record_id = _record_id(record.get("record_id"))
+        prefix = f"{meeting_id}:"
+        if not contribution_id.startswith(prefix):
+            raise SystemExit(INPUT_MEETING_INVALID)
+        record_id = _record_id(contribution_id[len(prefix):])
         if contribution_id != f"{meeting_id}:{record_id}" or len(contribution_id) > 300:
             raise SystemExit(INPUT_MEETING_INVALID)
         text = record.get("text")
@@ -505,10 +519,30 @@ def rebound_project_map(
         raise SystemExit(INPUT_SEMANTIC_AUTHORITY_INVALID) from None
 
 
+def validated_prepare_paths(source: Path, output: Path) -> tuple[Path, Path]:
+    try:
+        source = project_map_authority.assert_literal_physical_path(source).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        raise SystemExit(AI_REVIEW_INPUT_INVALID) from None
+    try:
+        output = project_map_authority.assert_literal_physical_path(
+            output, allow_missing_leaf=True,
+        )
+    except (OSError, RuntimeError, ValueError):
+        raise SystemExit(AI_REVIEW_OUTPUT_INVALID) from None
+    if not source.is_dir():
+        raise SystemExit(AI_REVIEW_INPUT_INVALID)
+    if not output.parent.is_dir():
+        raise SystemExit(AI_REVIEW_OUTPUT_INVALID)
+    return source, output
+
+
 def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
+    source, output = validated_prepare_paths(source, output)
     meetings = discover_meetings(source, require_review_identity=True)
     project_map, canonical_source = validated_project_map(source)
-    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.exists() or output.is_symlink():
+        raise SystemExit(AI_REVIEW_OUTPUT_EXISTS)
     staging = Path(tempfile.mkdtemp(
         prefix=f".{output.name}.prepare-", dir=output.parent,
     ))
@@ -517,12 +551,6 @@ def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
         meeting_warning_count = prepare_meetings(meetings, staging)
         if not trajectories and not meetings:
             raise SystemExit(f"no trajectories or meeting found in {source}")
-        write_json(
-            staging / "project-map.json",
-            rebound_project_map(
-                project_map, canonical_source, staging,
-            ),
-        )
         write_json(staging / "index.json", {
             "schema": AI_REVIEW_RUN_SCHEMA,
             "tool": "prepare_ai_review_run",
@@ -536,6 +564,12 @@ def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
             "publication_approved": False,
             "trajectories": trajectories,
         })
+        write_json(
+            staging / "project-map.json",
+            rebound_project_map(
+                project_map, canonical_source, staging,
+            ),
+        )
         for events_path in sorted((staging / "trajectories").glob("*/events.jsonl")):
             validated_trajectory(
                 events_path,
@@ -548,7 +582,12 @@ def prepare_run(source: Path, output: Path) -> tuple[list[dict], int]:
             expected_schema=AI_REVIEW_MEETING_SCHEMA,
         )
         validated_project_map(staging)
-        staging.replace(output)
+        try:
+            rename_noreplace(staging, output)
+        except FileExistsError:
+            raise SystemExit(AI_REVIEW_OUTPUT_EXISTS) from None
+        except OSError:
+            raise SystemExit(AI_REVIEW_OUTPUT_INVALID) from None
         return trajectories, len(meetings)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
@@ -561,13 +600,8 @@ def main() -> int:
     parser.add_argument("--run", type=Path, required=True, help="organized ingest run")
     parser.add_argument("--out", type=Path, required=True, help="new AI review run")
     args = parser.parse_args()
-    source = args.run.expanduser().resolve()
-    output = args.out.expanduser().resolve()
-    if not source.is_dir():
-        raise SystemExit(f"run not found: {source}")
-    if output.exists() or output.is_symlink():
-        raise SystemExit(f"output already exists: {output}")
-    trajectories, meeting_count = prepare_run(source, output)
+    trajectories, meeting_count = prepare_run(args.run, args.out)
+    output = Path(os.path.abspath(args.out.expanduser()))
     print(json.dumps({
         "output": str(output),
         "trajectories": len(trajectories),

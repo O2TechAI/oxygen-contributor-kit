@@ -99,8 +99,8 @@ python .\skills\oxygen-organize-review-export\scripts\record_semantic_worker.py 
   "work\<run>-organization\handoffs\<shard-id>.proposals.json"
 ```
 
-A recorder validation failure is pre-receipt authoring feedback only when both
-`outputs/<shard-id>.json` and `receipts/<shard-id>.json` are absent. The parent automatically
+A recorder validation failure is pre-receipt authoring feedback only when the atomic
+`records/<shard-id>/` output-and-receipt directory is absent. The parent automatically
 returns only the fixed safe validation code as authoring feedback. Each shard assignment gets one
 initial proposal plus at most two automatic proposal-only correction attempts.
 `correctionAttemptCount` is assignment-local, counts corrections only, excludes the initial

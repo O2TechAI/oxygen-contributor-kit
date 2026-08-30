@@ -5,7 +5,8 @@ import { resolve } from "node:path";
 import { canonicalizeAutoRemoved } from "../../../viewer/lib/auto-removed.mjs";
 import {
   canonicalPreferenceQuestionBatch,
-  deriveStoryReleaseTargetCatalog,
+  deriveStoryReleaseTargetContents,
+  normalizeStoryPrivacyOutput,
 } from "../../../viewer/lib/story-preparation.ts";
 import {
   normalizeBulkPreferencePresentations,
@@ -464,40 +465,23 @@ async function validateInsight(value, input, prepared) {
   return { output, count: output.reduce((total, record) => total + record.insights.length, 0) };
 }
 
-function validatePrivacy(value, input) {
-  if (!Array.isArray(value) || !Array.isArray(input.payload?.storyCandidates)
+async function validatePrivacy(value, input) {
+  if (!isObject(value) || !Array.isArray(input.payload?.storyCandidates)
     || !Array.isArray(input.payload?.releaseTargetCatalog)) fail("PRIVACY_OUTPUT_INVALID");
   const stories = input.payload.storyCandidates.map((row) => parseStorySource(row?.summary));
   if (stories.some((story) => !story)) fail("WORKER_INPUT_TAMPERED");
-  const fullCatalog = deriveStoryReleaseTargetCatalog(stories);
+  const fullCatalog = deriveStoryReleaseTargetContents(stories);
   const valid = new Set(input.unitIds);
-  const catalog = fullCatalog?.filter((target) => valid.has(target.id));
-  if (!catalog || catalog.length !== valid.size
-    || canonicalAuthorityJson(catalog) !== canonicalAuthorityJson(input.payload.releaseTargetCatalog)) {
+  const targets = fullCatalog?.filter((target) => valid.has(target.id));
+  if (!targets || targets.length !== valid.size
+    || canonicalAuthorityJson(targets.map(({ content: _content, ...target }) => target))
+      !== canonicalAuthorityJson(input.payload.releaseTargetCatalog)) {
     fail("WORKER_INPUT_TAMPERED");
   }
-  const order = new Map(catalog.map((target, index) => [target.id, index]));
-  const found = new Map();
-  for (const candidate of value) {
-    rejectMetadata(candidate);
-    if (!exactKeys(candidate, ["id", "reviewState", "title", "whyFlagged", "uncertaintyReason", "releaseTargets"])
-      || !boundedId(candidate.id) || !["deterministic", "needs_confirmation"].includes(candidate.reviewState)
-      || !safeText(candidate.title) || !safeText(candidate.whyFlagged)
-      || (candidate.reviewState === "deterministic" && candidate.uncertaintyReason !== null)
-      || (candidate.reviewState === "needs_confirmation" && !safeText(candidate.uncertaintyReason))
-      || !Array.isArray(candidate.releaseTargets) || candidate.releaseTargets.length === 0
-      || candidate.releaseTargets.some((target) => !valid.has(target))
-      || new Set(candidate.releaseTargets).size !== candidate.releaseTargets.length) fail("PRIVACY_OUTPUT_INVALID");
-    const normalized = { ...candidate, releaseTargets: [...candidate.releaseTargets]
-      .sort((left, right) => order.get(left) - order.get(right)) };
-    const prior = found.get(candidate.id);
-    if (prior && canonicalAuthorityJson(prior) !== canonicalAuthorityJson(normalized)) {
-      fail("WORKER_OUTPUT_IDENTITY_CONFLICT");
-    }
-    found.set(candidate.id, normalized);
-  }
-  const output = [...found.values()].sort((left, right) => compareUtf8(left.id, right.id));
-  return { output, count: output.length };
+  rejectMetadata(value);
+  const output = await normalizeStoryPrivacyOutput(value, targets);
+  if (!output) fail("PRIVACY_OUTPUT_INVALID");
+  return { output, count: output.targetProposals.length };
 }
 
 function preferenceOption(value) {

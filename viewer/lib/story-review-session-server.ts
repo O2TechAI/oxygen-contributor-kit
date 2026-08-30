@@ -12,6 +12,10 @@ import {
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
 import { parseStorySource } from "./timeline.ts";
+import {
+  validActivatedSourceRevision,
+  validNonnegativeAuthorityCounter,
+} from "./authority-validation.mjs";
 
 type ReviewSessionDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
@@ -49,7 +53,12 @@ type StoredStoryReviewSession = {
   session: StoryReviewSession;
 };
 
-const validRevision = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
+const validCounter = (value: unknown): value is number => (
+  typeof value === "number" && validNonnegativeAuthorityCounter(value)
+);
+const validSourceRevision = (value: unknown): value is number => (
+  typeof value === "number" && validActivatedSourceRevision(value)
+);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -60,15 +69,16 @@ export function parseStoredStoryReviewSession(value: unknown): {
   session: StoryReviewSession | null;
   sourceRevision: number | null;
 } {
-  if (!isRecord(value)
-    || Object.keys(value).some((key) => key !== "sourceRevision" && key !== "session")
-    || !validRevision(value.sourceRevision)) {
+  if (!isRecord(value)) {
     return { session: null, sourceRevision: null };
   }
+  const sourceRevision = value.sourceRevision;
+  if (Object.keys(value).some((key) => key !== "sourceRevision" && key !== "session")
+    || !validSourceRevision(sourceRevision)) return { session: null, sourceRevision: null };
   const session = parseStoryReviewSession(value.session);
   return session
-    ? { session, sourceRevision: value.sourceRevision }
-    : { session: null, sourceRevision: value.sourceRevision };
+    ? { session, sourceRevision }
+    : { session: null, sourceRevision };
 }
 
 function serializeStoredStoryReviewSession(sourceRevision: number, session: StoryReviewSession) {
@@ -92,7 +102,7 @@ export async function readStoryReviewSessionRecord(
   }
   return {
     session: stored.session,
-    serverVersion: validRevision(row.server_version) ? row.server_version : 0,
+    serverVersion: validCounter(row.server_version) ? row.server_version : 0,
     sourceRevision: stored.sourceRevision,
     persistedAt: typeof row.updated_at === "string" && row.updated_at ? row.updated_at : null,
   };
@@ -101,12 +111,14 @@ export async function readStoryReviewSessionRecord(
 export async function readActiveStoryReviewSource(
   db: ReviewSessionDatabase,
   workflowRunId: string,
-) {
+): Promise<{ ready: boolean; sourceRevision: number | null }> {
   const row = await db.prepare(`SELECT story_generation_status,story_source_revision
     FROM workflow_runs WHERE id=?`).bind(workflowRunId).first<SourceRow>();
+  const rawSourceRevision = row?.story_source_revision;
+  const sourceRevision = validSourceRevision(rawSourceRevision) ? rawSourceRevision : null;
   return {
-    ready: row?.story_generation_status === "ready_for_human_review",
-    sourceRevision: validRevision(row?.story_source_revision) ? row.story_source_revision : null,
+    ready: row?.story_generation_status === "ready_for_human_review" && sourceRevision !== null,
+    sourceRevision,
   };
 }
 
@@ -254,10 +266,10 @@ export async function persistStoryReviewSessionCas(
   request: CasRequest,
   serverNow: string,
 ): Promise<CasSuccess | CasFailure> {
-  if (!validRevision(request.expectedVersion)) {
+  if (!validNonnegativeAuthorityCounter(request.expectedVersion)) {
     return { ok: false, code: STORY_SESSION_ERROR.versionInvalid };
   }
-  if (!validRevision(request.sourceRevision)) {
+  if (!validActivatedSourceRevision(request.sourceRevision)) {
     return { ok: false, code: STORY_SESSION_ERROR.sourceConflict };
   }
   const canonical = parseStoryReviewSession(request.session);
@@ -275,6 +287,10 @@ export async function persistStoryReviewSessionCas(
   }
   if (active.sourceRevision !== request.sourceRevision) {
     return failure(STORY_SESSION_ERROR.sourceConflict, current, active.sourceRevision);
+  }
+  if (current.persistedAt && (!current.session
+    || !validActivatedSourceRevision(current.sourceRevision))) {
+    return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
   }
   if (!validation || request.storySessionSchema !== STORY_REVIEW_SESSION_SCHEMA) {
     return failure(STORY_SESSION_ERROR.stateInvalid, current, active.sourceRevision);
@@ -336,9 +352,14 @@ export async function persistStoryReviewSessionCas(
     return resolveZeroChange(db, request);
   }
 
+  if (!validNonnegativeAuthorityCounter(request.expectedVersion + 1)) {
+    return failure(STORY_SESSION_ERROR.versionInvalid, current, active.sourceRevision);
+  }
+
   const updated = await db.prepare(`UPDATE story_review_sessions
     SET state_json=?,updated_at=?,server_version=server_version+1
     WHERE workflow_run_id=? AND server_version=?
+      AND server_version<9007199254740991
       AND EXISTS (SELECT 1 FROM workflow_runs
         WHERE id=? AND story_generation_status='ready_for_human_review' AND story_source_revision=?)`)
     .bind(stateJson, serverNow, request.workflowRunId, request.expectedVersion,

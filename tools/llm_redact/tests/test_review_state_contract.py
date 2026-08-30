@@ -8,6 +8,12 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
 
+TEST_ROOT = Path(__file__).resolve().parent
+if str(TEST_ROOT) not in sys.path:
+    sys.path.insert(0, str(TEST_ROOT))
+
+from source_privacy_fixture import finalized_fixture
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "merge_and_apply.py"
 SPEC = importlib.util.spec_from_file_location("merge_and_apply_review_state", MODULE_PATH)
@@ -15,7 +21,7 @@ MERGE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MERGE)
 
-EVENT_ID = "evt-1"
+EVENT_ID = "evt-" + "a" * 64
 TEXT = "alpha beta"
 
 
@@ -65,7 +71,7 @@ class ReviewStateContractTest(unittest.TestCase):
         missing = finding()
         del missing["review_state"]
         cases = [
-            ("missing", missing, "missing or invalid"),
+            ("missing", missing, "shape is invalid"),
             ("unknown", finding(review_state="pending"), "missing or invalid"),
             (
                 "pending-without-reason",
@@ -101,25 +107,19 @@ class ReviewStateContractTest(unittest.TestCase):
     def test_exact_fields_survive_merge_output(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
-            dialogue = root / "dialogue"
-            findings_dir = root / "findings"
             output = root / "output"
-            dialogue.mkdir()
-            findings_dir.mkdir()
-            (dialogue / "traj-1.json").write_text(json.dumps({
-                "trajectory": "traj-1",
-                "turns": [{"event_id": EVENT_ID, "text": TEXT}],
-            }), encoding="utf-8")
             safe_reason = "human context is required to classify this reference"
-            (findings_dir / "traj-1.json").write_text(json.dumps({
-                "findings": [finding(
+            dialogue, findings_dir, _, _ = finalized_fixture(
+                root,
+                findings=[finding(
                     review_state="needs_confirmation",
                     uncertainty_reason=safe_reason,
                 )],
-            }), encoding="utf-8")
+            )
             argv = [
                 "merge_and_apply.py", "--dialogue", str(dialogue),
                 "--findings", str(findings_dir), "--out", str(output),
+                "--receipt", str(root / "receipt.json"),
             ]
             with mock.patch.object(sys, "argv", argv), \
                     contextlib.redirect_stdout(io.StringIO()):

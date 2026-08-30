@@ -194,13 +194,16 @@ def read_privacy_authority(
     report = read_json(privacy_report_path)
     report_fields = {
         "categories", "total_applied", "rejected", "rejects",
-        "missing_worker_output", "per_trajectory",
+        "missing_worker_output", "per_trajectory", "receiptDigest",
     }
     if not exact_object(report, report_fields):
         raise ValueError("completed Privacy report is malformed")
     if (not nonnegative_integer(report["total_applied"])
             or not nonnegative_integer(report["rejected"]) or report["rejected"] != 0
             or report["rejects"] != [] or report["missing_worker_output"] != []
+            or not isinstance(report["receiptDigest"], str)
+            or len(report["receiptDigest"]) != 64
+            or any(character not in "0123456789abcdef" for character in report["receiptDigest"])
             or not isinstance(report["categories"], dict)
             or not isinstance(report["per_trajectory"], list)):
         raise ValueError("completed Privacy report is incomplete")
@@ -252,11 +255,13 @@ def read_privacy_authority(
         character_count = 0
         for turn in turns:
             fields = {
-                "event_id", "document_id", "item_id", "role", "timestamp", "text",
+                "event_id", "document_id", "item_id", "sequence", "role", "timestamp", "text",
                 "redactions", "redacted_text",
             }
             if (not exact_object(turn, fields) or not stable_id(turn["event_id"], 1_000)
                     or turn["document_id"] != document_id or not stable_id(turn["item_id"], 1_000)
+                    or turn["event_id"] != turn["item_id"]
+                    or not nonnegative_integer(turn["sequence"]) or turn["sequence"] == 0
                     or not isinstance(turn["text"], str) or not isinstance(turn["redacted_text"], str)
                     or not isinstance(turn["redactions"], list)):
                 raise ValueError("reviewed redaction turn is malformed")

@@ -11,6 +11,11 @@ ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "scripts" / "prepare_preference_context.py"
 REPOSITORY_ROOT = ROOT.parents[1]
 MERGE_SCRIPT = REPOSITORY_ROOT / "tools" / "llm_redact" / "merge_and_apply.py"
+VERIFY_SCRIPT = REPOSITORY_ROOT / "tools" / "llm_redact" / "verify_coverage.py"
+LLM_REDACT_ROOT = REPOSITORY_ROOT / "tools" / "llm_redact"
+if str(LLM_REDACT_ROOT) not in sys.path:
+    sys.path.insert(0, str(LLM_REDACT_ROOT))
+from source_privacy_receipt import canonical_bundle_bytes, dialogue_authority, digest_value
 SPEC = importlib.util.spec_from_file_location("prepare_preference_context", SCRIPT)
 PREPARE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
@@ -59,7 +64,7 @@ def inputs(root: Path, stories=None, spans=None):
         "trajectory": "trajectory-a", "document_kind": "trajectory",
         "turns": [{
             "event_id": "event-a", "document_id": "trajectory-a", "item_id": "event-a",
-            "role": "user", "timestamp": None, "text": text,
+            "sequence": 1, "role": "user", "timestamp": None, "text": text,
             "redactions": spans, "redacted_text": redacted_text,
         }],
         "chars": len(text),
@@ -72,6 +77,7 @@ def inputs(root: Path, stories=None, spans=None):
         "categories": categories, "total_applied": len(spans), "rejected": 0,
         "rejects": [], "missing_worker_output": [],
         "per_trajectory": [{"trajectory": "trajectory-a", "turns": 1, "applied": len(spans)}],
+        "receiptDigest": "c" * 64,
     }
     report_path = root / "report.json"
     report_path.write_text(json.dumps(report), encoding="utf-8")
@@ -282,24 +288,50 @@ class PrepareContextTests(unittest.TestCase):
                 "trajectory": "trajectory-a", "document_kind": "trajectory",
                 "turns": [{
                     "event_id": "event-a", "document_id": "trajectory-a",
-                    "item_id": "event-a", "role": "user", "timestamp": None,
+                    "item_id": "event-a", "sequence": 1,
+                    "role": "user", "timestamp": None,
                     "text": text,
                 }],
                 "chars": len(text),
             }
-            (dialogue / "trajectory-a.json").write_text(json.dumps(bundle), encoding="utf-8")
+            bundle_bytes = canonical_bundle_bytes(bundle)
+            (dialogue / "trajectory-a.json").write_bytes(bundle_bytes)
+            dialogue_receipt = dialogue_authority([(bundle, bundle_bytes)])
+            source_authority = {
+                "workflowRunId": "synthetic-run",
+                "sourceRevision": 1,
+                "finalizedCorpus": {
+                    "revision": 1, "digest": "a" * 64,
+                    "documentCount": 1, "itemCount": 1,
+                },
+                "sourceDigest": "b" * 64,
+            }
+            (dialogue / "index.json").write_bytes(canonical_bundle_bytes({
+                **source_authority, "dialogue": dialogue_receipt,
+            }))
             finding = {
+                "trajectory": "trajectory-a",
+                "input_digest": dialogue_receipt["bundles"][0]["inputDigest"],
+                "reviewed_item_ids": ["event-a"],
+                "reviewed_items_digest": digest_value(["event-a"]),
                 "findings": [{
                     "event_id": "event-a", "start": 0, "end": 5,
-                    "category": "credential", "confidence": 0.95,
+                    "category": "credential", "confidence": "high",
                     "reason": "synthetic", "review_state": "deterministic",
                     "uncertainty_reason": None,
                 }],
+                "reviewed_turns": 1,
             }
             (findings / "trajectory-a.json").write_text(json.dumps(finding), encoding="utf-8")
+            receipt = root / "source-privacy-receipt.json"
+            subprocess.run([
+                sys.executable, str(VERIFY_SCRIPT), "--dialogue", str(dialogue),
+                "--findings", str(findings), "--receipt", str(receipt),
+            ], check=True, capture_output=True, text=True)
             subprocess.run([
                 sys.executable, str(MERGE_SCRIPT), "--dialogue", str(dialogue),
                 "--findings", str(findings), "--out", str(merged),
+                "--receipt", str(receipt),
             ], check=True, capture_output=True, text=True)
             candidates_path = root / "story-candidates.json"
             candidates_path.write_text(json.dumps([{
@@ -329,6 +361,7 @@ class PrepareContextTests(unittest.TestCase):
             bundle["document_kind"] = "meeting"
             bundle["turns"][0]["document_id"] = "meeting-a"
             bundle["turns"][0]["item_id"] = "meeting-a:event-a"
+            bundle["turns"][0]["event_id"] = "meeting-a:event-a"
             source.unlink()
             (redacted / "meeting-a.json").write_text(json.dumps(bundle), encoding="utf-8")
             privacy = json.loads(report.read_text())

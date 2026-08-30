@@ -4,8 +4,11 @@ import {
   finalizeCoverageManifestAuthority,
   validateSemanticManifestAuthority,
 } from "../lib/story-readiness.ts";
-import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { storyPreparationDigest } from "../lib/story-preparation.ts";
+import {
+  buildSourcePrivacyReceipt,
+  installSourcePrivacyReceipt,
+} from "./fixtures/source-privacy-receipt.mjs";
 
 const sha256 = async (value) => {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -22,6 +25,7 @@ export async function seedCoveragePrivacyAuthority(db, {
   stories,
   now,
   projectId = "test-project",
+  redactions = [],
 }) {
   const itemResult = await db.prepare(`SELECT id,document_id,sequence,event_type,actor_id,
     actor_type,timestamp,content,original_json,organization_reason
@@ -119,16 +123,30 @@ export async function seedCoveragePrivacyAuthority(db, {
     summary: `oxygen.story:${JSON.stringify(story)}`,
   }));
   const activeStoryDigest = await storyPreparationDigest(candidateRows);
-  const currentItems = (await db.prepare(`SELECT id,document_id,sequence,event_type,actor_type,
-    timestamp,content FROM items ORDER BY document_id,sequence,id`).all()).results;
-  const sourcePrivacyDigest = await computeSourceDigest(currentItems);
   const documentCount = Number((await db.prepare("SELECT COUNT(*) AS count FROM documents").first()).count);
+  const itemCount = items.length;
   const corpusDigest = "c".repeat(64);
   await db.prepare(`INSERT INTO finalized_corpus_manifests
     (workflow_run_id,corpus_revision,corpus_digest,document_count,item_count,finalized_at)
     VALUES (?,1,?,?,?,?)`).bind(
-    workflowRunId, corpusDigest, documentCount, items.length, now,
+    workflowRunId, corpusDigest, documentCount, itemCount, now,
   ).run();
+  for (const [index, redaction] of redactions.entries()) {
+    await db.prepare(`INSERT INTO redactions
+      (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
+       review_state,uncertainty_reason,status,created_by,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,'active',?,?,?)`).bind(
+        `synthetic-source-redaction-${index + 1}`,
+        redaction.itemId, redaction.documentId, redaction.startOffset, redaction.endOffset,
+        redaction.category, redaction.confidence, redaction.reason, redaction.reviewState,
+        redaction.uncertaintyReason, redaction.createdBy, now, now,
+      ).run();
+  }
+  const sourcePrivacyReceipt = await buildSourcePrivacyReceipt(db, {
+    workflowRunId,
+    sourceRevision,
+    redactions,
+  });
   await db.prepare(`INSERT INTO semantic_manifests
     (workflow_run_id,project_id,revision,source_revision,source_digest,universe_digest,
      manifest_digest,unit_count,serialized_bytes,story_projection_bytes,corpus_revision,
@@ -137,7 +155,7 @@ export async function seedCoveragePrivacyAuthority(db, {
     workflowRunId, projectId, 1, sourceRevision, semantic.sourceDigest,
     semantic.universeDigest, semantic.manifestDigest, semantic.units.length,
     semantic.serializedBytes, semanticValidation.storyProjectionBytes, corpusDigest,
-    documentCount, items.length, now, now,
+    documentCount, itemCount, now, now,
   ).run();
   for (const unit of semantic.units) {
     await db.prepare(`INSERT INTO semantic_units
@@ -167,11 +185,19 @@ export async function seedCoveragePrivacyAuthority(db, {
       (unit_id,workflow_run_id,disposition,owner_id,exclusion_reason)
       VALUES (?,?,?,?,NULL)`).bind(row.unitId, workflowRunId, row.disposition, row.ownerId).run();
   }
+  const sourcePrivacyJobId = `privacy-${workflowRunId}`;
   await db.prepare(`INSERT INTO redaction_jobs
     (id,status,stage,model,completed,total,rejected,source_digest,started_at,updated_at,completed_at)
-    VALUES (?,'complete','privacy',NULL,0,0,0,?,?,?,?)`).bind(
-    `privacy-${workflowRunId}`, sourcePrivacyDigest, now, now, now,
+    VALUES (?,'complete','privacy',NULL,?,?,0,?,?,?,?)`).bind(
+    sourcePrivacyJobId, redactions.length, redactions.length,
+    sourcePrivacyReceipt.sourceDigest, now, now, now,
   ).run();
+  await installSourcePrivacyReceipt(db, {
+    jobId: sourcePrivacyJobId,
+    workflowRunId,
+    receipt: sourcePrivacyReceipt,
+    at: now,
+  });
   const { readCoveragePrivacyAuthority } = await import(
     "../lib/story-coverage-privacy-authority.ts"
   );
@@ -191,5 +217,11 @@ export async function seedCoveragePrivacyAuthority(db, {
     WHERE workflow_run_id=? AND lane='story_privacy'`).bind(
     storyPrivacyInputDigest, workflowRunId,
   ).run();
-  return { semantic, coverage, activeStoryDigest, storyPrivacyInputDigest };
+  return {
+    semantic,
+    coverage,
+    activeStoryDigest,
+    storyPrivacyInputDigest,
+    sourcePrivacyReceipt,
+  };
 }

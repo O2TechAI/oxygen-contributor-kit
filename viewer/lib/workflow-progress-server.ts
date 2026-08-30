@@ -27,6 +27,14 @@ import {
 } from "./workflow-run-server.ts";
 import type { WorkspaceDocument, WorkspaceStatus } from "./workspace-types.ts";
 import { readProjectReleaseConfirmation } from "./project-release-confirmation.ts";
+import {
+  validActivatedSourceRevision,
+  validNonnegativeAuthorityCounter,
+} from "./authority-validation.mjs";
+import {
+  canonicalSourcePrivacyJson,
+  parseSourcePrivacyReceipt,
+} from "./source-privacy-receipt.ts";
 
 type CountRow = { total: number; completed: number };
 type JobRow = { id?: string; status?: string; updated_at?: string };
@@ -45,6 +53,60 @@ type WorkflowRunRow = {
 };
 
 type SessionBindingRow = { server_version?: number; state_json?: string };
+
+type SourcePrivacyCompletionRow = {
+  job_id?: string;
+  job_status?: string;
+  job_completed?: number;
+  job_total?: number;
+  job_rejected?: number;
+  job_source_digest?: string;
+  receipt_job_id?: string;
+  receipt_workflow_run_id?: string;
+  receipt_source_revision?: number;
+  receipt_source_digest?: string;
+  stored_receipt_digest?: string;
+  receipt_json?: string;
+  corpus_revision?: number;
+  corpus_digest?: string;
+  corpus_document_count?: number;
+  corpus_item_count?: number;
+  current_redaction_count?: number;
+};
+
+async function normalizedSourcePrivacyComplete(
+  row: SourcePrivacyCompletionRow | null,
+  workflowRunId: string,
+  currentSourceRevision: number,
+) {
+  if (!row || row.job_status !== "complete"
+    || !validActivatedSourceRevision(currentSourceRevision)
+    || !validActivatedSourceRevision(row.receipt_source_revision)
+    || Number(row.receipt_source_revision) > currentSourceRevision
+    || row.job_id !== row.receipt_job_id
+    || row.receipt_workflow_run_id !== workflowRunId
+    || !validNonnegativeAuthorityCounter(row.job_completed)
+    || !validNonnegativeAuthorityCounter(row.job_total)
+    || row.job_completed !== row.job_total
+    || row.job_completed !== Number(row.current_redaction_count)
+    || row.job_rejected !== 0
+    || typeof row.receipt_json !== "string") return false;
+  let parsed: unknown;
+  try { parsed = JSON.parse(row.receipt_json); } catch { return false; }
+  const receipt = await parseSourcePrivacyReceipt(parsed);
+  return Boolean(receipt
+    && canonicalSourcePrivacyJson(receipt) === row.receipt_json
+    && receipt.workflowRunId === workflowRunId
+    && receipt.sourceRevision === row.receipt_source_revision
+    && receipt.sourceDigest === row.job_source_digest
+    && receipt.sourceDigest === row.receipt_source_digest
+    && receipt.receiptDigest === row.stored_receipt_digest
+    && receipt.redactions.count === row.job_completed
+    && receipt.finalizedCorpus.revision === Number(row.corpus_revision)
+    && receipt.finalizedCorpus.digest === row.corpus_digest
+    && receipt.finalizedCorpus.documentCount === Number(row.corpus_document_count)
+    && receipt.finalizedCorpus.itemCount === Number(row.corpus_item_count));
+}
 
 /** Read the one sanitized persisted workflow projection used by both the
  * initial server render and the polling API. No Story or Evidence payload is
@@ -69,13 +131,25 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
       collection_total,story_generation_status,story_generation_completed,
       story_generation_total,story_source_revision,active_story_digest,updated_at
       FROM workflow_runs WHERE id=?`).bind(authority.workflowRunId).first<WorkflowRunRow>();
-  const [items, documents, organization, redaction, run, sessionBinding] = await Promise.all([
+  const [items, documents, organization, redaction, sourcePrivacyCompletion, run, sessionBinding] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN organization_category IS NOT NULL THEN 1 ELSE 0 END) AS completed
       FROM items`).first<CountRow>(),
     db.prepare("SELECT COUNT(*) AS total FROM documents").first<{ total: number }>(),
     db.prepare("SELECT id,status,updated_at FROM organization_jobs ORDER BY updated_at DESC LIMIT 1").first<JobRow>(),
     db.prepare("SELECT id,status,updated_at FROM redaction_jobs ORDER BY started_at DESC LIMIT 1").first<JobRow>(),
+    db.prepare(`SELECT j.id AS job_id,j.status AS job_status,j.completed AS job_completed,
+        j.total AS job_total,j.rejected AS job_rejected,j.source_digest AS job_source_digest,
+        p.job_id AS receipt_job_id,
+        p.workflow_run_id AS receipt_workflow_run_id,p.source_revision AS receipt_source_revision,
+        p.source_digest AS receipt_source_digest,p.receipt_digest AS stored_receipt_digest,
+        p.receipt_json,f.corpus_revision,f.corpus_digest,
+        f.document_count AS corpus_document_count,f.item_count AS corpus_item_count,
+        (SELECT COUNT(*) FROM redactions) AS current_redaction_count
+      FROM redaction_jobs j LEFT JOIN source_privacy_receipts p ON p.job_id=j.id
+      LEFT JOIN finalized_corpus_manifests f ON f.workflow_run_id=?
+      ORDER BY j.started_at DESC,j.id DESC LIMIT 1`).bind(authority.workflowRunId)
+      .first<SourcePrivacyCompletionRow>(),
     runQuery,
     db.prepare(`SELECT server_version,state_json FROM story_review_sessions WHERE workflow_run_id=?`)
       .bind(authority.workflowRunId).first<SessionBindingRow>(),
@@ -90,16 +164,22 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
   let storedSourceRevision: number | null = null;
   try {
     const stored = JSON.parse(String(sessionBinding?.state_json || ""));
-    storedSourceRevision = Number.isSafeInteger(stored?.sourceRevision)
+    storedSourceRevision = validActivatedSourceRevision(stored?.sourceRevision)
       ? Number(stored.sourceRevision) : null;
   } catch {
     storedSourceRevision = null;
   }
   const currentServerVersion = Number(sessionBinding?.server_version);
   const currentSourceRevision = Number(run?.story_source_revision);
+  const privacyComplete = redaction?.status === "complete"
+    && await normalizedSourcePrivacyComplete(
+      sourcePrivacyCompletion,
+      authority.workflowRunId,
+      currentSourceRevision,
+    );
   const releaseConfirmed = Boolean(run?.active_story_digest
-    && Number.isSafeInteger(currentServerVersion) && currentServerVersion >= 0
-    && Number.isSafeInteger(currentSourceRevision) && currentSourceRevision >= 0
+    && validNonnegativeAuthorityCounter(currentServerVersion)
+    && validActivatedSourceRevision(currentSourceRevision)
     && storedSourceRevision === currentSourceRevision
     && await readProjectReleaseConfirmation(db, {
       workflowRunId: authority.workflowRunId,
@@ -116,7 +196,9 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     itemCount: Number(items?.total || 0),
     organizedItemCount: Number(items?.completed || 0),
     organizationStatus: organization?.status || null,
-    redactionStatus: redaction?.status || null,
+    redactionStatus: redaction?.status === "complete"
+      ? privacyComplete ? "complete" : null
+      : redaction?.status || null,
     storyGenerationStatus: run?.story_generation_status || "not_started",
     storyGenerationCompleted: Number(run?.story_generation_completed || 0),
     storyGenerationTotal: Number(run?.story_generation_total || 0),

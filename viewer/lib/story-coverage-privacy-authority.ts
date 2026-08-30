@@ -2,6 +2,13 @@ import type { getLocalDatabase } from "../db";
 import { computeSourceDigest } from "./redaction-pass.mjs";
 import { applyActiveRedactions } from "./release.mjs";
 import type { SemanticManifestAuthority } from "./story-readiness.ts";
+import { validActivatedSourceRevision } from "./authority-validation.mjs";
+import {
+  buildCurrentSourcePrivacyDialogue,
+  validateStoredSourcePrivacyReceipt,
+  type CurrentSourceRow,
+  type PersistedSourcePrivacyRedaction,
+} from "./source-privacy-receipt.ts";
 
 type CoveragePrivacyDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 type JsonRecord = Record<string, unknown>;
@@ -9,8 +16,9 @@ type JsonRecord = Record<string, unknown>;
 export const MAX_SOURCE_PRIVACY_AUTHORITY_BYTES = 8_000_000;
 
 const JOB_KEYS = [
-  "id", "status", "stage", "model", "completed", "total", "rejected", "source_digest",
-  "started_at", "updated_at", "completed_at",
+  "id", "status", "stage", "model", "completed", "total", "rejected",
+  "source_revision", "source_digest", "receipt_digest", "started_at", "updated_at",
+  "completed_at",
 ] as const;
 const REDACTION_KEYS = [
   "id", "item_id", "document_id", "start_offset", "end_offset", "category", "confidence",
@@ -89,7 +97,9 @@ type SourcePrivacyJob = {
   completed: number;
   total: number;
   rejected: number;
+  source_revision: number;
   source_digest: string;
+  receipt_digest: string;
   started_at: string;
   updated_at: string;
   completed_at: string;
@@ -115,6 +125,7 @@ export type CoveragePrivacyAuthority = {
   semanticUnitWitnessJson?: string;
   membershipWitnessJson?: string;
   sourcePrivacyJobWitnessJson?: string;
+  sourcePrivacyReceiptWitnessJson?: string;
   sourceItemWitnessJson?: string;
   storedCoverageManifestWitnessJson?: string;
   storedCoverageRowsWitnessJson?: string;
@@ -177,7 +188,9 @@ function parseSourcePrivacyProjection(input: unknown) {
     || (job.model !== null && typeof job.model !== "string")
     || !Number.isSafeInteger(job.completed) || Number(job.completed) < 0
     || !Number.isSafeInteger(job.total) || Number(job.total) < 0
-    || job.completed !== job.total || job.rejected !== 0 || !hexDigest(job.source_digest)
+    || job.completed !== job.total || job.rejected !== 0
+    || !validActivatedSourceRevision(job.source_revision)
+    || !hexDigest(job.source_digest) || !hexDigest(job.receipt_digest)
     || typeof job.started_at !== "string" || typeof job.updated_at !== "string"
     || typeof job.completed_at !== "string") return null;
   const rows: SourcePrivacyRow[] = [];
@@ -223,6 +236,7 @@ export async function deriveCoveragePrivacyAuthority(
   semanticManifest: CoveragePrivacySemanticAuthority,
   options: {
     expectedSourceDigest?: string;
+    expectedSourceRevision?: number;
     currentItems?: CurrentItemAuthority[];
   } = {},
 ): Promise<CoveragePrivacyAuthorityValidation> {
@@ -232,7 +246,9 @@ export async function deriveCoveragePrivacyAuthority(
     || await sha256(canonicalJson(semantic.canonicalManifest)) !== semanticManifest.manifestDigest
     || await sha256(canonicalJson(semantic.universe)) !== semanticManifest.universeDigest
     || (options.expectedSourceDigest !== undefined
-      && privacy.job.source_digest !== options.expectedSourceDigest)) return invalid();
+      && privacy.job.source_digest !== options.expectedSourceDigest)
+    || (options.expectedSourceRevision !== undefined
+      && privacy.job.source_revision !== options.expectedSourceRevision)) return invalid();
   const currentItems = options.currentItems
     ? new Map(options.currentItems.map((item) => [item.id, item]))
     : null;
@@ -268,11 +284,13 @@ export async function deriveCoveragePrivacyAuthority(
 type SourceItemRow = {
   id: string;
   document_id: string;
+  document_kind: string;
   sequence: number;
   event_type: string | null;
   actor_type: string | null;
   timestamp: string | null;
   content: string;
+  original_json: string;
   content_length: number;
 };
 
@@ -309,7 +327,7 @@ export async function readCoveragePrivacyAuthority(
     || currentSemanticManifest.manifestDigest !== semanticManifest.manifestDigest) return invalid();
   semanticManifest = currentSemanticManifest;
   const verifyCurrentSource = options.verifyCurrentSource !== false;
-  const [binding, jobResult, redactionResult, itemResult, unitResult, memberResult,
+  const [binding, jobResult, receiptResult, redactionResult, itemResult, unitResult, memberResult,
     storedCoverageManifest, storedCoverageRows] = await Promise.all([
     db.prepare(`SELECT r.id AS workflow_run_id,r.story_generation_status,r.story_source_revision,
         m.source_revision,m.project_id,m.revision,m.source_digest,m.universe_digest,
@@ -324,17 +342,25 @@ export async function readCoveragePrivacyAuthority(
       FROM workflow_runs r JOIN semantic_manifests m ON m.workflow_run_id=r.id
       JOIN finalized_corpus_manifests f ON f.workflow_run_id=r.id WHERE r.id=?`)
       .bind(workflowRunId, workflowRunId, workflowRunId).first<JsonRecord>(),
-    db.prepare(`SELECT id,status,stage,model,completed,total,rejected,source_digest,
-        started_at,updated_at,completed_at FROM redaction_jobs ORDER BY started_at DESC,id DESC`)
+    db.prepare(`SELECT j.id,j.status,j.stage,j.model,j.completed,j.total,j.rejected,
+        p.source_revision,j.source_digest,p.receipt_digest,j.started_at,j.updated_at,j.completed_at
+      FROM redaction_jobs j LEFT JOIN source_privacy_receipts p ON p.job_id=j.id
+      ORDER BY j.started_at DESC,j.id DESC`)
+      .all<JsonRecord>(),
+    db.prepare(`SELECT job_id,workflow_run_id,source_revision,source_digest,receipt_digest,
+        receipt_json,created_at FROM source_privacy_receipts ORDER BY job_id`)
       .all<JsonRecord>(),
     db.prepare(`SELECT id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
         review_state,uncertainty_reason,status,created_by,created_at,updated_at
       FROM redactions ORDER BY document_id,item_id,start_offset,id`).all<JsonRecord>(),
     db.prepare(verifyCurrentSource
-      ? `SELECT id,document_id,sequence,event_type,actor_type,timestamp,content,
-          length(content) AS content_length FROM items ORDER BY document_id,sequence,id`
-      : `SELECT id,document_id,sequence,event_type,actor_type,timestamp,
-          0 AS content_length FROM items ORDER BY document_id,sequence,id`)
+      ? `SELECT i.id,i.document_id,d.kind AS document_kind,i.sequence,i.event_type,i.actor_type,
+          i.timestamp,i.content,i.original_json,length(i.content) AS content_length
+          FROM items i LEFT JOIN documents d ON d.id=i.document_id
+          ORDER BY i.document_id,i.sequence,i.id`
+      : `SELECT i.id,i.document_id,'' AS document_kind,i.sequence,i.event_type,i.actor_type,
+          i.timestamp,'' AS content,'' AS original_json,0 AS content_length
+          FROM items i ORDER BY i.document_id,i.sequence,i.id`)
       .all<SourceItemRow>(),
     db.prepare(`SELECT id,workflow_run_id,revision,project_id,kind,member_count,
         membership_digest,duplicate_of_unit_id,story_projection_json
@@ -350,7 +376,8 @@ export async function readCoveragePrivacyAuthority(
       FROM story_coverage_rows WHERE workflow_run_id=? ORDER BY unit_id`)
       .bind(workflowRunId).all<JsonRecord>(),
   ]);
-  if (!binding || jobResult.results.length !== 1
+  if (!binding || jobResult.results.length !== 1 || receiptResult.results.length !== 1
+    || !validActivatedSourceRevision(Number(binding.story_source_revision))
     || Number(binding.story_source_revision) !== Number(binding.source_revision)
     || binding.project_id !== semanticManifest.projectId
     || Number(binding.revision) !== semanticManifest.revision
@@ -397,6 +424,16 @@ export async function readCoveragePrivacyAuthority(
   const currentSourceDigest = verifyCurrentSource
     ? await computeSourceDigest(itemResult.results)
     : undefined;
+  let currentDialogue;
+  if (verifyCurrentSource) {
+    try {
+      currentDialogue = await buildCurrentSourcePrivacyDialogue(
+        itemResult.results as unknown as CurrentSourceRow[],
+      );
+    } catch {
+      return invalid();
+    }
+  }
   const derived = await deriveCoveragePrivacyAuthority({
     job: jobResult.results[0],
     redactions: redactionResult.results,
@@ -411,10 +448,29 @@ export async function readCoveragePrivacyAuthority(
     } : {}),
   });
   if (!derived.ok) return derived;
+  const receiptSourceRevision = Number(receiptResult.results[0].source_revision);
+  if (!validActivatedSourceRevision(receiptSourceRevision)
+    || receiptSourceRevision > Number(binding.story_source_revision)) return invalid();
+  const receipt = await validateStoredSourcePrivacyReceipt(receiptResult.results[0], {
+    jobId: String(jobResult.results[0].id),
+    workflowRunId,
+    sourceRevision: receiptSourceRevision,
+    sourceDigest: currentSourceDigest || String(jobResult.results[0].source_digest),
+    finalizedCorpus: {
+      revision: Number(binding.finalized_revision),
+      digest: String(binding.finalized_digest),
+      documentCount: Number(binding.document_count),
+      itemCount: Number(binding.item_count),
+    },
+    ...(currentDialogue ? { dialogue: currentDialogue } : {}),
+    redactions: redactionResult.results as unknown as PersistedSourcePrivacyRedaction[],
+  });
+  if (!receipt) return invalid();
   const redactionWitnessJson = JSON.stringify(redactionResult.results);
   const semanticUnitWitnessJson = JSON.stringify(unitResult.results);
   const membershipWitnessJson = JSON.stringify(memberResult.results);
   const sourcePrivacyJobWitnessJson = JSON.stringify(jobResult.results);
+  const sourcePrivacyReceiptWitnessJson = JSON.stringify(receiptResult.results);
   const sourceItemWitnessJson = verifyCurrentSource ? JSON.stringify(itemResult.results.map((row) => ({
     id: row.id,
     document_id: row.document_id,
@@ -438,7 +494,14 @@ export async function readCoveragePrivacyAuthority(
     semanticUnitWitnessJson,
     membershipWitnessJson,
     sourcePrivacyJobWitnessJson,
+    sourcePrivacyReceiptWitnessJson,
   };
+  const snapshotDigest = await sha256(canonicalJson({
+    derived: derived.authority.snapshotDigest,
+    binding: bindingSnapshot,
+  }));
+  if (!verifyCurrentSource && (!storedCoverageManifest
+    || storedCoverageManifest.privacy_authority_digest !== snapshotDigest)) return invalid();
   return {
     ok: true,
     authority: {
@@ -447,14 +510,12 @@ export async function readCoveragePrivacyAuthority(
       semanticSourceDigest: semanticManifest.sourceDigest,
       semanticUniverseDigest: semanticManifest.universeDigest,
       semanticUnitCount: semanticManifest.units.length,
-      snapshotDigest: await sha256(canonicalJson({
-        derived: derived.authority.snapshotDigest,
-        binding: bindingSnapshot,
-      })),
+      snapshotDigest,
       redactionWitnessJson,
       semanticUnitWitnessJson,
       membershipWitnessJson,
       sourcePrivacyJobWitnessJson,
+      sourcePrivacyReceiptWitnessJson,
       sourceItemWitnessJson,
       ...(reviewedNarrativeByItemId ? { reviewedNarrativeByItemId } : {}),
       storedCoverageManifestWitnessJson,
@@ -472,6 +533,7 @@ export async function readCoveragePrivacyAuthority(
 export function coveragePrivacyAuthorityGuardStatement(
   db: CoveragePrivacyDatabase,
   authority: CoveragePrivacyAuthority,
+  expectedStoryGenerationStatus = "source_writing_generation",
 ) {
   if (!authority.sourceItemWitnessJson) {
     throw new Error("Current source verification is required for activation");
@@ -480,7 +542,7 @@ export function coveragePrivacyAuthorityGuardStatement(
         JOIN semantic_manifests m ON m.workflow_run_id=r.id
         JOIN finalized_corpus_manifests f ON f.workflow_run_id=r.id
         WHERE r.id=? AND r.story_source_revision=?
-          AND r.story_generation_status='source_writing_generation'
+          AND r.story_generation_status=?
           AND m.source_revision=? AND m.project_id=? AND m.revision=?
           AND m.source_digest=? AND m.universe_digest=? AND m.manifest_digest=?
           AND m.unit_count=?
@@ -512,11 +574,19 @@ export function coveragePrivacyAuthorityGuardStatement(
           WHERE workflow_run_id=? ORDER BY unit_id,item_id))=?
       AND (SELECT COALESCE(json_group_array(json_object(
           'id',id,'status',status,'stage',stage,'model',model,'completed',completed,
-          'total',total,'rejected',rejected,'source_digest',source_digest,
+          'total',total,'rejected',rejected,'source_revision',source_revision,
+          'source_digest',source_digest,'receipt_digest',receipt_digest,
           'started_at',started_at,'updated_at',updated_at,'completed_at',completed_at)), '[]')
-        FROM (SELECT id,status,stage,model,completed,total,rejected,source_digest,
-          started_at,updated_at,completed_at FROM redaction_jobs
-          ORDER BY started_at DESC,id DESC))=?
+        FROM (SELECT j.id,j.status,j.stage,j.model,j.completed,j.total,j.rejected,
+          p.source_revision,j.source_digest,p.receipt_digest,j.started_at,j.updated_at,j.completed_at
+          FROM redaction_jobs j LEFT JOIN source_privacy_receipts p ON p.job_id=j.id
+           ORDER BY j.started_at DESC,j.id DESC))=?
+      AND (SELECT COALESCE(json_group_array(json_object(
+          'job_id',job_id,'workflow_run_id',workflow_run_id,'source_revision',source_revision,
+          'source_digest',source_digest,'receipt_digest',receipt_digest,
+          'receipt_json',receipt_json,'created_at',created_at)), '[]')
+        FROM (SELECT job_id,workflow_run_id,source_revision,source_digest,receipt_digest,
+          receipt_json,created_at FROM source_privacy_receipts ORDER BY job_id))=?
       AND (SELECT COALESCE(json_group_array(json_object(
           'id',id,'document_id',document_id,'sequence',sequence,'event_type',event_type,
           'actor_type',actor_type,'timestamp',timestamp,'content',content)), '[]')
@@ -537,6 +607,7 @@ export function coveragePrivacyAuthorityGuardStatement(
     .bind(
       authority.workflowRunId,
       authority.storySourceRevision,
+      expectedStoryGenerationStatus,
       authority.storySourceRevision,
       authority.semanticProjectId,
       authority.semanticManifestRevision,
@@ -552,6 +623,7 @@ export function coveragePrivacyAuthorityGuardStatement(
       authority.workflowRunId,
       authority.membershipWitnessJson,
       authority.sourcePrivacyJobWitnessJson,
+      authority.sourcePrivacyReceiptWitnessJson,
       authority.sourceItemWitnessJson,
       authority.workflowRunId,
       authority.storedCoverageManifestWitnessJson,

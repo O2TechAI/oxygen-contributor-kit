@@ -22,12 +22,23 @@ class FakePackageDb {
     this.probes = [];
     this.bulk = [];
     this.probeRuns = [];
+    this.sourcePrivacyReceipts = [{
+      job_id: "redaction-job", workflow_run_id: "workflow-run", source_revision: 1,
+      source_digest: "a".repeat(64), receipt_digest: "b".repeat(64),
+      receipt_json: "{}", created_at: "2026-08-25T00:00:02.000Z",
+    }];
+    this.finalizedCorpus = [{
+      workflow_run_id: "workflow-run", corpus_revision: 1, corpus_digest: "c".repeat(64),
+      document_count: 1, item_count: 1, finalized_at: "2026-08-25T00:00:00.000Z",
+      current_document_count: 1, current_item_count: 1,
+    }];
   }
 
   async initialize() {
     this.redactionJob = {
       id: "redaction-job", status: "complete", stage: "complete",
       completed: this.redactions.length, total: this.redactions.length, rejected: 0,
+      source_revision: 1, receipt_digest: "b".repeat(64),
       source_digest: await computeSourceDigest(this.items),
       started_at: "2026-08-25T00:00:01.000Z", updated_at: "2026-08-25T00:00:02.000Z",
       completed_at: "2026-08-25T00:00:02.000Z",
@@ -38,6 +49,12 @@ class FakePackageDb {
   prepare(sql) {
     return { all: async () => {
       if (/FROM redaction_jobs/.test(sql)) return { results: [structuredClone(this.redactionJob)] };
+      if (/FROM source_privacy_receipts/.test(sql)) {
+        return { results: structuredClone(this.sourcePrivacyReceipts) };
+      }
+      if (/FROM finalized_corpus_manifests/.test(sql)) {
+        return { results: structuredClone(this.finalizedCorpus) };
+      }
       if (/FROM documents/.test(sql)) return { results: structuredClone(this.documents) };
       if (/FROM items/.test(sql)) return { results: structuredClone(this.items) };
       if (/FROM redactions/.test(sql)) return { results: structuredClone(this.redactions) };

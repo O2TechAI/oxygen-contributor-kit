@@ -66,6 +66,22 @@ def write_source_trajectory(run: Path, trajectory_id: str, events: list[dict]) -
             "cross_trajectory_semantic_replay_count": 1,
         },
     }), encoding="utf-8")
+    index_path = run / "index.json"
+    index = (
+        json.loads(index_path.read_text(encoding="utf-8"))
+        if index_path.exists()
+        else {
+            "schema": MODULE.project_map_authority.INGEST_RUN_SCHEMA,
+            "tool": "collect_repo_trajectories",
+            "collection_status": "complete",
+            "trajectory_count": 0,
+            "trajectory_failures": 0,
+            "trajectories": [],
+        }
+    )
+    index["trajectories"].append({"trajectory_id": trajectory_id, "ok": True})
+    index["trajectory_count"] = len(index["trajectories"])
+    index_path.write_text(json.dumps(index), encoding="utf-8")
     return directory
 
 
@@ -502,6 +518,31 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 MODULE.prepare_trajectories(source, output)
             self.assertFalse(output.exists())
 
+    def test_failed_or_stale_index_membership_blocks_before_review_output(self):
+        for mutation in ("failed", "extra"):
+            with self.subTest(mutation=mutation), TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source"
+                output = root / "review"
+                write_source_trajectory(source, "traj-current", [{
+                    "event_id": "evt-safe",
+                    "event_type": "message",
+                    "actor": {"type": "human"},
+                    "payload": {"text": "safe synthetic text"},
+                }])
+                if mutation == "failed":
+                    index_path = source / "index.json"
+                    index = json.loads(index_path.read_text(encoding="utf-8"))
+                    index["trajectory_failures"] = 1
+                    index["trajectories"][0]["ok"] = False
+                    index_path.write_text(json.dumps(index), encoding="utf-8")
+                else:
+                    (source / "trajectories" / "traj-stale").mkdir()
+
+                with self.assertRaisesRegex(SystemExit, f"^{MODULE.INPUT_INDEX_INVALID}$"):
+                    MODULE.prepare_trajectories(source, output)
+                self.assertFalse(output.exists())
+
     def test_meeting_review_input_is_canonical_text_only(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -562,7 +603,9 @@ class PrepareAiReviewRunTest(unittest.TestCase):
             self.assertEqual(index["meeting_count"], 1)
             report = json.loads(emit.call_args.args[0])
             self.assertEqual(report, {
-                "output": str(output.resolve()), "trajectories": 0, "meetings": 1,
+                "output": str(Path(os.path.abspath(output))),
+                "trajectories": 0,
+                "meetings": 1,
             })
 
     def test_real_single_trajectory_flow_rebinds_canonical_authority(self):
@@ -831,10 +874,36 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 outputs.append(tree_bytes(output))
             self.assertEqual(outputs[0], outputs[1])
 
+    def test_missing_or_malformed_record_ids_keep_importer_fallback_identity(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            path = write_meeting(source, "meeting-safe", records=[{
+                "order": 1, "text": "first fallback record",
+            }, {
+                "record_id": "other:record", "order": 2,
+                "text": "second fallback record",
+            }])
+            source_meeting = json.loads(path.read_text(encoding="utf-8"))
+            expected_ids = MODULE.project_map_authority.meeting_contribution_ids(
+                "meeting-safe", source_meeting["records"],
+            )
+            write_semantic_project_map(source)
+
+            self.run_main(source, output)
+
+            prepared_path = output / "meetings" / "meeting-safe" / "meeting.json"
+            prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [f"meeting-safe:{record['record_id']}" for record in prepared["records"]],
+                expected_ids,
+            )
+            turns = EXTRACT.extract_bundles(output)[0]["turns"]
+            self.assertEqual([turn["item_id"] for turn in turns], expected_ids)
+
     def test_invalid_record_identity_and_sequence_authority_fail_atomically(self):
         mutations = {
-            "missing-record-id": lambda records: records[0].pop("record_id"),
-            "foreign-qualified-id": lambda records: records[0].update(record_id="other:record"),
             "duplicate-record-id": lambda records: records[1].update(record_id=records[0]["record_id"]),
             "missing-sequence": lambda records: records[0].pop("order"),
             "zero-sequence": lambda records: records[0].update(order=0),
@@ -885,6 +954,76 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$"):
                     MODULE.prepare_run(source, output)
             self.assertFalse(output.exists())
+
+    def test_output_parent_junction_is_rejected_without_external_mutation(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            write_meeting(source, "meeting-safe")
+            write_semantic_project_map(source)
+            external = root / "external"
+            external.mkdir()
+            sentinel = external / "sentinel.bin"
+            sentinel.write_bytes(b"external owner bytes")
+            directory_link_or_skip(self, root / "alias", external)
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{MODULE.AI_REVIEW_OUTPUT_INVALID}$",
+            ):
+                MODULE.prepare_run(source, root / "alias" / "review")
+
+            self.assertEqual(sentinel.read_bytes(), b"external owner bytes")
+            self.assertFalse((external / "review").exists())
+
+    def test_valid_input_never_replaces_existing_output(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            write_meeting(source, "meeting-safe")
+            write_semantic_project_map(source)
+            output.mkdir()
+            sentinel = output / "sentinel.bin"
+            sentinel.write_bytes(b"prior owner bytes")
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{MODULE.AI_REVIEW_OUTPUT_EXISTS}$",
+            ):
+                MODULE.prepare_run(source, output)
+
+            self.assertEqual(sentinel.read_bytes(), b"prior owner bytes")
+            self.assertEqual(list(output.iterdir()), [sentinel])
+
+    def test_late_output_collision_is_no_clobber_and_retry_succeeds(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "review"
+            write_meeting(source, "meeting-safe")
+            write_semantic_project_map(source)
+            real_rename = MODULE.rename_noreplace
+
+            def race(staging: Path, final: Path) -> None:
+                final.mkdir()
+                (final / "owner.bin").write_bytes(b"raced owner bytes")
+                real_rename(staging, final)
+
+            with (
+                mock.patch.object(MODULE, "rename_noreplace", side_effect=race),
+                self.assertRaisesRegex(
+                    SystemExit, f"^{MODULE.AI_REVIEW_OUTPUT_EXISTS}$",
+                ),
+            ):
+                MODULE.prepare_run(source, output)
+
+            self.assertEqual((output / "owner.bin").read_bytes(), b"raced owner bytes")
+            self.assertEqual(list(root.glob(".review.prepare-*")), [])
+            (output / "owner.bin").unlink()
+            output.rmdir()
+            trajectories, meetings = MODULE.prepare_run(source, output)
+            self.assertEqual(trajectories, [])
+            self.assertEqual(meetings, 1)
+            self.assertTrue((output / "index.json").is_file())
 
     def test_root_meeting_is_rejected_before_output(self):
         with TemporaryDirectory() as temp:

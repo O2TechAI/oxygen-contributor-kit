@@ -2,11 +2,10 @@
 
 ## Application Shell
 
-Reuse the existing local Viewer shell. The required final shell keeps top navigation, one left project/source rail, main canvas, Project Story Timeline, final decision-only Release Preview, Preferences, Evidence review, and download actions.
+Reuse the existing local Viewer shell. The required final shell keeps top navigation, one left project/source rail, main canvas, Project Story Timeline, final target-choice Release Preview, Preferences, Evidence review, and download actions.
 
-Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer. The
-only candidate decisions are Keep/Redact; category, reason, deletion, and soft deletion are not
-contributor actions.
+Chapter Privacy/Release Preview is implemented in the canonical Viewer. Candidate rows explain why
+targets were flagged; only the contributor chooses the exact release bytes for each target.
 
 Do not create a parallel page, second shell, project-bound renderer, replacement Privacy implementation, or standalone release tool.
 
@@ -92,19 +91,21 @@ Zero source Insights create no placeholder, empty approval card, or hidden oblig
 
 ## Privacy Surface
 
-This is required final behavior, not current executable behavior on this base. When Story/Release Privacy candidate authority and the final decision-only surface are implemented for the run, render one active candidate at a time:
+The canonical Viewer renders one active Story/Release Privacy candidate and its release targets at a time:
 
 ```text
 progress
 title
-Local original or unavailable notice
-source-language label when excerpt exists
+Local original
+Agent-proposed anonymized text
+Current HTML / ZIP text
 Why AI flagged it
-Keep
-Redact
+Use Agent proposal
+Edit anonymized text
+Save exact-public choices for noncredential occurrences
 ```
 
-Show the minimum permitted original only when it exists in reviewed local evidence. Unavailable originals are never reconstructed. Do not render an AI rewrite field or recommendation as the contributor decision.
+The contributor is the sole target-choice authority. Credentials are always removed, and only exact selected bytes enter Release Preview, HTML, and ZIP.
 
 ## Evidence Navigation
 
@@ -129,7 +130,7 @@ Verify desktop and narrow layouts with the actual local Viewer. Capture final pr
 - Project Story Timeline;
 - Chapter with rail, People, and Story read mode;
 - Story Edit Mode with notes and Undo/Redo;
-- Privacy states from current candidate authority;
+- Privacy states from the current target-choice authority;
 - final Release Preview;
 - Preferences;
 - reviewed release HTML/ZIP output.
@@ -144,7 +145,7 @@ An implementation is materially equivalent only when it preserves:
 - Story table-of-contents hierarchy;
 - readable centered Chapter article;
 - controlled direct editing and provenance;
-- one-at-a-time Privacy decisions when current candidate authority exists;
+- one-at-a-time Privacy target choices from the current server-owned authority;
 - evidence navigation and original-language Evidence;
 - Preferences as their own authority;
 - Release Preview safe projection;

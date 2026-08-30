@@ -356,6 +356,14 @@ test("Python Organization finalizer and Viewer validator share one digest contra
         cross_trajectory_semantic_replay_count: 0,
       },
     }), "utf8");
+    writeFileSync(join(root, "index.json"), JSON.stringify({
+      schema: "oxygen.ingest-run",
+      tool: "collect_repo_trajectories",
+      collection_status: "complete",
+      trajectory_count: 1,
+      trajectory_failures: 0,
+      trajectories: [{ trajectory_id: "traj-parity", ok: true }],
+    }), "utf8");
     const skeleton = spawnSync("python", [
       script, root, "--primary-project", "Synthetic Project",
       "--summary", "Cross-runtime parity.",
@@ -570,6 +578,35 @@ test("Organization carries same-workflow semantic lineage across full-corpus rep
     assert.equal(firstOrganization.semanticManifest.revision, 1);
     assert.equal(firstOrganization.semanticManifest.finalizedCorpus.revision, 1);
     assert.equal(firstOrganization.completed, 203);
+
+    const activatedSourceRevision = firstOrganization.semanticManifest.sourceRevision;
+    await db.prepare(`UPDATE workflow_runs SET story_source_revision=0 WHERE id=?`)
+      .bind(workflowRunId).run();
+    await db.prepare(`UPDATE semantic_manifests SET source_revision=0 WHERE workflow_run_id=?`)
+      .bind(workflowRunId).run();
+    const zeroStatus = await (await organizationRoute.GET(
+      new Request("http://localhost/api/organization"),
+    )).json();
+    assert.equal(zeroStatus.semanticManifest, null);
+    assert.equal(zeroStatus.semanticProjection, null);
+    const evidenceUnit = firstManifest.units[0];
+    const zeroEvidence = await organizationRoute.GET(new Request(
+      `http://localhost/api/organization?unitId=${encodeURIComponent(evidenceUnit.id)}`
+      + `&revision=${evidenceUnit.revision}`
+      + `&membershipDigest=${evidenceUnit.membershipDigest}`,
+    ));
+    assert.equal(zeroEvidence.status, 409);
+    const zeroRunBeforePost = await db.prepare(`SELECT story_generation_status,story_source_revision,
+      updated_at FROM workflow_runs WHERE id=?`).bind(workflowRunId).first();
+    assert.equal((await postJson(
+      organizationRoute, "/api/organization", { semanticManifest: firstManifest },
+    )).status, 409);
+    assert.deepEqual(await db.prepare(`SELECT story_generation_status,story_source_revision,
+      updated_at FROM workflow_runs WHERE id=?`).bind(workflowRunId).first(), zeroRunBeforePost);
+    await db.prepare(`UPDATE workflow_runs SET story_source_revision=? WHERE id=?`)
+      .bind(activatedSourceRevision, workflowRunId).run();
+    await db.prepare(`UPDATE semantic_manifests SET source_revision=? WHERE workflow_run_id=?`)
+      .bind(activatedSourceRevision, workflowRunId).run();
 
     const replacementResponse = await postJson(
       documentsRoute, "/api/documents", reviewCorpus("revision-2"),

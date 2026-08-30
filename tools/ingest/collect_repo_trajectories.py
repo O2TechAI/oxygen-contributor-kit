@@ -534,8 +534,37 @@ def validate_rerunnable_output(out: Path) -> bool:
         index = json.loads(index_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         raise ValueError("existing collector index is invalid") from None
-    if not isinstance(index, dict) or index.get("tool") != "collect_repo_trajectories":
+    if (
+        not isinstance(index, dict)
+        or index.get("schema") != INGEST_RUN_SCHEMA
+        or index.get("tool") != "collect_repo_trajectories"
+        or index.get("collection_status") not in {"complete", "in_progress"}
+    ):
         raise ValueError("nonempty output is not an identified collector run")
+    entries = index.get("trajectories")
+    count = index.get("trajectory_count")
+    failures = index.get("trajectory_failures")
+    if (
+        not isinstance(entries, list)
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or count != len(entries)
+        or not isinstance(failures, int)
+        or isinstance(failures, bool)
+        or failures < 0
+    ):
+        raise ValueError("existing collector index is invalid")
+    if index["collection_status"] == "in_progress":
+        if entries or count != 0 or failures != 1:
+            raise ValueError("existing collector index is invalid")
+        return True
+    if any(
+        not isinstance(entry, dict)
+        or not isinstance(entry.get("trajectory_id"), str)
+        or not isinstance(entry.get("ok"), bool)
+        for entry in entries
+    ) or failures != sum(1 for entry in entries if entry["ok"] is False):
+        raise ValueError("existing collector index is invalid")
     return True
 
 
@@ -561,6 +590,39 @@ def prune_stale_trajectory_outputs(out: Path, successful_ids: set[str]) -> int:
             shutil.rmtree(resolved_entry)
             removed += 1
     return removed
+
+
+def atomic_write_json(path: Path, value: object) -> None:
+    """Replace the collector index without exposing a partial JSON document."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def invalidate_collection_authority(out: Path) -> None:
+    """Make every pre-existing trajectory set non-consumable before mutation."""
+    atomic_write_json(out / "index.json", {
+        "schema": INGEST_RUN_SCHEMA,
+        "tool": "collect_repo_trajectories",
+        "collection_status": "in_progress",
+        "trajectory_count": 0,
+        "trajectory_failures": 1,
+        "trajectories": [],
+        "review_status": "pending",
+        "publication_approved": False,
+    })
 
 
 def extract(
@@ -888,6 +950,11 @@ def main(argv=None) -> int:
     if reporter:
         reporter.update(0, total)
 
+    # The old index must stop authorizing bytes before the first trajectory or
+    # memory file is changed. A crash from this point leaves a fixed invalid
+    # authority rather than a valid index pointing at stale/partial output.
+    invalidate_collection_authority(out)
+
     trajectories: list[dict] = []
     semantic_source_registry: dict[tuple[str, str, str, str, str], str] = {}
     claimed_trajectory_ids: set[str] = set()
@@ -910,15 +977,6 @@ def main(argv=None) -> int:
             progress(pct, "extract", f"[{done}/{total}] {entry['trajectory_id']} {status}")
             if reporter:
                 reporter.update(done, total)
-
-    if replacing_existing_output:
-        try:
-            prune_stale_trajectory_outputs(
-                out,
-                {entry["trajectory_id"] for entry in trajectories},
-            )
-        except ValueError as error:
-            raise fail(str(error)) from error
 
     progress(88, "memory", "collecting memory files")
     memory: list[dict] = []
@@ -950,6 +1008,7 @@ def main(argv=None) -> int:
     index = {
         "schema": INGEST_RUN_SCHEMA,
         "tool": "collect_repo_trajectories",
+        "collection_status": "complete",
         "generated_at": utc_now(),
         "repo": str(repo),
         "source_user": args.user,
@@ -963,7 +1022,19 @@ def main(argv=None) -> int:
         "session_discovery": {name: stats.as_dict() for name, stats in discovery.items()},
         "contribution_projection": aggregate_projection(trajectories),
     }
-    write_json(out / "index.json", index)
+    if replacing_existing_output:
+        try:
+            prune_stale_trajectory_outputs(
+                out,
+                {
+                    entry["trajectory_id"]
+                    for entry in trajectories
+                    if entry.get("ok") is True
+                },
+            )
+        except ValueError as error:
+            raise fail(str(error)) from error
+    atomic_write_json(out / "index.json", index)
     progress(
         100,
         "done",

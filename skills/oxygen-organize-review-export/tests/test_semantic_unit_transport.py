@@ -19,6 +19,7 @@ import build_project_map as builder
 import extract_codex_trajectory as extractor
 import finalize_semantic_units as finalizer
 import prepare_semantic_units as preparer
+import record_semantic_worker as recorder
 
 SENSITIVE_KEY_SPELLINGS = (
     "api key", "api_key", "api-key", "apikey",
@@ -96,6 +97,22 @@ def write_trajectory(run: Path, trajectory_id: str, texts: list[str]) -> list[st
             "cross_trajectory_semantic_replay_count": 0,
         },
     }), encoding="utf-8")
+    index_path = run / "index.json"
+    index = (
+        json.loads(index_path.read_text(encoding="utf-8"))
+        if index_path.exists()
+        else {
+            "schema": builder.INGEST_RUN_SCHEMA,
+            "tool": "collect_repo_trajectories",
+            "collection_status": "complete",
+            "trajectory_count": 0,
+            "trajectory_failures": 0,
+            "trajectories": [],
+        }
+    )
+    index["trajectories"].append({"trajectory_id": trajectory_id, "ok": True})
+    index["trajectory_count"] = len(index["trajectories"])
+    index_path.write_text(json.dumps(index), encoding="utf-8")
     return [event["event_id"] for event in events]
 
 
@@ -181,18 +198,20 @@ def write_worker_results(output: Path, unit_for_id) -> None:
             "inputDigest": shard["inputDigest"],
             "proposals": proposals,
         }
-        output_path = output / "outputs" / f"{shard['id']}.json"
+        record = output / "records" / shard["id"]
+        record.mkdir()
+        output_path = record / "output.json"
         output_path.write_text(json.dumps(worker_output, ensure_ascii=False), encoding="utf-8")
         receipt = {
             "status": "complete",
             "shardId": shard["id"],
             "inputDigest": shard["inputDigest"],
             "contributionIds": shard["contributionIds"],
-            "outputPath": f"outputs/{shard['id']}.json",
+            "outputPath": f"records/{shard['id']}/output.json",
             "outputDigest": builder.digest(worker_output),
             "outputCount": len(proposals),
         }
-        (output / "receipts" / f"{shard['id']}.json").write_text(
+        (record / "receipt.json").write_text(
             json.dumps(receipt), encoding="utf-8",
         )
 
@@ -266,7 +285,9 @@ class SemanticUnitTransportTests(unittest.TestCase):
                 "job": {
                     "id": "source-privacy-current", "status": "complete", "stage": "complete",
                     "model": None, "completed": 0, "total": 0, "rejected": 0,
+                    "source_revision": 1,
                     "source_digest": "9" * 64,
+                    "receipt_digest": "8" * 64,
                     "started_at": "2042-01-01T00:00:00.000Z",
                     "updated_at": "2042-01-01T00:00:00.000Z",
                     "completed_at": "2042-01-01T00:00:00.000Z",
@@ -288,6 +309,89 @@ class SemanticUnitTransportTests(unittest.TestCase):
             self.assertEqual(wrapped.returncode, 0, wrapped.stderr)
             self.assertEqual(bare.returncode, 0, bare.stderr)
             self.assertEqual(wrapped_output.read_bytes(), bare_output.read_bytes())
+
+    def test_worker_rejects_noncanonical_handoff_and_traversal_before_any_write(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / "run"
+            contribution_id = write_trajectory(run, "traj", ["one"])[0]
+            self.assertEqual(run_builder(run).returncode, 0)
+            project_map_before = (run / "project-map.json").read_bytes()
+            semantic = root / "semantic"
+            prepared = prepare(run, semantic)
+            shard = prepared["manifest"]["shards"][0]
+            shard_id = shard["id"]
+            proposals = [{
+                "unitId": "unit-discussion",
+                "kind": "discussion",
+                "contributionIds": [contribution_id],
+            }]
+            outside_proposal = root / "outside.proposals.json"
+            outside_proposal.write_text(json.dumps(proposals), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "proposal path is not canonical"):
+                recorder.record(semantic, shard_id, outside_proposal)
+            self.assertEqual(list((semantic / "records").iterdir()), [])
+            self.assertEqual((run / "project-map.json").read_bytes(), project_map_before)
+
+            manifest_path = semantic / "shards.json"
+            manifest_before = manifest_path.read_bytes()
+            tampered = json.loads(manifest_before)
+            traversal_id = "x/../../../outside-pair"
+            tampered["shards"][0]["id"] = traversal_id
+            tampered["shards"][0]["inputPath"] = f"inputs/{traversal_id}.json"
+            tampered["shards"][0]["receiptPath"] = f"records/{traversal_id}/receipt.json"
+            builder.atomic_write_json(manifest_path, tampered)
+            with self.assertRaisesRegex(ValueError, "shard identity is invalid"):
+                recorder.record(semantic, traversal_id, outside_proposal)
+            self.assertFalse((root / "outside-pair").exists())
+            self.assertEqual(list((semantic / "records").iterdir()), [])
+            self.assertEqual((run / "project-map.json").read_bytes(), project_map_before)
+
+            manifest_path.write_bytes(manifest_before)
+            canonical_proposal = semantic / "handoffs" / f"{shard_id}.proposals.json"
+            canonical_proposal.write_text(json.dumps(proposals), encoding="utf-8")
+            receipt = recorder.record(semantic, shard_id, canonical_proposal)
+            self.assertEqual(receipt["status"], "complete")
+            self.assertEqual(len(finalizer.finalize(run, semantic)["semantic_manifest"]["units"]), 1)
+
+    @unittest.skipUnless(os.name == "nt", "native 8.3 paths are Windows-only")
+    def test_worker_accepts_mixed_native_short_and_long_handoff_paths(self):
+        import ctypes
+
+        def short_path(path: Path) -> Path:
+            buffer = ctypes.create_unicode_buffer(32_768)
+            length = ctypes.windll.kernel32.GetShortPathNameW(str(path), buffer, len(buffer))
+            if not length or os.path.normcase(buffer.value) == os.path.normcase(str(path)):
+                self.skipTest("native 8.3 path aliases are unavailable")
+            return Path(buffer.value)
+
+        with tempfile.TemporaryDirectory(
+            prefix="oxygen semantic short path ", dir=Path(__file__).resolve().parents[3]
+        ) as temporary:
+            root = Path(temporary)
+            run = root / "run with a long name"
+            contribution_id = write_trajectory(run, "traj", ["one"])[0]
+            self.assertEqual(run_builder(run).returncode, 0)
+            semantic = root / "semantic output with a long name"
+            shard = prepare(run, semantic)["manifest"]["shards"][0]
+            proposal = semantic / "handoffs" / f"{shard['id']}.proposals.json"
+            proposal.write_text(json.dumps([{
+                "unitId": "unit-discussion",
+                "kind": "discussion",
+                "contributionIds": [contribution_id],
+            }]), encoding="utf-8")
+            short_root = short_path(semantic)
+            short_proposal = short_path(proposal)
+            script = SCRIPTS / "record_semantic_worker.py"
+            for root_path, proposal_path in (
+                (semantic, short_proposal),
+                (short_root, proposal),
+            ):
+                completed = subprocess.run([
+                    sys.executable, str(script), str(root_path), shard["id"], str(proposal_path),
+                ], capture_output=True, text=True, encoding="utf-8", check=False)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_invalid_kind_can_be_explicitly_corrected_only_before_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -320,8 +424,9 @@ class SemanticUnitTransportTests(unittest.TestCase):
             self.assertNotIn(invalid_kind, rejected.stderr)
             self.assertNotIn("RAW_KIND_SENTINEL", rejected.stderr)
             self.assertNotIn("Traceback", rejected.stderr)
-            output_path = semantic / "outputs" / f"{shard_id}.json"
-            receipt_path = semantic / "receipts" / f"{shard_id}.json"
+            record_path = semantic / "records" / shard_id
+            output_path = record_path / "output.json"
+            receipt_path = record_path / "receipt.json"
             self.assertFalse(output_path.exists())
             self.assertFalse(receipt_path.exists())
             self.assertEqual(shard_input.read_bytes(), input_before)
@@ -335,10 +440,19 @@ class SemanticUnitTransportTests(unittest.TestCase):
                 command, capture_output=True, text=True, encoding="utf-8", check=False,
             )
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
-            self.assertEqual(len(list((semantic / "outputs").glob("*.json"))), 1)
-            self.assertEqual(len(list((semantic / "receipts").glob("*.json"))), 1)
+            self.assertEqual([path.name for path in (semantic / "records").iterdir()], [shard_id])
+            self.assertEqual(
+                {path.name for path in record_path.iterdir()},
+                {"output.json", "receipt.json"},
+            )
             output_before = output_path.read_bytes()
             receipt_before = receipt_path.read_bytes()
+            replayed = subprocess.run(
+                command, capture_output=True, text=True, encoding="utf-8", check=False,
+            )
+            self.assertEqual(replayed.returncode, 0, replayed.stderr)
+            self.assertEqual(output_path.read_bytes(), output_before)
+            self.assertEqual(receipt_path.read_bytes(), receipt_before)
             finalized = finalizer.finalize(run, semantic)
             self.assertEqual(finalized["semantic_manifest"]["units"][0]["kind"],
                              "direction_change")
@@ -358,6 +472,93 @@ class SemanticUnitTransportTests(unittest.TestCase):
             self.assertEqual(receipt_path.read_bytes(), receipt_before)
             self.assertEqual(shard_input.read_bytes(), input_before)
 
+    def test_worker_pair_staged_write_faults_leave_no_final_and_retry(self):
+        for fail_after in (1, 2):
+            with self.subTest(fail_after=fail_after), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run = root / "run"
+                contribution_id = write_trajectory(run, "traj", ["one"])[0]
+                self.assertEqual(run_builder(run).returncode, 0)
+                semantic = root / "semantic"
+                prepared = prepare(run, semantic)
+                shard = prepared["manifest"]["shards"][0]
+                proposal_path = semantic / "handoffs" / f"{shard['id']}.proposals.json"
+                proposal_path.write_text(json.dumps([{
+                    "unitId": "unit-one",
+                    "kind": "discussion",
+                    "contributionIds": [contribution_id],
+                }]), encoding="utf-8")
+                skeleton = (run / "project-map.json").read_bytes()
+                real_write = recorder.atomic_write_json
+                calls = 0
+
+                def fail_after_staged_write(path, value):
+                    nonlocal calls
+                    real_write(path, value)
+                    calls += 1
+                    if calls == fail_after:
+                        raise OSError("synthetic staged write failure")
+
+                with mock.patch.object(
+                    recorder, "atomic_write_json", side_effect=fail_after_staged_write,
+                ):
+                    with self.assertRaisesRegex(OSError, "synthetic staged write failure"):
+                        recorder.record(semantic, shard["id"], proposal_path)
+
+                record = semantic / "records" / shard["id"]
+                self.assertFalse(record.exists())
+                self.assertEqual(list((semantic / "records").iterdir()), [])
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    finalizer.finalize(run, semantic)
+                self.assertEqual((run / "project-map.json").read_bytes(), skeleton)
+
+                receipt = recorder.record(semantic, shard["id"], proposal_path)
+                self.assertEqual(receipt["status"], "complete")
+                finalized = finalizer.finalize(run, semantic)
+                self.assertEqual(len(finalized["semantic_manifest"]["units"]), 1)
+
+    def test_worker_pair_late_collision_is_no_clobber_and_retry_succeeds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / "run"
+            contribution_id = write_trajectory(run, "traj", ["one"])[0]
+            self.assertEqual(run_builder(run).returncode, 0)
+            semantic = root / "semantic"
+            prepared = prepare(run, semantic)
+            shard = prepared["manifest"]["shards"][0]
+            proposal_path = semantic / "handoffs" / f"{shard['id']}.proposals.json"
+            proposal_path.write_text(json.dumps([{
+                "unitId": "unit-one",
+                "kind": "discussion",
+                "contributionIds": [contribution_id],
+            }]), encoding="utf-8")
+            destination = semantic / "records" / shard["id"]
+            owner_bytes = b'{"owner":"external"}\n'
+
+            def collide(_stage, raced_destination):
+                self.assertEqual(raced_destination, destination)
+                raced_destination.mkdir()
+                (raced_destination / "output.json").write_bytes(owner_bytes)
+                (raced_destination / "receipt.json").write_bytes(owner_bytes)
+                raise FileExistsError(17, "synthetic late collision")
+
+            with mock.patch.object(recorder, "rename_noreplace", side_effect=collide):
+                with self.assertRaisesRegex(
+                    ValueError, "immutable semantic worker artifact already differs",
+                ):
+                    recorder.record(semantic, shard["id"], proposal_path)
+
+            self.assertEqual((destination / "output.json").read_bytes(), owner_bytes)
+            self.assertEqual((destination / "receipt.json").read_bytes(), owner_bytes)
+            self.assertEqual(
+                [path.name for path in (semantic / "records").iterdir()],
+                [shard["id"]],
+            )
+            shutil.rmtree(destination)
+            recorder.record(semantic, shard["id"], proposal_path)
+            finalized = finalizer.finalize(run, semantic)
+            self.assertEqual(len(finalized["semantic_manifest"]["units"]), 1)
+
     def test_cross_shard_matching_unit_ids_require_identical_open_kind_metadata(self):
         proposals = [
             {"id": "unit-shared", "kind": "laboratory_observation", "members": ["item-a"]},
@@ -365,6 +566,14 @@ class SemanticUnitTransportTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(ValueError, "disagree on semantic authority"):
             finalizer.compose(proposals, ["item-a", "item-b"])
+
+    def test_unrelated_records_may_remain_distinct_singleton_units(self):
+        proposals = [
+            {"id": "unit-a", "kind": "discussion", "members": ["item-a"]},
+            {"id": "unit-b", "kind": "laboratory_observation", "members": ["item-b"]},
+        ]
+
+        self.assertEqual(finalizer.compose(proposals, ["item-a", "item-b"]), proposals)
 
     def test_current_ingest_sanitizer_closes_every_worker_secret_rule(self):
         unsafe = (
@@ -520,8 +729,9 @@ class SemanticUnitTransportTests(unittest.TestCase):
                     prepare(run, semantic)
                     write_worker_results(semantic, lambda _: "unit-all")
                     shard = json.loads((semantic / "shards.json").read_text(encoding="utf-8"))["shards"][0]
-                    receipt = semantic / "receipts" / f"{shard['id']}.json"
-                    output = semantic / "outputs" / f"{shard['id']}.json"
+                    record = semantic / "records" / shard["id"]
+                    receipt = record / "receipt.json"
+                    output = record / "output.json"
                     before = (run / "project-map.json").read_bytes()
                     mutate(semantic, shard, receipt, output)
                     with self.assertRaises((ValueError, FileNotFoundError)):

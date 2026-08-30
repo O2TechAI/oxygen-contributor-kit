@@ -128,6 +128,13 @@ Three tabs, all local:
 - **Preferences** — the probe batch, with evidence IDs. An unanswered or cleared probe records
   **no** preference; silence is never read as agreement.
 
+Editing reviewed Story text invalidates only the affected Story Privacy targets. When the Viewer
+shows `preparation_required`, use the single documented refresh sequence in
+[`SOP.md`](SOP.md#refresh-story-privacy-after-a-story-edit): export the current reviewed snapshot,
+prepare every changed-target shard, finalize the exact proposal set, import the bound bundle, then
+continue the same local review. No database edits or hand-written authority JSON are part of that
+workflow.
+
 Redactions are stored as offsets and applied at render time, so the stored text is the untouched
 original. That is what makes a decision reversible — and it is also why a Viewer serving a run is
 serving unredacted text over its API. Never expose it beyond localhost without an authenticating
@@ -200,6 +207,7 @@ python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
 # Record the exact URL and workflow run ID printed above, then use Terminal 2.
 VIEWER_URL=http://127.0.0.1:<port>
 WORKFLOW_RUN_ID=<run-id>
+SOURCE_PRIVACY_RECEIPT=work/my-source-privacy-receipt.json
 
 # 2. Collect with fixed operational progress events only.
 python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/my-project \
@@ -217,13 +225,16 @@ python3 tools/llm_redact/prepare_ai_review_run.py \
 python3 tools/llm_redact/audit_coverage.py work/my-review
 
 # 6. Extract only conversational turns for the configured model.
-python3 tools/llm_redact/extract_dialogue.py work/my-review --out work/my-dialogue
+python3 tools/llm_redact/extract_dialogue.py work/my-review --out work/my-dialogue \
+  --base-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
 
 # 7. After the model writes one findings JSON per bundle, validate and merge.
 python3 tools/llm_redact/verify_coverage.py \
-  --dialogue work/my-dialogue --findings work/my-findings
+  --dialogue work/my-dialogue --findings work/my-findings \
+  --receipt "$SOURCE_PRIVACY_RECEIPT"
 python3 tools/llm_redact/merge_and_apply.py \
-  --dialogue work/my-dialogue --findings work/my-findings --out work/my-redaction
+  --dialogue work/my-dialogue --findings work/my-findings --out work/my-redaction \
+  --receipt "$SOURCE_PRIVACY_RECEIPT"
 
 # 8. Reattach the reviewed boundary to the same Viewer.
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-review \
@@ -231,7 +242,8 @@ python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my
 
 # 9. Push validated spans into that exact Viewer.
 python3 tools/llm_redact/push_redactions.py \
-  --redacted work/my-redaction/redacted --base-url "$VIEWER_URL"
+  --redacted work/my-redaction/redacted --base-url "$VIEWER_URL" \
+  --receipt "$SOURCE_PRIVACY_RECEIPT"
 ```
 
 Native Windows PowerShell uses the same workflow without `python -X utf8`, `chcp`, WSL, or a
@@ -244,6 +256,7 @@ $Review = "work\my-review"
 $Dialogue = "work\my-dialogue"
 $Findings = "work\my-findings"
 $Redaction = "work\my-redaction"
+$Receipt = "work\my-source-privacy-receipt.json"
 
 # Terminal 1: show Workflow Progress before collection; keep this running.
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
@@ -266,13 +279,13 @@ python .\tools\llm_redact\prepare_ai_review_run.py `
   --run "$Run" --out "$Review"
 python .\tools\llm_redact\audit_coverage.py "$Review"
 python .\tools\llm_redact\extract_dialogue.py "$Review" `
-  --out "$Dialogue"
+  --out "$Dialogue" --base-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
 # 3. After the configured AI model writes one findings file per bundle.
 python .\tools\llm_redact\verify_coverage.py `
-  --dialogue "$Dialogue" --findings "$Findings"
+  --dialogue "$Dialogue" --findings "$Findings" --receipt "$Receipt"
 python .\tools\llm_redact\merge_and_apply.py `
-  --dialogue "$Dialogue" --findings "$Findings" --out "$Redaction"
+  --dialogue "$Dialogue" --findings "$Findings" --out "$Redaction" --receipt "$Receipt"
 
 # 4. Reattach the safe reviewed boundary to the already-running Viewer.
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
@@ -281,7 +294,7 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
 # 5. In another PowerShell terminal, push only validated findings.
 python .\tools\llm_redact\push_redactions.py `
   --redacted "$Redaction\redacted" `
-  --base-url "$Viewer"
+  --base-url "$Viewer" --receipt "$Receipt"
 ```
 
 Optional Windows audio uses a project-local environment only. Install its optional dependencies
@@ -294,7 +307,7 @@ $AudioPython = ".\tools\ingest\.venv-audio\Scripts\python.exe"
 $env:HF_TOKEN = "<current-user-token>"
 try {
   python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.m4a" `
-    --out "work\meeting-run" --language en --no-publish
+    --out "work\meeting-run" --language en
 }
 finally {
   Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue

@@ -52,10 +52,10 @@ Organize
 upstream source Privacy preparation
 build Project Story using bounded semantic workers
 independent global sparse Insight pass
-Story/Release Privacy candidate preparation
+Story/Release Privacy total proposal preparation
 Preference-question generation
 Project Story human review
-Privacy Keep/Redact decisions
+Privacy target choices
 Preference answers
 All set
 local reviewed release
@@ -64,7 +64,7 @@ local reviewed release
 Keep the two Privacy boundaries distinct:
 
 - Upstream source Privacy prepares the reviewed input boundary before Story generation. It removes or replaces source material and blocks release while required source redaction decisions remain unresolved.
-- Story/Release Privacy reviews release-safe Story targets after the Story candidate exists. On this base, `oxygen.story` does not contain Privacy candidates and the hydrated Story session does not restore top-level candidate decisions; if Story/Release Privacy candidates are required for a run but no implemented candidate authority exists, stop before claiming review or release readiness.
+- Story/Release Privacy reviews release-safe Story targets after the Story candidate exists. The Agent authors one meaning-preserving proposal for every target, while candidates remain explanatory metadata. The hydrated Story session does not own target choices; the server-owned target authority does.
 
 ## Readiness Terminal Rule
 
@@ -72,7 +72,7 @@ Opening Project Story for human review requires terminal results for all four pr
 
 - Story generation;
 - independent global sparse Insight pass, including an explicit completed-zero result when no Insight is warranted;
-- Story/Release Privacy candidate preparation;
+- Story/Release Privacy total proposal preparation;
 - Preference-question generation, including an explicit completed-zero result when no valid question is warranted.
 
 Preference questions must be generated before the human review UI opens by using reusable lessons represented by generated Insight candidates. They remain unanswered questions until the contributor acts; never report them as confirmed preferences. If no valid question is warranted, validate a completed-zero probe batch before review.
@@ -87,13 +87,13 @@ those files without handwritten digests, receipts, or authority JSON.
 
 Pause and wait for explicit contributor action at each of these points:
 
-- unresolved Privacy Keep/Redact decisions;
+- unresolved Privacy target choices;
 - contributor Preference answers;
 - Story review;
 - All set;
 - release handoff.
 
-Do not fabricate a decision, infer an answer from silence, click through review on behalf of the contributor, or treat a generated candidate as approval.
+Do not fabricate a target choice, infer an answer from silence, click through review on behalf of the contributor, or treat an Agent proposal as approval.
 
 ## Viewer And Workflow Identity
 
@@ -365,7 +365,16 @@ read-only while the explanatory fields are reviewed. Human-created Insight keeps
 user-selected Story-substring Quote origin and lifecycle. Release uses the accepted source Quote,
 not Story paragraph text, and strips anchor and Evidence identities.
 
-Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer. It is a release-safe projection only: deterministic or contributor-confirmed safe content shows safe projection only; `needs_confirmation` is the only actionable state; actions are exactly Keep/Redact; pending content may show only the minimum permitted original and safe projection; unavailable originals are never reconstructed; pending confirmation blocks release. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
+Chapter Privacy/Release Preview is implemented in the canonical Viewer as one choice authority per target. It shows the local original beside the Agent-authored meaning-preserving proposal. The contributor accepts that proposal, edits anonymized text, or explicitly makes an exact noncredential occurrence public for the current target digest. A missing, stale, invalid, or incomplete target choice blocks the whole release. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
+
+### Refresh reviewed Story Privacy
+
+After any reviewed Story edit, treat `preparation_required` as a resumable authority refresh and
+follow the parent-owned procedure in [`SOP.md`](../../SOP.md#refresh-story-privacy-after-a-story-edit).
+Keep the same localhost Viewer and workflow run, use a new private directory, and never repair SQLite
+or author an import bundle by hand. Each worker writes the total
+`{ "candidates": [...], "targetProposals": [...] }` object for its assigned targets. Credential
+occurrences are never publishable, and HTML and ZIP consume the exact same contributor-selected bytes.
 
 All set confirms the current reviewed Story locally. It does not publish, upload, merge, push, or set `publication_approved=true`.
 

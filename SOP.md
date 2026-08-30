@@ -4,7 +4,7 @@
 
 Collect only the contributor's in-scope project history, separate mixed-project content, prepare the
 upstream source Privacy boundary, build and human-review Project Story, prepare Story/Release
-Privacy candidates and Preferences, then finish with one local reviewed release ZIP. Nothing is
+Privacy total target proposals and Preferences, then finish with one local reviewed release ZIP. Nothing is
 uploaded automatically.
 
 ## Desired completion criteria
@@ -13,7 +13,7 @@ The workflow is complete only when all of the following are true:
 
 1. The contributor has been shown the local Viewer whenever a browser-visible frontend is
    available. The exact localhost URL is also provided, and no password is required.
-2. The contributor has completed Project Story human review, Privacy Keep/Redact decisions, and
+2. The contributor has completed Project Story human review, exact Privacy target choices, and
    Preference answers, then seen the redaction summary, Release Preview, exclusions, and unresolved
    warnings.
 3. The contributor can download one verified `oxygen-contribution.zip`.
@@ -21,7 +21,7 @@ The workflow is complete only when all of the following are true:
    approves publication.
 
 Current runtime status: the canonical Viewer implements activation-time preparation receipts,
-Preference readiness binding, server-owned Story Privacy decisions, final decision-only Chapter
+Preference readiness binding, server-owned Story Privacy target choices, final Chapter
 Privacy and Release Preview, session hydration, Chapter All set, final release confirmation, and
 reviewed HTML/ZIP transformation. A specific run becomes release-ready only after its current human
 decisions and final confirmation; none of those actions changes `publication_approved=false`.
@@ -36,10 +36,10 @@ Organize
 upstream source Privacy preparation
 build Project Story using bounded semantic workers
 independent global sparse Insight pass
-Story/Release Privacy candidate preparation
+Story/Release Privacy total proposal preparation
 Preference-question generation
 Project Story human review
-Privacy Keep/Redact decisions
+Privacy target choices
 Preference answers
 All set
 local reviewed release
@@ -126,7 +126,7 @@ python3 tools/ingest/import_anthropic_export.py export.zip \
 
 # Meeting notes/transcript or local audio. Audio remains local.
 python3 tools/ingest/import_meeting.py meeting.m4a \
-  --out work/meeting-run --language en --no-publish
+  --out work/meeting-run --language en
 ```
 
 Native Windows PowerShell equivalents are:
@@ -140,7 +140,7 @@ python .\tools\ingest\import_anthropic_export.py `
   "D:\Downloads\export.zip" --out "work\claude-run"
 
 python .\tools\ingest\import_meeting.py `
-  "D:\Meetings\meeting.txt" --out "work\meeting-run" --no-publish
+  "D:\Meetings\meeting.txt" --out "work\meeting-run"
 ```
 
 Codex collection searches the user-global `Path.home() / ".codex" / "sessions"` by default:
@@ -163,7 +163,7 @@ $AudioPython = ".\tools\ingest\.venv-audio\Scripts\python.exe"
 $env:HF_TOKEN = "<current-user-token>"
 try {
   python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.m4a" `
-    --out "work\meeting-run" --language en --no-publish
+    --out "work\meeting-run" --language en
 }
 finally {
   Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue
@@ -215,7 +215,7 @@ Use the contributor's configured AI model for redaction. The mandatory notice is
 > required before release.
 
 This is the upstream source Privacy boundary. Its output is the reviewed input boundary used by
-Story generation. It is distinct from later Story/Release Privacy candidates shown beside Chapter
+Story generation. It is distinct from later Story/Release Privacy targets shown beside Chapter
 or Release Preview content.
 
 Use the canonical worker contract at `tools/llm_redact/REDACTION_PROMPT.md`; do not search for a
@@ -251,8 +251,8 @@ count it did not actually review;
 `tools/llm_redact/merge_and_apply.py` and `verify_coverage.py` reject each of those rather than
 letting them reach the release candidate. Report the rejection count alongside the hit count — a
 pass with zero rejections and a pass whose failures were dropped silently look identical otherwise.
-`verify_coverage.py` exits non-zero on a mismatch and is meant to gate the pipeline, not to be read
-by eye; run it against the probe pass too.
+`verify_coverage.py` exits non-zero on a mismatch and atomically creates the immutable Source
+Privacy receipt. The merge, Viewer import, and release gates all require that same receipt.
 
 Two failures found the hard way, both of which look like success:
 
@@ -287,14 +287,15 @@ the existing Viewer and `viewer/lib/story-*` contracts. Do not build a separate 
 application or copy project prose into reusable source.
 
 Build the complete Project Story with bounded semantic workers, then run an independent global
-sparse Insight pass. Prepare Story/Release Privacy candidates only through implemented candidate
-authority; do not claim `oxygen.story` contains them. Generate Preference questions from reusable
+sparse Insight pass. Prepare one Agent-authored, meaning-preserving proposal for every Story/Release
+Privacy target through the implemented target authority; do not claim `oxygen.story` contains those
+proposals. Generate Preference questions from reusable
 lessons represented by generated Insight candidates before opening human review; questions remain
 unanswered until explicit contributor action. If no valid question exists, validate a completed-zero
 probe batch before review.
 
 Opening Project Story for human review requires terminal results for Story generation, global
-Insight pass, Story/Release Privacy candidate preparation, and Preference-question generation.
+Insight pass, Story/Release Privacy total proposal preparation, and Preference-question generation.
 Completed-zero is a valid terminal result for the Insight and Preference lanes when no warranted
 Insight or valid question exists. The composed launcher transport now requires the deterministic
 Preference bundle and the `oxygen.story-preparation` manifest with coverage and Story candidates.
@@ -368,13 +369,13 @@ Coverage draft rows use only `{unitId, disposition, ownerId}` for represented un
 submitted coverage manifest becomes the prior accepted authority for regeneration. Rejected output
 never becomes prior authority.
 
-The contributor reviews the Project Story, Chapters, Insights, Story/Release Privacy candidates
+The contributor reviews the Project Story, Chapters, Insights, Story/Release Privacy target proposals
 when present, Preference questions, and exact evidence through the iterative direct edit -> Apply
 review loop. Direct editing is the current canonical edit path. Already-existing Delete/Revise/Add
 records may be rendered only after exact validation and resolve through the same review ledger.
 `All set` creates a human-confirmed Final Release Memory; it does not publish, package
 automatically, or set `publication_approved=true`. The Agent pauses as soon as Stage 5 Review Story
-activates, again for unresolved Privacy decisions and Preference answers, again for All set, and
+activates, again for unresolved Privacy target choices and Preference answers, again for All set, and
 again for release handoff.
 
 Use the Viewer workflow-progress surface for user-facing execution status. Update it only at safe
@@ -393,7 +394,8 @@ python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
 
 # Import only the validated spans produced by merge_and_apply.py.
 python3 tools/llm_redact/push_redactions.py \
-  --redacted work/<run>-redaction/redacted --base-url <viewer-url>
+  --redacted work/<run>-redaction/redacted --base-url <viewer-url> \
+  --receipt work/<run>-source-privacy-receipt.json
 ```
 
 The initial launcher validates Node/npm, resolves the platform-native npm command, repairs missing
@@ -434,6 +436,7 @@ $Review = "work\repo-run-review"
 $Dialogue = "work\repo-run-dialogue"
 $Findings = "work\repo-run-findings"
 $Redaction = "work\repo-run-redaction"
+$Receipt = "work\repo-run-source-privacy-receipt.json"
 $Viewer = "http://127.0.0.1:3210"
 $WorkflowRun = "oxygen-local-review-001"
 Set-Location -LiteralPath $Kit
@@ -442,13 +445,13 @@ python .\tools\llm_redact\prepare_ai_review_run.py `
   --run "$Run" --out "$Review"
 python .\tools\llm_redact\audit_coverage.py "$Review"
 python .\tools\llm_redact\extract_dialogue.py "$Review" `
-  --out "$Dialogue"
+  --out "$Dialogue" --base-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
 # After the configured AI model writes one findings JSON per dialogue bundle:
 python .\tools\llm_redact\verify_coverage.py `
-  --dialogue "$Dialogue" --findings "$Findings"
+  --dialogue "$Dialogue" --findings "$Findings" --receipt "$Receipt"
 python .\tools\llm_redact\merge_and_apply.py `
-  --dialogue "$Dialogue" --findings "$Findings" --out "$Redaction"
+  --dialogue "$Dialogue" --findings "$Findings" --out "$Redaction" --receipt "$Receipt"
 # Reattach the reviewed boundary to the Viewer already running from §1.
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
@@ -456,7 +459,7 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
 # Push only the validated spans produced by merge_and_apply.py.
 python .\tools\llm_redact\push_redactions.py `
   --redacted "$Redaction\redacted" `
-  --base-url "$Viewer"
+  --base-url "$Viewer" --receipt "$Receipt"
 
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --story-event started
@@ -649,21 +652,67 @@ human edits, Privacy choices, preference answers, `All set`, or publication stat
 validation the correct terminal state is `WAITING_FOR_HUMAN_STORY_REVIEW`, not a completed package
 handoff. Resume release/package work only after the contributor says the review is complete.
 
+### Refresh Story Privacy after a Story edit
+
+A reviewed Story edit can make the current Story Privacy authority stale. The Viewer then reports
+`preparation_required`; this is resumable and is not a release failure. Keep the same Viewer and
+workflow run alive, and use this one canonical refresh sequence from the repository root. Choose a
+new private work directory: export, prepare, finalize, and import are no-clobber operations.
+
+```powershell
+$Viewer = "<exact URL printed by the running launcher>"
+$WorkflowRun = "<exact workflow run ID printed by the running launcher>"
+$Refresh = "<new private working directory>"
+$Snapshot = Join-Path $Refresh "reviewed-story-privacy-snapshot.json"
+$Prepared = Join-Path $Refresh "prepared"
+$Proposals = Join-Path $Refresh "proposals"
+$Bundle = Join-Path $Refresh "reviewed-story-privacy-import.json"
+
+New-Item -ItemType Directory -Path $Refresh | Out-Null
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --attach-url $Viewer --workflow-run-id $WorkflowRun `
+  --story-privacy-export $Snapshot
+node .\skills\oxygen-storytelling-review\scripts\prepare_reviewed_story_privacy.mjs `
+  $Snapshot $Prepared
+New-Item -ItemType Directory -Path $Proposals | Out-Null
+```
+
+The parent reads `$Prepared\manifest.json`, enumerates every `shards` entry, and dispatches every
+nonempty shard. A worker reads only `$Prepared\<inputPath>` and writes exactly one
+`{ "candidates": [...], "targetProposals": [...] }` JSON object to
+`$Proposals\<shard-id>.proposals.json`; it does not write receipts, manifests, Viewer state, or the
+final bundle. An empty shard set requires an empty `$Proposals` directory. After every expected
+proposal exists and no extra file exists, continue:
+
+```powershell
+node .\skills\oxygen-storytelling-review\scripts\finalize_reviewed_story_privacy.mjs `
+  $Prepared $Proposals $Bundle
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --attach-url $Viewer --workflow-run-id $WorkflowRun `
+  --story-privacy-import $Bundle
+```
+
+Return to the same Viewer. It shows the local original beside the proposed meaning-preserving
+anonymized text. The contributor may accept that text, edit the anonymized text, or publish an
+explicit exact occurrence of a non-credential fragment for this exact target revision. Credentials
+are always removed. Resolve all current target choices, then continue Preferences, All set,
+and local release. If another Story edit returns the run to `preparation_required`, repeat with a
+new work directory; never patch JSON or reuse an old snapshot, proposal set, or import bundle.
+
 The Viewer must show organization progress, project groups, the primary project, one combined
 timeline per project, evidence-derived primary-project Chapters, source-event evidence, and visible
 HTML/ZIP download actions. Do not describe unsupported annotation controls as available.
 
 Required final surfaces, with current runtime status:
 
-- Final decision-only Chapter Privacy/Release Preview is implemented in the canonical Viewer.
-  Contributor actions are exactly Keep/Redact for current `needs_confirmation` candidates; there is
-  no category, reason, delete, or soft-delete mutation surface.
-- Required Privacy review and Release Preview expose only the release-safe projection for
-  deterministic or contributor-confirmed safe content. Only `needs_confirmation` rows are
-  decision-editable. Those rows show the minimum locally permitted original when present, the
-  current safe projection, a safe uncertainty explanation, and exactly two actions: Keep or Redact.
-  Unavailable original content is never reconstructed. Pending confirmation blocks Story/package
-  release. Do not expose Raw Evidence or suppressed content through Insight review.
+- Chapter Privacy/Release Preview is implemented in the canonical Viewer as one choice authority per
+  target. The contributor accepts the Agent proposal, edits anonymized text, or explicitly makes an
+  exact noncredential occurrence public for the current target digest; credential occurrences are
+  never publishable.
+- Required Privacy review and Release Preview show the local original beside the proposed text, then
+  release only the exact selected bytes. Unavailable originals are never reconstructed. A missing,
+  stale, invalid, or incomplete target choice blocks the whole Story/package release. Do not expose
+  Raw Evidence or suppressed content through Insight review.
 - `Preferences` presents generated probes and records explicit answers (§7). Generated questions
   are not confirmed preferences.
 
@@ -728,7 +777,7 @@ Ask the contributor to inspect:
 
 - included sources and project assignments;
 - primary-project Chapters against source evidence;
-- Project Story Chapters, Insights, required Privacy decisions, exact evidence, and any
+- Project Story Chapters, Insights, required Privacy target choices, exact evidence, and any
   unresolved Story annotations;
 - AI-redaction counts, rejected-span count, and semantic review decisions;
 - bulk judgement-call decisions;

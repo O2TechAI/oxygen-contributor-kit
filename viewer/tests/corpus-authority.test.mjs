@@ -32,9 +32,9 @@ function loadOrganizationHarness() {
   const end = organizationSource.indexOf("async function status");
   assert.ok(start >= 0 && end > start, "Organization exposes one bounded corpus gate region");
   const javascript = stripTypeScriptTypes(organizationSource.slice(start, end));
-  return Function(`${javascript}\nreturn {
+  return Function("validActivatedSourceRevision", `${javascript}\nreturn {
     readFinalizedCorpusAuthority, finalizedCorpusCountsMatch
-  };`)();
+  };`)((value) => Number.isSafeInteger(value) && value > 0);
 }
 
 const organization = loadOrganizationHarness();
@@ -557,6 +557,7 @@ test("Organization refuses absent or mismatched corpus authority and binds its s
   assert.equal(await organization.readFinalizedCorpusAuthority(database(null), "run"), null);
   assert.equal(await organization.readFinalizedCorpusAuthority(database({
     story_generation_status: "not_started",
+    story_source_revision: 1,
     corpus_revision: null,
     corpus_digest: null,
     document_count: 0,
@@ -566,6 +567,7 @@ test("Organization refuses absent or mismatched corpus authority and binds its s
   }), "run"), null);
   const current = await organization.readFinalizedCorpusAuthority(database({
     story_generation_status: "not_started",
+    story_source_revision: 1,
     corpus_revision: 3,
     corpus_digest: "a".repeat(64),
     document_count: 2,

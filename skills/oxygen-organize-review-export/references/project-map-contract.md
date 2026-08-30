@@ -113,14 +113,16 @@ The receipt binds terminal status, shard ID, shard input digest, exact contribut
 path, output digest, and output count. The recorder and finalizer make no provider, model, network,
 Viewer, or release call and do not store prompts or responses in product output.
 
-If proposal validation fails while both `outputs/<shard-id>.json` and
-`receipts/<shard-id>.json` are absent, the failure is pre-receipt authoring feedback. The external
+If proposal validation fails while the atomic `records/<shard-id>/` output-and-receipt directory is
+absent, the failure is pre-receipt authoring feedback. The external
 worker may explicitly replace only `handoffs/<shard-id>.proposals.json` and run the recorder again
 against the same immutable shard input. Invalid kind syntax exits nonzero with the fixed safe code
 `SEMANTIC_WORKER_KIND_INVALID`; it does not echo the rejected label, contribution content, paths,
 tracebacks, or raw exception details. There is no automatic retry, rewrite, fallback, or repair.
-After an output or receipt exists, the durable artifact pair is immutable and any differing
-resubmission fails closed.
+After the record directory exists, its durable artifact pair is immutable and any differing
+resubmission fails closed. The recorder stages both files together and publishes the directory with
+one no-clobber atomic rename; a staged-write or publication fault exposes neither final artifact and
+allows a clean retry.
 
 ## 4. Compose and install canonical authority
 

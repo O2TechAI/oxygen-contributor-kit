@@ -1,11 +1,15 @@
 import type { getLocalDatabase } from "../db";
-import { applyStoryReviewToBlock } from "./story-review.ts";
+import { applyStoryReviewToBlock, humanQuoteText } from "./story-review.ts";
 import {
   hydrateStoryReviewSession,
   type StoryReviewSession,
 } from "./story-review-session.ts";
 import { readStoryReviewSessionRecord } from "./story-review-session-server.ts";
-import { storyPreparationDigest } from "./story-preparation.ts";
+import {
+  compareUtf8,
+  storyPreparationDigest,
+  storyReleaseTargetId,
+} from "./story-preparation.ts";
 import {
   readReservedStoryCandidateRows,
   validateCurrentStorySourcePackage,
@@ -36,6 +40,7 @@ export type ReviewedStoryPrivacyRevision = {
   reviewedStoryDigest: string;
   targetCatalogDigest: string;
   targetCatalog: Array<{ id: StoryReleaseTarget; contentDigest: string }>;
+  targets: ReviewedStoryPrivacyTarget[];
   changedTargetDigest: string;
   targetTransitions: Array<{
     id: StoryReleaseTarget;
@@ -59,21 +64,6 @@ type RevisionFailure = {
 const validRevision = (value: unknown): value is number => Number.isSafeInteger(value)
   && Number(value) >= 0;
 const digestPattern = /^[0-9a-f]{64}$/;
-const encoder = new TextEncoder();
-
-function compareUtf8(left: string, right: string) {
-  const a = encoder.encode(left);
-  const b = encoder.encode(right);
-  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
-    if (a[index] !== b[index]) return a[index] - b[index];
-  }
-  return a.length - b.length;
-}
-
-function targetId(storyKey: string, target: StoryReleaseTargetName) {
-  return `${storyKey}::${target}` as StoryReleaseTarget;
-}
-
 function sourceInsightContent(source: StorySource, review: StoryReviewSession["chapterReviews"][string] | null) {
   return source.insights.flatMap((insight) => {
     if (!review) return [{ id: insight.id, content: insight }];
@@ -96,7 +86,7 @@ function targetValues(
     content: string;
   }> = [];
   const add = (storyKey: string, target: StoryReleaseTargetName, content: string) => {
-    values.push({ id: targetId(storyKey, target), storyKey, target, content });
+    values.push({ id: storyReleaseTargetId(storyKey, target), storyKey, target, content });
   };
   for (const source of sources) {
     const review = reviews?.[source.key] || null;
@@ -139,6 +129,8 @@ function targetValues(
           add(source.key, `insight:${insightId}:title`, current.content.title);
         }
         add(source.key, `insight:${insightId}:background`, current.content.background);
+        const quote = humanQuoteText(review, source, current.content);
+        if (quote !== null) add(source.key, `insight:${insightId}:quote`, quote);
         add(source.key, `insight:${insightId}:directlyAcquiredExperience`,
           current.content.directlyAcquiredExperience);
         add(source.key, `insight:${insightId}:principle`, current.content.principle);
@@ -262,6 +254,7 @@ export async function reconstructReviewedStoryPrivacyRevision(
       reviewedStoryDigest: await storyPreparationDigest(current.map(({ id, content }) => ({ id, content }))),
       targetCatalogDigest: await storyPreparationDigest(targetCatalog),
       targetCatalog,
+      targets: current,
       changedTargetDigest: await storyPreparationDigest(targetTransitions),
       targetTransitions,
       changedTargets,

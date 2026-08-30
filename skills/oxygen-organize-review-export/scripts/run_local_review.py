@@ -50,6 +50,7 @@ from ingest.human_source_projection import (
     projected_contribution_id,
 )
 from oxygen_utf8 import configure_utf8_stdio, text_subprocess_options
+from atomic_rename import rename_noreplace
 
 
 VIEWER_HOST = "127.0.0.1"
@@ -65,6 +66,10 @@ INPUT_FILE_INVALID = "INPUT_FILE_INVALID"
 INPUT_PROJECTION_INVALID = "INPUT_PROJECTION_INVALID"
 VIEWER_NETWORK_ERROR = "VIEWER_NETWORK_ERROR: The local Viewer could not be reached."
 VIEWER_RESPONSE_INVALID = "VIEWER_RESPONSE_INVALID: The local Viewer returned an invalid response."
+VIEWER_ORIGIN_INVALID = "VIEWER_ORIGIN_INVALID: Use an exact canonical localhost HTTP origin."
+STORY_PRIVACY_EXPORT_EXISTS = "STORY_PRIVACY_EXPORT_EXISTS: The export destination already exists."
+STORY_PRIVACY_EXPORT_FAILED = "STORY_PRIVACY_EXPORT_FAILED: The current snapshot could not be exported."
+STORY_PRIVACY_IMPORT_INVALID = "STORY_PRIVACY_IMPORT_INVALID: The import bundle is missing or invalid."
 VIEWER_STATE_INVALID = "VIEWER_STATE_INVALID: The saved Viewer state is missing or corrupt."
 VIEWER_STATE_EXISTS = "VIEWER_STATE_EXISTS: The saved Viewer state destination already exists."
 VIEWER_STATE_SAVE_FAILED = "VIEWER_STATE_SAVE_FAILED: The Viewer state could not be saved."
@@ -287,26 +292,27 @@ def reserve_free_port(host: str = VIEWER_HOST) -> socket.socket:
     return reservation
 
 
-def select_free_port(host: str = VIEWER_HOST) -> int:
-    with reserve_free_port(host) as reservation:
-        return int(reservation.getsockname()[1])
-
-
 def normalize_local_viewer_url(value: str) -> str:
-    parsed = urllib.parse.urlparse(value)
-    if (
-        parsed.scheme != "http"
-        or parsed.hostname not in {VIEWER_HOST, "localhost"}
-        or parsed.port is None
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in {"", "/"}
-        or parsed.params
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise SystemExit("--attach-url must be an explicit localhost HTTP origin")
-    return f"http://{parsed.hostname}:{parsed.port}"
+    match = re.fullmatch(r"http://(127\.0\.0\.1|localhost):([1-9][0-9]{0,4})", value)
+    if not match:
+        raise SystemExit(VIEWER_ORIGIN_INVALID)
+    port = int(match.group(2))
+    if not 1 <= port <= 65535 or str(port) != match.group(2):
+        raise SystemExit(VIEWER_ORIGIN_INVALID)
+    return value
+
+
+class _NoLocalViewerRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def local_viewer_opener():
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _NoLocalViewerRedirect(),
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+    )
 
 
 def wait_for_port_release(port: int, host: str = VIEWER_HOST, timeout: float = 8) -> None:
@@ -325,14 +331,79 @@ def viewer_environment(runtime_root: Path) -> dict[str, str]:
     return environment
 
 
+def _is_link_or_reparse(path: Path, metadata: os.stat_result) -> bool:
+    if stat.S_ISLNK(metadata.st_mode):
+        return True
+    attributes = getattr(metadata, "st_file_attributes", None)
+    if os.name == "nt" and attributes is None:
+        raise ValueError
+    if attributes is None:
+        return False
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def _literal_state_path(path: Path, *, allow_missing_tail: bool = False) -> Path:
+    """Validate every existing literal component before syntactic normalization."""
+    literal = path.expanduser()
+    if not literal.is_absolute():
+        literal = Path.cwd() / literal
+    current = Path(literal.anchor)
+    missing = False
+    parts = literal.parts[1:] if literal.anchor else literal.parts
+    for index, part in enumerate(parts):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            current = current.parent
+        else:
+            current = current / part
+        try:
+            metadata = current.lstat()
+            missing = False
+        except FileNotFoundError:
+            if not allow_missing_tail:
+                raise ValueError
+            missing = True
+            continue
+        except OSError as error:
+            raise ValueError from error
+        if _is_link_or_reparse(current, metadata):
+            raise ValueError
+        if index < len(parts) - 1 and not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError
+    if missing and not allow_missing_tail:
+        raise ValueError
+    return Path(os.path.abspath(literal))
+
+
+def _validate_unique_state_tree(runtime_root: Path) -> tuple[Path, Path]:
+    root = _literal_state_path(runtime_root)
+    state_root = _literal_state_path(root / "state")
+    database = _literal_state_path(state_root / "oxygen.sqlite")
+    if not root.is_dir() or not state_root.is_dir() or not database.is_file():
+        raise ValueError
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        for entry in directory.iterdir():
+            metadata = entry.lstat()
+            if _is_link_or_reparse(entry, metadata):
+                raise ValueError
+            if stat.S_ISDIR(metadata.st_mode):
+                pending.append(entry)
+            elif stat.S_ISREG(metadata.st_mode):
+                if metadata.st_nlink != 1:
+                    raise ValueError
+            else:
+                raise ValueError
+    return root, database
+
+
 def validate_viewer_state(runtime_root: Path) -> Path:
     """Return the SQLite path for a complete, readable Viewer state directory."""
-    state_root = runtime_root / "state"
-    database = state_root / "oxygen.sqlite"
     try:
-        if not state_root.is_dir() or not database.is_file():
-            raise OSError
-        database_uri = f"{database.resolve(strict=True).as_uri()}?mode=ro"
+        _, database = _validate_unique_state_tree(runtime_root)
+        database_uri = f"{database.as_uri()}?mode=ro"
         with closing(sqlite3.connect(database_uri, uri=True)) as connection:
             integrity = connection.execute("PRAGMA integrity_check").fetchall()
             workflow_rows = connection.execute(WORKFLOW_SESSION_QUERY).fetchmany(2)
@@ -345,10 +416,15 @@ def validate_viewer_state(runtime_root: Path) -> Path:
     return database
 
 
-def resolve_state_path(path: Path, error: str) -> Path:
+def resolve_state_path(
+    path: Path,
+    error: str,
+    *,
+    allow_missing_tail: bool = False,
+) -> Path:
     try:
-        return path.expanduser().resolve()
-    except (OSError, RuntimeError):
+        return _literal_state_path(path, allow_missing_tail=allow_missing_tail)
+    except (OSError, RuntimeError, ValueError):
         raise SystemExit(error) from None
 
 
@@ -371,19 +447,22 @@ def save_viewer_state(
     workflow_run_id: str | None,
 ) -> Path:
     """Copy one stopped Viewer's complete state directory into a new local session."""
-    validate_viewer_state(runtime_root)
-    destination = resolve_state_path(destination, VIEWER_STATE_SAVE_FAILED)
-    if destination.exists() or destination.is_symlink():
-        raise SystemExit(VIEWER_STATE_EXISTS)
-
-    created = False
+    staging: Path | None = None
     try:
+        validate_viewer_state(runtime_root)
+        destination = resolve_state_path(
+            destination, VIEWER_STATE_SAVE_FAILED, allow_missing_tail=True,
+        )
+        if destination.exists() or destination.is_symlink():
+            raise SystemExit(VIEWER_STATE_EXISTS)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.mkdir()
-        created = True
-        saved_state = destination / "state"
-        shutil.copytree(runtime_root / "state", saved_state, symlinks=True)
-        validate_viewer_state(destination)
+        destination = resolve_state_path(
+            destination, VIEWER_STATE_SAVE_FAILED, allow_missing_tail=True,
+        )
+        staging = Path(tempfile.mkdtemp(
+            prefix=f".{destination.name}.save-", dir=destination.parent,
+        ))
+        shutil.copytree(runtime_root / "state", staging / "state", symlinks=False)
         locator = "\n".join((
             f"origin_worktree: {KIT_ROOT.resolve()}",
             f"origin_head: {_current_head()}",
@@ -391,15 +470,20 @@ def save_viewer_state(
             f"saved_path: {destination}",
             "",
         ))
-        (destination / "viewer-session.txt").write_text(locator, encoding="utf-8")
-    except SystemExit:
-        if created:
-            shutil.rmtree(destination, ignore_errors=True)
+        (staging / "viewer-session.txt").write_text(locator, encoding="utf-8")
+        validate_viewer_state(staging)
+        rename_noreplace(staging, destination)
+    except FileExistsError:
+        raise SystemExit(VIEWER_STATE_EXISTS) from None
+    except SystemExit as error:
+        if str(error) == VIEWER_STATE_EXISTS:
+            raise
         raise SystemExit(VIEWER_STATE_SAVE_FAILED) from None
     except (OSError, RuntimeError, shutil.Error, sqlite3.Error):
-        if created:
-            shutil.rmtree(destination, ignore_errors=True)
         raise SystemExit(VIEWER_STATE_SAVE_FAILED) from None
+    finally:
+        if staging is not None and staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
 
     print(f"Saved Viewer state: {destination}", flush=True)
     return destination
@@ -748,6 +832,132 @@ def request_json(opener, url: str, *, method="GET", body=None):
         raise SystemExit(VIEWER_RESPONSE_INVALID) from None
 
 
+def _workflow_run_id(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value or ""):
+        raise SystemExit(STORY_PRIVACY_IMPORT_INVALID)
+    return value
+
+
+def _direct_unique_file(path: Path, failure: str) -> Path:
+    try:
+        literal = _literal_state_path(path)
+        metadata = literal.lstat()
+    except (OSError, RuntimeError, ValueError):
+        raise SystemExit(failure) from None
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+    ):
+        raise SystemExit(failure)
+    return literal
+
+
+def _story_privacy_export_path(destination: Path) -> tuple[Path, Path]:
+    requested = destination.expanduser()
+    if not requested.name or requested.name in {".", ".."}:
+        raise SystemExit(STORY_PRIVACY_EXPORT_FAILED)
+    try:
+        parent = _literal_state_path(requested.parent)
+    except (OSError, RuntimeError, ValueError):
+        raise SystemExit(STORY_PRIVACY_EXPORT_FAILED) from None
+    if not parent.is_dir():
+        raise SystemExit(STORY_PRIVACY_EXPORT_FAILED)
+    output = parent / requested.name
+    if output.exists() or output.is_symlink():
+        raise SystemExit(STORY_PRIVACY_EXPORT_EXISTS)
+    return parent, output
+
+
+def export_story_privacy_snapshot(
+    base_url: str,
+    workflow_run_id: str,
+    destination: Path,
+) -> dict:
+    base_url = normalize_local_viewer_url(base_url)
+    workflow_run_id = _workflow_run_id(workflow_run_id)
+    parent, output = _story_privacy_export_path(destination)
+    query = urllib.parse.urlencode({"workflowRunId": workflow_run_id})
+    snapshot = request_json(
+        local_viewer_opener(),
+        f"{base_url}/api/story-privacy/export?{query}",
+    )
+    binding = snapshot.get("binding") if isinstance(snapshot, dict) else None
+    transitions = snapshot.get("targetTransitions") if isinstance(snapshot, dict) else None
+    changed_targets = snapshot.get("changedTargets") if isinstance(snapshot, dict) else None
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("schema") != "oxygen.reviewed-story-privacy-snapshot"
+        or not isinstance(binding, dict)
+        or binding.get("workflowRunId") != workflow_run_id
+        or not isinstance(transitions, list)
+        or not isinstance(changed_targets, list)
+    ):
+        raise SystemExit(VIEWER_RESPONSE_INVALID)
+    temporary = parent / f".{output.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp"
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            json.dump(snapshot, handle, ensure_ascii=False, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        rename_noreplace(temporary, output)
+    except FileExistsError:
+        raise SystemExit(STORY_PRIVACY_EXPORT_EXISTS) from None
+    except (OSError, RuntimeError):
+        raise SystemExit(STORY_PRIVACY_EXPORT_FAILED) from None
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+    result = {
+        "story_privacy": "snapshot_exported",
+        "workflow_run_id": workflow_run_id,
+        "output": str(output),
+        "changed_target_count": len(transitions),
+    }
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+    return result
+
+
+def import_story_privacy_bundle(
+    base_url: str,
+    workflow_run_id: str,
+    source: Path,
+) -> dict:
+    base_url = normalize_local_viewer_url(base_url)
+    workflow_run_id = _workflow_run_id(workflow_run_id)
+    path = _direct_unique_file(source.expanduser(), STORY_PRIVACY_IMPORT_INVALID)
+    try:
+        bundle = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise SystemExit(STORY_PRIVACY_IMPORT_INVALID) from None
+    binding = bundle.get("binding") if isinstance(bundle, dict) else None
+    if (not isinstance(bundle, dict)
+        or bundle.get("schema") != "oxygen.reviewed-story-privacy-import"
+        or not isinstance(binding, dict)
+        or binding.get("workflowRunId") != workflow_run_id):
+        raise SystemExit(STORY_PRIVACY_IMPORT_INVALID)
+    authority = request_json(
+        local_viewer_opener(),
+        f"{base_url}/api/story-privacy/import",
+        method="POST",
+        body=bundle,
+    )
+    candidates = authority.get("candidates") if isinstance(authority, dict) else None
+    if (not isinstance(authority, dict) or authority.get("workflowRunId") != workflow_run_id
+        or not isinstance(candidates, list)):
+        raise SystemExit(VIEWER_RESPONSE_INVALID)
+    result = {
+        "story_privacy": "bundle_imported",
+        "workflow_run_id": workflow_run_id,
+        "status": authority.get("status"),
+        "candidate_count": len(candidates),
+    }
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+    return result
+
+
 def resolve_contained_path(candidate: Path, approved_root: Path) -> Path:
     """Resolve one existing input and require its target to stay inside the run root."""
     resolved_root = approved_root.resolve(strict=True)
@@ -1061,54 +1271,64 @@ def locate_inputs(run: Path):
             raise SystemExit(INPUT_INDEX_INVALID) from None
         if not isinstance(index, dict):
             raise SystemExit(INPUT_INDEX_INVALID)
-        if (
-            index.get("schema") not in {INGEST_RUN_SCHEMA, AI_REVIEW_RUN_SCHEMA}
-            or "schema_version" in index
+        schema = index.get("schema")
+        tool = index.get("tool")
+        collector_index = schema == INGEST_RUN_SCHEMA and tool == "collect_repo_trajectories"
+        anthropic_index = schema == INGEST_RUN_SCHEMA and tool == "import_anthropic_export"
+        review_index = schema == AI_REVIEW_RUN_SCHEMA and tool == "prepare_ai_review_run"
+        if "schema_version" in index or not (
+            collector_index or anthropic_index or review_index
         ):
             raise SystemExit(INPUT_INDEX_INVALID)
-        entries = index.get("trajectories") or []
-        trajectory_failures = index.get("trajectory_failures", 0)
+        entries = index.get("trajectories")
+        trajectory_count = index.get("trajectory_count")
         if (
             not isinstance(entries, list)
-            or not isinstance(trajectory_failures, int)
-            or isinstance(trajectory_failures, bool)
-            or trajectory_failures < 0
-            or trajectory_failures != sum(
-                1 for entry in entries
-                if isinstance(entry, dict) and entry.get("ok", True) is False
-            )
+            or not isinstance(trajectory_count, int)
+            or isinstance(trajectory_count, bool)
+            or trajectory_count != len(entries)
         ):
             raise SystemExit(INPUT_INDEX_INVALID)
-        if trajectory_failures:
+        if collector_index and (
+            index.get("collection_status") != "complete"
+            or not isinstance(index.get("trajectory_failures"), int)
+            or isinstance(index.get("trajectory_failures"), bool)
+            or index.get("trajectory_failures") != 0
+        ):
             raise SystemExit(INPUT_INDEX_INVALID)
-        selected_entries = 0
+        if (anthropic_index or review_index) and "trajectory_failures" in index:
+            raise SystemExit(INPUT_INDEX_INVALID)
         seen_ids = set()
         for entry in entries:
-            if not isinstance(entry, dict) or ("ok" in entry and not isinstance(entry["ok"], bool)):
+            if not isinstance(entry, dict):
+                raise SystemExit(INPUT_INDEX_INVALID)
+            if (
+                (collector_index and entry.get("ok") is not True)
+                or (review_index and entry.get("ok") is not True)
+                or (anthropic_index and "ok" in entry)
+            ):
                 raise SystemExit(INPUT_INDEX_INVALID)
             trajectory_id = entry.get("trajectory_id")
             trajectory_id = _validated_trajectory_id(trajectory_id)
             if trajectory_id in seen_ids:
                 raise SystemExit(INPUT_INDEX_INVALID)
             seen_ids.add(trajectory_id)
-            if entry.get("ok", True) is False:
-                raise SystemExit(INPUT_INDEX_INVALID)
-            selected_entries += 1
             directory = _located_input(approved_run / "trajectories" / trajectory_id, approved_run)
             if not directory.is_dir():
                 raise SystemExit(INPUT_PATH_MISSING)
             _trajectory_files(directory, approved_run)
             trajectories.append(directory)
-        if not trajectories and selected_entries == 0:
-            trajectory_root = approved_run / "trajectories"
-            if trajectory_root.is_dir():
-                for events_candidate in sorted(trajectory_root.glob("*/events.jsonl")):
-                    events_path = _located_input(events_candidate, approved_run)
-                    directory = _located_input(events_path.parent, approved_run)
-                    if not events_path.is_file() or not directory.is_dir():
-                        raise SystemExit(INPUT_PATH_MISSING)
-                    _trajectory_files(directory, approved_run)
-                    trajectories.append(directory)
+        trajectory_root = approved_run / "trajectories"
+        if _has_path_entry(trajectory_root):
+            physical_root = _located_input(trajectory_root, approved_run)
+            if not physical_root.is_dir():
+                raise SystemExit(INPUT_PATH_MISSING)
+            try:
+                actual_ids = {entry.name for entry in physical_root.iterdir()}
+            except (OSError, RuntimeError):
+                raise SystemExit(INPUT_PATH_MISSING) from None
+            if actual_ids != seen_ids:
+                raise SystemExit(INPUT_INDEX_INVALID)
 
     _located_file(approved_run / "project-map.json", approved_run, required=False)
 
@@ -1211,9 +1431,7 @@ def establish_workflow_run(opener, base_url: str, workflow_run_id: str | None = 
 
 
 def attach_run(base_url: str, workflow_run_id: str, run: Path) -> None:
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
-    )
+    opener = local_viewer_opener()
     workflow = request_json(opener, f"{base_url}/api/workflow")
     if workflow.get("workflowRunId") != workflow_run_id:
         raise SystemExit("The target Viewer does not own the requested workflow run ID")
@@ -1248,16 +1466,25 @@ _AUTO_REMOVED_KINDS = {
     "internal-timeline", "mosaic-reidentification",
 }
 _PREPARATION_FIELDS = {
-    "schema", "workflowRunId", "sourceRevision", "receipts", "storyPrivacyCandidates",
+    "schema", "workflowRunId", "sourceRevision", "receipts", "storyPrivacy",
 }
 _RECEIPT_FIELDS = {
     "lane", "status", "inputDigest", "scopeDigest", "scopeCount", "outputDigest", "outputCount",
 }
 _PREPARATION_LANES = ("story", "insight", "story_privacy", "preference")
+_MAX_SAFE_INTEGER = (1 << 53) - 1
 
 
 def _nonnegative_integer(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= _MAX_SAFE_INTEGER
+    )
+
+
+def _activated_source_revision(value: object) -> bool:
+    return _nonnegative_integer(value) and value > 0
 
 
 def _digest(value: object) -> bool:
@@ -1305,7 +1532,7 @@ def validate_ready_authority(
         raise SystemExit("Preference bundle authority is invalid")
     if (
         preference_bundle.get("workflowRunId") != workflow_run_id
-        or not _nonnegative_integer(preference_bundle.get("sourceRevision"))
+        or not _activated_source_revision(preference_bundle.get("sourceRevision"))
         or not _digest(preference_bundle.get("inputDigest"))
         or not _digest(preference_bundle.get("outputDigest"))
         or not _nonnegative_integer(preference_bundle.get("outputCount"))
@@ -1321,7 +1548,7 @@ def validate_ready_authority(
         preparation_manifest.get("schema") != "oxygen.story-preparation"
         or preparation_manifest.get("workflowRunId") != workflow_run_id
         or preparation_manifest.get("sourceRevision") != preference_bundle["sourceRevision"]
-        or not isinstance(preparation_manifest.get("storyPrivacyCandidates"), list)
+        or not isinstance(preparation_manifest.get("storyPrivacy"), dict)
         or not isinstance(preparation_manifest.get("receipts"), list)
         or len(preparation_manifest["receipts"]) != len(_PREPARATION_LANES)
     ):
@@ -1359,9 +1586,7 @@ def update_story_workflow(
     preference_bundle: dict | None = None,
     preparation_manifest: dict | None = None,
 ) -> dict:
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
-    )
+    opener = local_viewer_opener()
     payload = {
         "workflowRunId": workflow_run_id,
         "event": STORY_WORKFLOW_EVENTS[story_event],
@@ -1434,6 +1659,15 @@ def main():
     parser.add_argument("--story-candidates", type=Path)
     parser.add_argument("--preference-bundle", type=Path)
     parser.add_argument("--preparation-manifest", type=Path)
+    story_privacy_mode = parser.add_mutually_exclusive_group()
+    story_privacy_mode.add_argument(
+        "--story-privacy-export", type=Path,
+        help="export the exact current reviewed Story Privacy refresh snapshot",
+    )
+    story_privacy_mode.add_argument(
+        "--story-privacy-import", type=Path,
+        help="import one exact finalized reviewed Story Privacy refresh bundle",
+    )
     parser.add_argument("--port", type=int)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--skip-install", action="store_true")
@@ -1448,6 +1682,29 @@ def main():
     )
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.story_privacy_export or args.story_privacy_import:
+        if (
+            args.run or args.target or args.story_event or args.save_state or args.resume_state
+            or args.port is not None or args.no_browser or args.skip_install or args.smoke_test
+            or not args.attach_url or not args.workflow_run_id
+            or args.story_completed is not None or args.story_total is not None
+            or args.coverage_manifest is not None or args.story_candidates is not None
+            or args.preference_bundle is not None or args.preparation_manifest is not None
+        ):
+            parser.error(
+                "Story Privacy refresh requires --attach-url, --workflow-run-id, and exactly one export/import path"
+            )
+        base_url = normalize_local_viewer_url(args.attach_url)
+        if args.story_privacy_export:
+            export_story_privacy_snapshot(
+                base_url, args.workflow_run_id, args.story_privacy_export,
+            )
+        else:
+            import_story_privacy_bundle(
+                base_url, args.workflow_run_id, args.story_privacy_import,
+            )
+        return
 
     if args.story_event:
         if (
@@ -1529,7 +1786,9 @@ def main():
     run = args.run.expanduser().resolve() if args.run else None
     target = args.target.expanduser().resolve() if args.target else None
     save_destination = (
-        resolve_state_path(args.save_state, VIEWER_STATE_SAVE_FAILED)
+        resolve_state_path(
+            args.save_state, VIEWER_STATE_SAVE_FAILED, allow_missing_tail=True,
+        )
         if args.save_state else None
     )
     resume_session = (
@@ -1596,9 +1855,7 @@ def main():
                 if not args.no_browser:
                     webbrowser.open(base_url)
                 if args.smoke_test:
-                    opener = urllib.request.build_opener(
-                        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
-                    )
+                    opener = local_viewer_opener()
                     workflow = request_json(opener, f"{base_url}/api/workflow")
                     print(json.dumps({
                         "smoke_test": "passed", "resumed": True, "workflow": workflow,
@@ -1609,9 +1866,7 @@ def main():
                     raise SystemExit(f"Viewer exited unexpectedly with status {return_code}")
                 return
 
-            opener = urllib.request.build_opener(
-                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
-            )
+            opener = local_viewer_opener()
             workflow_run_id = establish_workflow_run(
                 opener, base_url, args.workflow_run_id
             )

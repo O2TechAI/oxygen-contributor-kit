@@ -1,9 +1,14 @@
 import type { getLocalDatabase } from "../db";
+import {
+  validActivatedSourceRevision,
+  validNonnegativeAuthorityCounter,
+} from "./authority-validation.mjs";
 
 type SourcePublicationDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 type SourcePublicationStatement = Parameters<SourcePublicationDatabase["batch"]>[0][number];
 
 export const STORY_SOURCE_LEASE_STALE_MINUTES = 30;
+const MAX_SAFE_AUTHORITY_COUNTER = 9_007_199_254_740_991;
 
 export const STORY_SOURCE_WRITE_STATUS = {
   idle: "source_writing",
@@ -31,6 +36,10 @@ export function activeStoryPrivacyInvalidationStatements(
     db.prepare(`DELETE FROM project_release_confirmations WHERE workflow_run_id=? AND ${activeGuard}`)
       .bind(workflowRunId, workflowRunId),
     db.prepare(`DELETE FROM story_privacy_authorities
+      WHERE workflow_run_id=? AND ${activeGuard}`).bind(workflowRunId, workflowRunId),
+    db.prepare(`DELETE FROM story_privacy_candidates
+      WHERE workflow_run_id=? AND ${activeGuard}`).bind(workflowRunId, workflowRunId),
+    db.prepare(`DELETE FROM story_privacy_targets
       WHERE workflow_run_id=? AND ${activeGuard}`).bind(workflowRunId, workflowRunId),
     db.prepare(`UPDATE workflow_runs
       SET story_generation_status='blocked',active_story_digest=NULL,updated_at=?
@@ -67,7 +76,8 @@ export async function beginStorySourceMutation(
         story_source_revision=story_source_revision+CASE
           WHEN story_generation_status IN (?,?) THEN 1 ELSE 0 END,
         active_story_digest=NULL,updated_at=?
-    WHERE id=? AND (
+    WHERE id=? AND story_source_revision>=0
+      AND story_source_revision<${MAX_SAFE_AUTHORITY_COUNTER} AND (
       story_generation_status NOT IN (?,?)
       OR datetime(updated_at)<=datetime(?,'-${STORY_SOURCE_LEASE_STALE_MINUTES} minutes')
     )`)
@@ -96,7 +106,9 @@ export async function beginStoryActivationMutation(
   const result = await db.prepare(`UPDATE workflow_runs
     SET story_generation_status=?,story_generation_completed=0,
         story_generation_total=0,active_story_digest=NULL,updated_at=?
-    WHERE id=? AND story_generation_status='running'`)
+    WHERE id=? AND story_generation_status='running'
+      AND story_source_revision>=0
+      AND story_source_revision<${MAX_SAFE_AUTHORITY_COUNTER}`)
     .bind(STORY_SOURCE_WRITE_STATUS.resumeGeneration, now, workflowRunId).run();
   return Number(result.meta.changes || 0) === 1;
 }
@@ -111,7 +123,9 @@ export async function publishCompletedStorySourceMutation(
     SET story_generation_status=CASE
           WHEN story_generation_status=? THEN 'running' ELSE 'not_started' END,
         story_source_revision=story_source_revision+1,updated_at=?
-    WHERE id=? AND story_generation_status IN (?,?)`)
+    WHERE id=? AND story_source_revision>=0
+      AND story_source_revision<${MAX_SAFE_AUTHORITY_COUNTER}
+      AND story_generation_status IN (?,?)`)
     .bind(
       STORY_SOURCE_WRITE_STATUS.resumeGeneration,
       now,
@@ -136,6 +150,11 @@ export async function publishFinalizedCorpusSourceMutation(
   itemCount: number,
   now: string,
 ) {
+  if (!validNonnegativeAuthorityCounter(expectedSourceRevision)
+    || !validActivatedSourceRevision(expectedSourceRevision + 1)
+    || !validActivatedSourceRevision(corpusRevision)
+    || !validNonnegativeAuthorityCounter(documentCount)
+    || !validNonnegativeAuthorityCounter(itemCount)) return false;
   const results = await db.batch([
     ...replacementStatements,
     db.prepare(`UPDATE workflow_runs
@@ -181,6 +200,11 @@ export async function publishCompletedSemanticSourceMutation(
   corpusItemCount: number,
   now: string,
 ) {
+  if (!validNonnegativeAuthorityCounter(expectedRevision)
+    || !validActivatedSourceRevision(expectedRevision + 1)
+    || !validActivatedSourceRevision(corpusRevision)
+    || !validNonnegativeAuthorityCounter(corpusDocumentCount)
+    || !validNonnegativeAuthorityCounter(corpusItemCount)) return false;
   const results = await db.batch([
     ...packageStatements,
     db.prepare(`UPDATE workflow_runs
@@ -227,6 +251,12 @@ export async function publishActivatedStorySourceMutation(
   preferenceOutputCount: number,
   now: string,
 ) {
+  if (!validNonnegativeAuthorityCounter(expectedRevision)
+    || !validActivatedSourceRevision(expectedRevision + 1)
+    || !validNonnegativeAuthorityCounter(chapterCount)
+    || !validActivatedSourceRevision(coverageRevision)
+    || !validNonnegativeAuthorityCounter(preparationCandidateCount)
+    || !validNonnegativeAuthorityCounter(preferenceOutputCount)) return false;
   try {
     const results = await db.batch([
       ...packageStatements,
@@ -239,7 +269,7 @@ export async function publishActivatedStorySourceMutation(
         AND (SELECT COUNT(*) FROM story_preparation_receipts
           WHERE workflow_run_id=? AND source_revision=?
             AND lane IN ('story','insight','story_privacy','preference'))=4
-        AND (SELECT COUNT(*) FROM story_privacy_candidates
+        AND (SELECT COUNT(*) FROM story_privacy_targets
           WHERE workflow_run_id=?)=?
         AND EXISTS (SELECT 1 FROM probe_runs
           WHERE workflow_run_id=? AND source_revision=?

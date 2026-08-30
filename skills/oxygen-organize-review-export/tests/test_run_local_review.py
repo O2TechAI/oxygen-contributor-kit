@@ -68,7 +68,14 @@ def write_trajectory(run: Path, trajectory_id: str) -> Path:
 def write_index(run: Path, entries: list[dict]) -> None:
     run.mkdir(parents=True, exist_ok=True)
     (run / "index.json").write_text(
-        json.dumps({"schema": MODULE.INGEST_RUN_SCHEMA, "trajectories": entries}, ensure_ascii=False), encoding="utf-8"
+        json.dumps({
+            "schema": MODULE.INGEST_RUN_SCHEMA,
+            "tool": "collect_repo_trajectories",
+            "collection_status": "complete",
+            "trajectory_count": len(entries),
+            "trajectory_failures": 0,
+            "trajectories": entries,
+        }, ensure_ascii=False), encoding="utf-8"
     )
 
 
@@ -112,7 +119,8 @@ def ready_authority(workflow_run_id="run-1", *, probes=None, bulk_decisions=None
     }
     preparation = {
         "schema": "oxygen.story-preparation", "workflowRunId": workflow_run_id,
-        "sourceRevision": 7, "storyPrivacyCandidates": [],
+        "sourceRevision": 7,
+        "storyPrivacy": {"candidates": [], "targetProposals": []},
         "receipts": [
             receipt("story"), receipt("insight"), receipt("story_privacy"),
             receipt("preference", inputDigest=preference["inputDigest"],
@@ -268,7 +276,7 @@ class LauncherUnitTest(unittest.TestCase):
             ):
                 saved_session = MODULE.save_viewer_state(runtime, destination, "run-synthetic")
 
-            self.assertEqual(saved_session, destination.resolve())
+            self.assertEqual(saved_session, Path(os.path.abspath(destination)))
             saved_state = saved_session / "state"
             self.assertEqual(state_file_bytes(saved_state), before)
             with closing(sqlite3.connect(saved_state / "oxygen.sqlite")) as connection:
@@ -420,6 +428,117 @@ class LauncherUnitTest(unittest.TestCase):
                 MODULE.save_viewer_state(runtime, destination, "run-existing")
             self.assertEqual(sentinel.read_bytes(), b"owner bytes")
             self.assertEqual(list(destination.iterdir()), [sentinel])
+
+    def test_hardlinked_sqlite_is_rejected_without_changing_either_link(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            database = write_viewer_state(runtime, [("workflow", b"complete")])
+            external = root / "external.sqlite"
+            try:
+                os.link(database, external)
+            except OSError as error:
+                self.skipTest(f"hard links unavailable: {error}")
+            before = database.read_bytes()
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$",
+            ):
+                MODULE.validate_viewer_state(runtime)
+
+            self.assertEqual(database.read_bytes(), before)
+            self.assertEqual(external.read_bytes(), before)
+
+    def test_aliased_state_directory_is_rejected_without_external_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            external_runtime = root / "external-runtime"
+            write_viewer_state(external_runtime, [("workflow", b"complete")])
+            before = state_file_bytes(external_runtime / "state")
+            session = root / "session"
+            session.mkdir()
+            directory_link_or_skip(self, session / "state", external_runtime / "state")
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$",
+            ):
+                MODULE.validate_viewer_state(session)
+
+            self.assertEqual(state_file_bytes(external_runtime / "state"), before)
+
+    def test_symlinked_state_member_is_rejected_without_external_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(runtime, [("workflow", b"complete")])
+            external = root / "external.bin"
+            external.write_bytes(b"external member bytes")
+            link = runtime / "state" / "linked.bin"
+            try:
+                link.symlink_to(external)
+            except OSError as error:
+                self.skipTest(f"file symlink unavailable: {error}")
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$",
+            ):
+                MODULE.validate_viewer_state(runtime)
+
+            self.assertEqual(external.read_bytes(), b"external member bytes")
+
+    def test_save_parent_junction_is_rejected_before_external_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(runtime, [("workflow", b"complete")])
+            external = root / "external"
+            external.mkdir()
+            sentinel = external / "sentinel.bin"
+            sentinel.write_bytes(b"external owner bytes")
+            directory_link_or_skip(self, root / "alias", external)
+
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_SAVE_FAILED)}$",
+            ):
+                MODULE.save_viewer_state(runtime, root / "alias" / "saved", "run-safe")
+
+            self.assertEqual(sentinel.read_bytes(), b"external owner bytes")
+            self.assertFalse((external / "saved").exists())
+
+    def test_late_save_collision_is_no_clobber_and_clean_retry_succeeds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(runtime, [("workflow", b"complete")])
+            destination = root / "sessions" / "saved"
+            destination.parent.mkdir()
+            real_rename = MODULE.rename_noreplace
+
+            def race(staging: Path, final: Path) -> None:
+                final.mkdir()
+                (final / "owner.bin").write_bytes(b"raced owner bytes")
+                real_rename(staging, final)
+
+            with (
+                mock.patch.object(MODULE, "_current_head", return_value="d" * 40),
+                mock.patch.object(MODULE, "rename_noreplace", side_effect=race),
+                self.assertRaisesRegex(
+                    SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_EXISTS)}$",
+                ),
+            ):
+                MODULE.save_viewer_state(runtime, destination, "run-race")
+
+            self.assertEqual((destination / "owner.bin").read_bytes(), b"raced owner bytes")
+            self.assertEqual(list(destination.parent.glob(".saved.save-*")), [])
+            (destination / "owner.bin").unlink()
+            destination.rmdir()
+            with (
+                mock.patch.object(MODULE, "_current_head", return_value="d" * 40),
+                mock.patch("builtins.print"),
+            ):
+                saved = MODULE.save_viewer_state(runtime, destination, "run-race")
+            self.assertEqual(saved, destination)
+            self.assertEqual(MODULE.validate_viewer_state(saved), saved / "state" / "oxygen.sqlite")
 
     def test_save_runs_after_termination_and_port_release(self):
         order = []
@@ -594,7 +713,8 @@ class LauncherUnitTest(unittest.TestCase):
 
             environment = start.call_args.kwargs["env"]
             self.assertEqual(
-                environment["OXYGEN_VIEWER_STATE_DIR"], str((session / "state").resolve())
+                environment["OXYGEN_VIEWER_STATE_DIR"],
+                str(Path(os.path.abspath(session / "state"))),
             )
             request.assert_called_once_with(
                 mock.ANY, "http://127.0.0.1:3210/api/workflow"
@@ -604,7 +724,7 @@ class LauncherUnitTest(unittest.TestCase):
             stop.assert_called_once_with(
                 start.return_value,
                 3210,
-                runtime_root=session.resolve(),
+                runtime_root=Path(os.path.abspath(session)),
                 save_destination=None,
                 workflow_run_id=None,
                 save_ready=True,
@@ -648,7 +768,7 @@ class LauncherUnitTest(unittest.TestCase):
                 start.return_value,
                 3211,
                 runtime_root=runtime_root,
-                save_destination=destination.resolve(),
+                save_destination=Path(os.path.abspath(destination)),
                 workflow_run_id="run-saved",
                 save_ready=True,
                 preserve_active_failure=False,
@@ -894,16 +1014,179 @@ class LauncherUnitTest(unittest.TestCase):
 
     def test_attach_url_is_strictly_local_and_origin_only(self):
         self.assertEqual(
-            MODULE.normalize_local_viewer_url("http://127.0.0.1:3298/"),
+            MODULE.normalize_local_viewer_url("http://127.0.0.1:3298"),
             "http://127.0.0.1:3298",
+        )
+        self.assertEqual(
+            MODULE.normalize_local_viewer_url("http://localhost:1"),
+            "http://localhost:1",
         )
         for value in (
             "https://127.0.0.1:3298",
             "http://example.com:3298",
             "http://127.0.0.1:3298/api/workflow",
+            "http://127.0.0.1:3298/",
+            "http://127.0.0.1:03298",
+            "http://127.0.0.1:65536",
+            "http://LOCALHOST:3298",
+            "http://localhost:3298?x=1",
+            "http://localhost:3298#fragment",
+            "http://user@localhost:3298",
+            "http://127.0.0.1:3298@example.com:80",
+            " http://localhost:3298",
         ):
             with self.subTest(value=value), self.assertRaises(SystemExit):
                 MODULE.normalize_local_viewer_url(value)
+
+    def test_story_privacy_export_and_import_use_fixed_routes_and_no_clobber_files(self):
+        snapshot = {
+            "schema": "oxygen.reviewed-story-privacy-snapshot",
+            "binding": {"workflowRunId": "run-1"},
+            "targetTransitions": [],
+            "changedTargets": [],
+        }
+        authority = {"workflowRunId": "run-1", "status": "completed_empty", "candidates": []}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "snapshot.json"
+            bundle_path = root / "bundle.json"
+            bundle_path.write_text(json.dumps({
+                "schema": "oxygen.reviewed-story-privacy-import",
+                "binding": {"workflowRunId": "run-1"},
+            }), encoding="utf-8")
+            calls = []
+
+            def request(_opener, url, *, method="GET", body=None):
+                calls.append((url, method, body))
+                return snapshot if method == "GET" else authority
+
+            with (
+                mock.patch.object(MODULE, "request_json", side_effect=request),
+                mock.patch.object(MODULE, "local_viewer_opener", return_value=mock.sentinel.opener),
+                mock.patch("builtins.print"),
+            ):
+                exported = MODULE.export_story_privacy_snapshot(
+                    "http://127.0.0.1:3210", "run-1", output,
+                )
+                self.assertEqual(exported["story_privacy"], "snapshot_exported")
+                self.assertEqual(json.loads(output.read_text(encoding="utf-8")), snapshot)
+                with self.assertRaisesRegex(SystemExit, "STORY_PRIVACY_EXPORT_EXISTS"):
+                    MODULE.export_story_privacy_snapshot(
+                        "http://127.0.0.1:3210", "run-1", output,
+                    )
+                imported = MODULE.import_story_privacy_bundle(
+                    "http://127.0.0.1:3210", "run-1", bundle_path,
+                )
+                self.assertEqual(imported["story_privacy"], "bundle_imported")
+
+            self.assertEqual(calls[0][:2], (
+                "http://127.0.0.1:3210/api/story-privacy/export?workflowRunId=run-1", "GET",
+            ))
+            self.assertEqual(calls[1], (
+                "http://127.0.0.1:3210/api/story-privacy/import", "POST",
+                json.loads(bundle_path.read_text(encoding="utf-8")),
+            ))
+
+    def test_story_privacy_mode_rejects_origin_before_reading_any_path(self):
+        with (
+            mock.patch.object(sys, "argv", [
+                "run_local_review.py", "--attach-url", "http://127.0.0.1:3210@example.com:80",
+                "--workflow-run-id", "run-1", "--story-privacy-import", "PRIVATE_SENTINEL.json",
+            ]),
+            mock.patch.object(MODULE, "_direct_unique_file") as opened,
+        ):
+            with self.assertRaisesRegex(SystemExit, "VIEWER_ORIGIN_INVALID"):
+                MODULE.main()
+        opened.assert_not_called()
+
+    def test_story_privacy_direct_helpers_reject_origin_before_any_path_access(self):
+        hostile = "http://127.0.0.1:3210@example.com:80"
+        with mock.patch.object(MODULE, "_story_privacy_export_path") as export_path:
+            with self.assertRaisesRegex(SystemExit, "VIEWER_ORIGIN_INVALID"):
+                MODULE.export_story_privacy_snapshot(hostile, "run-1", Path("PRIVATE.json"))
+        export_path.assert_not_called()
+        with mock.patch.object(MODULE, "_direct_unique_file") as import_path:
+            with self.assertRaisesRegex(SystemExit, "VIEWER_ORIGIN_INVALID"):
+                MODULE.import_story_privacy_bundle(hostile, "run-1", Path("PRIVATE.json"))
+        import_path.assert_not_called()
+
+    def test_story_privacy_export_rejects_foreign_snapshot_without_output(self):
+        snapshot = {
+            "schema": "oxygen.reviewed-story-privacy-snapshot",
+            "binding": {"workflowRunId": "foreign-run"},
+            "targetTransitions": [],
+            "changedTargets": [],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "snapshot.json"
+            with (
+                mock.patch.object(MODULE, "request_json", return_value=snapshot),
+                mock.patch.object(MODULE, "local_viewer_opener", return_value=mock.sentinel.opener),
+            ):
+                with self.assertRaisesRegex(SystemExit, "VIEWER_RESPONSE_INVALID"):
+                    MODULE.export_story_privacy_snapshot(
+                        "http://127.0.0.1:3210", "run-1", output,
+                    )
+            self.assertFalse(output.exists())
+
+    def test_story_privacy_import_maps_malformed_binding_and_response_to_fixed_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "PRIVATE_SENTINEL_bundle.json"
+            source.write_text(json.dumps({
+                "schema": "oxygen.reviewed-story-privacy-import", "binding": "malformed",
+            }), encoding="utf-8")
+            with mock.patch.object(MODULE, "request_json") as request:
+                with self.assertRaisesRegex(SystemExit, "STORY_PRIVACY_IMPORT_INVALID") as error:
+                    MODULE.import_story_privacy_bundle(
+                        "http://127.0.0.1:3210", "run-1", source,
+                    )
+            request.assert_not_called()
+            self.assertNotIn(str(source), str(error.exception))
+
+            source.write_text(json.dumps({
+                "schema": "oxygen.reviewed-story-privacy-import",
+                "binding": {"workflowRunId": "run-1"},
+            }), encoding="utf-8")
+            with (
+                mock.patch.object(MODULE, "request_json", return_value={
+                    "workflowRunId": "run-1", "candidates": "malformed",
+                }),
+                mock.patch.object(MODULE, "local_viewer_opener", return_value=mock.sentinel.opener),
+            ):
+                with self.assertRaisesRegex(SystemExit, "VIEWER_RESPONSE_INVALID"):
+                    MODULE.import_story_privacy_bundle(
+                        "http://127.0.0.1:3210", "run-1", source,
+                    )
+
+    def test_story_privacy_export_rejects_an_ancestor_directory_alias(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            physical = root / "physical"
+            physical.mkdir()
+            (physical / "nested").mkdir()
+            alias = root / "alias"
+            try:
+                alias.symlink_to(physical, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"directory symlink unavailable: {error}")
+            with self.assertRaisesRegex(SystemExit, "STORY_PRIVACY_EXPORT_FAILED"):
+                MODULE._story_privacy_export_path(alias / "nested" / "snapshot.json")
+            self.assertFalse((physical / "nested" / "snapshot.json").exists())
+
+    def test_story_privacy_opener_has_no_proxy_redirect_or_ambient_cookie_authority(self):
+        opener = MODULE.local_viewer_opener()
+        proxy_handlers = [handler for handler in opener.handlers
+                          if isinstance(handler, MODULE.urllib.request.ProxyHandler)]
+        redirect_handlers = [handler for handler in opener.handlers
+                             if isinstance(handler, MODULE._NoLocalViewerRedirect)]
+        cookie_handlers = [handler for handler in opener.handlers
+                           if isinstance(handler, MODULE.urllib.request.HTTPCookieProcessor)]
+        # An inert ProxyHandler({}) suppresses urllib's environment-derived default
+        # and is intentionally omitted from the installed handler list.
+        self.assertEqual(proxy_handlers, [])
+        self.assertEqual(len(redirect_handlers), 1)
+        self.assertEqual(len(cookie_handlers), 1)
+        self.assertEqual(list(cookie_handlers[0].cookiejar), [])
 
     def test_attach_verifies_stable_workflow_run_before_import(self):
         with (
@@ -1305,6 +1588,34 @@ class LauncherUnitTest(unittest.TestCase):
                         story_candidates=[{"id": "doc:item-1"}], preference_bundle=preference_bundle,
                         preparation_manifest=preparation_manifest)
             request.assert_not_called()
+
+    def test_story_ready_rejects_zero_source_revisions_before_http(self):
+        unsafe = (1 << 53)
+        for preference_revision, preparation_revision, message in (
+            (0, 0, "Preference bundle authority is invalid"),
+            (7, 0, "Story preparation authority is invalid"),
+            (unsafe, unsafe, "Preference bundle authority is invalid"),
+            (7, unsafe, "Story preparation authority is invalid"),
+        ):
+            with self.subTest(
+                preference_revision=preference_revision,
+                preparation_revision=preparation_revision,
+            ):
+                preference_bundle, preparation_manifest = ready_authority(probes=[])
+                preference_bundle["sourceRevision"] = preference_revision
+                preparation_manifest["sourceRevision"] = preparation_revision
+                with mock.patch.object(MODULE, "request_json") as request:
+                    with self.assertRaisesRegex(SystemExit, message):
+                        MODULE.update_story_workflow(
+                            "http://127.0.0.1:3298",
+                            "run-1",
+                            "ready",
+                            coverage_manifest={},
+                            story_candidates=[{"id": "doc:item-1"}],
+                            preference_bundle=preference_bundle,
+                            preparation_manifest=preparation_manifest,
+                        )
+                request.assert_not_called()
 
     def test_cli_accepts_documented_story_started_command(self):
         with (
@@ -1789,6 +2100,14 @@ class LocateInputsContainmentTest(unittest.TestCase):
                 "trajectory_failures": 1,
                 "trajectories": [{"trajectory_id": "traj-alpha", "ok": False}],
             }), encoding="utf-8")
+            self.assert_import_fails_before_request(run, MODULE.INPUT_INDEX_INVALID)
+
+    def test_empty_index_never_falls_back_to_stale_trajectory_glob(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary, "run")
+            write_trajectory(run, "traj-stale")
+            write_index(run, [])
+
             self.assert_import_fails_before_request(run, MODULE.INPUT_INDEX_INVALID)
 
     def test_multi_meeting_cli_preserves_document_ids_and_qualified_records(self):

@@ -15,6 +15,7 @@ import {
   requireEstablishedWorkflowRun,
   workflowRunErrorResponse,
 } from "../../../lib/workflow-run-server";
+import { validActivatedSourceRevision } from "../../../lib/authority-validation.mjs";
 
 const SIGNALS = new Set([
   "repeated_correction", "long_exchange", "late_rejection", "decision_reversal",
@@ -151,6 +152,7 @@ export async function GET() {
     JOIN probe_runs probe_run ON probe_run.workflow_run_id=workflow.id
     WHERE workflow.id=? AND workflow.story_generation_status='ready_for_human_review'
       AND probe_run.status='complete' AND probe_run.stage='preference'
+      AND workflow.story_source_revision>0 AND probe_run.source_revision>0
       AND probe_run.source_revision=workflow.story_source_revision)`;
   const [probes, bulk, runs] = await db.batch([
     db.prepare(`SELECT * FROM probes WHERE ${currentAuthority}
@@ -161,6 +163,7 @@ export async function GET() {
       JOIN workflow_runs workflow ON workflow.id=probe_run.workflow_run_id
       WHERE workflow.id=? AND workflow.story_generation_status='ready_for_human_review'
         AND probe_run.status='complete' AND probe_run.stage='preference'
+        AND workflow.story_source_revision>0 AND probe_run.source_revision>0
         AND probe_run.source_revision=workflow.story_source_revision`)
       .bind(authority.workflowRunId),
   ]);
@@ -193,7 +196,7 @@ export async function POST(request: Request) {
   }
   if (!isObject(body) || Object.keys(body).length !== BODY_KEYS.size
     || !onlyKnownKeys(body, BODY_KEYS) || !stableId(body.workflowRunId)
-    || !nonNegativeInteger(body.sourceRevision)
+    || !validActivatedSourceRevision(body.sourceRevision)
     || typeof body.inputDigest !== "string" || !DIGEST.test(body.inputDigest)
     || typeof body.outputDigest !== "string" || !DIGEST.test(body.outputDigest)
     || !nonNegativeInteger(body.outputCount)

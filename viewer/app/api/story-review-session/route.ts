@@ -1,4 +1,5 @@
 import { getLocalDatabase } from "../../../db";
+import { validActivatedSourceRevision } from "../../../lib/authority-validation.mjs";
 import {
   MAX_STORY_REVIEW_SESSION_BYTES,
   parseStoryReviewSession,
@@ -106,7 +107,7 @@ export async function POST(request: Request) {
   }
   const workflowRunId = typeof body.workflowRunId === "string" ? body.workflowRunId : "";
   if (!isWorkflowRunId(workflowRunId)
-    || !Number.isSafeInteger(body.sourceRevision) || Number(body.sourceRevision) < 0) {
+    || !validActivatedSourceRevision(body.sourceRevision)) {
     return sessionErrorResponse(STORY_SESSION_ERROR.stateInvalid);
   }
   const session = parseStoryReviewSession(body.session);

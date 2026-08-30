@@ -15,6 +15,7 @@ import {
 } from "../lib/story-readiness.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { parseStorySource } from "../lib/timeline.ts";
+import { deriveStoryReleaseTargetContents } from "../lib/story-preparation.ts";
 
 const repository = resolve(import.meta.dirname, "../..");
 const scripts = join(repository, "skills", "oxygen-storytelling-review", "scripts");
@@ -113,6 +114,40 @@ async function recordLane(transport, lane, root, proposalForInput) {
     runOk(process.execPath, [record, transport, lane, shard.id, proposal]);
   }
   return manifest;
+}
+
+function privacyEnvelopeForInput(input, candidates = []) {
+  const stories = input.payload.storyCandidates.map((row) => parseStorySource(row.summary));
+  assert.ok(stories.every(Boolean));
+  const valid = new Set(input.unitIds);
+  const targets = deriveStoryReleaseTargetContents(stories).filter((target) => valid.has(target.id));
+  const shardCandidates = candidates.filter((candidate) => (
+    candidate.releaseTargets.every((target) => valid.has(target))
+  ));
+  const flagged = new Set(shardCandidates.flatMap((candidate) => candidate.releaseTargets));
+  return {
+    candidates: shardCandidates,
+    targetProposals: targets.map((target) => {
+      if (!flagged.has(target.id)) return {
+        targetId: target.id, targetContentDigest: digest(target.content),
+        proposedText: target.content, occurrences: [],
+      };
+      const replacement = "Anonymous";
+      const original = Array.from(target.content);
+      const start = original.findLastIndex((point) => /[\p{L}\p{N}]/u.test(point));
+      assert.notEqual(start, -1);
+      return {
+        targetId: target.id,
+        targetContentDigest: digest(target.content),
+        proposedText: original.slice(0, start).join("") + replacement + original.slice(start + 1).join(""),
+        occurrences: [{
+          originalStartOffset: start, originalEndOffset: start + 1,
+          proposalStartOffset: start, proposalEndOffset: start + Array.from(replacement).length,
+          category: "private-identity",
+        }],
+      };
+    }),
+  };
 }
 
 async function storyBatchFiles(transport, root, records, tag = "batch") {
@@ -260,7 +295,9 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = null,
     job: {
       id: "source-privacy-current", status: "complete", stage: "complete", model: null,
       completed: 0, total: 0, rejected: 0,
+      source_revision: 1,
       source_digest: await computeSourceDigest(sourceRows),
+      receipt_digest: "8".repeat(64),
       started_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:01Z",
       completed_at: "2026-01-01T00:00:01Z",
     },
@@ -309,10 +346,11 @@ async function privacyAuthority(root, suffixes = ["a", "b"], documentId = "doc-c
   const redacted = join(root, "redacted");
   await mkdir(redacted);
   const text = "safe reviewed canary";
-  const turns = suffixes.map((suffix) => ({
+  const turns = suffixes.map((suffix, index) => ({
     event_id: `event-${suffix}`,
     document_id: documentId,
     item_id: `event-${suffix}`,
+    sequence: index + 1,
     role: "user",
     timestamp: null,
     text,
@@ -329,6 +367,7 @@ async function privacyAuthority(root, suffixes = ["a", "b"], documentId = "doc-c
   await json(report, {
     categories: {}, total_applied: 0, rejected: 0, rejects: [], missing_worker_output: [],
     per_trajectory: [{ trajectory: documentId, turns: turns.length, applied: 0 }],
+    receiptDigest: "0".repeat(64),
   });
   return { redacted, report };
 }
@@ -413,19 +452,17 @@ async function createFlow({
     await reverseLaneManifest(transport, "story_privacy");
   }
 
-  const privacyProposal = join(root, "story-privacy-proposal.json");
-  await json(privacyProposal, completedZero ? [] : [{
+  const privacyCandidates = completedZero ? [] : [{
     id: "privacy-canary",
     reviewState: "needs_confirmation",
     title: "Review synthetic title",
     whyFlagged: "The reviewed canary requests a release decision.",
     uncertaintyReason: "Confirm the synthetic title.",
     releaseTargets: [`story-${suffixes[0]}::title`],
-  }]);
-  const privacyCandidates = await readJson(privacyProposal);
-  await recordLane(transport, "story_privacy", root, (input) => privacyCandidates.filter((candidate) => (
-    candidate.releaseTargets.every((target) => input.unitIds.includes(target))
-  )));
+  }];
+  await recordLane(transport, "story_privacy", root, (input) => (
+    privacyEnvelopeForInput(input, privacyCandidates)
+  ));
 
   const preferenceCandidates = join(root, "preference-candidates.json");
   await json(preferenceCandidates, completedZero ? {
@@ -803,15 +840,19 @@ test("real multi-shard manifests reject missing, duplicate, overlap, and foreign
   }
 });
 
-test("public commands bind completed-zero Insight, Story Privacy, and Preference results", async () => {
+test("public commands bind zero Insight/Preference and zero-candidate total Privacy results", async () => {
   const flow = await createFlow({ completedZero: true });
   try {
     const manifest = await readJson(flow.preparationManifest);
-    for (const lane of ["insight", "story_privacy", "preference"]) {
+    for (const lane of ["insight", "preference"]) {
       const receipt = manifest.receipts.find((item) => item.lane === lane);
       assert.equal(receipt.outputCount, 0);
       assert.equal(receipt.outputDigest, "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945");
     }
+    assert.equal(manifest.storyPrivacy.candidates.length, 0);
+    assert.equal(manifest.receipts.find((item) => item.lane === "story_privacy").outputCount,
+      manifest.storyPrivacy.targetProposals.length);
+    assert.ok(manifest.storyPrivacy.targetProposals.length > 0);
   } finally {
     await flow.cleanup();
   }
@@ -1642,7 +1683,8 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
       }],
       job: {
         id: "source-privacy-scale", status: "complete", stage: "complete", model: null,
-        completed: 1, total: 1, rejected: 0, source_digest: await computeSourceDigest(sourceRows),
+        completed: 1, total: 1, rejected: 0, source_revision: 1,
+        source_digest: await computeSourceDigest(sourceRows), receipt_digest: "8".repeat(64),
         started_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:01Z",
         completed_at: "2026-01-01T00:00:01Z",
       },
@@ -1748,6 +1790,7 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
       event_id: event.event_id,
       document_id: "doc-scale",
       item_id: event.event_id,
+      sequence: index + 1,
       role: "user",
       timestamp: null,
       text: event.payload.text,
@@ -1773,6 +1816,7 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
       rejects: [],
       missing_worker_output: [],
       per_trajectory: [{ trajectory: "doc-scale", turns: count, applied: 1 }],
+      receiptDigest: "0".repeat(64),
     });
     const preferenceContext = join(root, "preference-context.json");
     runOk("python", [preparePreferenceContext,
@@ -1783,7 +1827,8 @@ test("24,796-item validation authority is bounded and raw reviewed content is no
     ]);
 
     runOk(process.execPath, [prepare, "prepare", "story_privacy", candidates, transport]);
-    const privacyManifest = await recordLane(transport, "story_privacy", root, () => []);
+    const privacyManifest = await recordLane(transport, "story_privacy", root,
+      (input) => privacyEnvelopeForInput(input));
     runOk(process.execPath, [prepare, "prepare", "preference", candidates, preferenceContext, transport]);
     const preferenceCandidates = join(root, "preference-candidates.json");
     await json(preferenceCandidates, { probes: [], bulkDecisions: [], setAside: 0 });

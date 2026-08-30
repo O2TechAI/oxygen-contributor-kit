@@ -23,7 +23,9 @@ if str(TOOLS_ROOT) not in sys.path:
 from ingest.human_source_projection import (
     AI_REVIEW_EVENT_SCHEMA,
     AI_REVIEW_MEETING_SCHEMA,
+    AI_REVIEW_RUN_SCHEMA,
     AI_REVIEW_TRAJECTORY_SCHEMA,
+    INGEST_RUN_SCHEMA,
     MEETING_SCHEMA,
     POLICY_ID,
     TRAJECTORY_EVENT_SCHEMA,
@@ -77,7 +79,11 @@ def read_object(path: Path) -> dict[str, Any]:
 
 
 def _is_reparse_point(path: Path) -> bool:
-    attributes = getattr(path.stat(follow_symlinks=False), "st_file_attributes", 0)
+    attributes = getattr(path.stat(follow_symlinks=False), "st_file_attributes", None)
+    if os.name == "nt" and attributes is None:
+        raise ValueError(f"cannot prove reparse-point safety: {path}")
+    if attributes is None:
+        return False
     return bool(attributes & 0x400)
 
 
@@ -88,23 +94,35 @@ def assert_literal_physical_path(
     reject_hardlinked_file: bool = True,
 ) -> Path:
     """Reject links/reparse points in every literal existing path component."""
-    literal = Path(os.path.abspath(path))
+    literal = path.expanduser()
+    if not literal.is_absolute():
+        literal = Path.cwd() / literal
     anchor = Path(literal.anchor)
     current = anchor
     parts = literal.parts[1:] if literal.anchor else literal.parts
     for index, part in enumerate(parts):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            current = current.parent
+            continue
         current = current / part
         missing_leaf = allow_missing_leaf and index == len(parts) - 1
-        if not current.exists() and not current.is_symlink():
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
             if missing_leaf:
-                return literal
+                return Path(os.path.abspath(literal))
             raise ValueError(f"path component is unavailable: {current}")
+        except OSError as error:
+            raise ValueError(f"path component is unavailable: {current}") from error
         if current.is_symlink() or _is_reparse_point(current):
             raise ValueError(f"path component is aliased: {current}")
-        info = current.stat(follow_symlinks=False)
+        if index < len(parts) - 1 and not current.is_dir():
+            raise ValueError(f"path component is not a directory: {current}")
         if reject_hardlinked_file and current.is_file() and info.st_nlink != 1:
             raise ValueError(f"file has hard-link aliases: {current}")
-    return literal
+    return Path(os.path.abspath(literal))
 
 
 def transport_json_bytes(value: Any) -> bytes:
@@ -175,6 +193,78 @@ def direct_physical_child(path: Path, parent: Path, run: Path, *, directory: boo
     return resolved
 
 
+def indexed_trajectory_directories(run: Path) -> list[Path]:
+    """Return the exact successful trajectory membership declared by the run index."""
+    run = assert_literal_physical_path(run).resolve(strict=True)
+    trajectories_root = run / "trajectories"
+    index_path = run / "index.json"
+    has_root = trajectories_root.exists() or trajectories_root.is_symlink()
+    has_index = index_path.exists() or index_path.is_symlink()
+    if not has_root and not has_index:
+        return []
+    if not has_index:
+        raise ValueError("trajectory index authority is required")
+    index = read_object(contained_file(index_path, run))
+    entries = index.get("trajectories")
+    count = index.get("trajectory_count")
+    schema = index.get("schema")
+    tool = index.get("tool")
+    collector_index = schema == INGEST_RUN_SCHEMA and tool == "collect_repo_trajectories"
+    anthropic_index = schema == INGEST_RUN_SCHEMA and tool == "import_anthropic_export"
+    review_index = schema == AI_REVIEW_RUN_SCHEMA and tool == "prepare_ai_review_run"
+    if (
+        not (collector_index or anthropic_index or review_index)
+        or not isinstance(entries, list)
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or count != len(entries)
+    ):
+        raise ValueError("trajectory index authority is invalid")
+    if collector_index and (
+        index.get("collection_status") != "complete"
+        or not isinstance(index.get("trajectory_failures"), int)
+        or isinstance(index.get("trajectory_failures"), bool)
+        or index.get("trajectory_failures") != 0
+    ):
+        raise ValueError("trajectory index authority is invalid")
+    if (anthropic_index or review_index) and "trajectory_failures" in index:
+        raise ValueError("trajectory index authority is invalid")
+
+    expected_ids: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("trajectory index authority is invalid")
+        trajectory_id = entry.get("trajectory_id")
+        if (
+            not isinstance(trajectory_id, str)
+            or not SOURCE_ID_PATTERN.fullmatch(trajectory_id)
+            or (collector_index and entry.get("ok") is not True)
+            or (review_index and entry.get("ok") is not True)
+            or (anthropic_index and "ok" in entry)
+        ):
+            raise ValueError("trajectory index authority is invalid")
+        expected_ids.append(trajectory_id)
+    if len(set(expected_ids)) != len(expected_ids):
+        raise ValueError("trajectory index authority is invalid")
+
+    actual: dict[str, Path] = {}
+    if has_root:
+        root = assert_literal_physical_path(trajectories_root).resolve(strict=True)
+        if not root.is_dir() or root.parent != run:
+            raise ValueError("trajectory directory authority is invalid")
+        for entry in root.iterdir():
+            try:
+                physical = assert_literal_physical_path(entry).resolve(strict=True)
+            except (OSError, RuntimeError, ValueError):
+                raise ValueError("trajectory directory authority is invalid") from None
+            if not physical.is_dir() or physical.parent != root:
+                raise ValueError("trajectory directory authority is invalid")
+            actual[entry.name] = physical
+    if set(actual) != set(expected_ids):
+        raise ValueError("trajectory index membership is not exact")
+    return [actual[value] for value in sorted(expected_ids, key=lambda item: item.encode("utf-8"))]
+
+
 def source_inventory(
     run: Path,
 ) -> tuple[list[str], list[dict[str, Any]], dict[str, str]]:
@@ -191,9 +281,9 @@ def source_inventory_records(
     contribution_source_digests: dict[str, str] = {}
     contribution_records: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
-    for candidate in sorted((run / "trajectories").glob("*/events.jsonl")):
-        events_path = contained_file(candidate, run)
-        manifest_path = contained_file(candidate.parent / "manifest.json", run)
+    for trajectory_dir in indexed_trajectory_directories(run):
+        events_path = contained_file(trajectory_dir / "events.jsonl", run)
+        manifest_path = contained_file(trajectory_dir / "manifest.json", run)
         manifest = read_object(manifest_path)
         manifest_schema = manifest.get("schema")
         event_schema = {
@@ -202,8 +292,12 @@ def source_inventory_records(
         }.get(manifest_schema)
         if event_schema is None or "schema_version" in manifest:
             raise ValueError(f"{RECOLLECT_GUIDANCE}: non-canonical trajectory contract")
-        trajectory_id = manifest.get("trajectory_id") or events_path.parent.name
-        if not isinstance(trajectory_id, str) or not SOURCE_ID_PATTERN.fullmatch(trajectory_id):
+        trajectory_id = manifest.get("trajectory_id")
+        if (
+            not isinstance(trajectory_id, str)
+            or not SOURCE_ID_PATTERN.fullmatch(trajectory_id)
+            or trajectory_id != trajectory_dir.name
+        ):
             raise ValueError("trajectory source identity is invalid")
         projection = manifest.get("contribution_projection")
         if not isinstance(projection, dict):
