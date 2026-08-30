@@ -10,13 +10,15 @@ import {
 import { directPathEntry } from "./direct_path_entry.mjs";
 import { publishDirectoryNoReplace } from "./atomic_publish.mjs";
 
+class CliFailure extends Error {}
+const fail = (code) => { throw new CliFailure(code); };
+async function main() {
 const [snapshotInput, outputInput] = process.argv.slice(2);
 const hex = /^[0-9a-f]{64}$/;
 const MAX_SHARD_CONTENT_BYTES = 1_000_000;
 const MAX_SHARD_TARGETS = 64;
 const exact = (value, keys) => Boolean(value) && typeof value === "object" && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
-const fail = (code) => { throw new Error(code); };
 const safeId = (value) => typeof value === "string" && Boolean(value.trim())
   && !/[\u0000-\u001f\u007f]/u.test(value);
 const compareUtf8 = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
@@ -153,3 +155,6 @@ try {
   await rm(temporary, { recursive: true, force: true });
   throw error;
 }
+}
+await main().catch((error) => { console.error(error instanceof CliFailure
+  ? error.message : "REVIEWED_STORY_PRIVACY_PREPARE_FAILED"); process.exitCode = 1; });
