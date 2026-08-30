@@ -160,6 +160,30 @@ class AnthropicProjectionTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 MODULE.main([str(source)])
 
+    def test_missing_source_cli_emits_only_fixed_code(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sentinel = "HOSTILE_ANTHROPIC_SENTINEL"
+            exception_body = "synthetic-exception-body"
+            source = root / f"missing-{sentinel}-https-example.invalid-{exception_body}"
+            out = root / "requested-output"
+
+            result = subprocess.run(
+                [sys.executable, str(IMPORT_PATH), str(source), "--out", str(out)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            captured = result.stdout + result.stderr
+
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr.splitlines(), ["ANTHROPIC_EXPORT_SOURCE_INVALID"])
+            for leaked in (
+                "Traceback", str(root), str(INGEST_ROOT), sentinel,
+                "https", "example.invalid", exception_body,
+            ):
+                self.assertNotIn(leaked, captured)
+            self.assertFalse(out.exists())
+
     def test_exact_file_does_not_read_sibling_supplements(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

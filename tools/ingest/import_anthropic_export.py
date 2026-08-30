@@ -552,7 +552,8 @@ def main(argv=None) -> int:
 
     source = args.source.expanduser().resolve()
     if not source.exists():
-        raise fail(f"source not found: {source}")
+        print("ANTHROPIC_EXPORT_SOURCE_INVALID", file=sys.stderr)
+        return 1
     try:
         out = validate_output_root(args.out)
     except ValueError as error:
