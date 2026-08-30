@@ -129,8 +129,12 @@ def record(root: Path, shard_id: str, proposal_path: Path) -> dict:
         root / "handoffs" / f"{shard_id}.proposals.json",
         allow_missing_leaf=True,
     )
-    supplied_proposal_path = assert_literal_physical_path(proposal_path).resolve(strict=True)
-    if supplied_proposal_path != expected_proposal_path:
+    supplied_proposal_path = assert_literal_physical_path(proposal_path)
+    try:
+        same_proposal = supplied_proposal_path.samefile(expected_proposal_path)
+    except OSError:
+        same_proposal = False
+    if not same_proposal:
         raise ValueError("semantic worker proposal path is not canonical")
     expected_proposal_path = contained_relative(
         root, f"handoffs/{shard_id}.proposals.json"
@@ -172,8 +176,8 @@ def main() -> None:
     parser.add_argument("shard_id")
     parser.add_argument("proposal_file", type=Path)
     args = parser.parse_args()
-    root = assert_literal_physical_path(args.semantic_output_root).resolve(strict=True)
-    proposal_path = assert_literal_physical_path(args.proposal_file).resolve(strict=True)
+    root = assert_literal_physical_path(args.semantic_output_root)
+    proposal_path = assert_literal_physical_path(args.proposal_file)
     receipt = record(root, args.shard_id, proposal_path)
     print(json.dumps({
         "shard": receipt["shardId"],

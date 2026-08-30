@@ -355,6 +355,44 @@ class SemanticUnitTransportTests(unittest.TestCase):
             self.assertEqual(receipt["status"], "complete")
             self.assertEqual(len(finalizer.finalize(run, semantic)["semantic_manifest"]["units"]), 1)
 
+    @unittest.skipUnless(os.name == "nt", "native 8.3 paths are Windows-only")
+    def test_worker_accepts_mixed_native_short_and_long_handoff_paths(self):
+        import ctypes
+
+        def short_path(path: Path) -> Path:
+            buffer = ctypes.create_unicode_buffer(32_768)
+            length = ctypes.windll.kernel32.GetShortPathNameW(str(path), buffer, len(buffer))
+            if not length or os.path.normcase(buffer.value) == os.path.normcase(str(path)):
+                self.skipTest("native 8.3 path aliases are unavailable")
+            return Path(buffer.value)
+
+        with tempfile.TemporaryDirectory(
+            prefix="oxygen semantic short path ", dir=Path(__file__).resolve().parents[3]
+        ) as temporary:
+            root = Path(temporary)
+            run = root / "run with a long name"
+            contribution_id = write_trajectory(run, "traj", ["one"])[0]
+            self.assertEqual(run_builder(run).returncode, 0)
+            semantic = root / "semantic output with a long name"
+            shard = prepare(run, semantic)["manifest"]["shards"][0]
+            proposal = semantic / "handoffs" / f"{shard['id']}.proposals.json"
+            proposal.write_text(json.dumps([{
+                "unitId": "unit-discussion",
+                "kind": "discussion",
+                "contributionIds": [contribution_id],
+            }]), encoding="utf-8")
+            short_root = short_path(semantic)
+            short_proposal = short_path(proposal)
+            script = SCRIPTS / "record_semantic_worker.py"
+            for root_path, proposal_path in (
+                (semantic, short_proposal),
+                (short_root, proposal),
+            ):
+                completed = subprocess.run([
+                    sys.executable, str(script), str(root_path), shard["id"], str(proposal_path),
+                ], capture_output=True, text=True, encoding="utf-8", check=False)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_invalid_kind_can_be_explicitly_corrected_only_before_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

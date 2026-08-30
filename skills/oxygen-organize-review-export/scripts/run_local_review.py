@@ -840,19 +840,16 @@ def _workflow_run_id(value: str) -> str:
 
 def _direct_unique_file(path: Path, failure: str) -> Path:
     try:
-        metadata = path.lstat()
-        resolved = path.resolve(strict=True)
-    except (OSError, RuntimeError):
+        literal = _literal_state_path(path)
+        metadata = literal.lstat()
+    except (OSError, RuntimeError, ValueError):
         raise SystemExit(failure) from None
     if (
-        path.is_symlink()
-        or _is_link_or_reparse(path, metadata)
-        or not stat.S_ISREG(metadata.st_mode)
+        not stat.S_ISREG(metadata.st_mode)
         or metadata.st_nlink != 1
-        or os.path.normcase(os.path.abspath(path)) != os.path.normcase(str(resolved))
     ):
         raise SystemExit(failure)
-    return resolved
+    return literal
 
 
 def _story_privacy_export_path(destination: Path) -> tuple[Path, Path]:

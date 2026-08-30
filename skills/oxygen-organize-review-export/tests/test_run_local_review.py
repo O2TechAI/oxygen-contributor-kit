@@ -276,7 +276,7 @@ class LauncherUnitTest(unittest.TestCase):
             ):
                 saved_session = MODULE.save_viewer_state(runtime, destination, "run-synthetic")
 
-            self.assertEqual(saved_session, destination.resolve())
+            self.assertEqual(saved_session, Path(os.path.abspath(destination)))
             saved_state = saved_session / "state"
             self.assertEqual(state_file_bytes(saved_state), before)
             with closing(sqlite3.connect(saved_state / "oxygen.sqlite")) as connection:
@@ -713,7 +713,8 @@ class LauncherUnitTest(unittest.TestCase):
 
             environment = start.call_args.kwargs["env"]
             self.assertEqual(
-                environment["OXYGEN_VIEWER_STATE_DIR"], str((session / "state").resolve())
+                environment["OXYGEN_VIEWER_STATE_DIR"],
+                str(Path(os.path.abspath(session / "state"))),
             )
             request.assert_called_once_with(
                 mock.ANY, "http://127.0.0.1:3210/api/workflow"
@@ -723,7 +724,7 @@ class LauncherUnitTest(unittest.TestCase):
             stop.assert_called_once_with(
                 start.return_value,
                 3210,
-                runtime_root=session.resolve(),
+                runtime_root=Path(os.path.abspath(session)),
                 save_destination=None,
                 workflow_run_id=None,
                 save_ready=True,
@@ -767,7 +768,7 @@ class LauncherUnitTest(unittest.TestCase):
                 start.return_value,
                 3211,
                 runtime_root=runtime_root,
-                save_destination=destination.resolve(),
+                save_destination=Path(os.path.abspath(destination)),
                 workflow_run_id="run-saved",
                 save_ready=True,
                 preserve_active_failure=False,
