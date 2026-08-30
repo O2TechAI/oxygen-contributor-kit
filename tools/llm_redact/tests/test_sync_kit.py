@@ -274,7 +274,7 @@ class SyncKitFilesystemTest(unittest.TestCase):
                 return real_metadata(path)
 
             with mock.patch.object(MODULE, "_regular_target_metadata", side_effect=observe_metadata):
-                with self.assertRaises(OSError):
+                with self.assertRaisesRegex(ValueError, "^sync target is aliased$"):
                     run_sync(source, destination)
 
             self.assertTrue(target.is_symlink())

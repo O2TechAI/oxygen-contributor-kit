@@ -135,7 +135,10 @@ class ExtractDialogueTest(unittest.TestCase):
         with TemporaryDirectory() as temp:
             run = Path(temp, "review")
             run.mkdir()
-            root_meeting = run / "meeting.json"
+            root_meeting = (
+                MODULE.assert_literal_physical_path(run).resolve(strict=True)
+                / "meeting.json"
+            )
             with mock.patch.object(
                 Path, "is_symlink", autospec=True,
                 side_effect=lambda path: path == root_meeting,
