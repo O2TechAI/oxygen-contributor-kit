@@ -40,6 +40,14 @@ def probe(identifier="probe-a"):
     }
 
 
+def bulk(identifier="bulk-a", evidence=None):
+    return {
+        "id": identifier, "kind": "privacy", "count": 1,
+        "question": "Keep this reviewed group?", "evidenceSample": evidence or [],
+        "presentations": {},
+    }
+
+
 class FinalizerTests(unittest.TestCase):
     def test_fixed_nonempty_digests_and_exact_bundle_keys(self):
         bundle = VALIDATOR.finalize(context(), {"probes": [probe()], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
@@ -57,6 +65,57 @@ class FinalizerTests(unittest.TestCase):
         first = VALIDATOR.finalize(context(), {"probes": [probe("probe-z"), probe("probe-a")], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
         second = VALIDATOR.finalize(context(), {"probes": [probe("probe-a"), probe("probe-z")], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
         self.assertEqual(VALIDATOR.PREPARE.canonical_json(first), VALIDATOR.PREPARE.canonical_json(second))
+
+    def test_question_and_evidence_bounds_are_exact(self):
+        questions = [probe(f"probe-{index:02d}") for index in range(20)]
+        accepted = VALIDATOR.finalize(
+            context(), {"probes": questions, "bulkDecisions": [], "setAside": 7}, "run-a", 7,
+        )
+        self.assertEqual(accepted["outputCount"], 20)
+        with self.assertRaisesRegex(ValueError, "candidates"):
+            VALIDATOR.finalize(
+                context(), {"probes": questions + [probe("probe-20")], "bulkDecisions": [], "setAside": 0},
+                "run-a", 7,
+            )
+
+        bounded_context = context()
+        event_ids = [f"event-{index:03d}" for index in range(501)]
+        bounded_context["reviewedEvidence"] = [
+            {"documentId": "trajectory-a", "eventId": event_id, "documentKind": "trajectory"}
+            for event_id in event_ids
+        ]
+        candidate = probe()
+        candidate["eventIds"] = event_ids[:500]
+        VALIDATOR.finalize(
+            bounded_context, {"probes": [candidate], "bulkDecisions": [bulk(evidence=event_ids[:500])], "setAside": 0},
+            "run-a", 7,
+        )
+        candidate["eventIds"] = event_ids
+        with self.assertRaisesRegex(ValueError, "probe evidence"):
+            VALIDATOR.finalize(
+                bounded_context, {"probes": [candidate], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
+            )
+        with self.assertRaisesRegex(ValueError, "bulk evidence"):
+            VALIDATOR.finalize(
+                bounded_context, {"probes": [], "bulkDecisions": [bulk(evidence=event_ids)], "setAside": 0},
+                "run-a", 7,
+            )
+
+    def test_open_document_kind_remains_bound_to_reviewed_evidence(self):
+        lab_context = context()
+        lab_context["reviewedEvidence"][0]["documentKind"] = "lab_notebook"
+        candidate = probe()
+        candidate["documentKind"] = "lab_notebook"
+        self.assertEqual(VALIDATOR.finalize(
+            lab_context, {"probes": [candidate], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
+        )["probes"][0]["documentKind"], "lab_notebook")
+        for invalid in ("trajectory", "Lab_notebook", "lab-notebook", "a" * 65):
+            with self.subTest(invalid=invalid):
+                candidate["documentKind"] = invalid
+                with self.assertRaises(ValueError):
+                    VALIDATOR.finalize(
+                        lab_context, {"probes": [candidate], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
+                    )
 
     def test_option_normalization_is_explicit_and_cross_runtime_stable(self):
         self.assertEqual(VALIDATOR.normalize_option_text("\u00a0CHOICE...\ufeff"), "choice")
@@ -173,6 +232,13 @@ class FinalizerTests(unittest.TestCase):
             context_path, candidates_path = root / "context.json", root / "candidates.json"
             context_path.write_text(json.dumps(context()), encoding="utf-8")
             candidates_path.write_text(json.dumps({"probes": [dict(probe(), autoRemoved={})], "bulkDecisions": [], "setAside": 0}), encoding="utf-8")
+            result = subprocess.run([sys.executable, str(SCRIPT), "--context", str(context_path), "--candidates", str(candidates_path), "--workflow-run-id", "run-a", "--source-revision", "7", "--output", str(output)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(output.read_bytes(), b"preserve-me")
+            candidates_path.write_text(json.dumps({
+                "probes": [probe(f"probe-{index:02d}") for index in range(21)],
+                "bulkDecisions": [], "setAside": 0,
+            }), encoding="utf-8")
             result = subprocess.run([sys.executable, str(SCRIPT), "--context", str(context_path), "--candidates", str(candidates_path), "--workflow-run-id", "run-a", "--source-revision", "7", "--output", str(output)], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(output.read_bytes(), b"preserve-me")

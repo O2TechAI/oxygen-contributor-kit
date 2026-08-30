@@ -8,7 +8,10 @@ import {
 } from "../../../lib/preference-presentation";
 import {
   canonicalPreferenceQuestionBatch,
+  MAX_PREFERENCE_EVIDENCE_IDS,
+  MAX_PREFERENCE_QUESTIONS,
   storyPreparationDigest,
+  validPreferenceDocumentKind,
 } from "../../../lib/story-preparation";
 import {
   WORKFLOW_RUN_AUTHORITY,
@@ -80,8 +83,9 @@ function normalizeProbe(value: unknown): AcceptedProbe | null {
   if (!isObject(value) || Object.keys(value).length !== PROBE_KEYS.size
     || !onlyKnownKeys(value, PROBE_KEYS)
     || !stableId(value.id) || !stableId(value.documentId)
-    || (value.documentKind !== "trajectory" && value.documentKind !== "meeting")
+    || !validPreferenceDocumentKind(value.documentKind)
     || !Array.isArray(value.eventIds) || value.eventIds.length === 0
+    || value.eventIds.length > MAX_PREFERENCE_EVIDENCE_IDS
     || !value.eventIds.every(stableId)
     || new Set(value.eventIds).size !== value.eventIds.length
     || (value.timestamp !== null && !safeText(value.timestamp))
@@ -117,6 +121,7 @@ function normalizeBulkDecision(value: unknown): AcceptedBulkDecision | null {
   if (Object.keys(value).length !== BULK_KEYS.size || !onlyKnownKeys(value, BULK_KEYS)
     || !stableId(value.id) || !safeText(value.kind) || !nonNegativeInteger(value.count)
     || !safeText(value.question) || !Array.isArray(evidenceSample)
+    || evidenceSample.length > MAX_PREFERENCE_EVIDENCE_IDS
     || !evidenceSample.every(stableId)
     || new Set(evidenceSample).size !== evidenceSample.length) return null;
   const presentations = normalizeBulkPreferencePresentations(value.presentations);
@@ -201,7 +206,8 @@ export async function POST(request: Request) {
     || typeof body.outputDigest !== "string" || !DIGEST.test(body.outputDigest)
     || !nonNegativeInteger(body.outputCount)
     || !nonNegativeInteger(body.setAside)
-    || !Array.isArray(body.probes) || !Array.isArray(body.bulkDecisions)) {
+    || !Array.isArray(body.probes) || !Array.isArray(body.bulkDecisions)
+    || body.probes.length + body.bulkDecisions.length > MAX_PREFERENCE_QUESTIONS) {
     return Response.json({ error: "Invalid Preference batch" }, { status: 400 });
   }
   const probes = body.probes.map(normalizeProbe);

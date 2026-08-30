@@ -15,7 +15,7 @@ import {
 } from "../lib/story-readiness.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { parseStorySource } from "../lib/timeline.ts";
-import { deriveStoryReleaseTargetContents } from "../lib/story-preparation.ts";
+import { canonicalPreferenceQuestionBatch, deriveStoryReleaseTargetContents } from "../lib/story-preparation.ts";
 
 const repository = resolve(import.meta.dirname, "../..");
 const scripts = join(repository, "skills", "oxygen-storytelling-review", "scripts");
@@ -342,14 +342,17 @@ function insight(suffix, documentId = "doc-canary", language = "en") {
   };
 }
 
-async function privacyAuthority(root, suffixes = ["a", "b"], documentId = "doc-canary") {
+async function privacyAuthority(root, suffixes = ["a", "b"], documentId = "doc-canary",
+  documentKind = "trajectory", evidenceCount = suffixes.length) {
   const redacted = join(root, "redacted");
   await mkdir(redacted);
   const text = "safe reviewed canary";
-  const turns = suffixes.map((suffix, index) => ({
-    event_id: `event-${suffix}`,
+  const eventIds = suffixes.map((suffix) => `event-${suffix}`);
+  while (eventIds.length < evidenceCount) eventIds.push(`preference-event-${eventIds.length}`);
+  const turns = eventIds.map((eventId, index) => ({
+    event_id: eventId,
     document_id: documentId,
-    item_id: `event-${suffix}`,
+    item_id: eventId,
     sequence: index + 1,
     role: "user",
     timestamp: null,
@@ -359,7 +362,7 @@ async function privacyAuthority(root, suffixes = ["a", "b"], documentId = "doc-c
   }));
   await json(join(redacted, `${documentId}.json`), {
     trajectory: documentId,
-    document_kind: "trajectory",
+    document_kind: documentKind,
     turns,
     chars: text.length * turns.length,
   });
@@ -369,7 +372,7 @@ async function privacyAuthority(root, suffixes = ["a", "b"], documentId = "doc-c
     per_trajectory: [{ trajectory: documentId, turns: turns.length, applied: 0 }],
     receiptDigest: "0".repeat(64),
   });
-  return { redacted, report };
+  return { redacted, report, eventIds };
 }
 
 async function createFlow({
@@ -384,6 +387,8 @@ async function createFlow({
   insightSuffixes = suffixes,
   reverseManifests = false,
   deferPreferenceRecord = false,
+  documentKind = "trajectory",
+  preferenceEvidenceCount = 1,
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "story-public-transport-"));
   const semantic = semanticAuthority({ suffixes, projectId, kinds });
@@ -435,7 +440,16 @@ async function createFlow({
   const candidates = join(root, "story-candidates.json");
   runOk(process.execPath, [prepare, "compose", "final", transport, candidates]);
 
-  const privacy = await privacyAuthority(root, suffixes, documentId);
+  const privacy = await privacyAuthority(root, suffixes, documentId, documentKind, preferenceEvidenceCount);
+  if (preferenceEvidenceCount > suffixes.length) {
+    const rows = await readJson(candidates);
+    const first = JSON.parse(rows[0].summary.slice("oxygen.story:".length));
+    first.insights[0].evidence = privacy.eventIds.slice(suffixes.length).map((eventId) => ({
+      documentId, eventId,
+    }));
+    rows[0].summary = `oxygen.story:${JSON.stringify(first)}`;
+    await json(candidates, rows);
+  }
   const preferenceContext = join(root, "preference-context.json");
   runOk("python", [preparePreferenceContext,
     "--story-candidates", candidates,
@@ -471,8 +485,8 @@ async function createFlow({
     probes: [{
       id: "probe-canary",
       documentId,
-      documentKind: "trajectory",
-      eventIds: [`event-${suffixes[0]}`],
+      documentKind,
+      eventIds: privacy.eventIds.slice(0, preferenceEvidenceCount),
       timestamp: null,
       signal: "explicit_rule",
       score: 80,
@@ -856,6 +870,55 @@ test("public commands bind zero Insight/Preference and zero-candidate total Priv
   } finally {
     await flow.cleanup();
   }
+});
+
+test("lab_notebook crosses real Preference preparation, record, and finalization", async () => {
+  const flow = await createFlow({ documentKind: "lab_notebook" });
+  try {
+    const bundle = await readJson(flow.preferenceBundle);
+    assert.equal(bundle.probes[0].documentKind, "lab_notebook");
+    assert.equal((await readJson(flow.preparationManifest)).receipts.find((receipt) => (
+      receipt.lane === "preference"
+    )).outputCount, 1);
+  } finally { await flow.cleanup(); }
+});
+
+test("Preference recorder accepts 20 questions and 500 evidence IDs, rejecting 21 and 501 before receipt", async () => {
+  const flow = await createFlow({ deferPreferenceRecord: true, preferenceEvidenceCount: 500 });
+  try {
+    const shard = flow.preferenceManifest.shards[0];
+    const recordRoot = join(flow.transport, "preference", "records", shard.id);
+    const outputPath = join(recordRoot, "output.json");
+    const receiptPath = join(recordRoot, "receipt.json");
+    const original = await readJson(flow.preferenceBundle);
+    const eventIds = original.probes[0].eventIds;
+    const probes = [{ ...structuredClone(original.probes[0]), id: "probe-00" }];
+    const bulkDecisions = Array.from({ length: 19 }, (_, index) => ({
+      id: `bulk-${String(index).padStart(2, "0")}`, kind: "privacy", count: 1,
+      question: `Keep reviewed group ${index}?`, evidenceSample: eventIds, presentations: {},
+    }));
+    const accepted = { ...original, probes, bulkDecisions, outputCount: 20 };
+    accepted.outputDigest = digest(canonicalPreferenceQuestionBatch(probes, bulkDecisions));
+    const invalid = [
+      (value) => { value.probes[0].eventIds.push("event-501"); },
+      (value) => { value.bulkDecisions[0].evidenceSample.push("event-501"); },
+      (value) => { value.bulkDecisions.push({ ...structuredClone(value.bulkDecisions[0]), id: "bulk-20" }); value.outputCount = 21; },
+    ];
+    for (const mutate of invalid) {
+      const candidate = structuredClone(accepted);
+      mutate(candidate);
+      candidate.outputDigest = digest(canonicalPreferenceQuestionBatch(candidate.probes, candidate.bulkDecisions));
+      await json(flow.preferenceBundle, candidate);
+      const rejected = run(process.execPath, [record, flow.transport, "preference", shard.id,
+        flow.preferenceBundle]);
+      assert.notEqual(rejected.status, 0);
+      assert.equal(existsSync(outputPath), false);
+      assert.equal(existsSync(receiptPath), false);
+    }
+    await json(flow.preferenceBundle, accepted);
+    runOk(process.execPath, [record, flow.transport, "preference", shard.id, flow.preferenceBundle]);
+    assert.equal((await readJson(receiptPath)).outputCount, 20);
+  } finally { await flow.cleanup(); }
 });
 
 test("Preference recorder rejects zero before receipt, accepts corrected authority, and stays immutable", async () => {

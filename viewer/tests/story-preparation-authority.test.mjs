@@ -436,13 +436,13 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       (id,story_generation_status,story_source_revision,created_at,updated_at)
       VALUES (?,'running',?,?,?)`).bind(RUN_ID, SOURCE_REVISION, "2039-01-01", "2039-01-01").run();
     await db.prepare(`INSERT INTO documents
-      (id,kind,title,item_count,imported_at,updated_at) VALUES (?,'trajectory','Synthetic',1,?,?)`)
+      (id,kind,title,item_count,imported_at,updated_at) VALUES (?,'lab_notebook','Synthetic',1,?,?)`)
       .bind("doc", "2039-01-01", "2039-01-01").run();
     await db.prepare(`INSERT INTO items
       (id,document_id,sequence,content,original_json) VALUES (?,?,1,'Synthetic event','{}')`)
       .bind("doc:event", "doc").run();
     const probeAuthority = {
-      id: "probe-1", documentId: "doc", documentKind: "trajectory", eventIds: ["doc:event"],
+      id: "probe-1", documentId: "doc", documentKind: "lab_notebook", eventIds: ["doc:event"],
       timestamp: null, signal: "explicit_rule", score: 3, turns: 2,
       recap: "A contributor stated a rule.", question: "Keep this rule?",
       options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }], presentations: {},
@@ -520,6 +520,8 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       (candidate) => { candidate.probes[0].eventIds = ["foreign:event"]; },
       (candidate) => { candidate.bulkDecisions[0].evidenceSample = ["foreign:event"]; },
       (candidate) => { candidate.probes[0].documentKind = "meeting"; },
+      (candidate) => { candidate.probes[0].documentKind = "Lab_notebook"; },
+      (candidate) => { candidate.probes[0].documentKind = "lab-notebook"; },
       (candidate) => { candidate.setAside = Number.MAX_SAFE_INTEGER + 1; },
       (candidate) => { candidate.autoRemoved.reversible = false; },
       (candidate) => { candidate.autoRemoved = {
@@ -620,6 +622,44 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       method: "POST", body: JSON.stringify(stale),
     }))).status, 409);
     assert.deepEqual(await sqliteSnapshot(db), zeroState);
+
+    const eventIds = ["doc:event", ...Array.from({ length: 499 }, (_, index) => `doc:event-${index + 1}`)];
+    await db.batch(eventIds.slice(1).map((eventId, index) => db.prepare(`INSERT INTO items
+      (id,document_id,sequence,content,original_json) VALUES (?,?,?,'Synthetic event','{}')`)
+      .bind(eventId, "doc", index + 2)));
+    const boundedProbe = { ...clone(probeAuthority), id: "probe-500", eventIds };
+    const boundedBulk = Array.from({ length: 19 }, (_, index) => ({
+      ...clone(bulkAuthority), id: `bulk-${String(index).padStart(2, "0")}`,
+      question: `Keep reviewed group ${index}?`, evidenceSample: eventIds,
+    }));
+    const bounded = {
+      ...clone(payload), probes: [boundedProbe], bulkDecisions: boundedBulk,
+      outputCount: 20, setAside: 0,
+    };
+    bounded.outputDigest = await preparation.storyPreparationDigest(
+      preparation.canonicalPreferenceQuestionBatch(bounded.probes, bounded.bulkDecisions),
+    );
+    assert.equal((await route.POST(new Request("http://localhost/api/probes", {
+      method: "POST", body: JSON.stringify(bounded),
+    }))).status, 200);
+    const boundedState = await sqliteSnapshot(db);
+    assert.equal(boundedState.probes.length + boundedState.bulk.length, 20);
+    for (const mutate of [
+      (candidate) => { candidate.probes[0].eventIds.push("doc:event-500"); },
+      (candidate) => { candidate.bulkDecisions[0].evidenceSample.push("doc:event-500"); },
+      (candidate) => { candidate.bulkDecisions.push({ ...clone(candidate.bulkDecisions[0]), id: "bulk-20" }); },
+    ]) {
+      const invalid = clone(bounded);
+      mutate(invalid);
+      invalid.outputCount = invalid.probes.length + invalid.bulkDecisions.length;
+      invalid.outputDigest = await preparation.storyPreparationDigest(
+        preparation.canonicalPreferenceQuestionBatch(invalid.probes, invalid.bulkDecisions),
+      );
+      assert.equal((await route.POST(new Request("http://localhost/api/probes", {
+        method: "POST", body: JSON.stringify(invalid),
+      }))).status, 400);
+      assert.deepEqual(await sqliteSnapshot(db), boundedState);
+    }
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
     delete globalThis.__oxygenLocalSqlite;
