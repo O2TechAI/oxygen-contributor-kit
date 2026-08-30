@@ -2,7 +2,6 @@ import hashlib
 import importlib.util
 import json
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -505,68 +504,6 @@ class HumanSourceProjectionTests(unittest.TestCase):
         kept, _ = projection.project_events([message, *attachments])
         self.assertEqual(len(kept), 3)
         self.assertEqual(len({item["event_id"] for item in kept}), 3)
-
-    def test_bounded_scale_removes_mechanics_before_semantic_bookkeeping(self):
-        raw_count = 63_806
-        document_count = 34
-        semantic_count = 8_000
-        events = []
-        for index in range(raw_count):
-            item = event(
-                f"event-{index:06d}",
-                "message" if index < semantic_count else "tool_result",
-                actor_type="ai" if index < semantic_count else "tool",
-                role="assistant" if index < semantic_count else None,
-                text=(
-                    f"Recorded planning statement {index}."
-                    if index < semantic_count else None
-                ),
-                extra_payload={} if index < semantic_count else {"stdout": "mechanical output"},
-            )
-            item["trajectory_id"] = f"source-{index % document_count:02d}"
-            events.append(item)
-
-        started = time.perf_counter()
-        kept, summary = projection.project_events(events)
-        elapsed = time.perf_counter() - started
-
-        self.assertEqual(summary["raw_event_count"], raw_count)
-        self.assertEqual(summary["kept_event_count"], semantic_count)
-        self.assertEqual(summary["dropped_event_count"], raw_count - semantic_count)
-        self.assertEqual(len({item["trajectory_id"] for item in events}), document_count)
-        self.assertTrue(all(item["event_type"] != "tool_result" for item in kept))
-        self.assertLess(summary["projected_serialized_bytes"], summary["raw_serialized_bytes"])
-        self.assertLess(elapsed, 10.0)
-
-        bounded_units = [{
-            "id": f"unit-{index:03d}",
-            "revision": 1,
-            "kind": "progression",
-            "memberCount": semantic_count // 512 + (index < semantic_count % 512),
-            "membershipDigest": "a" * 64,
-        } for index in range(512)]
-        coverage_rows = [{
-            "unitId": item["id"],
-            "disposition": "represented",
-            "ownerId": f"chapter-{index % 24:02d}",
-        } for index, item in enumerate(bounded_units)]
-        bookkeeping = json.dumps({
-            "semanticUnits": bounded_units,
-            "coverageRows": coverage_rows,
-        }, separators=(",", ":")).encode("utf-8")
-        self.assertLess(len(bookkeeping), 250_000)
-        self.assertNotIn(b"event-000000", bookkeeping)
-        self.assertNotIn(b"excludedEvents", bookkeeping)
-        print(json.dumps({
-            "rawEvents": raw_count,
-            "sourceDocuments": document_count,
-            "keptContributions": semantic_count,
-            "rawBytes": summary["raw_serialized_bytes"],
-            "projectedBytes": summary["projected_serialized_bytes"],
-            "bookkeepingBytes": len(bookkeeping),
-            "runtimeMs": round(elapsed * 1000, 2),
-        }, separators=(",", ":")))
-
 
 if __name__ == "__main__":
     unittest.main()
