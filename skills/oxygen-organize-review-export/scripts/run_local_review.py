@@ -1804,7 +1804,7 @@ def main():
     if run:
         locate_inputs(run)
     if target and not target.is_dir():
-        raise SystemExit(f"Working folder not found: {target}")
+        raise SystemExit("WORKING_FOLDER_INVALID")
 
     install_signal_handlers()
     reservation = reserve_free_port() if args.port is None else None

@@ -255,6 +255,22 @@ def state_file_bytes(state: Path) -> dict[str, bytes]:
 
 
 class LauncherUnitTest(unittest.TestCase):
+    def test_missing_target_uses_fixed_safe_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "HOSTILE_SENTINEL_https_example.invalid_exception-body"
+            result = subprocess.run(
+                [sys.executable, str(MODULE_PATH), "--target", str(missing)],
+                capture_output=True, text=True, encoding="utf-8", check=False,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "WORKING_FOLDER_INVALID\n")
+        self.assertTrue(all(fragment not in result.stderr for fragment in (
+            str(missing), "HOSTILE_SENTINEL", "example.invalid", "Traceback",
+            "FileNotFoundError", "No such file or directory", "cannot find",
+        )))
+
     def test_complete_viewer_state_and_locator_survive_save(self):
         rows = [
             ("workflow", b"complete\x00workflow"),
