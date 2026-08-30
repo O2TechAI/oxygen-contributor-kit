@@ -3,10 +3,10 @@
 
 - Audio input: first runs transcribe_diarize.py locally (CPU ASR + optional
   speaker diarization), then imports the resulting transcript.
-- Text input, three accepted shapes (auto-detected):
+- Text input, accepted shapes are auto-detected:
     1. "M:SSSpeaker A text"      (Oxygen timestamped format)
     2. "Speaker A: text" / "说话人0: text" / "张三: text"
-    3. plain lines (no speaker structure)
+    3. "[Speaker A] 9:05 AM" followed by body lines; plain lines are also accepted
 
 Every source is stored under the explicitly requested run directory:
     meetings/<meeting-id>/meeting.json     canonical records
@@ -19,6 +19,7 @@ Everything is marked contains_unredacted_source_text=true / publication_approved
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import datetime as dt
 import json
 import re
@@ -40,6 +41,16 @@ SPEAKER_RE = re.compile(
 SPEAKER_LABEL_RE = re.compile(
     r"^[^\W_]+(?:[.'’\-][^\W_]+)*(?: +[^\W_]+(?:[.'’\-][^\W_]+)*)*$"
 )
+SPEAKER_TIME_LABEL_WORD = r"[^\W_]+(?:[.'’\-][^\W_]+)*"
+SPEAKER_TIME_LABEL_RE = re.compile(
+    rf"^{SPEAKER_TIME_LABEL_WORD}(?: +{SPEAKER_TIME_LABEL_WORD})*(?: +\({SPEAKER_TIME_LABEL_WORD}(?: +{SPEAKER_TIME_LABEL_WORD})*\))?$"
+)
+WALL_CLOCK = (
+    r"(?:0?[1-9]|1[0-2]):[0-5]\d(?::[0-5]\d)?[ \t]*(?:AM|PM|am|pm)"
+    r"|(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?"
+)
+SPEAKER_TIME_HEADER_RE = re.compile(rf"^(.+?)[ \t]+({WALL_CLOCK})$")
+CLOCKISH_HEADER_RE = re.compile(r"^(.+?)[ \t]+\d{1,2}:\d{0,2}(?::\d{0,2})?(?:[ \t]*[A-Za-z]{0,2})?$")
 NON_SPEAKER_LABELS = {
     "agenda", "answer", "author", "created", "date", "description", "duration", "file",
     "id", "key", "language", "location", "meeting id", "meeting title", "metadata", "name",
@@ -50,6 +61,10 @@ NON_SPEAKER_LABELS = {
 NON_SPEAKER_FIRST_WORDS = {"action", "chapter", "meeting", "phase", "project", "section", "step"}
 MEETING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 MEETING_ID_DIGEST_LENGTH = 64
+STRUCTURAL_FAILURE_CODE = "MEETING_TRANSCRIPT_STRUCTURE_INVALID"
+
+class MeetingStructureError(ValueError):
+    pass
 
 
 def run_asr(audio: Path, scratch: Path, model: str, language: str | None,
@@ -123,8 +138,122 @@ def match_speaker_line(line: str) -> tuple[str | None, str, str] | None:
     return timestamp, label, body
 
 
+def _speaker_time_label(raw_label: str) -> tuple[str, bool, str] | None:
+    label = raw_label.strip(" ")
+    bracketed = "[" in label or "]" in label
+    valid_wrapper = (label.startswith("[") and label.endswith("]")
+                     and label.count("[") == 1 and label.count("]") == 1)
+    if bracketed and not valid_wrapper:
+        raise MeetingStructureError
+    if bracketed:
+        label = label[1:-1]
+    valid = (label and len(label) <= 64 and any(character.isalpha() for character in label)
+             and SPEAKER_TIME_LABEL_RE.fullmatch(label))
+    words = re.findall(r"[^\W_]+", label)
+    valid = valid and bool(words)
+    cased_words = [word for word in words if any(character.islower() for character in word)]
+    role = bool(re.match(r"^(?:Speaker(?: +|\d)|说话人(?: +|\d))", label))
+    valid = valid and (role or not any(word[0].islower() for word in cased_words))
+    if not valid:
+        if bracketed:
+            raise MeetingStructureError
+        return None
+    return label, bracketed or role or label.endswith(")"), unicodedata.normalize("NFC", " ".join(label.split()))
+
+
+def match_speaker_time_header(line: str) -> tuple[str, str, bool, str] | None:
+    match = SPEAKER_TIME_HEADER_RE.fullmatch(line)
+    if (not match
+            or any(unicodedata.category(character) == "Cc" for character in line)):
+        return None
+    raw_label, timestamp = match.groups()
+    parsed = _speaker_time_label(raw_label)
+    if not parsed:
+        return None
+    return parsed[0], timestamp, *parsed[1:]
+
+
+def _clock_order(timestamp: str) -> dt.time:
+    value = timestamp.upper().replace(" ", "").replace("\t", "")
+    period_format = "%p" if value.endswith(("AM", "PM")) else ""
+    date_format = ("%I" if period_format else "%H") + ":%M"
+    date_format += (":%S" if value.count(":") == 2 else "") + period_format
+    return dt.datetime.strptime(value, date_format).time()
+
+
+def parse_speaker_time_layout(text: str) -> tuple[list[dict], str] | None:
+    lines = list(enumerate(text.splitlines(), 1))
+    headers: dict[int, tuple[str, str, bool, str]] = {}
+    clockish: list[tuple[int, str, bool, str]] = []
+    for number, line in ((number, line.strip()) for number, line in lines if line.strip()):
+        header = match_speaker_time_header(line)
+        if header:
+            headers[number] = header
+            continue
+        match = CLOCKISH_HEADER_RE.fullmatch(line)
+        if match and (parsed := _speaker_time_label(match.group(1))):
+            clockish.append((number, *parsed))
+
+    label_counts = Counter(header[3] for header in headers.values())
+    activated = (any(header[2] for header in headers.values())
+                 or any(count >= 2 for count in label_counts.values()))
+    candidate_lines = set(headers) | {item[0] for item in clockish}
+    if not activated:
+        if any(item[2] for item in clockish) or len(candidate_lines) > 1:
+            raise MeetingStructureError
+        if not candidate_lines: return None
+        records = [
+            {"timestamp": None, "speaker": None, "text": line.strip(), "source_line": number}
+            for number, line in lines if line.strip()
+        ]
+        return records, "plain"
+    if clockish: raise MeetingStructureError
+    if any(not header[2] and label_counts[header[3]] < 2 for header in headers.values()):
+        raise MeetingStructureError
+
+    records: list[dict] = []
+    current: dict | None = None
+    body: list[str] = []
+    for number, raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        header = headers.get(number)
+        if header:
+            if current is not None:
+                if not body:
+                    raise MeetingStructureError
+                current["text"] = "\n".join(body)
+                records.append(current)
+            speaker, timestamp, _, _ = header
+            current = {"timestamp": timestamp, "speaker": speaker, "source_line": number}
+            body = []
+            continue
+        if current is None:
+            raise MeetingStructureError
+        if TIMESTAMPED_RE.match(line) or match_speaker_line(line):
+            raise MeetingStructureError
+        body.append(raw_line)
+
+    if current is None or not body:
+        raise MeetingStructureError
+    current["text"] = "\n".join(body)
+    records.append(current)
+    clocks = [_clock_order(record["timestamp"]) for record in records]
+    if any(left > right for left, right in zip(clocks, clocks[1:])):
+        raise MeetingStructureError
+    return records, "speaker-time"
+
+
 def parse_lines(text: str) -> tuple[list[dict], str]:
     """Return (records, detected_format)."""
+    speaker_time = parse_speaker_time_layout(text)
+    if speaker_time is not None:
+        records, detected = speaker_time
+        for order, record in enumerate(records, 1):
+            record["record_id"] = f"rec-{order:05d}"
+            record["order"] = order
+        return records, detected
     records: list[dict] = []
     source_lines = [
         (number, line) for number, line in enumerate(text.splitlines(), 1) if line.strip()
@@ -181,8 +310,6 @@ def generated_meeting_id(source: Path) -> str:
 
 
 def import_source(source: Path, out: Path, meeting_id: str, title: str, date: str, args) -> dict:
-    out.mkdir(parents=True, exist_ok=True)
-
     if source.suffix.lower() in AUDIO_SUFFIXES:
         progress(2, "asr", f"audio input — running local transcription for {source.name}")
         scratch_root = Path(tempfile.gettempdir()).resolve()
@@ -196,10 +323,11 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
     else:
         transcript = source.read_text(encoding="utf-8")
 
-    progress(75, "parse", f"parsing {source.name}")
     records, detected = parse_lines(transcript)
     if not records:
         raise fail("no content found in transcript")
+    out.mkdir(parents=True, exist_ok=True)
+    progress(75, "parse", f"parsing {source.name}")
     speakers = sorted({r["speaker"] for r in records if r["speaker"]})
     progress(85, "write", f"format={detected}, {len(records)} records, {len(speakers)} speakers")
 
@@ -283,13 +411,17 @@ def main(argv=None) -> int:
     except ValueError as error:
         raise fail(str(error)) from error
     results = []
-    for source, meeting_id in zip(sources, meeting_ids):
-        out = (base_out / "meetings" / meeting_id).resolve()
-        if not out.is_relative_to(base_out):
-            raise fail("meeting output must remain inside the requested run")
-        results.append(import_source(
-            source, out, meeting_id, args.title or source.stem, date, args
-        ))
+    try:
+        for source, meeting_id in zip(sources, meeting_ids):
+            out = (base_out / "meetings" / meeting_id).resolve()
+            if not out.is_relative_to(base_out):
+                raise fail("meeting output must remain inside the requested run")
+            results.append(import_source(
+                source, out, meeting_id, args.title or source.stem, date, args
+            ))
+    except MeetingStructureError:
+        print(STRUCTURAL_FAILURE_CODE, file=sys.stderr)
+        return 1
 
     print(json.dumps({"output": str(base_out), "meeting_count": len(results),
                       "meetings": results}, ensure_ascii=False))
