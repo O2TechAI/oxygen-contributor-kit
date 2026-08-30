@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import datetime as dt
+import hashlib
 import json
 import re
 import subprocess
@@ -32,6 +33,10 @@ from pathlib import Path
 from oxygen_common import (configure_utf8_stdio, fail, progress, safe_slug, sha256_file,
                            text_subprocess_options, utc_now, validate_output_root, write_json)
 from human_source_projection import MEETING_SCHEMA
+from meeting_interpretation import (DETECTED_FORMAT as INTERPRETED_FORMAT,
+                                    InterpretationError, classify_plain_structure,
+                                    finish_success, interpret_or_prepare,
+                                    legacy_override_structure)
 
 AUDIO_SUFFIXES = {".m4a", ".wav", ".mp3", ".flac", ".ogg", ".aac", ".mp4"}
 TIMESTAMPED_RE = re.compile(r"^(\d{1,3}:\d{2})Speaker\s+([A-Z])\s*(.*)$")
@@ -310,6 +315,9 @@ def generated_meeting_id(source: Path) -> str:
 
 
 def import_source(source: Path, out: Path, meeting_id: str, title: str, date: str, args) -> dict:
+    interpreted = False
+    interpretation_plan_digest = None
+    preparation = None
     if source.suffix.lower() in AUDIO_SUFFIXES:
         progress(2, "asr", f"audio input — running local transcription for {source.name}")
         scratch_root = Path(tempfile.gettempdir()).resolve()
@@ -320,10 +328,23 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
                 source, Path(temporary), args.model, args.language, args.hf_token
             )
             transcript = text_path.read_text(encoding="utf-8")
+        source_bytes = None
     else:
-        transcript = source.read_text(encoding="utf-8")
+        source_bytes = source.read_bytes()
+        transcript = source_bytes.decode("utf-8")
 
     records, detected = parse_lines(transcript)
+    override = source_bytes is not None and legacy_override_structure(transcript)
+    if source_bytes is not None and (detected == "plain" or override):
+        remaining = "unsupported" if override else classify_plain_structure(transcript)
+        if remaining == "invalid":
+            raise MeetingStructureError
+        if remaining == "unsupported":
+            records, interpretation_plan_digest, preparation = interpret_or_prepare(
+                source_bytes, out.parents[1]
+            )
+            detected = INTERPRETED_FORMAT
+            interpreted = True
     if not records:
         raise fail("no content found in transcript")
     out.mkdir(parents=True, exist_ok=True)
@@ -331,7 +352,7 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
     speakers = sorted({r["speaker"] for r in records if r["speaker"]})
     progress(85, "write", f"format={detected}, {len(records)} records, {len(speakers)} speakers")
 
-    write_json(out / "meeting.json", {
+    dataset = {
         "schema": MEETING_SCHEMA,
         "tool": "import_meeting",
         "meeting_id": meeting_id,
@@ -346,7 +367,14 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
         "review_status": "pending",
         "publication_approved": False,
         "records": records,
-    })
+    }
+    if interpreted:
+        dataset.pop("generated_at")
+        dataset.update(
+            source_digest=hashlib.sha256(source_bytes).hexdigest(),
+            interpretation_plan_digest=interpretation_plan_digest,
+        )
+    write_json(out / "meeting.json", dataset)
 
     body = [f"# Raw Transcript — {date} {title}", "",
             f"> Meeting ID: {meeting_id}", f"> Recorded at: {date}",
@@ -367,6 +395,12 @@ def import_source(source: Path, out: Path, meeting_id: str, title: str, date: st
                 handle.write(f"{record['timestamp']}Speaker {record['speaker']}{record['text']}\n")
             elif record["speaker"]:
                 handle.write(f"{record['speaker']}: {record['text']}\n")
+
+    if preparation is not None:
+        try:
+            finish_success(preparation)
+        except OSError:
+            pass
 
     progress(100, "done", f"{len(records)} records ({detected}) -> {out}")
     return {"output": str(out), "meeting_id": meeting_id,
@@ -419,7 +453,10 @@ def main(argv=None) -> int:
             results.append(import_source(
                 source, out, meeting_id, args.title or source.stem, date, args
             ))
-    except MeetingStructureError:
+    except (MeetingStructureError, InterpretationError) as error:
+        if isinstance(error, InterpretationError):
+            print(error.code, file=sys.stderr)
+            return 1
         print(STRUCTURAL_FAILURE_CODE, file=sys.stderr)
         return 1
 

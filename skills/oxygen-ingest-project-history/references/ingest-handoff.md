@@ -38,4 +38,13 @@ Every ingest command requires an explicit local `--out`. For meetings, each sour
 stable meeting ID and records; transcript contents are never concatenated. With exactly one source,
 `--meeting-id` and `--title` can override its generated identity and source-derived title.
 
+Unknown repeated speaker/body layouts use one source-bound preparation directory under
+`.meeting-interpretation/<source-sha256>/`. `state.json` is importer-owned, content-free correction
+state; the workflow Agent may write only `proposal.json`. The plan is source-independent and
+declarative: exact bounded literals plus closed field order. The importer binds raw-byte SHA-256,
+validates and canonicalizes the plan, owns all extraction and record identity, and removes only
+that preparation directory after successful canonical publication. Invalid or exhausted plans
+leave `meetings/<meeting-id>/` absent. Known formats, malformed known-family evidence, and ordinary
+plain notes retain their existing deterministic paths.
+
 All outputs default to `review_status=pending` and `publication_approved=false`.

@@ -42,6 +42,35 @@ python3 tools/ingest/import_meeting.py meeting-a.txt meeting-b.txt \
   --out work/meeting-run
 ```
 
+The meeting importer always tries its deterministic known formats and ordinary plain notes first.
+If it returns only `MEETING_TRANSCRIPT_STRUCTURE_UNSUPPORTED`, the currently selected workflow
+Agent may inspect that contributor-approved text source and write one declarative proposal at:
+
+```text
+<out>/.meeting-interpretation/<source-sha256>/proposal.json
+```
+
+The proposal has exactly `sourceDigest`, `recordForm`, `prefix`, `separator`, `suffix`, `fields`,
+and `blankLines`. It describes inert exact literals and a closed field order; it contains no
+records, code, regex, commands, paths, transformations, provider choice, or instructions. Rerun
+the same importer with the same source and output root. The importer alone validates the proposal,
+derives canonical records from the source, and publishes the meeting.
+
+For `header_body`, `fields` is `["speaker"]`, `["speaker","timestamp"]`, or
+`["timestamp","speaker"]`; physical content through the next exact header is the body. For `row`,
+`fields` is a permutation with exactly one `speaker`, one `body`, and optionally one `timestamp`.
+Use `blankLines` as `body` or `record_separator` (`row` requires `record_separator`). The three
+literal tokens are bounded exact UTF-8 matchers without line breaks or controls other than a tab
+used as the row separator, never executable syntax; fixed alphabetic labels such as `Speaker: `
+are allowed.
+
+Only `MEETING_INTERPRETATION_PROPOSAL_INVALID` permits replacing `proposal.json`, using the same
+Agent and byte-identical source, for at most two corrections after the initial proposal. Rerun the
+same importer after each replacement. `MEETING_INTERPRETATION_EXHAUSTED` pauses Collect and asks the
+contributor; do not report a generic security failure. Missing proposals consume no attempt, and
+state/authority failures are not correctable. Never switch provider, write parser code, or enter
+Organize while interpretation remains unresolved.
+
 On native Windows PowerShell:
 
 ```powershell
