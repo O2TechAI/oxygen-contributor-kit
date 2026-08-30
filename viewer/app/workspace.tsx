@@ -388,15 +388,17 @@ export function InlineWorkspace({
   const [probes,setProbes] = useState<Probe[]>([]);
   const [bulkDecisions,setBulkDecisions] = useState<BulkDecision[]>([]);
   const [probeRun,setProbeRun] = useState<ProbeRun>(null);
+  const [preferenceLifecycleCurrent,setPreferenceLifecycleCurrent] = useState(false);
   const [probeBusy,setProbeBusy] = useState("");
   const probeRunStatus = probeRun?.status;
 
   const loadProbes = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch("/api/probes", { cache:"no-store", ...(signal ? { signal } : {}) });
     if (!response.ok) return;
-    const payload = await response.json() as { probes: Probe[]; bulkDecisions: BulkDecision[]; run: ProbeRun };
+    const payload = await response.json() as { lifecycleCurrent:boolean; probes: Probe[]; bulkDecisions: BulkDecision[]; run: ProbeRun };
     if (signal?.aborted) return;
     setProbes(payload.probes || []);
+    setPreferenceLifecycleCurrent(payload.lifecycleCurrent===true);
     setBulkDecisions(payload.bulkDecisions || []);
     setProbeRun(payload.run);
   }, []);
@@ -923,7 +925,10 @@ export function InlineWorkspace({
     }));
   const allCurrentChaptersConfirmed = storySelection.chapters.length > 0
     && currentDownloadReviewBlockerGroups().length === 0;
-  const allCurrentPreferencesComplete = projectReleaseConfirmationPreferencesComplete(probeRun, probes, bulkDecisions);
+  const allCurrentPreferencesComplete = preferenceLifecycleCurrent && !probes.some((probe) =>
+    probe.lifecycle_status !== "active" && probe.lifecycle_status !== "inactive" && probe.lifecycle_status !== "history")
+    && ((probes: Probe[]) => projectReleaseConfirmationPreferencesComplete(probeRun, probes, bulkDecisions))
+      (probes.filter((probe) => probe.lifecycle_status === "active"));
   const releaseConfirmed = workflow.releaseConfirmed === true;
   const releaseConfirmationBusy = releaseConfirmationBusyRunId === workflowRunId;
   const releaseConfirmationEligible = allCurrentChaptersConfirmed
@@ -934,6 +939,7 @@ export function InlineWorkspace({
     && storySessionReadyRunId === workflowRunId
     && storyPersistenceReadyRunId === workflowRunId;
   const projectReleaseReady = releaseConfirmed && releaseConfirmationEligible && !releaseConfirmationBusy;
+  const activePreferences=probes.filter((probe)=>probe.lifecycle_status==="active");
   const confirmProjectRelease = async () => {
     setError("");
     if (!releaseConfirmationEligible || releaseConfirmed) {
@@ -1138,7 +1144,8 @@ export function InlineWorkspace({
                     ? ` · ${redactions.filter((span) => span.review_state === "needs_confirmation").length} pending` : ""}
             </button>
             <button className={view==="probes"?"active":""} onClick={() => { restoreReleasePreviewSelection(); setView("probes"); }}>
-              {labels.preferences}{probeRun?.status === "running" ? " · running" : probes.length ? ` · ${probes.filter((p) => p.answered_at).length}/${probes.length}` : ""}
+              {labels.preferences}{probeRun?.status==="running"?" · running"
+                :activePreferences.length?` · ${activePreferences.filter((probe)=>probe.answered_at).length}/${activePreferences.length}`:""}
             </button></div>
           </nav>
           {view!=="timeline" && <div className="canvasHead" aria-hidden={activeChapter?true:undefined} inert={activeChapter?true:undefined}><div className="canvasHeadInner">
@@ -1185,10 +1192,14 @@ export function InlineWorkspace({
             />) : view === "probes" ? <ProbePanel
               language={storyLanguage}
               run={probeRun}
+              lifecycleCurrent={preferenceLifecycleCurrent}
               probes={probes}
               bulkDecisions={bulkDecisions}
               busyId={probeBusy}
               onAnswer={answerProbe}
+              onReviewInsight={(storyKey,insightId) => {
+                setView("timeline");setDownloadReviewFocus({chapterKey:storyKey,targetKind:"insight",targetId:insightId});openStory(storyKey);
+              }}
             /> : <div className="sourceList">
               <p className="redactionNotice">
                 Showing the release version. Redacted spans are replaced here — open

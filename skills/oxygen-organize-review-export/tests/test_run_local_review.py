@@ -82,9 +82,16 @@ def write_index(run: Path, entries: list[dict]) -> None:
     )
 
 
+PREFERENCE_INSIGHT_BINDING = {
+    "storyKey": "chapter-a", "insightId": "insight-a",
+    "insightAuthorityDigest": "f" * 64,
+}
+
+
 def preference_probe(identifier="probe-a"):
     return {
-        "id": identifier, "documentId": "doc-a", "documentKind": "trajectory",
+        "id": identifier, **PREFERENCE_INSIGHT_BINDING,
+        "documentId": "doc-a", "documentKind": "trajectory",
         "eventIds": ["event-a"], "timestamp": None, "signal": "explicit_rule",
         "score": 90, "turns": 1, "recap": "A reviewed source set a boundary.",
         "question": "What should the agent remember?",
@@ -107,12 +114,13 @@ def bulk_decision(identifier="bulk-a"):
 def ready_authority(workflow_run_id="run-1", *, probes=None, bulk_decisions=None):
     probes = [preference_probe()] if probes is None else probes
     bulk_decisions = [] if bulk_decisions is None else bulk_decisions
+    insight_scope = [PREFERENCE_INSIGHT_BINDING.copy()] if probes else []
     output_count = len(probes) + len(bulk_decisions)
     preference = {
         "workflowRunId": workflow_run_id, "sourceRevision": 7,
         "inputDigest": "a" * 64, "outputDigest": "b" * 64,
         "outputCount": output_count, "setAside": 0,
-        "probes": probes, "bulkDecisions": bulk_decisions,
+        "insightScope": insight_scope, "probes": probes, "bulkDecisions": bulk_decisions,
         "autoRemoved": {"total": 0, "reversible": True, "categories": []},
     }
     receipt = lambda lane, **values: {
@@ -127,7 +135,8 @@ def ready_authority(workflow_run_id="run-1", *, probes=None, bulk_decisions=None
         "receipts": [
             receipt("story"), receipt("insight"), receipt("story_privacy"),
             receipt("preference", inputDigest=preference["inputDigest"],
-                    outputDigest=preference["outputDigest"], outputCount=output_count),
+                    scopeCount=len(insight_scope), outputDigest=preference["outputDigest"],
+                    outputCount=output_count),
         ],
     }
     return preference, preparation

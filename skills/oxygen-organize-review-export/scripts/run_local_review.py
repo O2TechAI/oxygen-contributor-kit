@@ -873,6 +873,19 @@ def _story_privacy_export_path(destination: Path) -> tuple[Path, Path]:
     return parent, output
 
 
+def _write_new_json(parent: Path, output: Path, value: dict, failure: str) -> None:
+    temporary = parent / f".{output.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp"
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            json.dump(value, handle, ensure_ascii=False, separators=(",", ":")); handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
+        rename_noreplace(temporary, output)
+    except FileExistsError: raise SystemExit(STORY_PRIVACY_EXPORT_EXISTS) from None
+    except (OSError, RuntimeError): raise SystemExit(failure) from None
+    finally:
+        try: temporary.unlink(missing_ok=True)
+        except OSError: pass
+
+
 def export_story_privacy_snapshot(
     base_url: str,
     workflow_run_id: str,
@@ -898,23 +911,7 @@ def export_story_privacy_snapshot(
         or not isinstance(changed_targets, list)
     ):
         raise SystemExit(VIEWER_RESPONSE_INVALID)
-    temporary = parent / f".{output.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp"
-    try:
-        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
-            json.dump(snapshot, handle, ensure_ascii=False, separators=(",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        rename_noreplace(temporary, output)
-    except FileExistsError:
-        raise SystemExit(STORY_PRIVACY_EXPORT_EXISTS) from None
-    except (OSError, RuntimeError):
-        raise SystemExit(STORY_PRIVACY_EXPORT_FAILED) from None
-    finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+    _write_new_json(parent, output, snapshot, STORY_PRIVACY_EXPORT_FAILED)
     result = {
         "story_privacy": "snapshot_exported",
         "workflow_run_id": workflow_run_id,
@@ -961,6 +958,35 @@ def import_story_privacy_bundle(
     }
     print(json.dumps(result, ensure_ascii=False), flush=True)
     return result
+
+
+def export_preference_regeneration(base_url: str, workflow_run_id: str, destination: Path) -> None:
+    workflow_run_id = _workflow_run_id(workflow_run_id)
+    parent, output = _story_privacy_export_path(destination)
+    url = f"{normalize_local_viewer_url(base_url)}/api/probes/regeneration?{urllib.parse.urlencode({'workflowRunId': workflow_run_id})}"
+    context = request_json(local_viewer_opener(), url)
+    binding = context.get("binding") if isinstance(context, dict) else None
+    if ((context.get("schema") if isinstance(context, dict) else None) != "oxygen.preference-regeneration-context"
+            or not isinstance(binding, dict) or binding.get("workflowRunId") != workflow_run_id):
+        raise SystemExit(VIEWER_RESPONSE_INVALID)
+    _write_new_json(parent, output, context, STORY_PRIVACY_EXPORT_FAILED)
+    print(json.dumps({"preference_regeneration": "context_exported", "workflow_run_id": workflow_run_id,
+                      "output": str(output)}, ensure_ascii=False), flush=True)
+
+
+def import_preference_regeneration(base_url: str, workflow_run_id: str, source: Path) -> None:
+    bundle = _read_json_object(_direct_unique_file(source.expanduser(), STORY_PRIVACY_IMPORT_INVALID))
+    binding = bundle.get("binding")
+    if (bundle.get("schema") != "oxygen.preference-regeneration-import" or not isinstance(binding, dict)
+            or binding.get("workflowRunId") != _workflow_run_id(workflow_run_id)):
+        raise SystemExit(STORY_PRIVACY_IMPORT_INVALID)
+    result = request_json(local_viewer_opener(), f"{normalize_local_viewer_url(base_url)}/api/probes/regeneration", method="POST", body=bundle)
+    if (not isinstance(result, dict) or set(result) != {"workflowRunId", "status", "regenerated"}
+            or result.get("workflowRunId") != binding["workflowRunId"]
+            or result.get("status") != "complete"
+            or not _nonnegative_integer(result.get("regenerated"))):
+        raise SystemExit(VIEWER_RESPONSE_INVALID)
+    print(json.dumps({"preference_regeneration": "bundle_imported", **result}, ensure_ascii=False), flush=True)
 
 
 def resolve_contained_path(candidate: Path, approved_root: Path) -> Path:
@@ -1459,7 +1485,7 @@ STORY_WORKFLOW_EVENTS = {
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _PREFERENCE_BUNDLE_FIELDS = {
     "workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount",
-    "setAside", "probes", "bulkDecisions", "autoRemoved",
+    "setAside", "insightScope", "probes", "bulkDecisions", "autoRemoved",
 }
 _AUTO_REMOVED_FIELDS = {"total", "reversible", "categories"}
 _AUTO_REMOVED_CATEGORY_FIELDS = {"kind", "count"}
@@ -1670,6 +1696,8 @@ def main():
         "--story-privacy-import", type=Path,
         help="import one exact finalized reviewed Story Privacy refresh bundle",
     )
+    story_privacy_mode.add_argument("--preference-regeneration-export", type=Path)
+    story_privacy_mode.add_argument("--preference-regeneration-import", type=Path)
     parser.add_argument("--port", type=int)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--skip-install", action="store_true")
@@ -1685,7 +1713,7 @@ def main():
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    if args.story_privacy_export or args.story_privacy_import:
+    if args.story_privacy_export or args.story_privacy_import or args.preference_regeneration_export or args.preference_regeneration_import:
         if (
             args.run or args.target or args.story_event or args.save_state or args.resume_state
             or args.port is not None or args.no_browser or args.skip_install or args.smoke_test
@@ -1698,7 +1726,11 @@ def main():
                 "Story Privacy refresh requires --attach-url, --workflow-run-id, and exactly one export/import path"
             )
         base_url = normalize_local_viewer_url(args.attach_url)
-        if args.story_privacy_export:
+        if args.preference_regeneration_export:
+            export_preference_regeneration(base_url, args.workflow_run_id, args.preference_regeneration_export)
+        elif args.preference_regeneration_import:
+            import_preference_regeneration(base_url, args.workflow_run_id, args.preference_regeneration_import)
+        elif args.story_privacy_export:
             export_story_privacy_snapshot(
                 base_url, args.workflow_run_id, args.story_privacy_export,
             )

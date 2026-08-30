@@ -9,14 +9,19 @@ import {
   STORY_REVIEW_SESSION_SCHEMA,
   hydrateStoryReviewSession,
 } from "./story-review-session.ts";
-import { parseStoredStoryReviewSession } from "./story-review-session-server.ts";
+import {
+  parseStoredStoryReviewSession,
+  readActiveStoryReviewPackage,
+  readStoryReviewSessionRecord,
+} from "./story-review-session-server.ts";
 import {
   selectReservedStorySourceItems,
+  canonicalAuthorityJson,
   validateCurrentStorySourcePackage,
   type StoryCandidateRow,
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
-import { parseStorySource } from "./timeline.ts";
+import { parseStorySource, type StorySource } from "./timeline.ts";
 import { isWorkflowRunId } from "./workflow-progress.ts";
 import {
   captureStoryReleasePrivacySnapshot,
@@ -32,8 +37,117 @@ import {
   validActivatedSourceRevision,
   validNonnegativeAuthorityCounter,
 } from "./authority-validation.mjs";
+import {
+  insightAuthorityValue,
+  storyPreparationDigest,
+  type PreferenceInsightBinding,
+} from "./story-preparation.ts";
 
 type ReleaseDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
+
+export type PreferenceLifecycleStatus="active"|"inactive"|"needs_update"|"history"|"legacy";
+export type PreferenceQuestionBinding=PreferenceInsightBinding&{id:string;questionDigest:string};
+export type PreferenceLifecycleState={generationScope:PreferenceInsightBinding[];questions:PreferenceQuestionBinding[];history:Record<string,unknown>[]};
+export type PreferenceLifecycleRow={workflow_run_id?:string;source_revision?:number;active_story_digest?:string|null;
+  story_session_version?:number;state_json?:string;state_digest?:string;};
+const preferenceDigest=/^[0-9a-f]{64}$/u;
+const preferenceObject=(value:unknown):value is Record<string,unknown>=>Boolean(value)&&typeof value==="object"&&!Array.isArray(value);
+const preferenceExact=(value:Record<string,unknown>,keys:string[])=>Object.keys(value).length===keys.length&&keys.every((key)=>Object.hasOwn(value,key));
+const preferenceBinding=(value:unknown):value is PreferenceInsightBinding=>preferenceObject(value)
+  &&preferenceExact(value,["storyKey","insightId","insightAuthorityDigest"])
+  &&[value.storyKey,value.insightId].every((item)=>typeof item==="string"&&Boolean(item.trim()))&&typeof value.insightAuthorityDigest==="string"
+  &&preferenceDigest.test(value.insightAuthorityDigest);
+export const preferenceQuestionValue=(probe:Record<string,unknown>)=>({question:probe.question,
+  options:probe.options??JSON.parse(String(probe.options_json||"[]")),presentations:probe.presentations??JSON.parse(String(probe.presentations_json||"{}"))});
+export const preferenceQuestionDigest=(probe:Record<string,unknown>)=>storyPreparationDigest(preferenceQuestionValue(probe));
+export async function preferenceInsightScope(stories:StorySource[]){return Promise.all(stories.flatMap((story)=>story.insights.map(async(insight)=>({
+  storyKey:story.key,insightId:insight.id,insightAuthorityDigest:await storyPreparationDigest(insightAuthorityValue(story.key,insight))}))));}
+export async function createPreferenceLifecycleState(generationScope:PreferenceInsightBinding[],
+  probes:Array<PreferenceInsightBinding&{id:string;question:unknown;options?:unknown;presentations?:unknown}>,
+  history:Record<string,unknown>[]=[]) {
+  const questions=await Promise.all(probes.map(async(probe)=>({id:probe.id,storyKey:probe.storyKey,insightId:probe.insightId,
+    insightAuthorityDigest:probe.insightAuthorityDigest,questionDigest:await preferenceQuestionDigest(probe as Record<string,unknown>)})));
+  return {generationScope,questions,history};
+}
+export function parsePreferenceLifecycleState(value:unknown):PreferenceLifecycleState|null {
+  if(!preferenceObject(value)||!preferenceExact(value,["generationScope","questions","history"])
+    ||!Array.isArray(value.generationScope)||!value.generationScope.every(preferenceBinding)
+    ||!Array.isArray(value.questions)||!Array.isArray(value.history)||!value.history.every(preferenceObject))return null;
+  const questions:PreferenceQuestionBinding[]=[];for(const question of value.questions){
+    if(!preferenceObject(question))return null;
+    const binding={storyKey:question.storyKey,insightId:question.insightId,insightAuthorityDigest:question.insightAuthorityDigest};
+    if(!preferenceExact(question,["id","storyKey","insightId","insightAuthorityDigest","questionDigest"])
+      ||!preferenceBinding(binding)||typeof question.id!=="string"||!question.id.trim()
+      ||typeof question.questionDigest!=="string"||!preferenceDigest.test(question.questionDigest))return null;
+    questions.push(question as PreferenceQuestionBinding);
+  }
+  const scopeKeys=value.generationScope.map((item)=>`${item.storyKey}\0${item.insightId}`),questionKeys=questions.map(
+    (item)=>`${item.storyKey}\0${item.insightId}`);
+  if(new Set(scopeKeys).size!==scopeKeys.length||new Set(questionKeys).size!==questionKeys.length
+    ||new Set(questions.map((item)=>item.id)).size!==questions.length
+    ||questionKeys.some((key)=>!scopeKeys.includes(key)))return null;
+  return {generationScope:value.generationScope,questions,history:value.history};
+}
+export async function validatePreferenceLifecycleRow(row:PreferenceLifecycleRow|null,workflowRunId:string,sourceRevision:number,
+  activeStoryDigest:string|null){
+  if(!row||row.workflow_run_id!==workflowRunId||Number(row.source_revision)!==sourceRevision
+    ||row.active_story_digest!==activeStoryDigest||typeof row.state_json!=="string"
+    ||typeof row.state_digest!=="string"||!preferenceDigest.test(row.state_digest))return null;
+  try{const state=parsePreferenceLifecycleState(JSON.parse(row.state_json));return state&&await storyPreparationDigest(state)===row.state_digest
+    ?state:null;}catch{return null;}
+}
+export async function projectPreferenceLifecycle(stories:StorySource[],
+  reviews:ReturnType<typeof hydrateStoryReviewSession>["chapterReviews"]|null,
+  state:PreferenceLifecycleState,probes:Record<string,unknown>[]){
+  const ids=(values:PreferenceInsightBinding[])=>values.map(({storyKey,insightId})=>({storyKey,insightId}));
+  if(canonicalAuthorityJson(ids(await preferenceInsightScope(stories)))
+    !==canonicalAuthorityJson(ids(state.generationScope)))return null;
+  const byId=new Map(probes.map((probe)=>[String(probe.id),probe])),projected=[];
+  for(const question of state.questions){
+    const probe=byId.get(question.id),story=stories.find((item)=>item.key===question.storyKey),insight=story?.insights.find(
+      (item)=>item.id===question.insightId);if(!insight)return null;
+    const review=reviews?.[question.storyKey]?.sourceInsightReviews[question.insightId];
+    let status:PreferenceLifecycleStatus="inactive";
+    if(review?.decision==="accepted"&&review.resolution==="applied"&&review.appliedVersion===review.version){
+      const content=review.editedContent?{...insight,...review.editedContent,id:insight.id}:insight;
+      const current=await storyPreparationDigest(insightAuthorityValue(question.storyKey,content));
+      const questionCurrent=probe&&await preferenceQuestionDigest(probe)===question.questionDigest;
+      status=current===question.insightAuthorityDigest&&questionCurrent?"active":"needs_update";
+    }
+    projected.push({...probe,...question,lifecycle_status:status,lifecycle_key:`current:${question.id}`});
+  }
+  return projected;
+}
+const taggedPreference=(row:Record<string,unknown>,status:"history"|"legacy",key:string)=>
+  ({...row,lifecycle_status:status,lifecycle_key:key});
+export async function readCurrentPreferenceLifecycle(db:ReleaseDatabase,workflowRunId:string){
+  const queries=[readActiveStoryReviewPackage(db,workflowRunId),db.prepare(`SELECT workflow_run_id,source_revision,
+    active_story_digest,story_session_version,state_json,state_digest FROM preference_lifecycle_authorities
+    WHERE workflow_run_id=?`).bind(workflowRunId).first<PreferenceLifecycleRow>(),
+  readStoryReviewSessionRecord(db,workflowRunId),db.prepare("SELECT * FROM probes ORDER BY score DESC,created_at,id").all<Record<string,unknown>>(),
+  db.prepare("SELECT active_story_digest FROM workflow_runs WHERE id=?").bind(workflowRunId)
+    .first<{active_story_digest?:string}>()] as const;
+  const [{active,candidateRows,validation},row,record,probeResult,run]=await Promise.all(queries);
+  const legacy=probeResult.results.map((probe)=>taggedPreference(probe,"legacy",`legacy:${String(probe.id)}`));
+  if(!active.ready||active.sourceRevision===null||!validation||typeof run?.active_story_digest!=="string"
+    ||!preferenceDigest.test(run.active_story_digest))return {ok:false as const,probes:[]};
+  const stories=candidateRows.map((item)=>parseStorySource(item.summary));if(stories.some((story)=>!story))
+    return {ok:false as const,probes:legacy};
+  const exactStories=stories.flatMap((story)=>story?[story]:[]);
+  const state=await validatePreferenceLifecycleRow(row,workflowRunId,active.sourceRevision,run.active_story_digest);
+  if(!state)return {ok:false as const,probes:legacy};
+  const reviews=record.session&&record.sourceRevision===active.sourceRevision
+    ?hydrateStoryReviewSession(record.session,workflowRunId,exactStories).chapterReviews:null;
+  const current=await projectPreferenceLifecycle(exactStories,reviews,state,probeResult.results);if(!current)
+    return {ok:false as const,probes:legacy};
+  const currentIds=new Set(state.questions.map((item)=>item.id));
+  const history=state.history.map((probe,index)=>taggedPreference(probe,"history",
+    `history:${index}:${String(probe.id)}`));
+  const unbound=probeResult.results.filter((probe)=>!currentIds.has(String(probe.id)))
+    .map((probe)=>taggedPreference(probe,"legacy",`legacy:${String(probe.id)}`));
+  return {ok:true as const,active,stories:exactStories,record,reviews,row:row!,state,current,
+    probes:[...current,...history,...unbound]};
+}
 
 type ReleaseRunRow = {
   id?: string;
@@ -102,6 +216,7 @@ type ReleaseSuccess = {
   ok: true;
   story: NonNullable<ReturnType<typeof sanitizeReviewedStoryRelease>>;
   serializedStory: string;
+  preferenceProbeIds: string[];
   binding: {
     workflowRunId: string;
     activeStoryDigest: string;
@@ -168,10 +283,13 @@ function exactTimestamp(value: unknown): value is string {
   try { return new Date(value).toISOString() === value; } catch { return false; }
 }
 
-function validPreparationAndPreference(
+async function validPreparationAndPreference(
   snapshot: Awaited<ReturnType<typeof captureStoryReleasePrivacySnapshot>>,
   workflowRunId: string,
   sourceRevision: number,
+  sources: NonNullable<ReturnType<typeof parseStorySource>>[],
+  reviews: ReturnType<typeof hydrateStoryReviewSession>["chapterReviews"],
+  activeStoryDigest: string,
 ) {
   const receipts = snapshot.preparationReceiptRows;
   const lanes = receipts.map((row) => String(row.lane));
@@ -202,11 +320,19 @@ function validPreparationAndPreference(
     || Number(probeRun.output_count) !== Number(preferenceReceipt.output_count)
     || !validCounter(Number(probeRun.output_count))
     || Number(probeRun.output_count) !== snapshot.probeRows.length + snapshot.bulkRows.length
-    || snapshot.probeRows.some((row) => row.answer_choice === null || row.answer_choice === undefined
-      || !exactTimestamp(row.answered_at))
     || snapshot.bulkRows.some((row) => row.answer === null || row.answer === undefined
-      || !exactTimestamp(row.answered_at))) return false;
-  return true;
+      || !exactTimestamp(row.answered_at))) return null;
+  const state = await validatePreferenceLifecycleRow(
+    snapshot.preferenceLifecycleRows[0] || null, workflowRunId, sourceRevision, activeStoryDigest,
+  );
+  if (!state || !sameKeys(state.questions.map((item) => item.id),
+    snapshot.probeRows.map((item) => String(item.id)))) return null;
+  const current = await projectPreferenceLifecycle(sources, reviews, state, snapshot.probeRows);
+  if (!current || current.some((row) => row.lifecycle_status === "needs_update")) return null;
+  const active = current.filter((row) => row.lifecycle_status === "active");
+  return active.every((row) => "answer_choice" in row && "answered_at" in row
+    && Boolean(row.answer_choice) && exactTimestamp(row.answered_at))
+    ? active.map((row) => String(row.id)) : null;
 }
 
 function exactReleaseConfirmationBinding(
@@ -369,11 +495,15 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
   if (storyPrivacy.authority.targets.some((target) => target.selectedText === null)) {
     return failure(RELEASE_ERROR.storyPrivacyPending, boundedMetadata);
   }
-  if (!validPreparationAndPreference(
+  const preferenceProbeIds = await validPreparationAndPreference(
     initialSnapshot,
     request.workflowRunId,
     activeSourceRevision,
-  )) return failure(RELEASE_ERROR.preferencePending, boundedMetadata);
+    exactSources,
+    hydrated.chapterReviews,
+    String(run.active_story_digest),
+  );
+  if (!preferenceProbeIds) return failure(RELEASE_ERROR.preferencePending, boundedMetadata);
   const targetById = new Map(storyPrivacy.authority.targets.map((target) => (
     [target.targetId, target]
   )));
@@ -419,6 +549,7 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     ok: true,
     story,
     serializedStory,
+    preferenceProbeIds,
     binding: {
       workflowRunId: request.workflowRunId,
       activeStoryDigest: String(run.active_story_digest),

@@ -35,14 +35,15 @@ The output has exactly these fields:
 {
   "schema": "oxygen.preference-context",
   "reusableLessons": [],
-  "insightIdentities": [],
+  "insightScope": [],
   "reviewedEvidence": [],
   "autoRemoved": {"total": 0, "reversible": true, "categories": []}
 }
 ```
 
-`reusableLessons` is exactly Core's ordered final Insight lesson projection. `insightIdentities`
-uses Chapter-local `{storyKey, insightId}` pairs. `reviewedEvidence` contains only Insight-cited
+`reusableLessons` is exactly Core's ordered final Insight lesson projection. Every lesson and
+`insightScope` row carries the exact Chapter-local `{storyKey, insightId, insightAuthorityDigest}`
+triple, where the digest binds the full canonical Insight content. `reviewedEvidence` contains only Insight-cited
 reviewed event identities. `autoRemoved` is derived only from the completed report after its counts
 are recomputed from and matched to the exact reviewed bundles.
 
@@ -54,10 +55,12 @@ The Agent writes exactly:
 {"probes": [], "bulkDecisions": [], "setAside": 0}
 ```
 
-Candidate probes use the `/api/probes` camelCase nested shape: all fourteen probe keys, 2–3
+Candidate probes use the `/api/probes` camelCase nested shape: all seventeen probe keys, including
+one exact `storyKey`, `insightId`, and `insightAuthorityDigest` triple from `insightScope`, plus 2–3
 distinct canonical options, valid `en`/`zh` presentations when supplied, `allowOther: true`, and
-`allowSkip: true`. Candidate bulk decisions use the exact six API keys. Candidates cannot supply
-digests, `autoRemoved`, defaults, answers, model/provider information, or publication state.
+`allowSkip: true`. Copy each `insightAuthorityDigest` exactly from `insightScope`; candidates must
+not invent any other digest. Candidate bulk decisions use the exact six API keys. Candidates cannot
+supply `autoRemoved`, defaults, answers, model/provider information, or publication state.
 Other and Skip are flags, never option rows. A probe's evidence must belong to its document; every
 bulk evidence ID must be in the reviewed authority. The producer binds `documentKind` to the exact
 reviewed bundle that supplied each cited identity; Core POST independently rechecks that kind and
@@ -71,7 +74,7 @@ whitespace trimming, removes trailing ASCII `.` characters, and folds only ASCII
 non-ASCII characters remain verbatim so Python and JavaScript cannot diverge by Unicode runtime
 tables.
 
-The finalizer emits exactly nine API fields:
+The finalizer emits exactly ten API fields:
 
 ```text
 {
@@ -81,6 +84,7 @@ The finalizer emits exactly nine API fields:
   "outputDigest": "sha256",
   "outputCount": 0,
   "setAside": 0,
+  "insightScope": [],
   "probes": [],
   "bulkDecisions": [],
   "autoRemoved": {"total": 0, "reversible": true, "categories": []}
@@ -96,3 +100,22 @@ arrays deterministically. Completed-zero requires empty arrays, `setAside: 0`, a
 Invalid finalization never creates or changes its output file.
 Completed-zero describes the empty `probes` and `bulkDecisions` arrays; it never permits a zero
 `sourceRevision`.
+
+## Accepted-Insight regeneration
+
+The Toolkit Agent refreshes only questions whose linked Insight is accepted/applied and whose
+current authority digest differs. It must export current authority, write one changed probe per
+exported target, run bounded validation, and import the validated bundle:
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py --attach-url $ViewerUrl --workflow-run-id $WorkflowRunId --preference-regeneration-export .\preference-regeneration-context.json
+python .\skills\oxygen-elicit-contributor-preferences\scripts\validate_probes.py --regeneration --context .\preference-regeneration-context.json --candidates .\preference-regeneration-candidates.json --output .\preference-regeneration-import.json
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py --attach-url $ViewerUrl --workflow-run-id $WorkflowRunId --preference-regeneration-import .\preference-regeneration-import.json
+```
+
+The Agent reads only the exported context. Candidates contain exactly `probes`,
+`bulkDecisions: []`, and `setAside: 0`; preserve each target `id`, `storyKey`, and `insightId`, copy
+the current `insightAuthorityDigest`, and change question/options/presentations bytes. Stop on any
+export, validation, stale-authority, or import error; never invent or retry with hand-built authority.
+Successful import archives replaced question bytes, clears their answers, leaves Story review state
+unchanged, and requires the contributor to answer each regenerated active Preference again.

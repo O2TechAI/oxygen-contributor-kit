@@ -77,7 +77,7 @@ async function sha256(value) {
 }
 
 async function activationSnapshot(db) {
-  const [run, semantic, coverage, items, receipts, candidates, targets, probeRun] = await Promise.all([
+  const [run, semantic, coverage, items, receipts, candidates, targets, probeRun, lifecycle] = await Promise.all([
     db.prepare(`SELECT story_generation_status,story_generation_completed,
       story_generation_total,story_source_revision,active_story_digest,updated_at
       FROM workflow_runs WHERE id=?`).bind(RUN_ID).first(),
@@ -94,6 +94,8 @@ async function activationSnapshot(db) {
       WHERE workflow_run_id=? ORDER BY target_id`).bind(RUN_ID).all(),
     db.prepare(`SELECT source_revision,output_digest,output_count FROM probe_runs
       WHERE workflow_run_id=?`).bind(RUN_ID).first(),
+    db.prepare(`SELECT source_revision,active_story_digest,state_json,state_digest
+      FROM preference_lifecycle_authorities WHERE workflow_run_id=?`).bind(RUN_ID).first(),
   ]);
   return {
     run,
@@ -104,6 +106,7 @@ async function activationSnapshot(db) {
     candidates: candidates.results,
     targets: targets.results,
     probeRun,
+    lifecycle,
   };
 }
 
@@ -443,6 +446,7 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       { deriveStoryReleaseTargetContents, storyPreparationDigest },
       { computeSourceDigest },
       { loadWorkflowProgress },
+      probesRoute,
     ] = await Promise.all([
       import("../db/index.ts"),
       import("../app/api/workflow/route.ts"),
@@ -450,6 +454,7 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       import("../lib/story-preparation.ts"),
       import("../lib/redaction-pass.mjs"),
       import("../lib/workflow-progress-server.ts"),
+      import("../app/api/probes/route.ts"),
     ]);
     const db = await getLocalDatabase();
     const timestamp = "2041-01-01T00:00:00.000Z";
@@ -637,14 +642,19 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     }));
     const storyPrivacy = { candidates: privacyCandidates, targetProposals };
     const preferenceInputDigest = await storyPreparationDigest([]);
-    await db.prepare(`INSERT INTO probe_runs
-      (workflow_run_id,id,source_revision,input_digest,output_digest,output_count,
-       status,stage,generated,set_aside,auto_removed_json,started_at,updated_at,completed_at)
-      VALUES (?,?,?,?,?,0,'complete','preference',0,0,'{"total":0,"reversible":true,"categories":[]}',?,?,?)`)
-      .bind(
-        RUN_ID, RUN_ID, INITIAL_SOURCE_REVISION, preferenceInputDigest, EMPTY_DIGEST,
-        timestamp, timestamp, timestamp,
-      ).run();
+    await db.prepare(`INSERT INTO probes
+      (id,document_id,document_kind,event_ids_json,signal,recap,question,options_json,presentations_json,created_at)
+      VALUES ('pre-feature-legacy',?,'trajectory','[]','explicit_rule','Legacy','Legacy?','[]','{}',?)`)
+      .bind(DOCUMENT_ID,timestamp).run();
+    const refreshed = await probesRoute.POST(new Request("http://localhost/api/probes", {
+      method:"POST", body:JSON.stringify({ workflowRunId:RUN_ID, sourceRevision:INITIAL_SOURCE_REVISION,
+        inputDigest:preferenceInputDigest, outputDigest:EMPTY_DIGEST, outputCount:0, setAside:0,
+        insightScope:[], probes:[], bulkDecisions:[],
+        autoRemoved:{ total:0, reversible:true, categories:[] } }),
+    }));
+    assert.equal(refreshed.status, 200, await refreshed.text());
+    assert.equal(await db.prepare("SELECT 1 FROM probes WHERE id='pre-feature-legacy'").first(), null,
+      "the real full refresh retires pre-feature rows even for a legitimate zero-question result");
     const preparationManifest = {
       schema: "oxygen.story-preparation",
       workflowRunId: RUN_ID,
@@ -894,6 +904,11 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     assert.equal(activated.probeRun.source_revision, INITIAL_SOURCE_REVISION + 1);
     assert.equal(activated.probeRun.output_digest, EMPTY_DIGEST);
     assert.equal(activated.probeRun.output_count, 0);
+    assert.equal(activated.lifecycle.source_revision, INITIAL_SOURCE_REVISION + 1);
+    assert.equal(activated.lifecycle.active_story_digest, activated.run.active_story_digest);
+    const zeroLifecycle = JSON.parse(activated.lifecycle.state_json);
+    assert.deepEqual(zeroLifecycle.generationScope, []); assert.deepEqual(zeroLifecycle.questions, []);
+    assert.equal(zeroLifecycle.history[0].id, "pre-feature-legacy");
     assert.match(
       activated.items.find((item) => item.id === STORY_ITEM_ID).organization_reason,
       /^oxygen\.story:/,

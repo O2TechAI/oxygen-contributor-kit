@@ -1,20 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getLocalDatabase } from "../db/index.ts";
 import {
   applyChapterReview,
   applyStoryReviewToBlock,
+  editAiInsight,
   emptyChapterReview,
   markChapterReady,
   recordStoryEdit,
   returnChapterToReview,
   storyBlocks,
+  updateAiInsightDecision,
 } from "../lib/story-review.ts";
 import { createStoryReviewSession } from "../lib/story-review-session.ts";
 import {
+  canonicalPreferenceQuestionBatch,
   deriveStoryReleaseTargetContents,
   normalizeStoryPrivacyOutput,
   storyPreparationDigest,
@@ -24,10 +32,12 @@ import {
   readProjectReleaseConfirmation,
 } from "../lib/project-release-confirmation.ts";
 import {
+  createPreferenceLifecycleState,
+  preferenceInsightScope,
   RELEASE_ERROR,
   reconstructReviewedStoryReleaseFromDatabase,
 } from "../lib/story-release-server.ts";
-import { validateStorySourcePackage } from "../lib/story-readiness.ts";
+import { canonicalAuthorityJson, validateStorySourcePackage } from "../lib/story-readiness.ts";
 import { STORY_PREFIX } from "../lib/timeline.ts";
 import { reconstructReviewedStoryPrivacyRevision } from "../lib/story-privacy-revision.ts";
 import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
@@ -51,6 +61,13 @@ const RUN = "release-confirmation-run";
 const REVISION = 7;
 const VERSION = 1;
 const NOW = "2026-08-27T08:00:00.000Z";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  if (specifier.startsWith(".") && !/\.[^/]+$/u.test(specifier)) {
+    try { return nextResolve(`${specifier}.ts`, context); } catch { return nextResolve(`${specifier}/index.ts`, context); }
+  }
+  return nextResolve(specifier, context);
+} });
+let regenerationRoute, preferenceRoute;
 
 async function sha256(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -161,7 +178,7 @@ async function completedPrivacyImport(snapshot, candidates = [], completedAt = "
   };
 }
 
-function source(key, itemId, index) {
+function source(key, itemId, index, insights = []) {
   const evidence = { documentId: "release-doc", eventId: itemId };
   return {
     schema: "oxygen.story",
@@ -179,7 +196,7 @@ function source(key, itemId, index) {
       blocks: [{ id: `block-${key}`, text: `Safe release paragraph ${index}.`, evidence: [evidence] }],
       uncertainty: `Optional uncertainty ${index}.`,
     },
-    insights: [],
+    insights,
     evidence: { primary: evidence, supporting: [] },
     coverage: testStoryCoverage(),
   };
@@ -203,7 +220,7 @@ async function clear(db) {
   for (const table of [
     "project_release_confirmations", "story_privacy_authorities", "story_privacy_targets",
     "story_privacy_candidates", "story_preparation_receipts",
-    "probe_runs", "probe_bulk_decisions", "probes", "story_review_sessions",
+    "preference_lifecycle_authorities", "probe_runs", "probe_bulk_decisions", "probes", "story_review_sessions",
     "story_coverage_rows", "story_coverage_manifests", "semantic_unit_members", "semantic_units",
     "semantic_manifests", "finalized_corpus_manifests", "redactions",
     "source_privacy_receipts", "redaction_jobs",
@@ -293,13 +310,21 @@ async function chooseStoryPrivacyTarget(
   }, decidedAt);
 }
 
-async function setup({ anonymization = false } = {}) {
+async function setup({ anonymization = false, preference = false } = {}) {
   const db = await getLocalDatabase();
   await clear(db);
   const stories = [
     source("chapter-one", "release-doc:event-1", 1),
     source("chapter-two", "release-doc:event-2", 2),
   ];
+  if (preference) stories[0].insights = [{
+    id: "insight-preference", title: "Release preference", background: "The contributor set a release boundary.",
+    anchorStoryBlockId: "block-chapter-one", quote: { text: "Safe reviewed evidence 1.",
+      evidence: { documentId: "release-doc", eventId: "release-doc:event-1" } },
+    directlyAcquiredExperience: "The boundary was applied in the reviewed workflow.",
+    principle: "Ask before changing release behavior.",
+    evidence: [{ documentId: "release-doc", eventId: "release-doc:event-1" }],
+  }];
   if (anonymization) {
     stories[0].title = "Alice built Atlas at Acme";
     stories[0].overview = "Alice used C:\\Secret\\Atlas with sk-live-secret";
@@ -329,10 +354,10 @@ async function setup({ anonymization = false } = {}) {
   }));
   const evidenceRows = items.map((item) => ({
     id: item.id, documentId: item.document_id, eventType: item.event_type,
-    actorId: item.actor_id, actorType: item.actor_type,
+    actorId: item.actor_id, actorType: item.actor_type, reviewedNarrative:item.content,
   }));
   const validation = validateStorySourcePackage(candidateRows, evidenceRows);
-  assert.equal(validation.ok, true);
+  assert.equal(validation.ok, true, JSON.stringify(validation));
   const activeDigest = await sha256(validation.canonicalCandidate);
 
   await db.prepare(`INSERT INTO documents
@@ -446,19 +471,47 @@ async function setup({ anonymization = false } = {}) {
       pending ? null : NOW,
     ).run();
   }
+  const preferenceSeed = preference ? await seedCoveragePrivacyAuthority(db, {
+    workflowRunId:RUN, sourceRevision:REVISION, stories, now:NOW,
+    projectId:"release-confirmation-project", redactions:[],
+  }) : null;
   const emptyDigest = await storyPreparationDigest([]);
   const otherDigest = "a".repeat(64);
-  const completeDigest = await storyPreparationDigest(candidateRows.map((row, index) => ({
-    id: row.id, story: stories[index],
+  const storyOutput = candidateRows.map((row,index) => ({
+    id:row.id, story:{...stories[index],insights:[]},
+  }));
+  const completeDigest = await storyPreparationDigest(candidateRows.map((row,index) => ({
+    id:row.id, story:stories[index],
   })));
   const privacyDigest = await storyPreparationDigest(privacy);
   const scopeDigest = await storyPreparationDigest(targetContents.map((target) => target.id));
+  const preferenceScope = preference ? await preferenceInsightScope(stories) : [];
+  const reusableLessons = preference ? [{
+    ...preferenceScope[0],
+    title:stories[0].insights[0].title,
+    background:stories[0].insights[0].background,
+    directlyAcquiredExperience:stories[0].insights[0].directlyAcquiredExperience,
+    principle:stories[0].insights[0].principle,
+  }] : [];
+  const probe = preference ? { id:"preference-question", ...preferenceScope[0], documentId:"release-doc",
+    documentKind:"trajectory", eventIds:["release-doc:event-1"], timestamp:null, signal:"explicit_rule",
+    score:90, turns:2, recap:"The reviewed event records a release boundary.", question:"Keep this release boundary?",
+    options:[{id:"yes",text:"Keep it."},{id:"no",text:"Do not keep it."}], presentations:{},
+    allowOther:true, allowSkip:true } : null;
+  const preferenceInputDigest = await storyPreparationDigest(reusableLessons);
+  const preferenceDigest = await storyPreparationDigest(canonicalPreferenceQuestionBatch(probe ? [probe] : [], []));
   const receipts = [
-    ["story", otherDigest, otherDigest, 2, otherDigest, 2],
-    ["insight", otherDigest, otherDigest, 2, emptyDigest, 0],
+    ["story", preference ? preferenceSeed.semantic.manifestDigest : otherDigest,
+      preference ? await storyPreparationDigest(preferenceSeed.semantic.units.map((unit) => unit.id)) : otherDigest,
+      preference ? preferenceSeed.semantic.units.length : 2,
+      preference ? await storyPreparationDigest(storyOutput) : otherDigest, stories.length],
+    ["insight", preference ? await storyPreparationDigest(storyOutput) : otherDigest,
+      preference ? await storyPreparationDigest(stories.map((story) => story.key).sort()) : otherDigest,
+      stories.length, preference ? completeDigest : emptyDigest, preferenceScope.length],
     ["story_privacy", completeDigest, scopeDigest, targetContents.length, privacyDigest,
       privacy.targetProposals.length],
-    ["preference", emptyDigest, emptyDigest, 0, emptyDigest, 0],
+    ["preference", preferenceInputDigest, await storyPreparationDigest(preferenceScope), preferenceScope.length,
+      preferenceDigest, preferenceScope.length],
   ];
   for (const [lane, input, scope, scopeCount, output, outputCount] of receipts) {
     await db.prepare(`INSERT INTO story_preparation_receipts
@@ -469,10 +522,15 @@ async function setup({ anonymization = false } = {}) {
   await db.prepare(`INSERT INTO probe_runs
     (workflow_run_id,id,source_revision,input_digest,output_digest,output_count,status,stage,
      generated,set_aside,auto_removed_json,started_at,updated_at,completed_at)
-    VALUES (?,?,?,?,?,0,'complete','preference',0,0,?,?,?,?)`)
-    .bind(RUN, RUN, REVISION, emptyDigest, emptyDigest,
+    VALUES (?,?,?,?,?,?,'complete','preference',?,0,?,?,?,?)`)
+    .bind(RUN, RUN, REVISION, preferenceInputDigest, preferenceDigest, preferenceScope.length, preferenceScope.length,
       JSON.stringify({ total: 0, reversible: true, categories: [] }), NOW, NOW, NOW).run();
-
+  if (probe) await db.prepare(`INSERT INTO probes
+    (id,document_id,document_kind,event_ids_json,timestamp,signal,score,turns,recap,question,options_json,
+     presentations_json,allow_other,allow_skip,answer_choice,answer_text,answered_at,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,1,'yes',NULL,?,?)`).bind(probe.id,probe.documentId,probe.documentKind,
+      JSON.stringify(probe.eventIds),probe.timestamp,probe.signal,probe.score,probe.turns,probe.recap,probe.question,
+      JSON.stringify(probe.options),JSON.stringify(probe.presentations),NOW,NOW).run();
   const sourceRedactions = anonymization ? [
     ["Alice", "private-personal"], ["Bob", "private-personal"], ["Acme", "sensitive"],
     ["Atlas", "sensitive"], ["C:\\Secret\\Atlas", "sensitive"],
@@ -486,7 +544,7 @@ async function setup({ anonymization = false } = {}) {
       reviewState: "deterministic", uncertaintyReason: null, createdBy: "llm",
     };
   }) : [];
-  await seedCoveragePrivacyAuthority(db, {
+  if (!preference) await seedCoveragePrivacyAuthority(db, {
     workflowRunId: RUN,
     sourceRevision: REVISION,
     stories,
@@ -497,7 +555,9 @@ async function setup({ anonymization = false } = {}) {
 
   const reviews = {};
   for (const story of stories) {
-    const applied = applyChapterReview(emptyChapterReview(story), reviewContext(story));
+    let initial = emptyChapterReview(story);
+    if (story.insights.length) initial = updateAiInsightDecision(initial, story, story.insights[0].id, "accepted");
+    const applied = applyChapterReview(initial, reviewContext(story));
     assert.equal(applied.blockedReason, undefined);
     reviews[story.key] = markChapterReady(applied.state, reviewContext(story, applied.state));
   }
@@ -505,9 +565,62 @@ async function setup({ anonymization = false } = {}) {
   await db.prepare(`INSERT INTO story_review_sessions
     (workflow_run_id,state_json,updated_at,server_version) VALUES (?,?,?,?)`)
     .bind(RUN, JSON.stringify({ sourceRevision: REVISION, session }), NOW, VERSION).run();
-  return { db, stories, reviews, request: {
+  const currentRun = await db.prepare("SELECT active_story_digest FROM workflow_runs WHERE id=?")
+    .bind(RUN).first();
+  const preferenceLifecycle = probe
+    ? await createPreferenceLifecycleState(preferenceScope, [probe])
+    : { generationScope: [], questions: [], history: [] };
+  await db.prepare(`INSERT INTO preference_lifecycle_authorities
+    (workflow_run_id,source_revision,active_story_digest,story_session_version,
+     state_json,state_digest,updated_at) VALUES (?,?,?,?,?,?,?)`).bind(
+    RUN,
+    REVISION,
+    currentRun.active_story_digest,
+    VERSION,
+    canonicalAuthorityJson(preferenceLifecycle),
+    await storyPreparationDigest(preferenceLifecycle),
+    NOW,
+  ).run();
+  return { db, stories, reviews, probe, request: {
     workflowRunId: RUN, serverVersion: VERSION, sourceRevision: REVISION,
   } };
+}
+
+const repository = join(import.meta.dirname, "../..");
+const localReview = join(repository, "skills", "oxygen-organize-review-export", "scripts", "run_local_review.py");
+const validateProbes = join(repository, "skills", "oxygen-elicit-contributor-preferences", "scripts", "validate_probes.py");
+async function runPython(args) {
+  const child = spawn("python", args, { cwd:repository, stdio:["ignore", "pipe", "pipe"] });
+  let stdout = "", stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const [status] = await once(child, "close");
+  return { status, stdout, stderr };
+}
+async function productionLoopback() {
+  const server = createServer(async (incoming, outgoing) => {
+    try {
+      const chunks = []; for await (const chunk of incoming) chunks.push(chunk);
+      const body = Buffer.concat(chunks);
+      const request = new Request(`http://127.0.0.1${incoming.url}`, {
+        method:incoming.method, headers:incoming.headers,
+        ...(body.length ? { body } : {}),
+      });
+      const response = incoming.method === "POST"
+        ? await regenerationRoute.POST(request) : await regenerationRoute.GET(request);
+      outgoing.statusCode = response.status;
+      response.headers.forEach((value, key) => outgoing.setHeader(key, value));
+      outgoing.end(Buffer.from(await response.arrayBuffer()));
+    } catch { outgoing.statusCode = 500; outgoing.end(); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  return { server, url:`http://127.0.0.1:${server.address().port}` };
+}
+async function authorityBytes(db) {
+  const tables = ["probe_runs", "story_preparation_receipts", "story_review_sessions",
+    "project_release_confirmations", "preference_lifecycle_authorities", "probes"];
+  return Object.fromEntries(await Promise.all(tables.map(async (table) => [table,
+    canonicalAuthorityJson((await db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()).results)])));
 }
 
 test("release confirmation rejects source revision zero before database initialization", async () => {
@@ -738,20 +851,14 @@ test("Preference, receipt, session, edit, and final snapshot mutations block wit
   await db.prepare("UPDATE probes SET answer_choice='skip',answered_at=? WHERE id='probe-unanswered'")
     .bind(NOW).run();
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request)).code,
-    RELEASE_ERROR.releaseConfirmationRequired);
+    RELEASE_ERROR.preferencePending);
   assert.equal(await readProjectReleaseConfirmation(db, request), false);
+  const emptyDigest = await storyPreparationDigest([]);
+  await db.prepare("DELETE FROM probes WHERE id='probe-unanswered'").run();
+  await db.prepare("UPDATE probe_runs SET output_count=0,output_digest=?").bind(emptyDigest).run();
+  await db.prepare("UPDATE story_preparation_receipts SET output_count=0,output_digest=? WHERE lane='preference'").bind(emptyDigest).run();
   assert.equal((await confirmProjectReleaseConfirmation(db, request, "2026-08-27T08:00:01.000Z")).ok, true);
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request)).ok, true);
-  const chapterStateBeforePreferenceChange = (await db.prepare(
-    "SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?",
-  ).bind(RUN).first()).state_json;
-  await db.prepare("UPDATE probes SET answer_choice='keep',answered_at=? WHERE id='probe-unanswered'")
-    .bind("2026-08-27T08:00:02.000Z").run();
-  assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request)).code,
-    RELEASE_ERROR.releaseConfirmationRequired);
-  assert.equal((await db.prepare("SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?")
-    .bind(RUN).first()).state_json, chapterStateBeforePreferenceChange);
-  assert.equal((await confirmProjectReleaseConfirmation(db, request, "2026-08-27T08:00:03.000Z")).ok, true);
   assert.equal(await readProjectReleaseConfirmation(db, request), true);
 
   const raced = await reconstructReviewedStoryReleaseFromDatabase(db, request, {
@@ -769,10 +876,6 @@ test("Preference, receipt, session, edit, and final snapshot mutations block wit
     [
       "UPDATE story_privacy_targets SET decided_at='2026-08-27T08:00:01.500Z' WHERE target_id='chapter-one::overview'",
       "UPDATE story_privacy_targets SET decided_at='2026-08-27T08:00:00.000Z' WHERE target_id='chapter-one::overview'",
-    ],
-    [
-      "UPDATE probes SET answer_choice='skip' WHERE id='probe-unanswered'",
-      "UPDATE probes SET answer_choice='keep' WHERE id='probe-unanswered'",
     ],
     [
       "UPDATE story_review_sessions SET updated_at='2026-08-27T08:00:01.000Z' WHERE workflow_run_id='release-confirmation-run'",
@@ -859,6 +962,120 @@ test("Preference, receipt, session, edit, and final snapshot mutations block wit
     RELEASE_ERROR.stateInvalid);
 });
 
+test("production Preference regeneration preserves history and rolls back atomically", async () => {
+  regenerationRoute ||= await import("../app/api/probes/regeneration/route.ts");
+  preferenceRoute ||= await import("../app/api/probes/[id]/route.ts");
+  const { db, stories, reviews, probe, request } = await setup({ preference:true });
+  await resolveHumanStoryPrivacy(db);
+  assert.equal((await confirmProjectReleaseConfirmation(db, request, NOW)).ok, true);
+  const sessionBytes = (await db.prepare("SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?")
+    .bind(RUN).first()).state_json;
+  const patchAnswer = (choice) => preferenceRoute.PATCH(new Request("http://localhost/api/probes/preference-question", {
+    method:"PATCH", body:JSON.stringify({ choice }),
+  }), { params:Promise.resolve({ id:probe.id }) });
+  assert.equal((await patchAnswer("no")).status, 200);
+  assert.equal(await readProjectReleaseConfirmation(db, request), false);
+  assert.equal((await db.prepare("SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?")
+    .bind(RUN).first()).state_json, sessionBytes);
+  assert.equal((await patchAnswer("yes")).status, 200);
+  assert.equal((await confirmProjectReleaseConfirmation(db, request, NOW)).ok, true);
+  const raced = await reconstructReviewedStoryReleaseFromDatabase(db, request, {
+    beforeFinalPrivacyCheck: async () => { assert.equal((await patchAnswer("no")).status, 200); },
+  });
+  assert.equal(raced.code, RELEASE_ERROR.privacyConflict);
+  assert.equal((await patchAnswer("yes")).status, 200);
+  assert.equal((await confirmProjectReleaseConfirmation(db, request, NOW)).ok, true);
+
+  await db.prepare(`INSERT INTO probes
+    (id,document_id,document_kind,event_ids_json,signal,recap,question,options_json,presentations_json,created_at)
+    VALUES ('legacy-question','release-doc','trajectory','["release-doc:event-1"]','explicit_rule',
+      'Legacy recap','Legacy question?','[{"id":"yes","text":"Yes"},{"id":"no","text":"No"}]','{}',?)`)
+    .bind(NOW).run();
+  assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request)).code,
+    RELEASE_ERROR.preferencePending, "a pre-feature legacy row cannot satisfy release");
+  await db.prepare("DELETE FROM probes WHERE id='legacy-question'").run();
+
+  const story = stories[0], insight = story.insights[0];
+  const content = { ...insight, principle:"Ask before changing the exact current release behavior." };
+  delete content.id;
+  const pending = editAiInsight(returnChapterToReview(reviews[story.key]), story, insight.id, content);
+  const saveSession = async (state, version) => db.prepare(`UPDATE story_review_sessions
+    SET state_json=?,updated_at=?,server_version=? WHERE workflow_run_id=?`).bind(JSON.stringify({
+      sourceRevision:REVISION, session:createStoryReviewSession(RUN, { ...reviews, [story.key]:state }, {}, NOW),
+    }), NOW, version, RUN).run();
+  await saveSession(pending, 2);
+  assert.equal((await regenerationRoute.GET(new Request(
+    `http://localhost/api/probes/regeneration?workflowRunId=${RUN}`))).status, 409,
+  "an unaccepted Insight edit is not exportable");
+  let accepted = updateAiInsightDecision(pending, story, insight.id, "accepted");
+  accepted = applyChapterReview(accepted, reviewContext(story, accepted)).state;
+  accepted = markChapterReady(accepted, reviewContext(story, accepted));
+  await saveSession(accepted, 3);
+
+  const root = await mkdtemp(join(tmpdir(), "preference-production-regeneration-"));
+  const { server, url } = await productionLoopback();
+  try {
+    const contextPath=join(root,"context.json"), candidatesPath=join(root,"candidates.json"), importPath=join(root,"import.json");
+    const common=[localReview,"--attach-url",url,"--workflow-run-id",RUN];
+    let result = await runPython([...common,"--preference-regeneration-export",contextPath]);
+    assert.equal(result.status, 0, result.stderr);
+    const context = JSON.parse(await readFile(contextPath,"utf8"));
+    assert.equal(context.targets.length, 1);
+    const candidate = { ...probe, ...context.insightScope[0] };
+    await writeFile(candidatesPath, JSON.stringify({ probes:[candidate], bulkDecisions:[], setAside:0 }));
+    result = await runPython([validateProbes,"--regeneration","--context",contextPath,
+      "--candidates",candidatesPath,"--output",importPath]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /regeneration is foreign or unchanged/u);
+    candidate.question = "Keep the revised release boundary?";
+    candidate.options = [{id:"yes",text:"Keep the revised boundary."},{id:"no",text:"Do not keep it."}];
+    candidate.presentations = { zh:{ recap:"审阅事件记录了修订后的发布边界。", question:"保留修订后的发布边界吗？",
+      options:[{id:"yes",text:"保留修订后的边界。"},{id:"no",text:"不保留。"}] } };
+    await writeFile(candidatesPath, JSON.stringify({ probes:[candidate], bulkDecisions:[], setAside:0 }));
+    result = await runPython([validateProbes,"--regeneration","--context",contextPath,
+      "--candidates",candidatesPath,"--output",importPath]);
+    assert.equal(result.status, 0, result.stderr);
+
+    const before = await authorityBytes(db), originalPrepare = db.prepare;
+    db.prepare = function failConfirmationDelete(sql) {
+      if (/DELETE FROM project_release_confirmations/u.test(sql)) throw new Error("forced rollback");
+      return originalPrepare.call(this, sql);
+    };
+    result = await runPython([...common,"--preference-regeneration-import",importPath]);
+    db.prepare = originalPrepare;
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(await authorityBytes(db), before, "failed production import must roll back every authority");
+
+    result = await runPython([...common,"--preference-regeneration-import",importPath]);
+    assert.equal(result.status, 0, result.stderr);
+    const after = await authorityBytes(db);
+    for (const table of ["probe_runs","story_preparation_receipts","story_review_sessions"])
+      assert.equal(after[table], before[table], `${table} bytes changed during regeneration`);
+    assert.equal(JSON.parse(after.project_release_confirmations).length, 0);
+    const current = await db.prepare("SELECT * FROM probes WHERE id=?").bind(probe.id).first();
+    assert.equal(current.question, candidate.question); assert.equal(current.answer_choice, null);
+    const lifecycle = JSON.parse((await db.prepare(`SELECT state_json FROM preference_lifecycle_authorities
+      WHERE workflow_run_id=?`).bind(RUN).first()).state_json);
+    assert.equal(lifecycle.history.length, 1); assert.equal(lifecycle.history[0].question, probe.question);
+    assert.equal(lifecycle.history[0].answer_choice, "yes");
+
+    const privacyPreparation = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN);
+    assert.equal(privacyPreparation.ok, true);
+    assert.equal((await importReviewedStoryPrivacyAuthority(db,
+      await completedPrivacyImport(privacyPreparation.snapshot), NOW)).ok, true);
+    assert.equal((await patchAnswer("yes")).status, 200);
+    const currentRequest = { ...request, serverVersion:3 };
+    assert.equal((await confirmProjectReleaseConfirmation(db, currentRequest, NOW)).ok, true);
+    const release = await reconstructReviewedStoryReleaseFromDatabase(db, currentRequest);
+    assert.equal(release.ok, true); assert.deepEqual(release.preferenceProbeIds, [probe.id]);
+    const zip = await buildPackageFromDatabase(db, release.serializedStory, currentRequest, { exportedAt:NOW });
+    const zipText = new TextDecoder().decode(await zip.arrayBuffer());
+    assert.match(zipText, /Keep the revised release boundary/u); assert.doesNotMatch(zipText, /Keep this release boundary/u);
+  } finally {
+    server.close(); await once(server,"close"); await rm(root,{recursive:true,force:true});
+  }
+});
+
 test("every bound authority invalidates only project release confirmation, never Chapter bytes", async () => {
   const { db, request } = await setup();
   await resolveHumanStoryPrivacy(db);
@@ -881,17 +1098,6 @@ test("every bound authority invalidates only project release confirmation, never
     currentRequest = nextRequest;
   };
 
-  await invalidated("Preference mutation", async () => {
-    await db.prepare(`INSERT INTO probes
-      (id,document_id,document_kind,event_ids_json,signal,recap,question,options_json,
-       presentations_json,answer_choice,answered_at,created_at)
-      VALUES ('probe-bound','release-doc','trajectory','[]','preference','recap','Question?',
-       '[]','{}','keep',?,?)`).bind(NOW, NOW).run();
-    await db.prepare("UPDATE probe_runs SET output_count=1,output_digest=? WHERE workflow_run_id=?")
-      .bind("c".repeat(64), RUN).run();
-    await db.prepare(`UPDATE story_preparation_receipts SET output_count=1,output_digest=?
-      WHERE workflow_run_id=? AND lane='preference'`).bind("c".repeat(64), RUN).run();
-  });
   await db.prepare("UPDATE redaction_jobs SET updated_at=? WHERE id=?")
     .bind("2026-08-27T08:00:04.000Z", `privacy-${RUN}`).run();
   assert.equal(await readProjectReleaseConfirmation(db, currentRequest), false,

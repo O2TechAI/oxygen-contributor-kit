@@ -4,6 +4,7 @@ import {
   requireEstablishedWorkflowRun,
   workflowRunErrorResponse,
 } from "../../../../lib/workflow-run-server";
+import { readCurrentPreferenceLifecycle } from "../../../../lib/story-release-server";
 
 // Record, change, or withdraw one answer. Only an explicit answer becomes a
 // confirmed preference -- clearing it returns the probe to unanswered rather
@@ -34,7 +35,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   };
 
   const now = new Date().toISOString();
-
+  try {
+    return await db.transaction(async () => {
   if (body.bulk) {
     const decision = await db.prepare(
       "SELECT id FROM probe_bulk_decisions WHERE id=?").bind(id).first();
@@ -58,11 +60,17 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         return Response.json({ error: "Preference source authority is stale" }, { status: 409 });
       }
     }
+    await db.prepare("DELETE FROM project_release_confirmations WHERE workflow_run_id=?")
+      .bind(authority.workflowRunId).run();
     const updated = await db.prepare(
       "SELECT * FROM probe_bulk_decisions WHERE id=?").bind(id).first();
     return Response.json(updated);
   }
 
+  const lifecycle = await readCurrentPreferenceLifecycle(db, authority.workflowRunId);
+  const current = lifecycle.ok
+    ? lifecycle.current.find((item) => item.id === id && item.lifecycle_status === "active") : null;
+  if (!current) return Response.json({ error: "Preference requires an accepted unchanged Insight" }, { status: 409 });
   const probe = await db.prepare(
     "SELECT options_json FROM probes WHERE id=?").bind(id).first<{ options_json: string }>();
   if (!probe) return Response.json({ error: "Probe not found" }, { status: 404 });
@@ -74,6 +82,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (Number(updated.meta.changes || 0) !== 1) {
       return Response.json({ error: "Preference source authority is stale" }, { status: 409 });
     }
+    await db.prepare("DELETE FROM project_release_confirmations WHERE workflow_run_id=?")
+      .bind(authority.workflowRunId).run();
     return Response.json(await db.prepare("SELECT * FROM probes WHERE id=?").bind(id).first());
   }
 
@@ -101,6 +111,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (Number(updated.meta.changes || 0) !== 1) {
     return Response.json({ error: "Preference source authority is stale" }, { status: 409 });
   }
+  await db.prepare("DELETE FROM project_release_confirmations WHERE workflow_run_id=?")
+    .bind(authority.workflowRunId).run();
 
   return Response.json(await db.prepare("SELECT * FROM probes WHERE id=?").bind(id).first());
+    });
+  } catch {
+    return Response.json({ error: "Preference answer conflicted" }, { status: 409 });
+  }
 }

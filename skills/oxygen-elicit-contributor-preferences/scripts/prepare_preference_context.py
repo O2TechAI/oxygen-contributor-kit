@@ -51,6 +51,10 @@ def sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def insight_authority(story_key: str, insight: dict[str, Any]) -> dict[str, Any]:
+    return {"storyKey": story_key, "insightId": insight["id"], "content": insight}
+
+
 def js_trim(value: str) -> str:
     return value.strip(ECMASCRIPT_TRIM)
 
@@ -182,8 +186,13 @@ def parse_story(summary: Any) -> dict[str, Any]:
             evidence_seen.add(identity)
             evidence_out.append({"documentId": identity[0], "eventId": identity[1]})
         seen.add(insight["id"])
+        content = {key: insight[key] for key in (
+            "id", "background", "anchorStoryBlockId", "quote",
+            "directlyAcquiredExperience", "principle", "evidence",
+        )}
         lesson = {
             "storyKey": story["key"], "insightId": insight["id"],
+            "insightAuthorityDigest": sha256(insight_authority(story["key"], content)),
             "background": insight["background"],
             "directlyAcquiredExperience": insight["directlyAcquiredExperience"],
             "principle": insight["principle"],
@@ -191,6 +200,8 @@ def parse_story(summary: Any) -> dict[str, Any]:
         if "title" in insight:
             if not safe_text(insight["title"]):
                 raise ValueError("Story Insight is malformed")
+            content["title"] = insight["title"]
+            lesson["insightAuthorityDigest"] = sha256(insight_authority(story["key"], content))
             lesson["title"] = insight["title"]
         parsed.append({"lesson": lesson, "evidence": evidence_out})
     return {"key": story["key"], "insights": parsed}
@@ -330,7 +341,7 @@ def prepare(
     reviewed, auto_removed = read_privacy_authority(redacted_dir, privacy_report_path)
 
     lessons: list[dict[str, Any]] = []
-    identities: list[dict[str, str]] = []
+    scope: list[dict[str, str]] = []
     evidence: list[dict[str, str]] = []
     seen_story_keys: set[str] = set()
     seen_candidate_ids: set[str] = set()
@@ -354,7 +365,10 @@ def prepare(
                 raise ValueError("Insight identity is duplicated")
             seen_identities.add(identity)
             lessons.append(lesson)
-            identities.append({"storyKey": identity[0], "insightId": identity[1]})
+            scope.append({
+                "storyKey": identity[0], "insightId": identity[1],
+                "insightAuthorityDigest": lesson["insightAuthorityDigest"],
+            })
             for reference in insight["evidence"]:
                 event_identity = (reference["documentId"], reference["eventId"])
                 if event_identity not in reviewed:
@@ -368,7 +382,7 @@ def prepare(
     return {
         "schema": CONTEXT_SCHEMA,
         "reusableLessons": lessons,
-        "insightIdentities": identities,
+        "insightScope": scope,
         "reviewedEvidence": evidence,
         "autoRemoved": auto_removed,
     }

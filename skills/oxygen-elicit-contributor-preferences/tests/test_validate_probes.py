@@ -15,24 +15,26 @@ assert SPEC.loader
 SPEC.loader.exec_module(VALIDATOR)
 
 
-def context():
+def context(count=1):
+    lessons = [{
+        "storyKey": f"chapter-{index}", "insightId": f"lesson-{index}", "insightAuthorityDigest": "d" * 64,
+        "title": "Lesson A", "background": "A reviewed background.",
+        "directlyAcquiredExperience": "A learned fact.", "principle": "A bounded principle.",
+    } for index in range(count)]
     return {
         "schema": "oxygen.preference-context",
-        "reusableLessons": [{
-            "storyKey": "chapter-a", "insightId": "lesson-a", "title": "Lesson A",
-            "background": "A reviewed background.", "directlyAcquiredExperience": "A learned fact.",
-            "principle": "A bounded principle.",
-        }],
-        "insightIdentities": [{"storyKey": "chapter-a", "insightId": "lesson-a"}],
+        "reusableLessons": lessons,
+        "insightScope": [{key: item[key] for key in ("storyKey", "insightId", "insightAuthorityDigest")} for item in lessons],
         "reviewedEvidence": [{"documentId": "trajectory-a", "eventId": "event-a", "documentKind": "trajectory"}],
         "autoRemoved": {"total": 1, "reversible": True, "categories": [{"kind": "credential", "count": 1}]},
     }
 
 
-def probe(identifier="probe-a"):
+def probe(identifier="probe-a", binding_index=0):
     options = [{"id": "one", "text": "Ask before editing deployment files."}, {"id": "two", "text": "Put deployment work on a separate branch."}]
     return {
-        "id": identifier, "documentId": "trajectory-a", "documentKind": "trajectory", "eventIds": ["event-a"],
+        "id": identifier, "storyKey": f"chapter-{binding_index}", "insightId": f"lesson-{binding_index}",
+        "insightAuthorityDigest": "d" * 64, "documentId": "trajectory-a", "documentKind": "trajectory", "eventIds": ["event-a"],
         "timestamp": None, "signal": "explicit_rule", "score": 80, "turns": 2,
         "recap": "The reviewed event records a deployment boundary.", "question": "What should the agent remember?",
         "options": options, "presentations": {"zh": {"recap": "已审阅事件记录了部署边界。", "question": "代理应该记住什么？", "options": [{"id": "one", "text": "修改部署文件前先询问。"}, {"id": "two", "text": "把部署工作放在单独分支。"}]}},
@@ -48,12 +50,43 @@ def bulk(identifier="bulk-a", evidence=None):
     }
 
 
+def regeneration_context():
+    value = context(); value.pop("autoRemoved"); value["schema"] = "oxygen.preference-regeneration-context"
+    value["binding"] = {"workflowRunId": "run-a", "sourceRevision": 7, "activeStoryDigest": "a" * 64,
+                        "serverVersion": 3, "lifecycleDigest": "b" * 64}
+    value["targets"] = [{"id": "probe-a", "storyKey": "chapter-0", "insightId": "lesson-0",
+                         "previousQuestionDigest": "c" * 64}]
+    value["exportDigest"] = VALIDATOR.digest(value)
+    return value
+
+
 class FinalizerTests(unittest.TestCase):
+    def test_regeneration_is_exact_changed_and_digest_bound(self):
+        candidate = probe(); candidate["question"] = "What should the agent remember now?"
+        result = VALIDATOR.finalize_regeneration(
+            regeneration_context(), {"probes": [candidate], "bulkDecisions": [], "setAside": 0})
+        self.assertEqual(result["schema"], "oxygen.preference-regeneration-import")
+        self.assertEqual(result["targets"][0]["id"], result["probes"][0]["id"])
+        self.assertEqual(result["importDigest"], VALIDATOR.digest({key: result[key] for key in result if key != "importDigest"}))
+
+    def test_regeneration_rejects_tampered_export_and_unchanged_question(self):
+        tampered = regeneration_context(); tampered["binding"]["serverVersion"] = 4
+        with self.assertRaisesRegex(ValueError, "authority"):
+            VALIDATOR.finalize_regeneration(tampered, {"probes": [probe()], "bulkDecisions": [], "setAside": 0})
+        unchanged = regeneration_context()
+        unchanged["targets"][0]["previousQuestionDigest"] = VALIDATOR.digest(
+            {key: probe()[key] for key in ("question", "options", "presentations")})
+        unchanged["exportDigest"] = VALIDATOR.digest({key: unchanged[key] for key in unchanged if key != "exportDigest"})
+        with self.assertRaisesRegex(ValueError, "unchanged"):
+            VALIDATOR.finalize_regeneration(unchanged, {"probes": [probe()], "bulkDecisions": [], "setAside": 0})
+
     def test_fixed_nonempty_digests_and_exact_bundle_keys(self):
         bundle = VALIDATOR.finalize(context(), {"probes": [probe()], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
-        self.assertEqual(set(bundle), {"workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount", "setAside", "probes", "bulkDecisions", "autoRemoved"})
-        self.assertEqual(bundle["inputDigest"], "0aaccfef36606dee21895ac04c22e1d2be6c395685f0ff43670a44b5dcb9662a")
-        self.assertEqual(bundle["outputDigest"], "b4f891752ea9e4763150ac3daf41b0fb12eccf3a98f977b395d52172fe6eb274")
+        self.assertEqual(set(bundle), {
+            "workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount", "setAside",
+            "insightScope", "probes", "bulkDecisions", "autoRemoved"})
+        self.assertEqual(bundle["inputDigest"], "e1c6d1d5d5b85b5dd73c0e87ae7cdaff9d9cb75672c90220e9d52de235fd1fc4")
+        self.assertEqual(bundle["outputDigest"], "1b2cb1e9b96d9f1d5996772f5e141a8297d4af7bd535952ec08ede98592c1f18")
 
     def test_completed_zero_and_nonzero_set_aside_rejection(self):
         bundle = VALIDATOR.finalize(context(), {"probes": [], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
@@ -62,19 +95,19 @@ class FinalizerTests(unittest.TestCase):
             VALIDATOR.finalize(context(), {"probes": [], "bulkDecisions": [], "setAside": 1}, "run-a", 7)
 
     def test_reordering_is_byte_stable(self):
-        first = VALIDATOR.finalize(context(), {"probes": [probe("probe-z"), probe("probe-a")], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
-        second = VALIDATOR.finalize(context(), {"probes": [probe("probe-a"), probe("probe-z")], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
+        first = VALIDATOR.finalize(context(2), {"probes": [probe("probe-z", 1), probe("probe-a", 0)], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
+        second = VALIDATOR.finalize(context(2), {"probes": [probe("probe-a", 0), probe("probe-z", 1)], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
         self.assertEqual(VALIDATOR.PREPARE.canonical_json(first), VALIDATOR.PREPARE.canonical_json(second))
 
     def test_question_and_evidence_bounds_are_exact(self):
-        questions = [probe(f"probe-{index:02d}") for index in range(20)]
+        questions = [probe(f"probe-{index:02d}", index) for index in range(20)]
         accepted = VALIDATOR.finalize(
-            context(), {"probes": questions, "bulkDecisions": [], "setAside": 7}, "run-a", 7,
+            context(20), {"probes": questions, "bulkDecisions": [], "setAside": 7}, "run-a", 7,
         )
         self.assertEqual(accepted["outputCount"], 20)
         with self.assertRaisesRegex(ValueError, "candidates"):
             VALIDATOR.finalize(
-                context(), {"probes": questions + [probe("probe-20")], "bulkDecisions": [], "setAside": 0},
+                context(21), {"probes": questions + [probe("probe-20", 20)], "bulkDecisions": [], "setAside": 0},
                 "run-a", 7,
             )
 

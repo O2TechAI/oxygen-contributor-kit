@@ -215,6 +215,15 @@ const statements = [
     auto_removed_json TEXT NOT NULL DEFAULT '{}',
     started_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS preference_lifecycle_authorities (
+    workflow_run_id TEXT PRIMARY KEY,
+    source_revision INTEGER NOT NULL CHECK(source_revision > 0),
+    active_story_digest TEXT,
+    story_session_version INTEGER NOT NULL DEFAULT 0 CHECK(story_session_version >= 0),
+    state_json TEXT NOT NULL CHECK(json_valid(state_json)),
+    state_digest TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS story_preparation_receipts (
     workflow_run_id TEXT NOT NULL, lane TEXT NOT NULL,
     source_revision INTEGER NOT NULL, input_digest TEXT NOT NULL,

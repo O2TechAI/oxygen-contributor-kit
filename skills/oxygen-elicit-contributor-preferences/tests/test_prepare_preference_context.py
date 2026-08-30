@@ -95,11 +95,11 @@ class PrepareContextTests(unittest.TestCase):
         self.assertEqual(output["schema"], "oxygen.preference-context")
         self.assertEqual(
             set(output),
-            {"schema", "reusableLessons", "insightIdentities", "reviewedEvidence", "autoRemoved"},
+            {"schema", "reusableLessons", "insightScope", "reviewedEvidence", "autoRemoved"},
         )
         self.assertEqual(
-            output["insightIdentities"],
-            [{"storyKey": "chapter-a", "insightId": "lesson-a"}],
+            output["insightScope"],
+            [{"storyKey": "chapter-a", "insightId": "lesson-a", "insightAuthorityDigest": output["reusableLessons"][0]["insightAuthorityDigest"]}],
         )
         self.assertEqual(output["reviewedEvidence"], [{
             "documentId": "trajectory-a", "eventId": "event-a", "documentKind": "trajectory",

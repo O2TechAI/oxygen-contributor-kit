@@ -11,6 +11,7 @@ import {
   STORY_PREPARATION_EMPTY_ARRAY_DIGEST,
   deriveStoryReleaseTargetCatalog,
   deriveStoryReleaseTargetContents,
+  insightAuthorityValue,
   validateStoryPreparationManifest,
 } from "../lib/story-preparation.ts";
 
@@ -30,6 +31,9 @@ registerHooks({
 const RUN_ID = "story-preparation-authority";
 const SOURCE_REVISION = 7;
 const SEMANTIC_DIGEST = "a".repeat(64);
+const PREFERENCE_BINDING = {
+  storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: "f".repeat(64),
+};
 const utf8Sort = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
 const independentCanonicalJson = (value) => {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -140,6 +144,7 @@ async function authorityFixture({
   const lessonOutput = stories.flatMap((source) => source.insights.map((insight) => ({
     storyKey: source.key,
     insightId: insight.id,
+    insightAuthorityDigest: independentDigest(insightAuthorityValue(source.key, insight)),
     ...(insight.title === undefined ? {} : { title: insight.title }),
     background: insight.background,
     directlyAcquiredExperience: insight.directlyAcquiredExperience,
@@ -151,6 +156,10 @@ async function authorityFixture({
     inputDigest: independentDigest(lessonOutput),
     outputDigest: independentDigest(preferenceOutput),
     outputCount: preferenceCount,
+    insightScope: lessonOutput.map(({ storyKey, insightId, insightAuthorityDigest }) => ({
+      storyKey, insightId, insightAuthorityDigest,
+    })).sort((left, right) => utf8Sort(left.storyKey, right.storyKey)
+      || utf8Sort(left.insightId, right.insightId)),
   };
   const storyOutput = storyCandidates.map((row, index) => ({
     id: row.id,
@@ -165,6 +174,7 @@ async function authorityFixture({
   const insightIdentities = stories.flatMap((source) => source.insights.map((insight) => ({
     storyKey: source.key,
     insightId: insight.id,
+    insightAuthorityDigest: independentDigest(insightAuthorityValue(source.key, insight)),
   }))).sort((left, right) => utf8Sort(left.storyKey, right.storyKey)
     || utf8Sort(left.insightId, right.insightId));
   const receipts = [{
@@ -349,10 +359,7 @@ test("scope omission, duplicate, foreign, overlapping Story keys, and Chapter-lo
     assert.equal(result.ok, true, result.code);
     const receipt = result.authority.receipts.find((item) => item.lane === "preference");
     assert.equal(receipt.scopeCount, 2);
-    assert.equal(receipt.scopeDigest, independentDigest([
-      { storyKey: "a", insightId: "local-insight" },
-      { storyKey: "b", insightId: "local-insight" },
-    ]));
+    assert.equal(receipt.scopeDigest, independentDigest(current.context.preference.insightScope));
   });
   await t.test("duplicate Insight IDs inside one Chapter remain invalid", async () => {
     const current = await authorityFixture();
@@ -442,7 +449,8 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       (id,document_id,sequence,content,original_json) VALUES (?,?,1,'Synthetic event','{}')`)
       .bind("doc:event", "doc").run();
     const probeAuthority = {
-      id: "probe-1", documentId: "doc", documentKind: "lab_notebook", eventIds: ["doc:event"],
+      id: "probe-1", ...PREFERENCE_BINDING,
+      documentId: "doc", documentKind: "lab_notebook", eventIds: ["doc:event"],
       timestamp: null, signal: "explicit_rule", score: 3, turns: 2,
       recap: "A contributor stated a rule.", question: "Keep this rule?",
       options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }], presentations: {},
@@ -462,6 +470,7 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       outputDigest,
       outputCount: 2,
       setAside: 1,
+      insightScope: [PREFERENCE_BINDING],
       probes: [probeAuthority],
       bulkDecisions: [bulkAuthority],
       autoRemoved: { total: 2, reversible: true, categories: [
@@ -576,6 +585,7 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       outputDigest: STORY_PREPARATION_EMPTY_ARRAY_DIGEST,
       outputCount: 0,
       setAside: 1,
+      insightScope: [PREFERENCE_BINDING],
       probes: [],
       bulkDecisions: [],
       autoRemoved: { total: 0, reversible: true, categories: [] },
@@ -592,6 +602,7 @@ test("Preference import validates before mutation, supports zero, and real SQL f
       outputDigest: STORY_PREPARATION_EMPTY_ARRAY_DIGEST,
       outputCount: 0,
       setAside: 0,
+      insightScope: [PREFERENCE_BINDING],
       probes: [],
       bulkDecisions: [],
       autoRemoved: { total: 0, reversible: true, categories: [] },
@@ -669,7 +680,7 @@ test("Preference import validates before mutation, supports zero, and real SQL f
   }
 });
 
-test("Preference GET and PATCH expose and mutate only current ready authority", async () => {
+test("Preference GET and PATCH reject a staged lifecycle without activated Story authority", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "oxygen-preference-current-"));
   const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
   process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
@@ -691,7 +702,8 @@ test("Preference GET and PATCH expose and mutate only current ready authority", 
       (id,document_id,sequence,content,original_json) VALUES (?,?,1,'Synthetic event','{}')`)
       .bind("meeting:event", "meeting-doc").run();
     const probe = {
-      id: "current-probe", documentId: "meeting-doc", documentKind: "meeting",
+      id: "current-probe", ...PREFERENCE_BINDING,
+      documentId: "meeting-doc", documentKind: "meeting",
       eventIds: ["meeting:event"], timestamp: null, signal: "explicit_rule", score: 50,
       turns: 1, recap: "A current rule.", question: "Keep the current rule?",
       options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }],
@@ -706,6 +718,7 @@ test("Preference GET and PATCH expose and mutate only current ready authority", 
       ),
       outputCount: 1,
       setAside: 0,
+      insightScope: [PREFERENCE_BINDING],
       probes: [probe],
       bulkDecisions: [],
       autoRemoved: { total: 0, reversible: true, categories: [] },
@@ -717,30 +730,22 @@ test("Preference GET and PATCH expose and mutate only current ready authority", 
       WHERE id=?`).bind(RUN_ID).run();
 
     const currentProjection = await (await collectionRoute.GET()).json();
-    assert.equal(currentProjection.probes.length, 1);
+    assert.equal(currentProjection.probes.length, 0);
     assert.equal(currentProjection.run.source_revision, SOURCE_REVISION);
     const answer = await itemRoute.PATCH(new Request("http://localhost/api/probes/current-probe", {
       method: "PATCH", body: JSON.stringify({ choice: "yes" }),
     }), { params: Promise.resolve({ id: "current-probe" }) });
-    assert.equal(answer.status, 200);
-    assert.equal((await answer.json()).answer_choice, "yes");
-    const clear = await itemRoute.PATCH(new Request("http://localhost/api/probes/current-probe", {
-      method: "PATCH", body: JSON.stringify({ clear: true }),
-    }), { params: Promise.resolve({ id: "current-probe" }) });
-    assert.equal(clear.status, 200);
-    assert.equal((await clear.json()).answer_choice, null);
-    await itemRoute.PATCH(new Request("http://localhost/api/probes/current-probe", {
-      method: "PATCH", body: JSON.stringify({ choice: "no" }),
-    }), { params: Promise.resolve({ id: "current-probe" }) });
+    assert.equal(answer.status, 409);
     const beforeStalePatch = await db.prepare(`SELECT answer_choice,answer_text,answered_at
       FROM probes WHERE id='current-probe'`).first();
+    assert.deepEqual(beforeStalePatch, { answer_choice: null, answer_text: null, answered_at: null });
 
     await db.prepare(`UPDATE workflow_runs SET story_source_revision=0 WHERE id=?`)
       .bind(RUN_ID).run();
     await db.prepare(`UPDATE probe_runs SET source_revision=0 WHERE workflow_run_id=?`)
       .bind(RUN_ID).run();
     assert.deepEqual(await (await collectionRoute.GET()).json(), {
-      probes: [], bulkDecisions: [], run: null,
+      lifecycleCurrent: false, probes: [], bulkDecisions: [], run: null,
     });
     assert.equal((await itemRoute.PATCH(new Request("http://localhost/api/probes/current-probe", {
       method: "PATCH", body: JSON.stringify({ clear: true }),
@@ -755,7 +760,7 @@ test("Preference GET and PATCH expose and mutate only current ready authority", 
     await db.prepare(`UPDATE workflow_runs SET story_source_revision=? WHERE id=?`)
       .bind(SOURCE_REVISION + 1, RUN_ID).run();
     assert.deepEqual(await (await collectionRoute.GET()).json(), {
-      probes: [], bulkDecisions: [], run: null,
+      lifecycleCurrent: false, probes: [], bulkDecisions: [], run: null,
     });
     assert.equal((await itemRoute.PATCH(new Request("http://localhost/api/probes/current-probe", {
       method: "PATCH", body: JSON.stringify({ clear: true }),
@@ -781,11 +786,21 @@ test("Preference GET and PATCH expose and mutate only current ready authority", 
 });
 
 test("preparation authority has no provider client or external network surface", async () => {
+  const regeneration = await import("../app/api/probes/regeneration/route.ts");
+  assert.equal((await regeneration.GET(new Request("http://localhost/api/probes/regeneration"))).status, 409);
+  assert.equal((await regeneration.POST(new Request("http://localhost/api/probes/regeneration", { method: "POST", body: "{" }))).status, 400);
   const files = await Promise.all([
     readFile(new URL("../lib/story-preparation.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/probes/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/workflow/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/probes/regeneration/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/probe-panel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
   ]);
-  const source = files.join("\n");
+  const source = files.slice(0, 4).join("\n");
   assert.doesNotMatch(source, /fetch\(|axios|openai|anthropic|cloudflare|provider|modelId|model_id/i);
+  assert.match(files[4], /"active"\|"inactive"\|"needs_update"\|"history"\|"legacy"/u);
+  assert.match(files[4], /key=\{probe\.lifecycle_key\|\|probe\.id\}/u);
+  assert.match(files[4], /<input[\s\S]{0,220}disabled=\{inactive \|\| busyId === probe\.id\}/u);
+  assert.match(files[5], /preferenceLifecycleCurrent && !probes\.some/u);
 });

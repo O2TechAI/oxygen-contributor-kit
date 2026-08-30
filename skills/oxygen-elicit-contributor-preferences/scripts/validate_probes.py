@@ -20,7 +20,8 @@ _spec.loader.exec_module(PREPARE)
 
 EMPTY_DIGEST = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 SIGNALS = {"repeated_correction", "long_exchange", "late_rejection", "decision_reversal", "explicit_rule", "sustained_disagreement"}
-PROBE_KEYS = {"id", "documentId", "documentKind", "eventIds", "timestamp", "signal", "score", "turns", "recap", "question", "options", "presentations", "allowOther", "allowSkip"}
+PROBE_KEYS = {"id", "storyKey", "insightId", "insightAuthorityDigest", "documentId", "documentKind", "eventIds", "timestamp", "signal"} | \
+    {"score", "turns", "recap", "question", "options", "presentations", "allowOther", "allowSkip"}
 BULK_KEYS = {"id", "kind", "count", "question", "evidenceSample", "presentations"}
 GENERIC = {"be more careful", "communicate better", "be clearer", "ask more questions", "do better", "follow instructions", "be consistent", "improve quality", "write better code", "test more", "be faster", "explain more"}
 ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
@@ -54,26 +55,31 @@ def digest(value: Any) -> str:
     return hashlib.sha256(PREPARE.canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def context_evidence(context: Any) -> dict[tuple[str, str], str]:
-    keys = {"schema", "reusableLessons", "insightIdentities", "reviewedEvidence", "autoRemoved"}
-    if not exact(context, keys) or context["schema"] != PREPARE.CONTEXT_SCHEMA:
+def context_evidence(context: Any) -> tuple[dict[tuple[str, str], str], dict[tuple[str, str], str]]:
+    regeneration = isinstance(context, dict) and context.get("schema") == "oxygen.preference-regeneration-context"
+    keys = {"schema", "reusableLessons", "insightScope", "reviewedEvidence", "autoRemoved"} if not regeneration else {
+        "schema", "binding", "reusableLessons", "insightScope", "reviewedEvidence", "targets", "exportDigest"}
+    if not exact(context, keys) or (not regeneration and context["schema"] != PREPARE.CONTEXT_SCHEMA):
         raise ValueError("preference context is malformed")
-    lessons, identities = context["reusableLessons"], context["insightIdentities"]
-    if not isinstance(lessons, list) or not isinstance(identities, list):
+    lessons, scope = context["reusableLessons"], context["insightScope"]
+    if not isinstance(lessons, list) or not isinstance(scope, list):
         raise ValueError("preference context is malformed")
     expected, seen = [], set()
     for lesson in lessons:
-        allowed = ({"storyKey", "insightId", "background", "directlyAcquiredExperience", "principle"}, {"storyKey", "insightId", "title", "background", "directlyAcquiredExperience", "principle"})
+        allowed = ({"storyKey", "insightId", "insightAuthorityDigest", "background", "directlyAcquiredExperience", "principle"},
+                   {"storyKey", "insightId", "insightAuthorityDigest", "title", "background", "directlyAcquiredExperience", "principle"})
         if (not isinstance(lesson, dict) or set(lesson) not in allowed
                 or not stable_id(lesson.get("storyKey")) or not stable_id(lesson.get("insightId"))
+                or not isinstance(lesson.get("insightAuthorityDigest"), str) or len(lesson["insightAuthorityDigest"]) != 64
+                or any(character not in "0123456789abcdef" for character in lesson["insightAuthorityDigest"])
                 or not all(safe_text(lesson.get(field)) for field in ("background", "directlyAcquiredExperience", "principle"))
                 or ("title" in lesson and not safe_text(lesson["title"]))):
             raise ValueError("preference context has malformed reusable lessons")
         identity = (lesson["storyKey"], lesson["insightId"])
         if identity in seen:
             raise ValueError("preference context has duplicate Insight identity")
-        seen.add(identity); expected.append({"storyKey": identity[0], "insightId": identity[1]})
-    if identities != expected or not isinstance(context["reviewedEvidence"], list):
+        seen.add(identity); expected.append({"storyKey": identity[0], "insightId": identity[1], "insightAuthorityDigest": lesson["insightAuthorityDigest"]})
+    if scope != expected or not isinstance(context["reviewedEvidence"], list):
         raise ValueError("preference context identities or evidence are stale")
     evidence: dict[tuple[str, str], str] = {}
     for record in context["reviewedEvidence"]:
@@ -85,9 +91,9 @@ def context_evidence(context: Any) -> dict[tuple[str, str], str]:
         if identity in evidence:
             raise ValueError("preference context has duplicate reviewed evidence")
         evidence[identity] = record["documentKind"]
-    if PREPARE.canonical_auto_removed(context["autoRemoved"]) != context["autoRemoved"]:
+    if not regeneration and PREPARE.canonical_auto_removed(context["autoRemoved"]) != context["autoRemoved"]:
         raise ValueError("preference context Privacy aggregate is not canonical")
-    return evidence
+    return evidence, {(item["storyKey"], item["insightId"]): item["insightAuthorityDigest"] for item in scope}
 
 
 def presentations(value: Any, options: list[dict[str, str]], bulk: bool = False) -> bool:
@@ -108,11 +114,14 @@ def presentations(value: Any, options: list[dict[str, str]], bulk: bool = False)
     return True
 
 
-def probe(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
+def probe(value: Any, evidence: dict[tuple[str, str], str], scope: dict[tuple[str, str], str]) -> dict[str, Any]:
     if not exact(value, PROBE_KEYS):
         raise ValueError("candidate probe has extra, unknown, or missing fields")
     if not stable_id(value["id"]) or not stable_id(value["documentId"]) or not PREPARE.valid_document_kind(value["documentKind"]) or value["signal"] not in SIGNALS:
         raise ValueError("candidate probe identity, kind, or signal is invalid")
+    if (not stable_id(value["storyKey"]) or not stable_id(value["insightId"])
+            or scope.get((value["storyKey"], value["insightId"])) != value["insightAuthorityDigest"]):
+        raise ValueError("candidate probe Insight binding is missing, foreign, or stale")
     if (not PREPARE.nonnegative_integer(value["score"]) or value["score"] > 100
             or not PREPARE.nonnegative_integer(value["turns"])):
         raise ValueError("candidate probe score or turns is invalid")
@@ -159,7 +168,7 @@ def bulk(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
 
 
 def finalize(context: Any, candidates: Any, workflow_run_id: str, source_revision: int) -> dict[str, Any]:
-    evidence = context_evidence(context)
+    evidence, scope = context_evidence(context)
     if (not stable_id(workflow_run_id, 1_000)
             or not PREPARE.nonnegative_integer(source_revision) or source_revision < 1):
         raise ValueError("workflow authority is invalid")
@@ -169,10 +178,11 @@ def finalize(context: Any, candidates: Any, workflow_run_id: str, source_revisio
             or len(candidates["probes"]) + len(candidates["bulkDecisions"]) > PREPARE.MAX_PREFERENCE_QUESTIONS
             or not PREPARE.nonnegative_integer(candidates["setAside"])):
         raise ValueError("candidates must contain only valid probes, bulkDecisions, and setAside")
-    probes = [probe(item, evidence) for item in candidates["probes"]]
+    probes = [probe(item, evidence, scope) for item in candidates["probes"]]
     decisions = [bulk(item, evidence) for item in candidates["bulkDecisions"]]
     ids = [item["id"] for item in probes + decisions]
-    if len(ids) != len(set(ids)):
+    bindings = [(item["storyKey"], item["insightId"]) for item in probes]
+    if len(ids) != len(set(ids)) or len(bindings) != len(set(bindings)):
         raise ValueError("candidate identity is duplicated")
     probes.sort(key=lambda item: item["id"].encode("utf-8")); decisions.sort(key=lambda item: item["id"].encode("utf-8"))
     count = len(probes) + len(decisions)
@@ -183,7 +193,36 @@ def finalize(context: Any, candidates: Any, workflow_run_id: str, source_revisio
     output = digest(batch)
     if count == 0 and output != EMPTY_DIGEST:
         raise ValueError("completed-zero digest is invalid")
-    return {"workflowRunId": workflow_run_id, "sourceRevision": source_revision, "inputDigest": digest(context["reusableLessons"]), "outputDigest": output, "outputCount": count, "setAside": candidates["setAside"], "probes": probes, "bulkDecisions": decisions, "autoRemoved": context["autoRemoved"]}
+    return {"workflowRunId": workflow_run_id, "sourceRevision": source_revision,
+            "inputDigest": digest(context["reusableLessons"]), "outputDigest": output, "outputCount": count,
+            "setAside": candidates["setAside"], "insightScope": context["insightScope"], "probes": probes,
+            "bulkDecisions": decisions, "autoRemoved": context["autoRemoved"]}
+
+
+def finalize_regeneration(context: Any, candidates: Any) -> dict[str, Any]:
+    evidence, scope = context_evidence(context)
+    draft = {key: context[key] for key in context if key != "exportDigest"}
+    if context["exportDigest"] != digest(draft) or not exact(candidates, {"probes", "bulkDecisions", "setAside"}) \
+            or candidates["bulkDecisions"] != [] or candidates["setAside"] != 0:
+        raise ValueError("regeneration authority is invalid")
+    probes = [probe(item, evidence, scope) for item in candidates["probes"]]
+    targets = context["targets"]
+    if not isinstance(targets, list) or len(probes) != len(targets):
+        raise ValueError("regeneration scope is incomplete")
+    target_map = {(item.get("storyKey"), item.get("insightId")): item for item in targets if isinstance(item, dict)}
+    question_digest = lambda item: digest({key: item[key] for key in ("question", "options", "presentations")})
+    if len(target_map) != len(targets) or any(
+        (target := target_map.get((item["storyKey"], item["insightId"]))) is None
+        or target.get("id") != item["id"] or target.get("previousQuestionDigest") == question_digest(item)
+        for item in probes
+    ):
+        raise ValueError("regeneration is foreign or unchanged")
+    probes.sort(key=lambda item: item["id"].encode("utf-8"))
+    receipt = {"status": "complete", "inputDigest": context["exportDigest"],
+               "outputDigest": digest(probes), "outputCount": len(probes)}
+    output = {"schema": "oxygen.preference-regeneration-import", "binding": context["binding"],
+              "targets": targets, "probes": probes, "receipt": receipt}
+    return {**output, "importDigest": digest(output)}
 
 
 def write_atomic(path: Path, value: Any) -> None:
@@ -196,14 +235,17 @@ def write_atomic(path: Path, value: Any) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--context", required=True, type=Path); parser.add_argument("--candidates", required=True, type=Path)
-    parser.add_argument("--workflow-run-id", required=True); parser.add_argument("--source-revision", required=True, type=int); parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--workflow-run-id"); parser.add_argument("--source-revision", type=int); parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--regeneration", action="store_true")
     args = parser.parse_args()
     try:
-        result = finalize(load(args.context), load(args.candidates), args.workflow_run_id, args.source_revision)
+        context = load(args.context); candidates = load(args.candidates)
+        result = finalize_regeneration(context, candidates) if args.regeneration else finalize(context, candidates, args.workflow_run_id, args.source_revision)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr); return 1
     write_atomic(args.output, result)
-    print(json.dumps({"ok": True, "inputDigest": result["inputDigest"], "outputDigest": result["outputDigest"]}))
+    receipt = result.get("receipt", result)
+    print(json.dumps({"ok": True, "inputDigest": receipt["inputDigest"], "outputDigest": receipt["outputDigest"]}))
     return 0
 
 

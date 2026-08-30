@@ -88,7 +88,9 @@ export async function buildPackageFromDatabase(
   const documentResult = { results: privacySnapshot.documentRows };
   const itemResult = { results: privacySnapshot.itemRows };
   const redactionResult = { results: privacySnapshot.redactionRows };
-  const probeResult = { results: privacySnapshot.probeRows };
+  const currentProbeIds = new Set(initialReconstruction.preferenceProbeIds);
+  const probeResult = { results: privacySnapshot.probeRows
+    .filter((row) => currentProbeIds.has(String(row.id))) };
   const bulkResult = { results: privacySnapshot.bulkRows };
   const probeRun = privacySnapshot.probeRun;
   const currentSourceDigest = await computeSourceDigest(itemResult.results);

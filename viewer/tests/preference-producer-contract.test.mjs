@@ -24,17 +24,21 @@ registerHooks({
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const FINALIZER = join(ROOT, "skills", "oxygen-elicit-contributor-preferences", "scripts", "validate_probes.py");
 const RUN_ID = "preference-producer-contract";
+const INSIGHT_DIGEST = "a".repeat(64);
 
 const context = {
   schema: "oxygen.preference-context",
-  reusableLessons: [{ storyKey: "chapter-a", insightId: "insight-a", background: "Reviewed background.", directlyAcquiredExperience: "Reviewed experience.", principle: "Reviewed principle." }],
-  insightIdentities: [{ storyKey: "chapter-a", insightId: "insight-a" }],
+  reusableLessons: [{ storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: INSIGHT_DIGEST,
+    background: "Reviewed background.", directlyAcquiredExperience: "Reviewed experience.",
+    principle: "Reviewed principle." }],
+  insightScope: [{ storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: INSIGHT_DIGEST }],
   reviewedEvidence: [{ documentId: "doc-a", eventId: "event-a", documentKind: "trajectory" }],
   autoRemoved: { total: 0, reversible: true, categories: [] },
 };
 const candidates = {
   probes: [{
-    id: "probe-a", documentId: "doc-a", documentKind: "trajectory", eventIds: ["event-a"], timestamp: null,
+    id: "probe-a", storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: INSIGHT_DIGEST,
+    documentId: "doc-a", documentKind: "trajectory", eventIds: ["event-a"], timestamp: null,
     signal: "explicit_rule", score: 90, turns: 1, recap: "A reviewed source set a boundary.",
     question: "What should the agent remember?", options: [{ id: "one", text: "Ask before changing this boundary." }, { id: "two", text: "Use a separate branch for this boundary." }],
     presentations: {}, allowOther: true, allowSkip: true,
@@ -54,7 +58,9 @@ test("Python preference producer emits the exact Core digest batch accepted by P
     await writeFile(candidatesPath, JSON.stringify(candidates));
     execFileSync("python", [FINALIZER, "--context", contextPath, "--candidates", candidatesPath, "--workflow-run-id", RUN_ID, "--source-revision", "3", "--output", outputPath], { stdio: "pipe" });
     const bundle = JSON.parse(await readFile(outputPath, "utf8"));
-    assert.deepEqual(Object.keys(bundle).sort(), ["autoRemoved", "bulkDecisions", "inputDigest", "outputCount", "outputDigest", "probes", "setAside", "sourceRevision", "workflowRunId"]);
+    assert.deepEqual(Object.keys(bundle).sort(), ["autoRemoved", "bulkDecisions", "inputDigest", "insightScope",
+      "outputCount", "outputDigest",
+      "probes", "setAside", "sourceRevision", "workflowRunId"]);
     const [{ getLocalDatabase }, route, preparation] = await Promise.all([
       import("../db/index.ts"), import("../app/api/probes/route.ts"), import("../lib/story-preparation.ts"),
     ]);

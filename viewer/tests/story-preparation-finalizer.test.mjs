@@ -10,6 +10,7 @@ import {
   canonicalPreferenceQuestionBatch,
   deriveStoryReleaseTargetCatalog,
   deriveStoryReleaseTargetContents,
+  insightAuthorityValue,
 } from "../lib/story-preparation.ts";
 
 const root = resolve(import.meta.dirname, "../..");
@@ -59,18 +60,19 @@ function rowsFor(stories) {
 
 function lessons(stories) {
   return stories.flatMap((story) => story.insights.map((insight) => ({
-    storyKey: story.key, insightId: insight.id, background: insight.background,
+    storyKey: story.key, insightId: insight.id,
+    insightAuthorityDigest: digest(insightAuthorityValue(story.key, insight)), background: insight.background,
     directlyAcquiredExperience: insight.directlyAcquiredExperience, principle: insight.principle,
   })));
 }
 
-function probe(documentKind = "trajectory") {
+function probe(documentKind = "trajectory", binding = {}) {
   const options = [
     { id: "one", text: "Ask before editing deployment files." },
     { id: "two", text: "Put deployment work on a separate branch." },
   ];
   return {
-    id: "probe-a", documentId: "doc", documentKind, eventIds: ["event:é"],
+    id: "probe-a", ...binding, documentId: "doc", documentKind, eventIds: ["event:é"],
     timestamp: "2026-08-27T12:00:00Z", signal: "explicit_rule", score: 80, turns: 2,
     recap: "The reviewed event records a deployment boundary.",
     question: "What should the agent remember?", options,
@@ -157,11 +159,16 @@ async function fixture({
   const base = canonicalRows.map((row, index) => ({ id: row.id, story: { ...canonicalStories[index], insights: [] } }));
   const complete = canonicalRows.map((row, index) => ({ id: row.id, story: canonicalStories[index] }));
   const inputDigest = digest(lessons(canonicalStories));
-  const probes = questions ? [probe(documentKind)] : [];
+  const lessonRows = lessons(canonicalStories);
+  const probeLesson = lessonRows.find((row) => row.storyKey === "é") ?? lessonRows[0];
+  const probes = questions ? [probe(documentKind, {
+    storyKey: probeLesson.storyKey, insightId: probeLesson.insightId, insightAuthorityDigest: probeLesson.insightAuthorityDigest,
+  })] : [];
   const bulkDecisions = questions ? [bulkDecision()] : [];
   const batch = canonicalPreferenceQuestionBatch(probes, bulkDecisions);
   const preference = {
     workflowRunId: "run-11", sourceRevision: 4, inputDigest, outputDigest: digest(batch),
+    insightScope: lessonRows.map(({ storyKey, insightId, insightAuthorityDigest }) => ({ storyKey, insightId, insightAuthorityDigest })),
     outputCount: batch.length, setAside: 0, probes, bulkDecisions,
     autoRemoved: { total: 6, reversible: true, categories: [
       { kind: "credential", count: 1 },
@@ -189,7 +196,7 @@ async function fixture({
   const units = {
     story: ["é", "z"], insight: ["é", "z"],
     story_privacy: deriveStoryReleaseTargetCatalog(stories).map((target) => target.id),
-    preference: insightIds[0] === null && insightIds[1] === null ? [] : [canonical({ storyKey: "é", insightId: insightIds[0] }), canonical({ storyKey: "z", insightId: insightIds[1] })],
+    preference: lessonRows.map(({ storyKey, insightId, insightAuthorityDigest }) => canonical({ storyKey, insightId, insightAuthorityDigest })),
   };
   const laneOutputs = {
     story: reverse ? [...base].reverse() : base,
@@ -254,8 +261,8 @@ async function fixture({
         reviewedNarrative: insightReviewedNarrative,
       } : lane === "preference" ? {
         preferenceContext: {
-          schema: "oxygen.preference-context", reusableLessons: lessons(canonicalStories),
-          insightIdentities: lessons(canonicalStories).map(({ storyKey, insightId }) => ({ storyKey, insightId })),
+          schema: "oxygen.preference-context", reusableLessons: lessonRows,
+          insightScope: preference.insightScope,
           reviewedEvidence: [...eventIds.values()].map((eventId) => ({
             documentId: "doc", eventId, documentKind,
           })),
@@ -347,7 +354,10 @@ test("Story candidate order uses the production comparator for producer-identica
     assert.equal(await readFile(first.output, "utf8"), await readFile(second.output, "utf8"));
     const result = await readJson(first.output);
     const receipt = result.receipts.find((item) => item.lane === "preference");
-    assert.equal(receipt.inputDigest, digest(lessons([source("é", "same"), source("z", "same")])));
+    assert.equal(receipt.inputDigest, digest(lessons([
+      source("é", "same", "a".repeat(64), "b".repeat(64), candidateIds[0]),
+      source("z", "same", "a".repeat(64), "b".repeat(64), candidateIds[1]),
+    ])));
   } finally { await first.cleanup(); await second.cleanup(); }
 });
 

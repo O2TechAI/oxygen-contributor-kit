@@ -59,10 +59,10 @@ const metadataKeys = new Set([
 ]);
 const preferenceKeys = [
   "workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount",
-  "setAside", "probes", "bulkDecisions", "autoRemoved",
+  "setAside", "insightScope", "probes", "bulkDecisions", "autoRemoved",
 ];
 const probeKeys = [
-  "id", "documentId", "documentKind", "eventIds", "timestamp", "signal", "score",
+  "id", "storyKey", "insightId", "insightAuthorityDigest", "documentId", "documentKind", "eventIds", "timestamp", "signal", "score",
   "turns", "recap", "question", "options", "presentations", "allowOther", "allowSkip",
 ];
 const bulkKeys = ["id", "kind", "count", "question", "evidenceSample", "presentations"];
@@ -491,7 +491,7 @@ function preferenceOption(value) {
   return exactKeys(value, ["id", "text"]) && boundedId(value.id, 200) && safeText(value.text);
 }
 
-function preferenceProbe(value, evidence) {
+function preferenceProbe(value, evidence, scope) {
   if (!exactKeys(value, probeKeys) || !boundedId(value.id) || !boundedId(value.documentId)
     || !validPreferenceDocumentKind(value.documentKind)
     || !Array.isArray(value.eventIds) || value.eventIds.length === 0
@@ -505,6 +505,7 @@ function preferenceProbe(value, evidence) {
     || !Array.isArray(value.options) || ![2, 3].includes(value.options.length)
     || value.options.some((option) => !preferenceOption(option))
     || new Set(value.options.map((option) => option.id)).size !== value.options.length
+    || scope.get(canonicalAuthorityJson([value.storyKey, value.insightId])) !== value.insightAuthorityDigest
     || value.allowOther !== true || value.allowSkip !== true) fail("PREFERENCE_BUNDLE_INVALID");
   const normalizedOptions = value.options.map((option) => normalizeOptionText(option.text));
   if (new Set(normalizedOptions).size !== normalizedOptions.length
@@ -545,10 +546,16 @@ function validatePreference(value, input) {
     canonicalAuthorityJson([record?.documentId, record?.eventId]), record?.documentKind,
   ]));
   const evidenceIds = new Set(context.reviewedEvidence.map((record) => record?.eventId));
-  const probes = value.probes.map((probe) => preferenceProbe(probe, evidence));
+  const scope = new Map(context.insightScope?.map((item) => [
+    canonicalAuthorityJson([item?.storyKey, item?.insightId]), item?.insightAuthorityDigest,
+  ]));
+  if (!Array.isArray(value.insightScope) || canonicalAuthorityJson(value.insightScope) !== canonicalAuthorityJson(context.insightScope)
+    || scope.size !== context.insightScope?.length) fail("PREFERENCE_BUNDLE_INVALID");
+  const probes = value.probes.map((probe) => preferenceProbe(probe, evidence, scope));
   const decisions = value.bulkDecisions.map((decision) => preferenceBulk(decision, evidenceIds));
   const ids = [...probes, ...decisions].map((item) => item.id);
-  if (new Set(ids).size !== ids.length || value.outputCount !== ids.length
+  const bindings = probes.map((probe) => canonicalAuthorityJson([probe.storyKey, probe.insightId]));
+  if (new Set(ids).size !== ids.length || new Set(bindings).size !== bindings.length || value.outputCount !== ids.length
     || (value.outputCount === 0 && value.setAside !== 0)
     || canonicalAuthorityJson(probes) !== canonicalAuthorityJson([...probes].sort((a, b) => compareUtf8(a.id, b.id)))
     || canonicalAuthorityJson(decisions) !== canonicalAuthorityJson([...decisions].sort((a, b) => compareUtf8(a.id, b.id)))) {

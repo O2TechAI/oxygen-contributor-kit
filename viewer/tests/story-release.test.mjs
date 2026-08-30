@@ -35,6 +35,11 @@ import {
 import { readActiveStoryReviewContract } from "../lib/story-review-session-server.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { captureStoryReleasePrivacySnapshot } from "../lib/release-privacy-snapshot.ts";
+import {
+  createPreferenceLifecycleState,
+  preferenceInsightScope,
+  projectPreferenceLifecycle,
+} from "../lib/story-release-server.ts";
 import { readCoveragePrivacyAuthority } from "../lib/story-coverage-privacy-authority.ts";
 import {
   buildCurrentSourcePrivacyDialogue,
@@ -54,6 +59,7 @@ import { STORY_PREFIX } from "../lib/timeline.ts";
 import {
   deriveStoryReleaseTargetContents,
   deriveStoryReleaseTargetCatalog,
+  insightAuthorityValue,
   storyPreparationDigest,
 } from "../lib/story-preparation.ts";
 
@@ -302,6 +308,40 @@ test("pending, missing, and edited-without-reaccept story Insight state blocks r
   }).chapters, []);
 });
 
+test("Preference lifecycle projects accepted, rejected, and accepted-edited Insights exactly", async () => {
+  const currentSource = source([insight("insight-preference")]);
+  const scope = await preferenceInsightScope([currentSource]);
+  const probe = { id: "preference-question", ...scope[0], question: "Keep this rule?",
+    options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }], presentations: {} };
+  const state = await createPreferenceLifecycleState(scope, [probe]);
+  const project = (review) => projectPreferenceLifecycle(
+    [currentSource], { [currentSource.key]: review }, state, [probe],
+  );
+  assert.equal((await project(reviewedState(currentSource)))[0].lifecycle_status, "active");
+  assert.equal((await projectPreferenceLifecycle(
+    [currentSource], { [currentSource.key]: reviewedState(currentSource) }, state, [],
+  ))[0].lifecycle_status, "needs_update");
+  assert.equal((await projectPreferenceLifecycle(
+    [currentSource], { [currentSource.key]: reviewedState(currentSource) }, state,
+    [{ ...probe, question: "Tampered question" }],
+  ))[0].lifecycle_status, "needs_update");
+  assert.equal((await project(reviewedState(currentSource, { "insight-preference": "rejected" })))[0].lifecycle_status, "inactive");
+  let edited = { ...reviewedState(currentSource), stage: "revision_ready" };
+  const content = { ...currentSource.insights[0], title: "Accepted edited title" };
+  delete content.id;
+  edited = editAiInsight(edited, currentSource, "insight-preference", content);
+  edited = updateAiInsightDecision(edited, currentSource, "insight-preference", "accepted");
+  edited = applyChapterReview(edited, context(currentSource)).state;
+  assert.equal((await project(edited))[0].lifecycle_status, "needs_update");
+  const editedInsight = { ...currentSource.insights[0], ...content, id:"insight-preference" };
+  const regeneratedScope = [{ storyKey:currentSource.key, insightId:editedInsight.id,
+    insightAuthorityDigest:await storyPreparationDigest(insightAuthorityValue(currentSource.key, editedInsight)) }];
+  const regeneratedProbe = { ...probe, ...regeneratedScope[0], question:"Keep the edited rule?" };
+  const regenerated = await createPreferenceLifecycleState(regeneratedScope, [regeneratedProbe]);
+  assert.equal((await projectPreferenceLifecycle([currentSource], { [currentSource.key]:edited }, regenerated,
+    [regeneratedProbe]))[0].lifecycle_status, "active");
+});
+
 test("story sanitizer strips every non-product field and canonicalizes Insight order", () => {
   const currentSource = source([insight("insight-b"), insight("insight-a")], {}, "Safe detail");
   const release = buildReviewedStoryRelease(
@@ -330,7 +370,7 @@ async function sha256(value) {
 
 
 class FakeStoryReleaseDb {
-  constructor({ items, run, session, redactionJob, redactions = [], receipts, probeRun,
+  constructor({ items, run, session, redactionJob, redactions = [], receipts, probeRun, preferenceLifecycle,
     releaseConfirmation, completeness, sourcePrivacyReceipt, finalizedCorpus,
     storyPrivacyCandidates = [], storyPrivacyTargets = [] }) {
     this.items = items;
@@ -342,6 +382,7 @@ class FakeStoryReleaseDb {
     this.finalizedCorpus = finalizedCorpus;
     this.receipts = receipts;
     this.probeRun = probeRun;
+    this.preferenceLifecycle = preferenceLifecycle;
     this.releaseConfirmation = releaseConfirmation;
     this.completeness = completeness;
     this.storyPrivacyCandidates = storyPrivacyCandidates;
@@ -392,6 +433,9 @@ class FakeStoryReleaseDb {
         if (/FROM probe_runs/.test(sql)) return { results: this.probeRun ? [structuredClone(this.probeRun)] : [] };
         if (/FROM probes/.test(sql)) return { results: [] };
         if (/FROM probe_bulk_decisions/.test(sql)) return { results: [] };
+        if (/FROM preference_lifecycle_authorities/.test(sql)) {
+          return { results: this.preferenceLifecycle ? [structuredClone(this.preferenceLifecycle)] : [] };
+        }
         if (/FROM project_release_confirmations/.test(sql)) {
           return { results: this.releaseConfirmation ? [structuredClone(this.releaseConfirmation)] : [] };
         }
@@ -659,13 +703,17 @@ async function serverFixture({
       input_digest: emptyDigest, scope_digest: emptyDigest, scope_count: 0,
       output_digest: emptyDigest, output_count: 0, completed_at: completedAt },
   ];
+  const activeStoryDigest = await sha256(validation.canonicalCandidate);
+  const preferenceState = {
+    generationScope: await preferenceInsightScope([currentSource]), questions: [], history: [],
+  };
   const db = new FakeStoryReleaseDb({
     items: [item],
     run: {
       id: RUN_ID,
       status: "ready_for_human_review",
       sourceRevision: SOURCE_REVISION,
-      activeStoryDigest: await sha256(validation.canonicalCandidate),
+      activeStoryDigest,
     },
     session: {
       state_json: JSON.stringify({ sourceRevision: SOURCE_REVISION, session }),
@@ -712,6 +760,12 @@ async function serverFixture({
       workflow_run_id: RUN_ID, id: RUN_ID, source_revision: SOURCE_REVISION,
       input_digest: emptyDigest, output_digest: emptyDigest, output_count: 0,
       status: "complete", stage: "preference", model: null, generated: 0, set_aside: 0,
+    },
+    preferenceLifecycle: {
+      workflow_run_id: RUN_ID, source_revision: SOURCE_REVISION,
+      active_story_digest: activeStoryDigest, story_session_version: SERVER_VERSION,
+      state_json: canonicalAuthorityJson(preferenceState),
+      state_digest: await storyPreparationDigest(preferenceState),
     },
     releaseConfirmation: null,
     storyPrivacyCandidates,

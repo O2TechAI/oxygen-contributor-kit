@@ -75,7 +75,11 @@ export type PreferenceBatchAuthority = {
   inputDigest: string;
   outputDigest: string;
   outputCount: number;
+  insightScope: PreferenceInsightBinding[];
+  lifecycleDigest?: string;
 };
+
+export type PreferenceInsightBinding = { storyKey: string; insightId: string; insightAuthorityDigest: string };
 
 export type StoryPreparationContext = {
   workflowRunId: string;
@@ -152,6 +156,10 @@ export async function storyPreparationDigest(value: unknown) {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+export const insightAuthorityValue = (storyKey: string, insight: StorySource["insights"][number]) => ({
+  storyKey, insightId: insight.id, content: insight,
+});
 
 export function canonicalPreferenceQuestionBatch(
   probes: Array<Record<string, unknown> & { id: string }>,
@@ -259,15 +267,14 @@ function insightLaneOutput(rows: StoryCandidateRow[], stories: StorySource[]) {
   return insightCount === 0 ? [] : finalStoryOutput(rows, stories);
 }
 
-function reusableLessonOutput(stories: StorySource[]) {
-  return stories.flatMap((story) => story.insights.map((insight) => ({
-    storyKey: story.key,
-    insightId: insight.id,
+async function reusableLessonOutput(stories: StorySource[]) {
+  return Promise.all(stories.flatMap((story) => story.insights.map(async (insight) => ({
+    storyKey: story.key, insightId: insight.id,
+    insightAuthorityDigest: await storyPreparationDigest(insightAuthorityValue(story.key, insight)),
     ...(insight.title === undefined ? {} : { title: insight.title }),
-    background: insight.background,
-    directlyAcquiredExperience: insight.directlyAcquiredExperience,
+    background: insight.background, directlyAcquiredExperience: insight.directlyAcquiredExperience,
     principle: insight.principle,
-  })));
+  }))));
 }
 
 function parseReceipt(value: unknown): StoryPreparationReceipt | null {
@@ -439,10 +446,10 @@ export async function validateStoryPreparationManifest(
   }
   const storyKeys = sortedUniqueIds(stories.map((story) => story.key));
   if (!storyKeys) return mismatch("STORY_PREPARATION_SCOPE_INVALID");
-  const insightIdentities = stories.flatMap((story) => story.insights.map((insight) => ({
-    storyKey: story.key,
-    insightId: insight.id,
-  }))).sort((left, right) => (
+  const lessonOutput = await reusableLessonOutput(stories);
+  const insightScope = lessonOutput.map(({ storyKey, insightId, insightAuthorityDigest }) => ({
+    storyKey, insightId, insightAuthorityDigest,
+  })).sort((left, right) => (
     compareUtf8(left.storyKey, right.storyKey) || compareUtf8(left.insightId, right.insightId)
   ));
   const targetContents = deriveStoryReleaseTargetContents(stories);
@@ -460,7 +467,8 @@ export async function validateStoryPreparationManifest(
     || !digestPattern.test(context.preference.inputDigest)
     || !digestPattern.test(context.preference.outputDigest)
     || !exactNonNegativeInteger(context.preference.outputCount)
-    || context.preference.outputCount > MAX_PREFERENCE_QUESTIONS) {
+    || context.preference.outputCount > MAX_PREFERENCE_QUESTIONS
+    || canonicalAuthorityJson(context.preference.insightScope) !== canonicalAuthorityJson(insightScope)) {
     return mismatch("STORY_PREPARATION_PREFERENCE_AUTHORITY_INVALID");
   }
 
@@ -468,7 +476,6 @@ export async function validateStoryPreparationManifest(
   const completeStoryOutput = finalStoryOutput(context.storyCandidates, stories);
   const insightOutput = insightLaneOutput(context.storyCandidates, stories);
   const insightCount = stories.reduce((total, story) => total + story.insights.length, 0);
-  const lessonOutput = reusableLessonOutput(stories);
   const expected: Record<StoryPreparationLane, StoryPreparationReceipt> = {
     story: {
       lane: "story",
@@ -501,8 +508,8 @@ export async function validateStoryPreparationManifest(
       lane: "preference",
       status: "complete",
       inputDigest: await storyPreparationDigest(lessonOutput),
-      scopeDigest: await storyPreparationDigest(insightIdentities),
-      scopeCount: insightIdentities.length,
+      scopeDigest: await storyPreparationDigest(insightScope),
+      scopeCount: insightScope.length,
       outputDigest: context.preference.outputDigest,
       outputCount: context.preference.outputCount,
     },
