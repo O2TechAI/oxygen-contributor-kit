@@ -64,6 +64,17 @@ function storedCorpus(db, workflowRunId) {
   }));
 }
 
+async function durableCorpusSnapshot(db) {
+  const tables = [
+    "documents", "items", "finalized_corpus_manifests", "workflow_runs",
+    "organization_jobs", "redaction_jobs",
+  ];
+  return Object.fromEntries(await Promise.all(tables.map(async (table) => {
+    const { results } = await db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
+    return [table, results];
+  })));
+}
+
 function post(route, payload) {
   return route.POST(new Request("http://localhost/api/documents", {
     method: "POST",
@@ -144,6 +155,13 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
       active_story_digest: null,
     });
 
+    const beforeIdentical = await durableCorpusSnapshot(db);
+    const identicalResponse = await post(route, firstPayload);
+    assert.equal(identicalResponse.status, 200);
+    assert.deepEqual(await identicalResponse.json(), firstResult);
+    assert.deepEqual(await durableCorpusSnapshot(db), beforeIdentical,
+      "an exact-current corpus attach must not rewrite any durable source authority");
+
     await db.prepare(`INSERT INTO organization_jobs
       (id,status,stage,started_at,updated_at) VALUES (?,?,?,?,?)`)
       .bind("organization-before-replace", "complete", "done", now, now).run();
@@ -187,6 +205,21 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
       status: "stale", stage: "source_changed", completed_at: null,
     });
 
+    await db.prepare("UPDATE items SET content=? WHERE id=?")
+      .bind("tampered current content", "event-current").run();
+    const drifted = await storedCorpus(db, workflowRunId);
+    assert.equal(drifted.manifest.corpus_digest, replacementDigest,
+      "the matching manifest remains present while its canonical row has drifted");
+    const repairedResponse = await post(route, replacementPayload);
+    assert.equal(repairedResponse.status, 200);
+    assert.deepEqual(await repairedResponse.json(), {
+      ...replacementResult,
+      corpusRevision: 3,
+    });
+    const repaired = await storedCorpus(db, workflowRunId);
+    assert.equal(repaired.items[0].content, "current content");
+    assert.equal(repaired.workflow.story_source_revision, 3);
+
     await db.prepare(`CREATE TRIGGER fail_replacement_item BEFORE INSERT ON items
       WHEN NEW.id='event-failing' BEGIN SELECT RAISE(ABORT, 'forced replacement failure'); END`).run();
     const beforeFailure = await storedCorpus(db, workflowRunId);
@@ -207,6 +240,10 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
 
     assert.equal(await publication.beginStorySourceMutation(db, workflowRunId, now), true);
     const beforeCasZero = await storedCorpus(db, workflowRunId);
+    const activeWriterResponse = await post(route, replacementPayload);
+    assert.equal(activeWriterResponse.status, 409);
+    assert.deepEqual(await storedCorpus(db, workflowRunId), beforeCasZero,
+      "an active source writer must never be accepted as an exact-current no-op");
     const casPublished = await publication.publishFinalizedCorpusSourceMutation(
       db,
       [

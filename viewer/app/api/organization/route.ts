@@ -67,6 +67,80 @@ function finalizedCorpusCountsMatch(authority: FinalizedCorpusAuthority) {
     && authority.itemCount === authority.currentItemCount;
 }
 
+type ContributionItemRow = {
+  id: string;
+  document_id: string;
+  sequence: number;
+  event_type: string | null;
+  actor_id: string | null;
+  actor_type: string | null;
+  timestamp: string | null;
+  content: string;
+  original_json: string;
+};
+
+async function readContributionRecords(itemRows: ContributionItemRow[]) {
+  if (itemRows.some((row) => new TextEncoder().encode(JSON.stringify({
+    id: row.id,
+    documentId: row.document_id,
+    eventType: row.event_type,
+    actorId: row.actor_id,
+    actorType: row.actor_type,
+    timestamp: row.timestamp,
+    content: row.content,
+  })).byteLength > MAX_SEMANTIC_EVIDENCE_ITEM_BYTES)) {
+    return { ok: false as const, code: "SEMANTIC_EVIDENCE_ITEM_TOO_LARGE" };
+  }
+  try {
+    return {
+      ok: true as const,
+      records: await Promise.all(itemRows.map(async (row) => {
+        const original = JSON.parse(row.original_json) as Record<string, unknown>;
+        const originalEventId = original?.event_id;
+        const originalTrajectoryId = original?.trajectory_id;
+        const identityMatches = (
+          typeof originalEventId === "string"
+          && originalEventId === row.id
+          && typeof originalTrajectoryId === "string"
+          && originalTrajectoryId === row.document_id
+        ) || (
+          originalEventId === undefined
+          && (originalTrajectoryId === undefined || originalTrajectoryId === row.document_id)
+          && row.id.startsWith(`${row.document_id}:`)
+        );
+        if (!identityMatches) throw new Error("Contribution source identity mismatch");
+        return {
+          id: row.id,
+          sourceDigest: await contributionRecordSourceDigest(original, {
+            id: row.id,
+            documentId: row.document_id,
+            sequence: Number(row.sequence),
+            eventType: row.event_type,
+            actorId: row.actor_id,
+            actorType: row.actor_type,
+            timestamp: row.timestamp,
+            content: row.content,
+          }),
+        };
+      })),
+    };
+  } catch {
+    return { ok: false as const, code: "CONTRIBUTION_SOURCE_INVALID" };
+  }
+}
+
+function contributionFailureResponse(code: string) {
+  return code === "SEMANTIC_EVIDENCE_ITEM_TOO_LARGE"
+    ? Response.json({
+      error: "Contribution Evidence exceeds the bounded semantic input",
+      code,
+    }, { status: 409 })
+    : Response.json({
+      error: "Contribution source identity validation failed",
+      code,
+    }, { status: 409 });
+}
+
 async function status(db: Awaited<ReturnType<typeof getLocalDatabase>>, workflowRunId: string) {
   const [job, counts, documents, manifest] = await Promise.all([
     db.prepare("SELECT * FROM organization_jobs WHERE id=?").bind(JOB_ID)
@@ -123,6 +197,87 @@ async function status(db: Awaited<ReturnType<typeof getLocalDatabase>>, workflow
     } : null,
     warnings: JSON.parse(String(job?.warnings_json || "[]")),
   };
+}
+
+async function exactCurrentSemanticResponse(
+  db: Awaited<ReturnType<typeof getLocalDatabase>>,
+  workflowRunId: string,
+  submittedManifest: unknown,
+) {
+  return db.transaction(async () => {
+    const [finalizedCorpus, { results: itemRows }, binding] = await Promise.all([
+      readFinalizedCorpusAuthority(db, workflowRunId),
+      db.prepare(`SELECT id,document_id,sequence,event_type,actor_id,actor_type,
+          timestamp,content,original_json FROM items ORDER BY id`)
+        .all<ContributionItemRow>(),
+      db.prepare(`SELECT m.project_id,m.revision,m.source_revision,m.source_digest,
+          m.universe_digest,m.manifest_digest,m.unit_count,m.serialized_bytes,
+          m.story_projection_bytes,
+          m.corpus_revision,m.corpus_digest,m.corpus_document_count,m.corpus_item_count,
+          (SELECT COUNT(*) FROM semantic_units) AS current_unit_count,
+          (SELECT COUNT(*) FROM semantic_unit_members) AS current_member_count
+        FROM semantic_manifests m WHERE m.workflow_run_id=?`).bind(workflowRunId)
+        .first<Record<string, unknown>>(),
+    ]);
+    if (!finalizedCorpus) {
+      return Response.json({
+        error: "A finalized source corpus is required before Organization",
+        code: "FINALIZED_CORPUS_REQUIRED",
+      }, { status: 409 });
+    }
+    if (!finalizedCorpusCountsMatch(finalizedCorpus)) {
+      return Response.json({
+        error: "Finalized source corpus counts do not match current source rows",
+        code: "FINALIZED_CORPUS_COUNT_MISMATCH",
+      }, { status: 409 });
+    }
+    if (isStorySourceWriteInProgress(finalizedCorpus.storyGenerationStatus)) {
+      return Response.json({
+        error: "Finalized source corpus replacement is still running",
+        code: "FINALIZED_CORPUS_NOT_CURRENT",
+      }, { status: 409 });
+    }
+    if (itemRows.length !== finalizedCorpus.itemCount) {
+      return Response.json({
+        error: "Finalized source corpus authority changed before Organization",
+        code: "FINALIZED_CORPUS_NOT_CURRENT",
+      }, { status: 409 });
+    }
+    const contributions = await readContributionRecords(itemRows);
+    if (!contributions.ok) return null;
+    const validation = await validateSemanticManifestAuthority(
+      submittedManifest,
+      contributions.records,
+    );
+    if (!validation.ok) return null;
+    let storedManifest: SemanticManifestAuthority | null = null;
+    try {
+      storedManifest = await readStoredSemanticManifestAuthority(db, workflowRunId);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+    const manifest = validation.authority;
+    if (!binding || !storedManifest
+      || Number(binding.revision) !== manifest.revision
+      || storedManifest.revision !== manifest.revision
+      || binding.manifest_digest !== manifest.manifestDigest
+      || storedManifest.manifestDigest !== manifest.manifestDigest
+      || Number(binding.source_revision) !== finalizedCorpus.storySourceRevision
+      || Number(binding.corpus_revision) !== finalizedCorpus.corpusRevision
+      || binding.corpus_digest !== finalizedCorpus.corpusDigest
+      || Number(binding.corpus_document_count) !== finalizedCorpus.documentCount
+      || Number(binding.corpus_item_count) !== finalizedCorpus.itemCount
+      || Number(binding.unit_count) !== manifest.units.length
+      || Number(binding.current_unit_count) !== manifest.units.length
+      || Number(binding.current_member_count) !== itemRows.length
+      || Number(binding.serialized_bytes) !== manifest.serializedBytes
+      || storedManifest.serializedBytes !== manifest.serializedBytes
+      || Number(binding.story_projection_bytes) !== validation.storyProjectionBytes
+    ) {
+      return null;
+    }
+    return Response.json(await status(db, workflowRunId));
+  });
 }
 
 async function readSemanticProjection(
@@ -295,6 +450,12 @@ export async function POST(request: Request) {
     || Object.keys(body).some((key) => !["semanticManifest"].includes(key))) {
     return Response.json({ error: "Invalid semantic manifest" }, { status: 400 });
   }
+  const exactCurrent = await exactCurrentSemanticResponse(
+    db,
+    authority.workflowRunId,
+    (body as { semanticManifest?: unknown }).semanticManifest,
+  );
+  if (exactCurrent) return exactCurrent;
   const finalizedCorpus = await readFinalizedCorpusAuthority(db, authority.workflowRunId);
   if (!finalizedCorpus) {
     return Response.json({
@@ -323,9 +484,7 @@ export async function POST(request: Request) {
     const [{ results: itemRows }, run, storedPreviousManifest, leasedCorpus] = await Promise.all([
       db.prepare(`SELECT id,document_id,sequence,event_type,actor_id,actor_type,
           timestamp,content,original_json FROM items ORDER BY id`)
-        .all<{ id: string; document_id: string; sequence: number; event_type: string | null;
-          actor_id: string | null; actor_type: string | null; timestamp: string | null;
-          content: string; original_json: string }>(),
+        .all<ContributionItemRow>(),
       db.prepare(`SELECT story_source_revision FROM workflow_runs WHERE id=?`)
         .bind(authority.workflowRunId).first<{ story_source_revision: number }>(),
       readStoredSemanticManifestAuthority(db, authority.workflowRunId),
@@ -348,60 +507,12 @@ export async function POST(request: Request) {
     // The stored snapshot is revision lineage only. Current authority remains
     // the leased finalized corpus and the complete next-manifest validation.
     const previousManifest = storedPreviousManifest;
-    const oversizedEvidence = itemRows.some((row) => new TextEncoder().encode(JSON.stringify({
-      id: row.id,
-      documentId: row.document_id,
-      eventType: row.event_type,
-      actorId: row.actor_id,
-      actorType: row.actor_type,
-      timestamp: row.timestamp,
-      content: row.content,
-    })).byteLength > MAX_SEMANTIC_EVIDENCE_ITEM_BYTES);
-    if (oversizedEvidence) {
+    const contributions = await readContributionRecords(itemRows);
+    if (!contributions.ok) {
       await abortStorySourceMutation(db, authority.workflowRunId, now, leasedRevision);
-      return Response.json({
-        error: "Contribution Evidence exceeds the bounded semantic input",
-        code: "SEMANTIC_EVIDENCE_ITEM_TOO_LARGE",
-      }, { status: 409 });
+      return contributionFailureResponse(contributions.code);
     }
-    let contributionRecords: Array<{ id: string; sourceDigest: string }>;
-    try {
-      contributionRecords = await Promise.all(itemRows.map(async (row) => {
-        const original = JSON.parse(row.original_json) as Record<string, unknown>;
-        const originalEventId = original?.event_id;
-        const originalTrajectoryId = original?.trajectory_id;
-        const identityMatches = (
-          typeof originalEventId === "string"
-          && originalEventId === row.id
-          && typeof originalTrajectoryId === "string"
-          && originalTrajectoryId === row.document_id
-        ) || (
-          originalEventId === undefined
-          && (originalTrajectoryId === undefined || originalTrajectoryId === row.document_id)
-          && row.id.startsWith(`${row.document_id}:`)
-        );
-        if (!identityMatches) throw new Error("Contribution source identity mismatch");
-        return {
-          id: row.id,
-          sourceDigest: await contributionRecordSourceDigest(original, {
-            id: row.id,
-            documentId: row.document_id,
-            sequence: Number(row.sequence),
-            eventType: row.event_type,
-            actorId: row.actor_id,
-            actorType: row.actor_type,
-            timestamp: row.timestamp,
-            content: row.content,
-          }),
-        };
-      }));
-    } catch {
-      await abortStorySourceMutation(db, authority.workflowRunId, now, leasedRevision);
-      return Response.json({
-        error: "Contribution source identity validation failed",
-        code: "CONTRIBUTION_SOURCE_INVALID",
-      }, { status: 409 });
-    }
+    const contributionRecords = contributions.records;
     const validation = await validateSemanticManifestAuthority(
       (body as { semanticManifest?: unknown }).semanticManifest,
       contributionRecords,

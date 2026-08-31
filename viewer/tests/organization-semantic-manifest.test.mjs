@@ -19,6 +19,10 @@ import {
   validateSemanticRevisionTransition,
   validateSemanticManifestAuthority,
 } from "../lib/story-readiness.ts";
+import {
+  buildSourcePrivacyReceipt,
+  installSourcePrivacyReceipt,
+} from "./fixtures/source-privacy-receipt.mjs";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -151,6 +155,19 @@ async function storedContributionRecords(db) {
       timestamp: row.timestamp,
       content: row.content,
     }),
+  })));
+}
+
+async function completeAttachSnapshot(db) {
+  const tables = [
+    "documents", "items", "finalized_corpus_manifests", "workflow_runs",
+    "organization_jobs", "semantic_manifests", "semantic_units", "semantic_unit_members",
+    "redaction_jobs", "source_privacy_receipts", "story_privacy_authorities", "probe_runs",
+    "project_release_confirmations",
+  ];
+  return Object.fromEntries(await Promise.all(tables.map(async (table) => {
+    const { results } = await db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
+    return [table, results];
   })));
 }
 
@@ -580,6 +597,61 @@ test("Organization carries same-workflow semantic lineage across full-corpus rep
     assert.equal(firstOrganization.completed, 203);
 
     const activatedSourceRevision = firstOrganization.semanticManifest.sourceRevision;
+    const sourcePrivacyReceipt = await buildSourcePrivacyReceipt(db, {
+      workflowRunId,
+      sourceRevision: activatedSourceRevision,
+    });
+    await db.batch([
+      db.prepare(`UPDATE workflow_runs SET story_generation_status='ready_for_human_review',
+        active_story_digest=?,updated_at=? WHERE id=?`)
+        .bind("a".repeat(64), "2039-02-01T00:00:00.000Z", workflowRunId),
+      db.prepare(`INSERT INTO redaction_jobs
+        (id,status,stage,model,completed,total,rejected,source_digest,
+         started_at,updated_at,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+        .bind("completed-source-privacy", "complete", "done", "fixture-model", 0, 0, 0,
+          sourcePrivacyReceipt.sourceDigest, "2039-01-02T00:00:00.000Z", "2039-01-03T00:00:00.000Z",
+          "2039-01-03T00:00:00.000Z"),
+      db.prepare(`INSERT INTO story_privacy_authorities
+        (workflow_run_id,source_revision,active_story_digest,server_version,
+         reviewed_story_digest,target_catalog_json,target_catalog_digest,changed_target_digest,
+         changed_target_count,receipt_digest,proposal_digest,proposal_count,imported_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+        workflowRunId, activatedSourceRevision, "a".repeat(64), 1, "c".repeat(64), "[]",
+        "d".repeat(64), "e".repeat(64), 0, "f".repeat(64), "1".repeat(64), 0,
+        "2039-01-04T00:00:00.000Z",
+      ),
+      db.prepare(`INSERT INTO probe_runs
+        (workflow_run_id,id,source_revision,input_digest,output_digest,output_count,status,stage,
+         generated,set_aside,auto_removed_json,started_at,updated_at,completed_at)
+        VALUES (?,?,?,?,?,1,'complete','preference',1,0,'{}',?,?,?)`).bind(
+        workflowRunId, "completed-preference", activatedSourceRevision,
+        "2".repeat(64), "3".repeat(64), "2039-01-05T00:00:00.000Z",
+        "2039-01-06T00:00:00.000Z", "2039-01-06T00:00:00.000Z",
+      ),
+      db.prepare(`INSERT INTO project_release_confirmations
+        (workflow_run_id,review_gate_digest,confirmed_at) VALUES (?,?,?)`)
+        .bind(workflowRunId, "4".repeat(64), "2039-01-07T00:00:00.000Z"),
+    ]);
+    await installSourcePrivacyReceipt(db, {
+      jobId: "completed-source-privacy",
+      workflowRunId,
+      receipt: sourcePrivacyReceipt,
+      at: "2039-01-03T00:00:00.000Z",
+    });
+    const beforeIdenticalAttach = await completeAttachSnapshot(db);
+    const identicalCorpusResponse = await postJson(
+      documentsRoute, "/api/documents", reviewCorpus("revision-1"),
+    );
+    assert.equal(identicalCorpusResponse.status, 200);
+    assert.deepEqual(await identicalCorpusResponse.json(), firstCorpusAuthority);
+    const identicalOrganizationResponse = await postJson(
+      organizationRoute, "/api/organization", { semanticManifest: firstManifest },
+    );
+    assert.equal(identicalOrganizationResponse.status, 200);
+    assert.deepEqual(await identicalOrganizationResponse.json(), firstOrganization);
+    assert.deepEqual(await completeAttachSnapshot(db), beforeIdenticalAttach,
+      "an exact documents-plus-Organization reattach must preserve all downstream authority");
+
     await db.prepare(`UPDATE workflow_runs SET story_source_revision=0 WHERE id=?`)
       .bind(workflowRunId).run();
     await db.prepare(`UPDATE semantic_manifests SET source_revision=0 WHERE workflow_run_id=?`)
@@ -705,6 +777,49 @@ test("Organization carries same-workflow semantic lineage across full-corpus rep
       corpus_revision: 2,
       corpus_digest: replacementAuthority.corpusDigest,
     });
+
+    const beforeSerializedDrift = await db.prepare(`SELECT m.serialized_bytes,
+        r.story_source_revision FROM semantic_manifests m JOIN workflow_runs r ON r.id=m.workflow_run_id
+        WHERE m.workflow_run_id=?`).bind(workflowRunId).first();
+    await db.prepare(`UPDATE semantic_manifests SET serialized_bytes=serialized_bytes+1
+      WHERE workflow_run_id=?`).bind(workflowRunId).run();
+    const serializedDriftResponse = await postJson(
+      organizationRoute, "/api/organization", { semanticManifest: nextManifest },
+    );
+    assert.equal(serializedDriftResponse.status, 200);
+    assert.deepEqual(await db.prepare(`SELECT m.serialized_bytes,
+        r.story_source_revision FROM semantic_manifests m JOIN workflow_runs r ON r.id=m.workflow_run_id
+        WHERE m.workflow_run_id=?`).bind(workflowRunId).first(), {
+      serialized_bytes: Buffer.byteLength(JSON.stringify(nextManifest)),
+      story_source_revision: Number(beforeSerializedDrift.story_source_revision) + 1,
+    }, "serialized-byte drift must use the guarded publication path and restore durable authority");
+
+    await db.prepare(`UPDATE semantic_unit_members SET source_digest=?
+      WHERE workflow_run_id=? AND item_id=?`).bind(
+      "9".repeat(64), workflowRunId, nextManifest.units[0].members[0],
+    ).run();
+    const driftedSemanticRows = await Promise.all([
+      db.prepare("SELECT * FROM semantic_manifests WHERE workflow_run_id=?")
+        .bind(workflowRunId).all(),
+      db.prepare("SELECT * FROM semantic_units WHERE workflow_run_id=? ORDER BY id")
+        .bind(workflowRunId).all(),
+      db.prepare("SELECT * FROM semantic_unit_members WHERE workflow_run_id=? ORDER BY item_id")
+        .bind(workflowRunId).all(),
+    ]);
+    const driftResponse = await postJson(
+      organizationRoute, "/api/organization", { semanticManifest: nextManifest },
+    );
+    assert.equal(driftResponse.status, 409);
+    assert.equal((await driftResponse.json()).code, "SEMANTIC_REVISION_STALE");
+    assert.deepEqual(await Promise.all([
+      db.prepare("SELECT * FROM semantic_manifests WHERE workflow_run_id=?")
+        .bind(workflowRunId).all(),
+      db.prepare("SELECT * FROM semantic_units WHERE workflow_run_id=? ORDER BY id")
+        .bind(workflowRunId).all(),
+      db.prepare("SELECT * FROM semantic_unit_members WHERE workflow_run_id=? ORDER BY item_id")
+        .bind(workflowRunId).all(),
+    ]), driftedSemanticRows,
+    "a matching manifest must not mask drift in persisted semantic member authority");
   } finally {
     globalThis.__oxygenLocalSqlite?.database.close();
     delete globalThis.__oxygenLocalSqlite;
