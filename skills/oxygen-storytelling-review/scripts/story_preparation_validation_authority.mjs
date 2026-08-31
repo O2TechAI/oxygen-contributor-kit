@@ -249,7 +249,6 @@ function projectEvidence(rows, sourcePrivacy) {
       id: row.id,
       documentId: row.documentId,
       sequence: row.sequence,
-      timestamp: row.timestamp,
       eventType: row.eventType,
       actorType: row.actorType,
       actorEquivalence: row.actorId,
