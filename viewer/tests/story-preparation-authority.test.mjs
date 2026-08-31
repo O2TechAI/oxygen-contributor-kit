@@ -238,7 +238,7 @@ async function authorityFixture({
 
 const clone = (value) => structuredClone(value);
 
-test("reviewed meeting chronology remains internal evidence, not writing-worker metadata", async () => {
+test("reviewed meeting narrative preserves exact bound text outside validation metadata", async () => {
   const root = await mkdtemp(join(tmpdir(), "reviewed-meeting-chronology-"));
   try {
     const chronology = "2026-01-02T03:04:05.678+05:45";
@@ -264,22 +264,31 @@ test("reviewed meeting chronology remains internal evidence, not writing-worker 
     await mkdir(meetingRoot, { recursive: true });
     await writeFile(semanticPath, JSON.stringify(semantic), "utf8");
     await writeFile(join(reviewRoot, "project-map.json"), JSON.stringify(semantic), "utf8");
+    const protectedFragment = "safe reviewed meeting";
+    const reviewedNarrative = `${protectedFragment} narrative`;
     await writeFile(join(meetingRoot, "meeting.json"), JSON.stringify({
       meeting_id: "doc",
       records: [{
         record_id: "a", order: 1, speaker: `actor-${"1".repeat(64)}`,
-        timestamp: chronology, text: "safe reviewed meeting narrative",
+        timestamp: chronology, text: reviewedNarrative,
       }],
     }), "utf8");
     const sourceDigest = await computeSourceDigest([{
       id: "doc:a", document_id: "doc", sequence: 1, event_type: "record",
-      actor_type: "human", timestamp: chronology, content: "safe reviewed meeting narrative",
+      actor_type: "human", timestamp: chronology, content: reviewedNarrative,
     }]);
     await writeFile(sourcePrivacyPath, JSON.stringify({
-      redactions: [],
+      redactions: [{
+        id: "source-redaction-current", item_id: "doc:a", document_id: "doc",
+        start_offset: 0, end_offset: Array.from(protectedFragment).length,
+        category: "sensitive", confidence: "high", reason: "Synthetic protected context.",
+        review_state: "deterministic", uncertainty_reason: null, status: "active",
+        created_by: "local-test", created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:01Z",
+      }],
       job: {
         id: "source-privacy-current", status: "complete", stage: "complete", model: null,
-        completed: 0, total: 0, rejected: 0, source_revision: 1,
+        completed: 1, total: 1, rejected: 0, source_revision: 1,
         source_digest: sourceDigest, receipt_digest: "8".repeat(64),
         started_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:01Z",
         completed_at: "2026-01-01T00:00:01Z",
@@ -306,12 +315,16 @@ test("reviewed meeting chronology remains internal evidence, not writing-worker 
 
     assert.equal(built.authority.evidence[0].timestamp, chronology);
     assert.equal(Object.hasOwn(built.reviewedNarrative[0], "timestamp"), false);
+    assert.equal(
+      built.reviewedNarrative[0].narrative,
+      reviewedNarrative,
+    );
     const insightNarrative = insightReviewedNarrative(
       [{ payload: { ownerBundles: [{ reviewedNarrative: built.reviewedNarrative }] } }],
       [{ id: "doc:a", summary: `oxygen.story:${JSON.stringify(story("a", { insight: false }))}` }],
     );
     assert.deepEqual(insightNarrative, [{
-      id: "doc:a", documentId: "doc", narrative: "safe reviewed meeting narrative",
+      id: "doc:a", documentId: "doc", narrative: reviewedNarrative,
     }]);
     assert.equal(Object.hasOwn(insightNarrative[0], "timestamp"), false);
   } finally {

@@ -1,6 +1,6 @@
 # Story preparation transport
 
-This is the sole unversioned public transport from the current Privacy-reviewed Organization
+This is the sole unversioned public transport from the current Source-Privacy-bound Organization
 semantic authority to `story-candidates.json` and `oxygen.story-preparation`. It is deterministic
 and provider-free. The workflow-owning parent automatically assigns generated inputs to bounded
 host subagents and records their proposals; the
@@ -17,16 +17,17 @@ map has the finite Coverage transport envelope, while the extracted semantic man
 unchanged byte limit, canonical digest, and exact unit membership.
 
 The preparer verifies the Source Privacy digest against the exact current reviewed source rows,
-normalizes Coverage with the existing Coverage validator, applies only current final active
-redactions, and writes `story/validation-authority.json` once. That minimal bundle contains the
+normalizes Coverage with the existing Coverage validator, preserves the exact bound raw reviewed
+narrative for the selected-provider Story input, and writes `story/validation-authority.json` once.
+That minimal bundle contains the
 semantic and Coverage authorities plus evidence identity, event/actor type, and opaque
 actor-equivalence tokens. It contains no source text, raw actor ID, redaction row, provider
-metadata, or private value. The worker input binds its digest and carries the corresponding
-Privacy-reviewed narrative once; it never carries pre-redaction text.
+metadata, private value, or source narrative. The worker input binds its digest and is the only
+artifact here that carries the corresponding exact bound raw reviewed narrative.
 
 Each lane is prepared once under one transport root. Before Coverage finalization, the parent
 establishes the global Chapter-owner skeleton by coherent narrative arc across the complete
-Privacy-safe semantic projection. It does not default or mechanically copy `ownerId` from `unitId`,
+bound reviewed semantic projection. It does not default or mechanically copy `ownerId` from `unitId`,
 derive Chapter count from semantic-unit/source/meeting/prior-run count, or derive Phase count from
 Chapter count or semantic kind. Related units may share one owner, one Chapter may represent
 multiple units, and multiple Chapters may share one Phase. Finalized Coverage `ownerId` is then the
@@ -38,10 +39,10 @@ count controls this partitioning.
 Every shard binds the lane, deterministic shard ID, upstream input digest, exact assigned
 identities, per-input digest, and lane payload. Full reviewed narrative and the central validation
 authority are not copied into every non-Story shard. Each Story input is self-contained: it carries
-complete represented semantic units, their Privacy-reviewed narrative, canonical semantic/Coverage
+complete represented semantic units, their exact bound raw reviewed narrative, canonical semantic/Coverage
 references, and equality-only actor tokens for its owners. It carries no excluded narrative, raw
-actor identity, Source Privacy row, pre-redaction content, private sentinel, or provider metadata.
-A worker reads exactly one Privacy-safe `inputPath` and
+actor identity, Source Privacy row, source outside the exact reviewed boundary, or provider metadata.
+A worker uses the contributor-selected current provider to read exactly one provider-bound `inputPath` and
 writes only its proposal; it never writes a digest, receipt, final manifest, SQLite, Viewer API,
 revision, activation state, release state, or publication state.
 
@@ -49,7 +50,7 @@ Every `story`-lane subagent assignment must convey this ordered contract before 
 
 1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
 2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
-3. Then read exactly the assignment's one generated Privacy-safe `inputPath`.
+3. Then read exactly the assignment's one generated provider-bound `inputPath`.
 4. Write only that assignment's proposal.
 
 The parent must not dispatch a Story worker unless the assignment names both required contract
@@ -62,8 +63,8 @@ shard automatically. Preference intentionally uses exactly one global bounded wo
 produces one deduplicated questionnaire authority, capped at 12 probes by default and 20 maximum;
 the parent must not fan Preference out. When host subagents are available, dispatches run in waves
 of at most three live subagents. Silently doing all semantic reasoning in the parent is invalid.
-Internal host subagents are not product provider/API calls, require no separate API key, and
-receive no raw/private source beyond their prepared input. If the host genuinely lacks that
+Processing remains with the contributor-selected current provider, does not call a second endpoint,
+requires no separate API key, and receives no source beyond the exact bound reviewed input. If the host genuinely lacks that
 capability, the parent processes the identical assignments serially, reports
 `executionMode=serial_capability_limited`, and continues through the same recorder/finalizer
 authority without asking the contributor to create workers.
@@ -152,11 +153,11 @@ assigned Story key, including an empty array when no Insight is warranted:
 
 Each nonempty `insights` array must make the frozen base Story satisfy the Story data contract.
 The immutable input contains only assigned Story candidates, their Story blocks and Evidence
-references, the minimum `reviewedNarrative` rows referenced by those blocks, and the existing
-validation-authority reference. It contains no raw/pre-redaction source, Source Privacy rows,
+references, the minimum exact bound `reviewedNarrative` rows referenced by those blocks, and the existing
+validation-authority reference. It contains no source outside the reviewed boundary, Source Privacy rows,
 unrelated Chapters or trajectory narrative, private actor identity, or provider metadata. Every
 nonempty proposal uses `anchorStoryBlockId` only for placement and `quote: { text, evidence }` for
-one exact current Privacy-reviewed trajectory substring. Quote Evidence must support the anchored
+one exact current bound reviewed trajectory substring. Quote Evidence must support the anchored
 block. Top-level `evidence` may be empty and is retained only for broader same-Chapter grounding.
 Replacing a rejected proposal against byte-identical immutable input is allowed before receipt;
 invalid proposals create neither output nor receipt.
@@ -181,7 +182,7 @@ Chapters use the production comparator. The finalizer independently
 reopens the frozen inputs, receipts, and outputs through physical containment, checks every content
 digest and exact identity union, reconstructs the final Story/Insight result, calls the same
 `validateStorySourcePackage` again on the composed package using the reopened immutable minimum
-Privacy-reviewed narrative rows, binds the unchanged
+exact bound reviewed narrative rows, binds the unchanged
 Preference bundle, and emits the existing `oxygen.story-preparation` manifest.
 
 ## Public PowerShell sequence

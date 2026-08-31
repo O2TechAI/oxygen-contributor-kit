@@ -2,7 +2,8 @@
 
 ## Product Outcome
 
-Storytelling Review turns a privacy-prepared reviewed project history into:
+Storytelling Review turns a reviewed project history with upstream Source Privacy release
+authority into:
 
 ```text
 Project Story
@@ -76,12 +77,12 @@ Preference questions must be generated before Project Story human review opens b
 
 ## Bounded Semantic Workers
 
-Semantic work is Master-owned. The owning Agent runs the public preparer before any worker starts;
-it computes immutable input digests, assigns the exact current identities, and installs the bounded
-worker input and shard manifest together.
+Semantic work is workflow-parent-owned. The workflow parent runs the public preparer before any
+worker starts; it computes immutable input digests, assigns the exact current identities, and
+installs the bounded worker input and shard manifest together.
 
 Before Coverage finalization, the parent establishes one global Chapter-owner skeleton by coherent
-narrative arc across the complete Privacy-safe semantic projection. It never defaults or
+narrative arc across the complete exact-bound reviewed semantic projection. It never defaults or
 mechanically copies `ownerId` from `unitId`; no semantic-unit, source-document, meeting, prior-run,
 Chapter, Phase, block, Insight, or Evidence count is golden. Related units may share one owner, one
 Chapter may represent multiple units, and multiple Chapters may later share one Phase. Finalized
@@ -92,9 +93,11 @@ then sibling Story Privacy and Preference-question passes. Story, Insight, and S
 multi-shard. Preference intentionally uses exactly one global bounded worker because it produces
 one deduplicated questionnaire authority, capped at 12 probes by default and 20 maximum. Workers
 write only lane proposals. The recorder validates each proposal against the frozen lane, shard, input digest, and assigned
-identities. Each Story input is self-contained with its complete represented units, Privacy-reviewed
-narrative, canonical references, and equality-only actor tokens; it has no excluded narrative, raw
-identity, Source Privacy rows, pre-redaction content, or provider metadata. Story workers return
+identities. Each Story input is self-contained with its complete represented units, exact bound raw
+reviewed narrative, canonical references, and equality-only actor tokens; it has no excluded or
+outside-boundary narrative, raw identity, Source Privacy rows, or provider metadata. Its validation
+authority has no source narrative, raw actor identity, or source outside the exact reviewed
+boundary. Story workers return
 phase-free proposals and never author schema, keys, Phase, Coverage, exclusions, receipts, or
 authority. On a subagent-capable host the parent does not initially write Story prose or choose
 People or Evidence. It reads every proposal in full, records all eight narrative decisions against
@@ -128,11 +131,12 @@ remains a separate later pass. Actual subagent spawning is proved only by later 
 static tests.
 
 Each Insight worker receives only its assigned frozen Story candidates, their Story blocks and
-Evidence references, the minimum Privacy-reviewed narrative rows those blocks reference, and the
-existing validation-authority reference. It receives no raw/pre-redaction source, Source Privacy
-rows, unrelated Chapter or trajectory narrative, private actor identity, or provider metadata.
-`anchorStoryBlockId` controls placement only. `quote.text` is one exact current Privacy-reviewed
-trajectory substring bound to `quote.evidence`, and that Evidence must support the anchored block.
+Evidence references, the minimum exact bound raw reviewed narrative rows those blocks reference,
+and the existing validation-authority reference. It receives no narrative outside that exact
+reviewed boundary, Source Privacy rows, unrelated Chapter or trajectory narrative, private actor
+identity, or provider metadata. `anchorStoryBlockId` controls placement only. `quote.text` is one
+exact current substring of the bound raw reviewed narrative, bound to `quote.evidence`, and that
+Evidence must support the anchored block.
 Invalid anchors, quote/anchor mismatch, modified or Story-derived paraphrase, foreign/stale/private
 Evidence, and unavailable current reviewed narrative fail before output or receipt and again in the
 finalizer and server-owned activation path. Completed-zero is valid.
@@ -201,12 +205,14 @@ After Chapters are complete and ordered, adjacent Chapters may be grouped into p
 
 Generate zero or more Insights only after the complete Story is understood. No Chapter has an Insight quota.
 
-Each AI Insight card appears beside its one `anchorStoryBlockId` passage and displays its exact safe
-source `quote.text`; it never reconstructs Quote from Story prose. On narrow screens the card follows
-its anchored paragraph in DOM order. AI source Quote and anchor remain read-only in the editor while
+Each AI Insight card appears beside its one `anchorStoryBlockId` passage and locally displays its
+exact bound reviewed source `quote.text`; it never reconstructs Quote from Story prose. The local
+Quote may contain exact bound raw source text. On narrow screens the card follows its anchored
+paragraph in DOM order. AI source Quote and anchor remain read-only in the editor while
 explanatory fields may be reviewed. Human-created Insight keeps its separate exact user-selected
 Story-substring Quote origin and lifecycle. Release HTML and ZIP preserve the same placement and
-safe Quote while stripping anchors, Evidence IDs, Privacy authority, CAS data, and review metadata.
+the contributor-selected Story Privacy release bytes while stripping anchors, Evidence IDs,
+Privacy authority, CAS data, and review metadata.
 
 ## Visual And Interaction Product
 

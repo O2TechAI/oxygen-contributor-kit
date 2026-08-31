@@ -222,6 +222,34 @@ test("public docs align Preference timing and the final-export Privacy boundary"
   assert.match(productContract, /Final package reconstruction is\s+provider-free[\s\S]{0,100}does not make the entire workflow provider-free/iu);
 });
 
+test("routed Story contracts distinguish exact-bound provider input from final release bytes", async () => {
+  const [agents, sop, product, checklist, bilingual, privacy] = await Promise.all([
+    read("AGENTS.md"),
+    read("SOP.md"),
+    read("skills/oxygen-storytelling-review/references/product-contract.md"),
+    read("skills/oxygen-storytelling-review/references/validation-checklist.md"),
+    read("skills/oxygen-storytelling-review/references/bilingual-contract.md"),
+    read("skills/oxygen-storytelling-review/references/privacy-evidence-boundary.md"),
+  ]);
+
+  for (const document of [agents, sop, product, checklist]) {
+    assert.match(document, /exact bound raw reviewed narrative/iu);
+    assert.match(document, /contributor-selected current(?: coding Agent\/model)? provider/iu);
+    assert.match(document, /(?:contains|has) no source narrative/iu);
+    assert.match(document, /raw actor identity/iu);
+    assert.match(document, /source outside the exact reviewed\s+boundary/iu);
+  }
+  for (const document of [agents, sop]) {
+    assert.match(document, /Source Privacy[\s\S]{0,100}mandatory release authority/iu);
+    assert.match(document, /not applied[\s\S]{0,80}before[\s\S]{0,80}Story authoring|does not apply Source Privacy redactions before authoring/iu);
+  }
+  assert.match(product, /local\s+Quote may contain exact bound raw source text/iu);
+  assert.match(bilingual,
+    /localized final release uses the\s+same contributor-reviewed Story Privacy bytes[\s\S]{0,160}release gate/iu);
+  assert.match(privacy,
+    /generated Story is non-release working state[\s\S]{0,160}every current release target[\s\S]{0,160}exact reviewed release bytes/iu);
+});
+
 test("fresh parent Story-worker assignments convey both writing contracts before bounded input", async () => {
   const assignmentMarker = "Every `story`-lane subagent assignment must convey this ordered contract before dispatch:";
   const narrativePath = "skills/oxygen-storytelling-review/references/narrative-writing-contract.md";

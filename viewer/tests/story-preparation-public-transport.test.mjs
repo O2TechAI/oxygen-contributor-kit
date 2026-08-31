@@ -309,7 +309,7 @@ function storySource(suffix, semantic, coverage, insights = [], {
 }
 
 async function reviewedBoundary(root, projectMap, semantic, coverageRows = null, {
-  documentId = "doc-canary", language = "en", narrativeBytes = 0,
+  documentId = "doc-canary", language = "en", narrativeBytes = 0, sourceRedactions = [],
 } = {}) {
   const review = join(root, "review");
   const trajectory = join(review, "trajectories", documentId);
@@ -344,11 +344,27 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = null,
     content: event.payload.text,
   }));
   const sourcePrivacy = join(root, "source-privacy.json");
+  const redactions = sourceRedactions.map((redaction, index) => ({
+    id: `source-redaction-${index + 1}`,
+    item_id: `event-${redaction.suffix}`,
+    document_id: documentId,
+    start_offset: redaction.startOffset,
+    end_offset: redaction.endOffset,
+    category: "sensitive",
+    confidence: "high",
+    reason: "Synthetic protected context.",
+    review_state: "deterministic",
+    uncertainty_reason: null,
+    status: "active",
+    created_by: "local-test",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:01Z",
+  }));
   await json(sourcePrivacy, {
-    redactions: [],
+    redactions,
     job: {
       id: "source-privacy-current", status: "complete", stage: "complete", model: null,
-      completed: 0, total: 0, rejected: 0,
+      completed: redactions.length, total: redactions.length, rejected: 0,
       source_revision: 1,
       source_digest: await computeSourceDigest(sourceRows),
       receipt_digest: "8".repeat(64),
@@ -443,6 +459,8 @@ async function createFlow({
   deferPreferenceRecord = false,
   documentKind = "trajectory",
   preferenceEvidenceCount = 1,
+  sourceRedactions = [],
+  storyPrivacyReleaseTargets = null,
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "story-public-transport-"));
   const semantic = semanticAuthority({ suffixes, projectId, kinds });
@@ -460,7 +478,7 @@ async function createFlow({
   });
   const projectMap = await readJson(projectMapPath);
   const boundary = await reviewedBoundary(root, projectMap, semantic, null, {
-    documentId, language, narrativeBytes,
+    documentId, language, narrativeBytes, sourceRedactions,
   });
 
   runOk(process.execPath, [prepare, "prepare", "story", projectMapPath,
@@ -526,7 +544,7 @@ async function createFlow({
     title: "Review synthetic title",
     whyFlagged: "The reviewed canary requests a release decision.",
     uncertaintyReason: "Confirm the synthetic title.",
-    releaseTargets: [`story-${suffixes[0]}::title`],
+    releaseTargets: storyPrivacyReleaseTargets ?? [`story-${suffixes[0]}::title`],
   }];
   await recordLane(transport, "story_privacy", root, (input) => (
     privacyEnvelopeForInput(input, privacyCandidates)
@@ -590,7 +608,7 @@ async function createFlow({
 
 async function prepareStoryOnly({
   suffixes = ["a", "b"], coverageRows = null, narrativeBytes = 0,
-  reverseTransportInputs = false,
+  reverseTransportInputs = false, sourceRedactions = [],
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "story-owner-batch-"));
   const semantic = semanticAuthority({ suffixes });
@@ -606,7 +624,9 @@ async function prepareStoryOnly({
   };
   const projectMapPath = join(root, "project-map.json");
   await json(projectMapPath, projectMap);
-  const boundary = await reviewedBoundary(root, projectMap, semantic, coverageRows, { narrativeBytes });
+  const boundary = await reviewedBoundary(root, projectMap, semantic, coverageRows, {
+    narrativeBytes, sourceRedactions,
+  });
   if (reverseTransportInputs) {
     const reversedMap = structuredClone(projectMap);
     reversedMap.semantic_manifest.units.reverse();
@@ -677,10 +697,53 @@ test("public commands execute the nonempty four-lane dependency chain determinis
   }
 });
 
+test("a Source Privacy-marked fragment reaches the real Insight Quote path and remains gated by Story Privacy", async () => {
+  const reviewedNarrative = "safe reviewed canary a";
+  const fragmentStart = Array.from(reviewedNarrative).length - 1;
+  const quoteTarget = "story-a::insight:insight-a:quote";
+  const flow = await createFlow({
+    suffixes: ["a"],
+    sourceRedactions: [{ suffix: "a", startOffset: fragmentStart, endOffset: fragmentStart + 1 }],
+    storyPrivacyReleaseTargets: [quoteTarget],
+  });
+  try {
+    const insightManifest = await readJson(join(flow.transport, "insight", "shards.json"));
+    assert.equal(insightManifest.shards.length, 1);
+    const insightShard = insightManifest.shards[0];
+    const input = await readJson(join(flow.transport, ...insightShard.inputPath.split("/")));
+    assert.deepEqual(input.payload.reviewedNarrative, [{
+      id: "event-a", documentId: "doc-canary", narrative: reviewedNarrative,
+    }]);
+
+    const recorded = await readJson(join(
+      flow.transport, "insight", "records", insightShard.id, "output.json",
+    ));
+    assert.equal(recorded[0].insights[0].quote.text, reviewedNarrative);
+    const finalizedStory = parseStorySource((await readJson(flow.candidates))[0].summary);
+    assert.equal(finalizedStory.insights[0].quote.text, reviewedNarrative);
+
+    const authority = await readJson(flow.preparationManifest);
+    const candidate = authority.storyPrivacy.candidates.find((row) => (
+      row.releaseTargets.includes(quoteTarget)
+    ));
+    assert.equal(candidate.reviewState, "needs_confirmation");
+    const proposal = authority.storyPrivacy.targetProposals.find((row) => row.targetId === quoteTarget);
+    assert.equal(proposal.proposedText, "safe reviewed canary Anonymous");
+    assert.deepEqual(proposal.occurrences.map(({ originalStartOffset, originalEndOffset }) => ({
+      originalStartOffset, originalEndOffset,
+    })), [{ originalStartOffset: fragmentStart, originalEndOffset: fragmentStart + 1 }]);
+  } finally {
+    await flow.cleanup();
+  }
+});
+
 test("finalized Coverage owner IDs form indivisible self-contained Story bundles", async () => {
   const suffixes = ["a", "b", "c", "d", "e"];
   const value = await prepareStoryOnly({
     suffixes,
+    sourceRedactions: [{
+      suffix: "a", startOffset: 0, endOffset: Array.from("safe reviewed canary").length,
+    }],
     coverageRows: suffixes.map((suffix) => ({
       unitId: `unit-${suffix}`, disposition: "represented", ownerId: "story-complete-owner",
     })),
@@ -697,11 +760,15 @@ test("finalized Coverage owner IDs form indivisible self-contained Story bundles
     assert.equal(bundle.ownerId, "story-complete-owner");
     assert.deepEqual(bundle.semanticUnits.map((unit) => unit.id), suffixes.map((suffix) => `unit-${suffix}`));
     assert.deepEqual(bundle.reviewedNarrative.map((row) => row.id), suffixes.map((suffix) => `event-${suffix}`));
+    assert.equal(bundle.reviewedNarrative[0].narrative, "safe reviewed canary a");
     assert.ok(bundle.reviewedNarrative.every((row) => (
       row.actorEquivalence.startsWith("actor-") && !Object.hasOwn(row, "actorId")
     )));
     const workerBytes = await readFile(join(value.transport, ...manifest.shards[0].inputPath.split("/")), "utf8");
-    assert.doesNotMatch(workerBytes, /sourcePrivacy|redactions|provider|model|PRIVATE-SENTINEL/u);
+    assert.doesNotMatch(workerBytes, /sourcePrivacy|redactions|provider|model|OUTSIDE-EXACT-BOUND-REVIEWED-NARRATIVE/u);
+    const authorityBytes = await readFile(join(value.transport, "story", "validation-authority.json"), "utf8");
+    assert.doesNotMatch(authorityBytes,
+      /safe reviewed canary|narrative|content|actorId|OUTSIDE-EXACT-BOUND-REVIEWED-NARRATIVE/u);
   } finally {
     await value.cleanup();
   }
@@ -1652,7 +1719,7 @@ test("Insight source Quote matrix fails before receipt, permits proposal-only co
       id: "event-a", documentId: "doc-canary", narrative: "safe reviewed canary a",
     }]);
     assert.doesNotMatch(inputBefore.toString("utf8"),
-      /safe reviewed canary b|sourcePrivacy|redactions|actorId|provider|model|PRIVATE-SENTINEL/u);
+      /safe reviewed canary b|sourcePrivacy|redactions|actorId|provider|model|OUTSIDE-EXACT-BOUND-REVIEWED-NARRATIVE/u);
     const recordRoot = join(transport, "insight", "records", shard.id);
     const validInsight = {
       ...insight("a"),
@@ -1684,9 +1751,9 @@ test("Insight source Quote matrix fails before receipt, permits proposal-only co
           evidence: { documentId: "doc-canary-old", eventId: "event-a" },
         },
       }],
-      ["private or pre-redaction Quote", {
+      ["Quote outside the exact bound reviewed narrative", {
         ...validInsight,
-        quote: { ...validInsight.quote, text: "PRIVATE-SENTINEL" },
+        quote: { ...validInsight.quote, text: "OUTSIDE-EXACT-BOUND-REVIEWED-NARRATIVE" },
       }],
       ["invalid anchor", {
         ...validInsight,

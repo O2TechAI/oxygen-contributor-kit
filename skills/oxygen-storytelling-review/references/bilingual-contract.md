@@ -25,7 +25,9 @@ Directly Acquired Experience
 Principle
 ```
 
-Quote remains a safe Story anchor, never raw/private Evidence.
+A local reviewed Quote may contain exact bound raw source text. Any localized final release uses the
+same contributor-reviewed Story Privacy bytes as the canonical release and cannot bypass its target
+choices or release gate.
 
 ## Shared Review State
 

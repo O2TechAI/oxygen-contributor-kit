@@ -90,18 +90,18 @@ function candidate(story = source()) {
 
 const groundingFailure = { ok: false, code: "STORY_INSIGHT_GROUNDING_INVALID" };
 
-test("an exact nonempty Privacy-reviewed source substring grounds an anchored AI Insight", () => {
+test("an exact nonempty substring of the bound reviewed source grounds an anchored AI Insight", () => {
   const story = source();
   assert.ok(parseStorySource(candidate(story)[0].summary));
   assert.equal(story.story.blocks.some((block) => block.text === story.insights[0].quote.text), false);
   assert.equal(validateStorySourcePackage(candidate(story), evidenceRows()).ok, true);
 });
 
-test("Story paraphrases, modified source text, private pre-redaction text, and absent current narrative fail before authority", () => {
+test("Story paraphrases, modified source text, text outside the exact bound reviewed narrative, and absent current narrative fail before authority", () => {
   for (const quoteText of [
     "A reviewer asked for direct evidence before accepting it.",
     "challenged an assumption",
-    "PRIVATE PRE-REDACTION QUOTE",
+    "OUTSIDE EXACT BOUND REVIEWED NARRATIVE",
   ]) {
     const story = source([insight({ quote: { text: quoteText, evidence: evidenceB } })]);
     assert.deepEqual(validateStorySourcePackage(candidate(story), evidenceRows()), groundingFailure);
