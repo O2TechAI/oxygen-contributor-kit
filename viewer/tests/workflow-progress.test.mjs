@@ -176,8 +176,6 @@ test("workflow route hydrates count-only persistent state and the shell can reop
   ]);
   assert.match(route, /loadWorkflowProgress/);
   assert.match(loader, /deriveWorkflowProgress/);
-  assert.match(loader, /FROM finalized_corpus_manifests WHERE workflow_run_id=\?/);
-  assert.match(loader, /collectionFinalized/);
   assert.match(loader, /SELECT COUNT\(\*\)/);
   assert.match(route, /export async function POST/);
   assert.match(route, /workflow_runs/);

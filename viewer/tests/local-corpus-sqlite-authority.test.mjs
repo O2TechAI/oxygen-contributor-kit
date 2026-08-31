@@ -90,11 +90,14 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
   process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
 
   try {
-    const [{ getLocalDatabase }, { establishWorkflowRun }, route, publication] = await Promise.all([
+    const [
+      { getLocalDatabase }, { establishWorkflowRun }, route, publication, progress,
+    ] = await Promise.all([
       import("../db/index.ts"),
       import("../lib/workflow-run-server.ts"),
       import("../app/api/documents/route.ts"),
       import("../lib/story-source-publication.ts"),
+      import("../lib/workflow-progress-server.ts"),
     ]);
     const db = await getLocalDatabase();
     const workflowRunId = "workflow-local-corpus-sqlite";
@@ -103,6 +106,9 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
     await db.prepare(`UPDATE workflow_runs SET collection_status='failed',
       collection_completed=8,collection_total=9,blocker_code='COLLECTION_FAILED'
       WHERE id=?`).bind(workflowRunId).run();
+    const beforeFinalization = await progress.loadWorkflowProgress(workflowRunId);
+    assert.equal(beforeFinalization.currentStageId, "collect");
+    assert.equal(beforeFinalization.blockedReasonCode, "COLLECTION_FAILED");
 
     const firstPayload = { documents: [
       corpusEntry("trajectory-alpha", "event-alpha", "alpha content"),
@@ -162,6 +168,21 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
       story_generation_status: "not_started",
       active_story_digest: null,
     });
+    assert.equal(
+      (await progress.loadWorkflowProgress(workflowRunId)).currentStageId,
+      "organize",
+    );
+
+    await db.prepare(`INSERT INTO documents
+      (id,kind,title,item_count,metadata_json,original_envelope_json,imported_at,updated_at,
+       organization_status,formatted_summary_json)
+      VALUES ('trajectory-count-drift','trajectory','Count drift',0,'{}','{}',?,?,'pending','{}')`)
+      .bind(now, now).run();
+    assert.equal(
+      (await progress.loadWorkflowProgress(workflowRunId)).currentStageId,
+      "collect",
+    );
+    await db.prepare("DELETE FROM documents WHERE id='trajectory-count-drift'").run();
 
     const beforeIdentical = await durableCorpusSnapshot(db);
     const identicalResponse = await post(route, firstPayload);
@@ -267,6 +288,9 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
       story_generation_status: "not_started",
       active_story_digest: null,
     });
+    const emptyProgress = await progress.loadWorkflowProgress(workflowRunId);
+    assert.equal(emptyProgress.currentStageId, "collect");
+    assert.equal(emptyProgress.blockedReasonCode, "COLLECTION_EMPTY");
     const beforeIdenticalEmpty = await durableCorpusSnapshot(db);
     const identicalEmptyResponse = await post(route, emptyPayload);
     assert.equal(identicalEmptyResponse.status, 200);

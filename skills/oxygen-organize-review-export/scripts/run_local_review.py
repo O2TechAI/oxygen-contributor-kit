@@ -1872,7 +1872,7 @@ def main():
             or args.preference_bundle is not None or args.preparation_manifest is not None
         ):
             parser.error(
-                "Story Privacy refresh requires --attach-url, --workflow-run-id, and exactly one export/import path"
+                "Export/import mode requires --attach-url, --workflow-run-id, and exactly one path"
             )
         base_url = normalize_local_viewer_url(args.attach_url)
         if args.source_privacy_export:
