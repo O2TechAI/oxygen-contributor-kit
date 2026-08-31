@@ -73,6 +73,7 @@ export type WorkflowFacts = {
   collectionStatus?: string | null;
   collectionCompleted?: number;
   collectionTotal?: number;
+  collectionFinalized?: boolean;
   documentCount: number;
   itemCount: number;
   organizedItemCount: number;
@@ -257,7 +258,7 @@ export function deriveWorkflowProgress(input: WorkflowFacts): WorkflowProgressSt
     storyGenerationCompleted: nonNegativeInteger(input.storyGenerationCompleted || 0),
     storyGenerationTotal: nonNegativeInteger(input.storyGenerationTotal || 0),
   };
-  if (!facts.documentCount) {
+  if (facts.collectionFinalized !== true) {
     const collectionStatus = String(facts.collectionStatus || "pending");
     const collectionProgress = facts.collectionTotal > 0
       ? {
@@ -271,18 +272,7 @@ export function deriveWorkflowProgress(input: WorkflowFacts): WorkflowProgressSt
         collectionProgress, "COLLECTION_FAILED",
       );
     }
-    if (collectionStatus === "complete") {
-      if (!facts.collectionTotal) {
-        return state(
-          facts, 0, "collect", "blocked", "blocked", "no_project_history_found", true,
-          undefined, "COLLECTION_EMPTY",
-        );
-      }
-      return state(
-        facts, 1, "organize", "waiting", "waiting", "collection_ready_for_organization", false,
-      );
-    }
-    if (collectionStatus === "running") {
+    if (collectionStatus === "running" || collectionStatus === "complete") {
       return state(
         facts, 0, "collect", "running", "current", "collecting_project_history", false,
         collectionProgress,
@@ -295,6 +285,12 @@ export function deriveWorkflowProgress(input: WorkflowFacts): WorkflowProgressSt
     }
     return state(
       facts, 0, "collect", "waiting", "waiting", "target_working_folder_required", true,
+    );
+  }
+  if (!facts.documentCount) {
+    return state(
+      facts, 0, "collect", "blocked", "blocked", "no_project_history_found", true,
+      undefined, "COLLECTION_EMPTY",
     );
   }
 

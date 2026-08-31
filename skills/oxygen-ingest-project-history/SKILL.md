@@ -14,7 +14,8 @@ before scanning any history:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
-  --target /path/to/repo
+  --target /path/to/repo \
+  --save-state /external/private/.old/oxygen-session-<fresh-id>
 ```
 
 The launcher reserves an arbitrary free loopback port, opens the sanitized Workflow Progress
@@ -164,8 +165,9 @@ publication, or upload option. Do not copy outputs to any shared or network loca
 - Confirm `publication_approved=false`.
 
 Then invoke `$oxygen-organize-review-export` with the output directory, exact Viewer origin, and
-workflow run ID. That Skill attaches the run to the already-running Viewer; it must not launch a
-second runtime.
+workflow run ID using its explicit `--collection-only` attach. Repository, Anthropic, and meeting
+ingest outputs all use that same corpus finalization path before Organization. It must not launch a
+second runtime or require a semantic manifest at this boundary.
 
 ## Boundaries
 

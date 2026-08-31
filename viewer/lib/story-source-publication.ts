@@ -158,7 +158,13 @@ export async function publishFinalizedCorpusSourceMutation(
   const results = await db.batch([
     ...replacementStatements,
     db.prepare(`UPDATE workflow_runs
-      SET story_generation_status=CASE
+      SET collection_status='complete',
+          collection_completed=(SELECT document_count FROM finalized_corpus_manifests
+            WHERE workflow_run_id=workflow_runs.id),
+          collection_total=(SELECT document_count FROM finalized_corpus_manifests
+            WHERE workflow_run_id=workflow_runs.id),
+          blocker_code=NULL,
+          story_generation_status=CASE
             WHEN story_generation_status=? THEN 'running' ELSE 'not_started' END,
           story_source_revision=story_source_revision+1,updated_at=?
       WHERE id=? AND story_source_revision=? AND story_generation_status IN (?,?)

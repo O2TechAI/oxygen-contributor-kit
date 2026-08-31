@@ -272,9 +272,6 @@ test("duplicate, ambiguous, foreign, malformed, and non-JSON corpora fail before
     document: first.document,
     items: first.items,
   })), "CORPUS_PAYLOAD_INVALID");
-  assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({ documents: [] })),
-    "CORPUS_DOCUMENTS_REQUIRED");
-
   const invalidContent = structuredClone(first);
   invalidContent.items[0].content = { text: "not a string" };
   assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({ documents: [invalidContent] })),
@@ -283,6 +280,21 @@ test("duplicate, ambiguous, foreign, malformed, and non-JSON corpora fail before
   invalidOriginal.items[0].original.payload.invalid = undefined;
   assert.equal(errorCode(() => corpus.normalizeFinalizedCorpus({ documents: [invalidOriginal] })),
     "CORPUS_JSON_INVALID");
+});
+
+test("empty corpus is canonical finalized 0/0 authority with a stable digest", async () => {
+  const empty = corpus.normalizeFinalizedCorpus({ documents: [] });
+  assert.deepEqual(empty, {
+    documents: [],
+    itemCount: 0,
+    canonicalPayload: '{"documents":[]}',
+  });
+  const digest = await corpus.finalizedCorpusDigest(empty);
+  assert.match(digest, /^[0-9a-f]{64}$/u);
+  assert.equal(
+    await corpus.finalizedCorpusDigest(corpus.normalizeFinalizedCorpus({ documents: [] })),
+    digest,
+  );
 });
 
 test("corpus digest ignores input array and object-key order but binds every persisted source field", async () => {

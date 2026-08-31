@@ -75,6 +75,9 @@ VIEWER_ORIGIN_INVALID = "VIEWER_ORIGIN_INVALID: Use an exact canonical localhost
 STORY_PRIVACY_EXPORT_EXISTS = "STORY_PRIVACY_EXPORT_EXISTS: The export destination already exists."
 STORY_PRIVACY_EXPORT_FAILED = "STORY_PRIVACY_EXPORT_FAILED: The current snapshot could not be exported."
 STORY_PRIVACY_IMPORT_INVALID = "STORY_PRIVACY_IMPORT_INVALID: The import bundle is missing or invalid."
+SOURCE_PRIVACY_EXPORT_EXISTS = "SOURCE_PRIVACY_EXPORT_EXISTS: The export destination already exists."
+SOURCE_PRIVACY_EXPORT_FAILED = "SOURCE_PRIVACY_EXPORT_FAILED: The current Source Privacy projection could not be exported."
+SOURCE_PRIVACY_EXPORT_INVALID = "SOURCE_PRIVACY_EXPORT_INVALID: The current Source Privacy authority is incomplete or stale."
 VIEWER_STATE_INVALID = "VIEWER_STATE_INVALID: The saved Viewer state is missing or corrupt."
 VIEWER_STATE_EXISTS = "VIEWER_STATE_EXISTS: The saved Viewer state destination already exists."
 VIEWER_STATE_SAVE_FAILED = "VIEWER_STATE_SAVE_FAILED: The Viewer state could not be saved."
@@ -421,6 +424,57 @@ def validate_viewer_state(runtime_root: Path) -> Path:
     return database
 
 
+def _saved_workflow_run_id(database: Path) -> str:
+    database_uri = f"{database.as_uri()}?mode=ro"
+    with closing(sqlite3.connect(database_uri, uri=True)) as connection:
+        row = connection.execute("SELECT id FROM workflow_runs").fetchone()
+    workflow_run_id = row[0] if row else None
+    if (
+        not isinstance(workflow_run_id, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", workflow_run_id) is None
+    ):
+        raise ValueError
+    return workflow_run_id
+
+
+def validate_viewer_session(runtime_root: Path, requested_path: Path) -> Path:
+    """Validate one saved-state locator against its database and current checkout."""
+    database = validate_viewer_state(runtime_root)
+    try:
+        root = _literal_state_path(runtime_root)
+        locator = _literal_state_path(root / "viewer-session.txt")
+        metadata = locator.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError
+        lines = locator.read_text(encoding="utf-8").splitlines()
+        fields: dict[str, str] = {}
+        for line in lines:
+            key, separator, value = line.partition(": ")
+            if not separator or key in fields or not value or value != value.strip():
+                raise ValueError
+            fields[key] = value
+        if set(fields) != {
+            "origin_worktree", "origin_head", "workflow_run_id", "saved_path",
+        } or len(lines) != 4:
+            raise ValueError
+        saved_path = _literal_state_path(Path(fields["saved_path"]))
+        origin_worktree = _literal_state_path(Path(fields["origin_worktree"]))
+        origin_head = fields["origin_head"]
+        workflow_run_id = fields["workflow_run_id"]
+        if (
+            saved_path != _literal_state_path(requested_path)
+            or origin_worktree != _literal_state_path(KIT_ROOT)
+            or re.fullmatch(r"[0-9a-f]{40}", origin_head) is None
+            or origin_head != _current_head()
+            or workflow_run_id == "unknown"
+            or workflow_run_id != _saved_workflow_run_id(database)
+        ):
+            raise ValueError
+    except (OSError, UnicodeError, RuntimeError, ValueError, sqlite3.Error):
+        raise SystemExit(VIEWER_STATE_INVALID) from None
+    return database
+
+
 def resolve_state_path(
     path: Path,
     error: str,
@@ -454,7 +508,10 @@ def save_viewer_state(
     """Copy one stopped Viewer's complete state directory into a new local session."""
     staging: Path | None = None
     try:
-        validate_viewer_state(runtime_root)
+        database = validate_viewer_state(runtime_root)
+        saved_workflow_run_id = _saved_workflow_run_id(database)
+        if workflow_run_id is not None and workflow_run_id != saved_workflow_run_id:
+            raise ValueError
         destination = resolve_state_path(
             destination, VIEWER_STATE_SAVE_FAILED, allow_missing_tail=True,
         )
@@ -471,7 +528,7 @@ def save_viewer_state(
         locator = "\n".join((
             f"origin_worktree: {KIT_ROOT.resolve()}",
             f"origin_head: {_current_head()}",
-            f"workflow_run_id: {workflow_run_id or 'unknown'}",
+            f"workflow_run_id: {saved_workflow_run_id}",
             f"saved_path: {destination}",
             "",
         ))
@@ -484,7 +541,7 @@ def save_viewer_state(
         if str(error) == VIEWER_STATE_EXISTS:
             raise
         raise SystemExit(VIEWER_STATE_SAVE_FAILED) from None
-    except (OSError, RuntimeError, shutil.Error, sqlite3.Error):
+    except (OSError, RuntimeError, ValueError, shutil.Error, sqlite3.Error):
         raise SystemExit(VIEWER_STATE_SAVE_FAILED) from None
     finally:
         if staging is not None and staging.exists():
@@ -837,9 +894,9 @@ def request_json(opener, url: str, *, method="GET", body=None):
         raise SystemExit(VIEWER_RESPONSE_INVALID) from None
 
 
-def _workflow_run_id(value: str) -> str:
+def _workflow_run_id(value: str, failure: str = STORY_PRIVACY_IMPORT_INVALID) -> str:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value or ""):
-        raise SystemExit(STORY_PRIVACY_IMPORT_INVALID)
+        raise SystemExit(failure)
     return value
 
 
@@ -857,29 +914,39 @@ def _direct_unique_file(path: Path, failure: str) -> Path:
     return literal
 
 
-def _story_privacy_export_path(destination: Path) -> tuple[Path, Path]:
+def _json_export_path(
+    destination: Path,
+    exists_error: str,
+    failure: str,
+) -> tuple[Path, Path]:
     requested = destination.expanduser()
     if not requested.name or requested.name in {".", ".."}:
-        raise SystemExit(STORY_PRIVACY_EXPORT_FAILED)
+        raise SystemExit(failure)
     try:
         parent = _literal_state_path(requested.parent)
     except (OSError, RuntimeError, ValueError):
-        raise SystemExit(STORY_PRIVACY_EXPORT_FAILED) from None
+        raise SystemExit(failure) from None
     if not parent.is_dir():
-        raise SystemExit(STORY_PRIVACY_EXPORT_FAILED)
+        raise SystemExit(failure)
     output = parent / requested.name
     if output.exists() or output.is_symlink():
-        raise SystemExit(STORY_PRIVACY_EXPORT_EXISTS)
+        raise SystemExit(exists_error)
     return parent, output
 
 
-def _write_new_json(parent: Path, output: Path, value: dict, failure: str) -> None:
+def _write_new_json(
+    parent: Path,
+    output: Path,
+    value: dict,
+    exists_error: str,
+    failure: str,
+) -> None:
     temporary = parent / f".{output.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp"
     try:
         with temporary.open("x", encoding="utf-8", newline="\n") as handle:
             json.dump(value, handle, ensure_ascii=False, separators=(",", ":")); handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
         rename_noreplace(temporary, output)
-    except FileExistsError: raise SystemExit(STORY_PRIVACY_EXPORT_EXISTS) from None
+    except FileExistsError: raise SystemExit(exists_error) from None
     except (OSError, RuntimeError): raise SystemExit(failure) from None
     finally:
         try: temporary.unlink(missing_ok=True)
@@ -893,7 +960,9 @@ def export_story_privacy_snapshot(
 ) -> dict:
     base_url = normalize_local_viewer_url(base_url)
     workflow_run_id = _workflow_run_id(workflow_run_id)
-    parent, output = _story_privacy_export_path(destination)
+    parent, output = _json_export_path(
+        destination, STORY_PRIVACY_EXPORT_EXISTS, STORY_PRIVACY_EXPORT_FAILED,
+    )
     query = urllib.parse.urlencode({"workflowRunId": workflow_run_id})
     snapshot = request_json(
         local_viewer_opener(),
@@ -911,7 +980,9 @@ def export_story_privacy_snapshot(
         or not isinstance(changed_targets, list)
     ):
         raise SystemExit(VIEWER_RESPONSE_INVALID)
-    _write_new_json(parent, output, snapshot, STORY_PRIVACY_EXPORT_FAILED)
+    _write_new_json(
+        parent, output, snapshot, STORY_PRIVACY_EXPORT_EXISTS, STORY_PRIVACY_EXPORT_FAILED,
+    )
     result = {
         "story_privacy": "snapshot_exported",
         "workflow_run_id": workflow_run_id,
@@ -962,16 +1033,76 @@ def import_story_privacy_bundle(
 
 def export_preference_regeneration(base_url: str, workflow_run_id: str, destination: Path) -> None:
     workflow_run_id = _workflow_run_id(workflow_run_id)
-    parent, output = _story_privacy_export_path(destination)
+    parent, output = _json_export_path(
+        destination, STORY_PRIVACY_EXPORT_EXISTS, STORY_PRIVACY_EXPORT_FAILED,
+    )
     url = f"{normalize_local_viewer_url(base_url)}/api/probes/regeneration?{urllib.parse.urlencode({'workflowRunId': workflow_run_id})}"
     context = request_json(local_viewer_opener(), url)
     binding = context.get("binding") if isinstance(context, dict) else None
     if ((context.get("schema") if isinstance(context, dict) else None) != "oxygen.preference-regeneration-context"
             or not isinstance(binding, dict) or binding.get("workflowRunId") != workflow_run_id):
         raise SystemExit(VIEWER_RESPONSE_INVALID)
-    _write_new_json(parent, output, context, STORY_PRIVACY_EXPORT_FAILED)
+    _write_new_json(
+        parent, output, context, STORY_PRIVACY_EXPORT_EXISTS, STORY_PRIVACY_EXPORT_FAILED,
+    )
     print(json.dumps({"preference_regeneration": "context_exported", "workflow_run_id": workflow_run_id,
                       "output": str(output)}, ensure_ascii=False), flush=True)
+
+
+def export_source_privacy_projection(
+    base_url: str,
+    workflow_run_id: str,
+    destination: Path,
+) -> None:
+    base_url = normalize_local_viewer_url(base_url)
+    workflow_run_id = _workflow_run_id(workflow_run_id, SOURCE_PRIVACY_EXPORT_INVALID)
+    parent, output = _json_export_path(
+        destination, SOURCE_PRIVACY_EXPORT_EXISTS, SOURCE_PRIVACY_EXPORT_FAILED,
+    )
+    opener = local_viewer_opener()
+    projection = request_json(opener, f"{base_url}/api/redactions")
+    current = request_json(opener, f"{base_url}/api/redactions?sourceAuthority=1")
+    redactions = projection.get("redactions") if isinstance(projection, dict) else None
+    job = projection.get("job") if isinstance(projection, dict) else None
+    authority = current.get("sourceAuthority") if isinstance(current, dict) else None
+    finalized = authority.get("finalizedCorpus") if isinstance(authority, dict) else None
+    completed = job.get("completed") if isinstance(job, dict) else None
+    total = job.get("total") if isinstance(job, dict) else None
+    rejected = job.get("rejected") if isinstance(job, dict) else None
+    source_revision = authority.get("sourceRevision") if isinstance(authority, dict) else None
+    source_digest = authority.get("sourceDigest") if isinstance(authority, dict) else None
+    if (
+        not isinstance(projection, dict) or set(projection) != {"redactions", "job"}
+        or not isinstance(redactions, list) or not isinstance(job, dict)
+        or not isinstance(current, dict) or set(current) != {"sourceAuthority"}
+        or not isinstance(authority, dict) or set(authority) != {
+            "workflowRunId", "sourceRevision", "finalizedCorpus", "sourceDigest",
+        }
+        or not isinstance(finalized, dict) or set(finalized) != {
+            "revision", "digest", "documentCount", "itemCount",
+        }
+        or authority.get("workflowRunId") != workflow_run_id
+        or not _activated_source_revision(source_revision)
+        or re.fullmatch(r"[0-9a-f]{64}", str(source_digest or "")) is None
+        or not _activated_source_revision(finalized.get("revision"))
+        or re.fullmatch(r"[0-9a-f]{64}", str(finalized.get("digest") or "")) is None
+        or not _nonnegative_integer(finalized.get("documentCount"))
+        or not _nonnegative_integer(finalized.get("itemCount"))
+        or job.get("status") != "complete"
+        or not _nonnegative_integer(completed)
+        or not _nonnegative_integer(total)
+        or not _nonnegative_integer(rejected)
+        or not _activated_source_revision(job.get("source_revision"))
+        or completed != total or completed != len(redactions)
+        or rejected != 0
+        or job.get("source_revision") != source_revision
+        or job.get("source_digest") != source_digest
+    ):
+        raise SystemExit(SOURCE_PRIVACY_EXPORT_INVALID)
+    _write_new_json(
+        parent, output, projection, SOURCE_PRIVACY_EXPORT_EXISTS, SOURCE_PRIVACY_EXPORT_FAILED,
+    )
+    print(json.dumps({"redaction_count": len(redactions), "output": str(output)}, ensure_ascii=False), flush=True)
 
 
 def import_preference_regeneration(base_url: str, workflow_run_id: str, source: Path) -> None:
@@ -1458,20 +1589,28 @@ def establish_workflow_run(opener, base_url: str, workflow_run_id: str | None = 
     return established
 
 
-def attach_run(base_url: str, workflow_run_id: str, run: Path) -> None:
+def attach_run(
+    base_url: str,
+    workflow_run_id: str,
+    run: Path,
+    *,
+    collection_only: bool = False,
+) -> None:
     opener = local_viewer_opener()
     workflow = request_json(opener, f"{base_url}/api/workflow")
     if workflow.get("workflowRunId") != workflow_run_id:
         raise SystemExit("The target Viewer does not own the requested workflow run ID")
-    semantic_manifest = finalized_semantic_manifest(run)
+    semantic_manifest = None if collection_only else finalized_semantic_manifest(run)
     document_count, event_count = import_run(opener, base_url, run)
-    organization = complete_organization(opener, base_url, semantic_manifest)
+    organization = None if collection_only else complete_organization(
+        opener, base_url, semantic_manifest,
+    )
     print(json.dumps({
         "attached_to": base_url,
         "workflow_run_id": workflow_run_id,
         "documents": document_count,
         "events_or_records": event_count,
-        "organization": organization,
+        **({"collection": "finalized"} if collection_only else {"organization": organization}),
     }, ensure_ascii=False), flush=True)
 
 
@@ -1696,11 +1835,19 @@ def main():
         "--story-privacy-import", type=Path,
         help="import one exact finalized reviewed Story Privacy refresh bundle",
     )
+    story_privacy_mode.add_argument(
+        "--source-privacy-export", type=Path,
+        help="export the exact current public Source Privacy projection",
+    )
     story_privacy_mode.add_argument("--preference-regeneration-export", type=Path)
     story_privacy_mode.add_argument("--preference-regeneration-import", type=Path)
     parser.add_argument("--port", type=int)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--skip-install", action="store_true")
+    parser.add_argument(
+        "--collection-only", action="store_true",
+        help="attach and finalize the collected corpus without posting Organization",
+    )
     state_mode = parser.add_mutually_exclusive_group()
     state_mode.add_argument(
         "--save-state", type=Path,
@@ -1713,9 +1860,11 @@ def main():
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    if args.story_privacy_export or args.story_privacy_import or args.preference_regeneration_export or args.preference_regeneration_import:
+    if (args.story_privacy_export or args.story_privacy_import or args.source_privacy_export
+            or args.preference_regeneration_export or args.preference_regeneration_import):
         if (
             args.run or args.target or args.story_event or args.save_state or args.resume_state
+            or args.collection_only
             or args.port is not None or args.no_browser or args.skip_install or args.smoke_test
             or not args.attach_url or not args.workflow_run_id
             or args.story_completed is not None or args.story_total is not None
@@ -1726,7 +1875,11 @@ def main():
                 "Story Privacy refresh requires --attach-url, --workflow-run-id, and exactly one export/import path"
             )
         base_url = normalize_local_viewer_url(args.attach_url)
-        if args.preference_regeneration_export:
+        if args.source_privacy_export:
+            export_source_privacy_projection(
+                base_url, args.workflow_run_id, args.source_privacy_export,
+            )
+        elif args.preference_regeneration_export:
             export_preference_regeneration(base_url, args.workflow_run_id, args.preference_regeneration_export)
         elif args.preference_regeneration_import:
             import_preference_regeneration(base_url, args.workflow_run_id, args.preference_regeneration_import)
@@ -1742,7 +1895,7 @@ def main():
 
     if args.story_event:
         if (
-            args.run or args.target or args.save_state or args.resume_state
+            args.run or args.target or args.save_state or args.resume_state or args.collection_only
             or not args.attach_url or not args.workflow_run_id
         ):
             parser.error("Story events require --attach-url and --workflow-run-id only")
@@ -1805,9 +1958,16 @@ def main():
             parser.error("attach mode requires RUN, --attach-url, and --workflow-run-id only")
         run = args.run.expanduser().resolve()
         locate_inputs(run)
-        attach_run(normalize_local_viewer_url(args.attach_url), args.workflow_run_id, run)
+        attach_run(
+            normalize_local_viewer_url(args.attach_url),
+            args.workflow_run_id,
+            run,
+            collection_only=args.collection_only,
+        )
         return
 
+    if args.collection_only:
+        parser.error("--collection-only requires attach mode")
     if args.resume_state:
         if args.run or args.target or args.workflow_run_id:
             parser.error("resume mode requires --resume-state without RUN or --target")
@@ -1835,7 +1995,7 @@ def main():
     ):
         raise SystemExit(VIEWER_STATE_EXISTS)
     if resume_session is not None:
-        validate_viewer_state(resume_session)
+        validate_viewer_session(resume_session, resume_session)
     if run:
         locate_inputs(run)
     if target and not target.is_dir():

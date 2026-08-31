@@ -198,7 +198,7 @@ export function normalizeFinalizedCorpus(value: unknown): NormalizedFinalizedCor
     ["documents"],
     "CORPUS_PAYLOAD_INVALID",
   );
-  if (!Array.isArray(body.documents) || body.documents.length < 1) {
+  if (!Array.isArray(body.documents)) {
     throw new CorpusValidationError("CORPUS_DOCUMENTS_REQUIRED");
   }
   const documentIds = new Set<string>();

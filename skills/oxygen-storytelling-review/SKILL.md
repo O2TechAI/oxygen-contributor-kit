@@ -106,10 +106,12 @@ $Kit = (Get-Location).Path
 $Target = "D:\Coding Projects\my-project"
 $Viewer = "http://127.0.0.1:3210"
 $WorkflowRun = "oxygen-local-review-001"
+$SavedSession = "D:\private\.old\oxygen-session-<fresh-id>"
 Set-Location -LiteralPath $Kit
 
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  --target "$Target" --workflow-run-id "$WorkflowRun" --port 3210 --no-browser
+  --target "$Target" --workflow-run-id "$WorkflowRun" --port 3210 `
+  --save-state "$SavedSession" --no-browser
 ```
 
 Keep that PowerShell window running. Start the second PowerShell window in the same contributor-kit root, then attach the organized reviewed run to that same Viewer/run:
@@ -282,6 +284,10 @@ Write the unit-level coverage draft with `rows` only. Each row must have exactly
 Then run the provider-free finalizer:
 
 ```powershell
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" `
+  --source-privacy-export "$Review\current-public-source-privacy.json"
+
 node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
   "$Review\project-map.json" `
   "$Review\story-coverage-draft.json" `
