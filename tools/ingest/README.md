@@ -31,8 +31,8 @@ python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/repo-
 python3 tools/ingest/import_anthropic_export.py ~/Downloads/export.zip --out work/claude-run
 
 # ③ 会议:文本直接进;录音先本机转写再进
-python3 tools/ingest/import_meeting.py meeting.txt --out work/meeting-run --title "0730 组会"
-python3 tools/ingest/import_meeting.py meeting.m4a --out work/meeting-run --language zh
+python3 tools/ingest/import_meeting.py meeting.txt --out work/meeting-run --title "0730 组会" --date 2026-07-30
+python3 tools/ingest/import_meeting.py meeting.m4a --out work/meeting-run --language zh --date 2026-08-30
 ```
 
 Windows PowerShell 使用同一套 UTF-8 工具链，无需 `python -X utf8`、`chcp` 或 WSL：
@@ -43,7 +43,7 @@ python .\tools\ingest\collect_repo_trajectories.py `
 python .\tools\ingest\import_anthropic_export.py `
   "D:\Downloads\export.zip" --out "out\claude-run"
 python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.txt" `
-  --out "out\meeting-run" --title "项目会议"
+  --out "out\meeting-run" --title "项目会议" --date "2026-08-30"
 ```
 
 Codex 会话默认来自用户全局目录 `Path.home() / ".codex" / "sessions"`，Windows 通常是
@@ -58,7 +58,7 @@ Codex 会话默认来自用户全局目录 `Path.home() / ".codex" / "sessions"`
 ```bash
 .venv-audio/bin/pip install pyannote.audio        # 需要 torch,较大
 # 到 https://huggingface.co/pyannote/speaker-diarization-3.1 接受协议,拿 HF token
-python3 tools/ingest/import_meeting.py xx.m4a --out work/meeting-run --hf-token hf_xxx
+python3 tools/ingest/import_meeting.py xx.m4a --out work/meeting-run --hf-token hf_xxx --date 2026-08-30
 ```
 
 没有 token 时管线不会失败:输出单说话人转写稿并在 `transcript.json.warnings` 里明确标注。
@@ -72,7 +72,7 @@ $AudioPython = ".\tools\ingest\.venv-audio\Scripts\python.exe"
 $env:HF_TOKEN = "<current-user-token>"
 try {
   python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.m4a" `
-    --out "out\meeting-run" --language zh
+    --out "out\meeting-run" --language zh --date "2026-08-30"
 }
 finally {
   Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue

@@ -131,7 +131,7 @@ python3 tools/ingest/import_anthropic_export.py export.zip \
 
 # Meeting notes/transcript or local audio. Audio remains local.
 python3 tools/ingest/import_meeting.py meeting.m4a \
-  --out work/meeting-run --language en
+  --out work/meeting-run --language en --date 2026-08-30
 ```
 
 Native Windows PowerShell equivalents are:
@@ -145,7 +145,7 @@ python .\tools\ingest\import_anthropic_export.py `
   "D:\Downloads\export.zip" --out "work\claude-run"
 
 python .\tools\ingest\import_meeting.py `
-  "D:\Meetings\meeting.txt" --out "work\meeting-run"
+  "D:\Meetings\meeting.txt" --out "work\meeting-run" --date "2026-08-30"
 ```
 
 Codex collection searches the user-global `Path.home() / ".codex" / "sessions"` by default:
@@ -168,7 +168,7 @@ $AudioPython = ".\tools\ingest\.venv-audio\Scripts\python.exe"
 $env:HF_TOKEN = "<current-user-token>"
 try {
   python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.m4a" `
-    --out "work\meeting-run" --language en
+    --out "work\meeting-run" --language en --date "2026-08-30"
 }
 finally {
   Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue

@@ -343,7 +343,8 @@ class MeetingInterpretationTest(unittest.TestCase):
             source, run = root / "renamed.txt", root / "run"
             source.write_text(self.HEADER_TEXT, encoding="utf-8", newline="")
 
-            code = run_failure(source, "--out", run, "--meeting-id", "unknown")
+            code = run_failure(source, "--out", run, "--meeting-id", "unknown",
+                               "--date", "2026-08-30")
 
             self.assertEqual(code, INTERPRETATION.UNSUPPORTED_CODE)
             state_path = proposal_path(run, source).with_name("state.json")
@@ -358,7 +359,8 @@ class MeetingInterpretationTest(unittest.TestCase):
             write_proposal(run, source, proposal_for(source))
             source.write_text(self.HEADER_TEXT.replace("Alice North", "Renamed Person"),
                               encoding="utf-8", newline="")
-            self.assertEqual(run_failure(source, "--out", run, "--meeting-id", "unknown"),
+            self.assertEqual(run_failure(source, "--out", run, "--meeting-id", "unknown",
+                                         "--date", "2026-08-30"),
                              INTERPRETATION.UNSUPPORTED_CODE)
             self.assertNotEqual(proposal_path(run, source), old_proposal)
             self.assertTrue(old_proposal.exists())
@@ -371,7 +373,8 @@ class MeetingInterpretationTest(unittest.TestCase):
                 root = Path(temporary)
                 source, run = root / "layout.txt", root / "run"
                 source.write_bytes(text.encode("utf-8"))
-                self.assertEqual(run_failure(source, "--out", run, "--meeting-id", "planned"),
+                self.assertEqual(run_failure(source, "--out", run, "--meeting-id", "planned",
+                                             "--date", "2026-08-30"),
                                  INTERPRETATION.UNSUPPORTED_CODE)
                 write_proposal(run, source, proposal_for(source))
 
@@ -417,7 +420,8 @@ class MeetingInterpretationTest(unittest.TestCase):
                 root = Path(temporary)
                 source, run = root / "rows.txt", root / "run"
                 source.write_text(text, encoding="utf-8", newline="")
-                self.assertEqual(run_failure(source, "--out", run), INTERPRETATION.UNSUPPORTED_CODE)
+                self.assertEqual(run_failure(source, "--out", run, "--date", "2026-08-30"),
+                                 INTERPRETATION.UNSUPPORTED_CODE)
                 plan = proposal_for(
                     source, recordForm="row", prefix="ROW|", separator="|", suffix="|END",
                     fields=["speaker", "timestamp", "body"], blankLines="record_separator",
@@ -438,7 +442,8 @@ class MeetingInterpretationTest(unittest.TestCase):
                 root = Path(temporary)
                 source, run = root / "weak.txt", root / "run"
                 source.write_text(text, encoding="utf-8", newline="")
-                self.assertEqual(run_failure(source, "--out", run), INTERPRETATION.UNSUPPORTED_CODE)
+                self.assertEqual(run_failure(source, "--out", run, "--date", "2026-08-30"),
+                                 INTERPRETATION.UNSUPPORTED_CODE)
                 write_proposal(run, source, proposal_for(
                     source, recordForm="row", prefix="", separator=separator, suffix="",
                     fields=["speaker", "timestamp", "body"], blankLines="record_separator"))
@@ -457,10 +462,11 @@ class MeetingInterpretationTest(unittest.TestCase):
                 root = Path(temporary)
                 source, run = root / "labels.txt", root / "run"
                 source.write_text(text, encoding="utf-8")
-                self.assertEqual(run_failure(source, "--out", run), INTERPRETATION.UNSUPPORTED_CODE)
+                self.assertEqual(run_failure(source, "--out", run, "--date", "2026-08-30"),
+                                 INTERPRETATION.UNSUPPORTED_CODE)
                 write_proposal(run, source, proposal_for(
                     source, prefix="Speaker: ", separator=f"{separator}Time: ", suffix=""))
-                result = run_main(source, "--out", run)
+                result = run_main(source, "--out", run, "--date", "2026-08-30")
                 dataset = json.loads((Path(result["meetings"][0]["output"]) / "meeting.json")
                                      .read_text(encoding="utf-8"))
                 self.assertEqual([(row["speaker"], row["text"]) for row in dataset["records"]],
@@ -474,7 +480,7 @@ class MeetingInterpretationTest(unittest.TestCase):
             source = root / "known.txt"
             source.write_text("Speaker A: body | pipe\ncontinuation - dash\nSpeaker B: second\n",
                               encoding="utf-8")
-            result = run_main(source, "--out", root / "run")
+            result = run_main(source, "--out", root / "run", "--date", "2026-08-30")
             self.assertEqual(result["meetings"][0]["detected_format"], "speaker-labeled")
     def test_plain_notes_and_malformed_known_or_unknown_structures_keep_boundaries(self):
         plain = (
@@ -505,7 +511,8 @@ class MeetingInterpretationTest(unittest.TestCase):
                 root = Path(temporary)
                 source, run = root / "invalid.txt", root / "run"
                 source.write_text(text, encoding="utf-8")
-                self.assertEqual(run_failure(source, "--out", run), MODULE.STRUCTURAL_FAILURE_CODE)
+                self.assertEqual(run_failure(source, "--out", run, "--date", "2026-08-30"),
+                                 MODULE.STRUCTURAL_FAILURE_CODE)
                 self.assertFalse((run / ".meeting-interpretation").exists())
                 self.assertFalse((run / "meetings").exists())
     def test_plan_contract_rejects_foreign_ambiguous_and_non_declarative_inputs(self):
@@ -557,7 +564,8 @@ class MeetingInterpretationTest(unittest.TestCase):
             root = Path(temporary)
             source, run = root / "source.txt", root / "run"
             source.write_text(self.HEADER_TEXT, encoding="utf-8")
-            args = (source, "--out", run, "--meeting-id", "stateful")
+            args = (source, "--out", run, "--meeting-id", "stateful",
+                    "--date", "2026-08-30")
             self.assertEqual(run_failure(*args), INTERPRETATION.UNSUPPORTED_CODE)
             path = proposal_path(run, source)
             state_path = path.with_name("state.json")
@@ -602,14 +610,16 @@ class MeetingInterpretationTest(unittest.TestCase):
             source = root / "source.txt"
             source.write_text(self.HEADER_TEXT, encoding="utf-8")
             with mock.patch.object(INTERPRETATION, "_atomic_json", side_effect=OSError):
-                self.assertEqual(run_failure(source, "--out", root / "run"),
+                self.assertEqual(run_failure(source, "--out", root / "run",
+                                             "--date", "2026-08-30"),
                                  INTERPRETATION.STATE_INVALID_CODE)
             self.assertFalse((root / "run" / "meetings").exists())
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, run = root / "source.txt", root / "run"
             source.write_text(self.HEADER_TEXT, encoding="utf-8")
-            args = (source, "--out", run, "--meeting-id", "safe")
+            args = (source, "--out", run, "--meeting-id", "safe",
+                    "--date", "2026-08-30")
             self.assertEqual(run_failure(*args), INTERPRETATION.UNSUPPORTED_CODE)
             path = proposal_path(run, source)
             path.write_bytes(b"x" * (INTERPRETATION.PROPOSAL_LIMIT + 1))
@@ -628,7 +638,8 @@ class MeetingInterpretationTest(unittest.TestCase):
             root = Path(temporary)
             source, run = root / "source.txt", root / "run"
             source.write_text(self.HEADER_TEXT, encoding="utf-8")
-            args = (source, "--out", run, "--meeting-id", "safe")
+            args = (source, "--out", run, "--meeting-id", "safe",
+                    "--date", "2026-08-30")
             self.assertEqual(run_failure(*args), INTERPRETATION.UNSUPPORTED_CODE)
             write_proposal(run, source, proposal_for(source))
             original = Path.read_bytes
@@ -717,7 +728,8 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             run = root / "run"
 
             result = subprocess.run(
-                [sys.executable, str(MODULE_PATH), str(source), "--out", str(run)],
+                [sys.executable, str(MODULE_PATH), str(source), "--out", str(run),
+                 "--date", "2026-08-30"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
 
@@ -742,7 +754,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             source.write_text("Speaker A: bounded text\n", encoding="utf-8")
             out = root / "meeting-run"
 
-            result = run_main(source, "--out", out)
+            result = run_main(source, "--out", out, "--date", "2026-08-30")
 
             self.assertEqual(result["meeting_count"], 1)
             self.assertTrue(Path(result["meetings"][0]["output"]).is_dir())
@@ -776,7 +788,8 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             cleanup = junction_or_symlink(self, requested, external)
             try:
                 with self.assertRaises(SystemExit):
-                    run_main(source, "--out", requested, "--meeting-id", "meeting-junction")
+                    run_main(source, "--out", requested, "--meeting-id", "meeting-junction",
+                             "--date", "2026-08-30")
                 self.assertEqual(tree_snapshot(external), before)
             finally:
                 cleanup()
@@ -797,7 +810,8 @@ class ImportMeetingTopologyTest(unittest.TestCase):
                 before_external = external.read_bytes()
 
                 with self.assertRaises(SystemExit):
-                    run_main(source, "--out", run, "--meeting-id", "meeting-hard-link")
+                    run_main(source, "--out", run, "--meeting-id", "meeting-hard-link",
+                             "--date", "2026-08-30")
 
                 self.assertEqual(external.read_bytes(), before_external)
                 self.assertEqual(tree_snapshot(run), before_run)
@@ -828,6 +842,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             )
             dataset = json.loads((meeting / "meeting.json").read_text(encoding="utf-8"))
             self.assertEqual(dataset["meeting_id"], "meeting-stable")
+            self.assertEqual(dataset["date"], "2026-08-27")
             self.assertEqual(dataset["title"], "Stable meeting")
             self.assertEqual(dataset["detected_format"], "speaker-labeled")
             self.assertEqual(dataset["speakers"], ["Speaker A", "Speaker B"])
@@ -877,6 +892,27 @@ class ImportMeetingTopologyTest(unittest.TestCase):
                 self.assertNotIn(leaked, captured)
             self.assertFalse(out.exists())
 
+    def test_missing_or_invalid_date_is_recoverable_and_creates_no_output(self):
+        cases = (
+            ((), MODULE.MISSING_DATE_CODE),
+            (("--date", ""), MODULE.INVALID_DATE_CODE), (("--date", "not-a-date"), MODULE.INVALID_DATE_CODE),
+            (("--date", "2026-02-30"), MODULE.INVALID_DATE_CODE),
+            (("--date", "2026-8-3"), MODULE.INVALID_DATE_CODE),
+        )
+        for date_args, expected in cases:
+            with self.subTest(date_args=date_args), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "meeting.txt"
+                source.write_text("Speaker A: bounded text\n", encoding="utf-8")
+                out = root / "requested-output"
+                result = subprocess.run(
+                    [sys.executable, str(MODULE_PATH), str(source), "--out", str(out), *date_args],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace")
+                self.assertEqual((result.returncode, result.stdout), (1, ""))
+                self.assertEqual(result.stderr.splitlines(), [expected])
+                self.assertFalse(out.exists())
+                self.assertEqual(list(root.rglob("meeting.json")), [])
+
     def test_audio_cli_uses_temporary_asr_scratch_and_leaves_only_canonical_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -907,7 +943,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             with mock.patch.object(MODULE.subprocess, "Popen", side_effect=run_mock_asr):
                 result = run_main(
                     source, "--out", run, "--meeting-id", "meeting-audio",
-                    "--language", "en",
+                    "--language", "en", "--date", "2026-08-30",
                 )
 
             meeting = run / "meetings" / "meeting-audio"
@@ -930,7 +966,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             second.write_text("张三: beta private text\n", encoding="utf-8")
             run = root / "run"
 
-            result = run_main(first, second, "--out", run)
+            result = run_main(first, second, "--out", run, "--date", "2026-08-30")
 
             expected_ids = [
                 f"meeting-alpha-{hashlib.sha256(first.read_bytes()).hexdigest()}",
@@ -946,6 +982,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
                 meeting = run / "meetings" / meeting_id
                 dataset = json.loads((meeting / "meeting.json").read_text(encoding="utf-8"))
                 self.assertEqual(dataset["meeting_id"], meeting_id)
+                self.assertEqual(dataset["date"], "2026-08-30")
                 self.assertEqual(dataset["detected_format"], "speaker-labeled")
                 self.assertEqual(dataset["speakers"], [expected_speaker])
                 self.assertEqual(dataset["records"][0]["record_id"], "rec-00001")
@@ -963,8 +1000,8 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             source = root / "same name.txt"
             source.write_text("same content\n", encoding="utf-8")
 
-            first = run_main(source, "--out", root / "first")
-            second = run_main(source, "--out", root / "second")
+            first = run_main(source, "--out", root / "first", "--date", "2026-08-30")
+            second = run_main(source, "--out", root / "second", "--date", "2026-08-30")
             first_id = first["meetings"][0]["meeting_id"]
             self.assertEqual(second["meetings"][0]["meeting_id"], first_id)
             self.assertEqual(
@@ -976,7 +1013,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             self.assertEqual(first_output.parent.name, "meetings")
 
             source.write_text("changed content\n", encoding="utf-8")
-            changed = run_main(source, "--out", root / "changed")
+            changed = run_main(source, "--out", root / "changed", "--date", "2026-08-30")
             self.assertNotEqual(changed["meetings"][0]["meeting_id"], first_id)
 
     def test_writable_historical_shared_locations_remain_byte_for_byte_unchanged(self):
@@ -998,6 +1035,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             with mock.patch.object(COMMON, "STAGING_DIR", shared, create=True):
                 result = run_main(
                     source, "--out", run, "--meeting-id", "meeting-local",
+                    "--date", "2026-08-30",
                 )
 
             self.assertEqual(result["meeting_count"], 1)
@@ -1012,6 +1050,7 @@ class ImportMeetingTopologyTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 run_main(
                     source, "--out", root / "run", "--meeting-id", "../outside",
+                    "--date", "2026-08-30",
                 )
             self.assertFalse((root / "outside").exists())
 
