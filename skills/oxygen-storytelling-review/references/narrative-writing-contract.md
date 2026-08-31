@@ -19,7 +19,7 @@ Write for a technically curious reader. Make the supported arc engaging by quick
 ## Story Generation Order
 
 Before any Story writer is dispatched, the workflow-owning parent reviews the complete
-Privacy-safe semantic projection and establishes the global Coverage/Chapter-owner skeleton by
+bound reviewed semantic projection and establishes the global Coverage/Chapter-owner skeleton by
 coherent narrative arc. `ownerId` is never defaulted or mechanically copied from `unitId`.
 Related semantic units may share one owner, one Chapter may cover multiple semantic units, and
 several Chapters may later share one Phase. Chapter count does not follow semantic-unit, source,
@@ -79,8 +79,8 @@ each Evidence row. A one-sentence Chapter is acceptable only when the reviewed s
 contains no larger supported arc.
 
 Direct quotations in Story prose are permitted only when they exactly reproduce canonical
-Privacy-reviewed source text and retain the supporting Evidence reference. Never create dialogue
-from a paraphrase or from raw, pre-redaction, foreign, or stale source.
+bound reviewed source text and retain the supporting Evidence reference. Never create dialogue
+from a paraphrase or from source outside the exact reviewed boundary, foreign source, or stale source.
 
 ## Title, Overview, And Project Summary
 
@@ -121,7 +121,7 @@ determines all of the following for that exact proposal:
 4. The prose shows supported response and change rather than merely enumerating facts.
 5. The Chapter forms one coherent arc.
 6. The ending explains what changed or what remains unresolved.
-7. Every claimed interaction is supported by Privacy-reviewed Evidence.
+7. Every claimed interaction is supported by exact bound reviewed Evidence.
 8. The prose is readable enough that a human could voluntarily continue.
 
 The parent records those eight decisions in the transient proposal-digest-bound editorial review
@@ -140,7 +140,7 @@ establishing the arc.
 
 For a dry, fragmented, mechanical, incomplete, or record-by-record proposal, do not invoke the
 recorder. Give the assigned writer a specific proposal-only correction that names the missing
-narrative relationship, reuse the byte-identical immutable Privacy-safe input, and then re-read the
+narrative relationship, reuse the byte-identical immutable bound reviewed input, and then re-read the
 complete corrected prose. The initial proposal has at most two subagent correction attempts. If
 both corrected proposals remain editorially unacceptable, the Ultra parent may complete only that
 same still-unrecorded assignment from the byte-identical input and write the same canonical
@@ -162,9 +162,9 @@ Principle
 ```
 
 Background is Story-grounded context. `anchorStoryBlockId` selects only the Story paragraph beside
-which the card appears. Quote is exact canonical Privacy-reviewed trajectory text, or one exact
+which the card appears. Quote is exact canonical bound reviewed trajectory text, or one exact
 nonempty substring, bound to the current supporting Evidence identity for that anchored passage.
-It is not Story prose, a Story paraphrase, generated dialogue, raw/pre-redaction text, foreign or
+It is not Story prose, a Story paraphrase, generated dialogue, source outside the exact reviewed boundary, foreign or
 stale Evidence, or text inferred from an Evidence ID. Directly Acquired Experience is what was
 learned from that actual project moment. Principle is a reusable rule, question, or guardrail for a
 genuinely similar future condition.

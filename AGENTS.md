@@ -7,7 +7,8 @@ history, use this file as the initial routing contract:
 2. Before collection, load the organizer Skill and start its sanitized Workflow Progress surface.
    Surface the exact localhost URL and keep one canonical local Viewer/run through the workflow.
 3. Keep the final public workflow in this order: Collect, Organize, upstream source Privacy
-   preparation, Build Project Story with bounded semantic workers, independent global sparse
+   preparation as mandatory release authority, Build Project Story with bounded semantic workers,
+   independent global sparse
    Insight pass, Story/Release Privacy candidate preparation, Preference-question generation,
    Project Story human review, Privacy Keep/Redact decisions, Preference answers, All set,
    local reviewed release.
@@ -22,7 +23,10 @@ Stage ownership:
   reviewed-boundary tooling.
 - **Build Project Story, Insight pass, and Story/Release Privacy candidate preparation** —
   delegate to `skills/oxygen-storytelling-review/SKILL.md` only after upstream source Privacy
-  produces the privacy-prepared reviewed input.
+  establishes the reviewed source authority. The workflow parent selects Story owners from, and
+  gives Story and Insight workers, the exact bound raw reviewed narrative through the
+  contributor-selected current provider. Source Privacy spans are mandatory for release; they are
+  not applied to that narrative before Story authoring.
 - **Preference-question generation** —
   `skills/oxygen-elicit-contributor-preferences/SKILL.md` after reusable lessons and generated
   Insight candidates exist, using that same reviewed input without reopening raw history or
@@ -37,12 +41,14 @@ shard. Story, Insight, and Story Privacy remain multi-shard lanes. Preference in
 exactly one global bounded worker because it produces one deduplicated questionnaire authority,
 capped at 12 probes by default and 20 maximum; never fan Preference out across multiple workers.
 When host subagents are available, the parent dispatches with no more than three live at once; each
-subagent reads exactly one Privacy-safe `inputPath` and writes only its assigned proposal. The
-parent alone runs recorders and finalizers, installs authority, proves exact union and no overlap,
+subagent reads exactly one generated immutable `inputPath` and writes only its assigned proposal.
+Story and Insight inputs carry only the exact bound raw reviewed narrative needed for their assigned
+scope through the contributor-selected current provider. The parent alone runs recorders and
+finalizers, installs authority, proves exact union and no overlap,
 mutates Viewer state, and waits for all terminal receipts. Story is the global boundary: before
 Coverage finalization, the parent selects Chapter owners by coherent narrative arc across the
-complete Privacy-safe semantic projection. It never defaults or mechanically copies `ownerId` from
-`unitId`; Chapter count never follows semantic-unit, source, meeting, or prior-run count, and Phase
+complete exact-bound reviewed semantic projection. It never defaults or mechanically copies
+`ownerId` from `unitId`; Chapter count never follows semantic-unit, source, meeting, or prior-run count, and Phase
 count never follows Chapter count or semantic kind. Related units may share one owner, multiple
 units may form one Chapter, and multiple Chapters may later share one Phase. Finalized Coverage
 `ownerId` is then the sole Chapter-ownership source, complete owner bundles never split across
@@ -70,14 +76,15 @@ absent. After successful batch installation every Story output and receipt is im
 genuinely unavailable, the parent processes the same assignments serially, reports
 `executionMode=serial_capability_limited`, and continues through the identical recorder/finalizer
 authority without asking the contributor to create workers. Internal host subagents are not
-product provider/API calls, require no separate API key, and receive no raw/private source beyond
-the prepared Privacy-safe input.
+separate product provider/API calls and require no separate API key. Story workers receive exact
+bound raw reviewed narrative only through the contributor-selected current provider and never
+receive source outside that reviewed boundary.
 
 Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
 
 1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
 2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
-3. Then read exactly the assignment's one generated Privacy-safe `inputPath`.
+3. Then read exactly the assignment's one generated immutable `inputPath`.
 4. Write only that assignment's proposal.
 
 Do not dispatch a Story worker unless its assignment names both required contract paths, its one
@@ -85,9 +92,11 @@ actual generated `inputPath`, and its proposal-only write boundary. The worker m
 other data input or write a receipt, final artifact, or authority file.
 
 Each Story input is self-contained for writing: it carries complete owner-atomic represented-unit
-bundles, Privacy-reviewed narrative, canonical semantic/Coverage references, and equality-only actor
-tokens, with no excluded narrative, raw actor identity, Source Privacy rows, pre-redaction content,
-or provider metadata. Workers return phase-free proposals only. On a subagent-capable host the
+bundles, exact bound raw reviewed narrative, canonical semantic/Coverage references, and
+equality-only actor tokens, with no excluded or outside-boundary narrative, raw actor identity,
+Source Privacy rows, or provider metadata. Its validation authority contains no source narrative,
+raw actor identity, or source outside the exact reviewed boundary. Workers return phase-free
+proposals only. On a subagent-capable host the
 parent does not initially write Story prose, People, Evidence choices, titles, overviews, or blocks.
 The parent reads every proposed Chapter in full, records the eight-question narrative acceptance
 bound to the exact current proposal digest, and rejects any dry, fragmented, mechanical,

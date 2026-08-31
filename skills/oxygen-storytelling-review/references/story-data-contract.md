@@ -149,7 +149,7 @@ Each Story block is safe release-draft prose with exact Evidence support. Do not
 `insights` is an array and may be empty. Each existing Insight has exactly these four meanings:
 
 - `background`: minimum Story-grounded context for the judgment moment.
-- `quote`: exact canonical Privacy-reviewed trajectory text, or one exact nonempty substring of it,
+- `quote`: exact canonical bound reviewed trajectory text, or one exact nonempty substring of it,
   bound to one exact current `documentId`/`eventId` Evidence identity.
 - `directlyAcquiredExperience`: what was learned from that actual project moment.
 - `principle`: a reusable rule, question, or guardrail for a genuinely similar future condition.
@@ -157,7 +157,7 @@ Each Story block is safe release-draft prose with exact Evidence support. Do not
 `anchorStoryBlockId` is placement only and identifies exactly one Story block in the same Chapter.
 The Quote Evidence must belong to that anchored block and to the current approved Story/source
 boundary. The Quote is never reconstructed from Story prose and must not be a Story paraphrase,
-model-generated dialogue, raw/pre-redaction text, Source Privacy row, foreign Evidence, stale
+model-generated dialogue, source outside the exact reviewed boundary, Source Privacy row, foreign Evidence, stale
 Evidence, or text inferred from an Evidence ID. Top-level Insight Evidence is optional broader
 multi-record grounding; every reference it contains must remain current and same-Chapter.
 `title` is optional presentation metadata, not a fifth required meaning.
@@ -248,8 +248,9 @@ Receipts and authority digests are recorder-owned and must never be handwritten.
 
 Before Story preparation, finalize Coverage. The Story preparer binds that exact authority to the
 same semantic generation and current public Source Privacy state, derives equality-only actor facts
-and redacted narrative from the canonical reviewed run, and persists no raw actor identity or
-pre-redaction content. The recorder and finalizer call the exported Viewer
+and exact bound raw reviewed narrative from the canonical reviewed run, and persists no raw actor
+identity or source narrative in validation authority. Only explicitly provider-bound worker input
+carries that reviewed narrative. The recorder and finalizer call the exported Viewer
 `validateStorySourcePackage` directly; no transport-local People, Evidence, Phase, Coverage, or
 Insight-grounding validator substitutes for it.
 
@@ -271,8 +272,8 @@ type StoryCandidateSubmissionRow = {
 };
 ```
 
-The server derives document, sequence, timestamp, project identity, and current Privacy-reviewed
-narrative from current server-owned source and Source Privacy authority. It validates candidate
+The server derives document, sequence, timestamp, project identity, and current exact bound raw
+reviewed narrative from current server-owned source and Source Privacy authority. It validates candidate
 size, IDs, source schema, evidence, People, Phase contiguity, exact Quote substring identity,
 Quote/anchor grounding, Insight grounding, coverage authority, revision transitions, and active
 digest before activation. Nonempty AI Insights fail when that current reviewed narrative cannot be

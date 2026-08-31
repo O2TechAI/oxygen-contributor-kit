@@ -63,7 +63,7 @@ local reviewed release
 
 Keep the two Privacy boundaries distinct:
 
-- Upstream source Privacy prepares the reviewed input boundary before Story generation. It removes or replaces source material and blocks release while required source redaction decisions remain unresolved.
+- Upstream source Privacy binds mandatory release authority to the reviewed source before Story generation and blocks release while required source redaction decisions remain unresolved. During Organize and Story authoring, the contributor-selected current Agent/provider may process the exact bound raw reviewed source; this does not authorize release, upload, publication, or a provider switch.
 - Story/Release Privacy reviews release-safe Story targets after the Story candidate exists. The Agent authors one meaning-preserving proposal for every target, while candidates remain explanatory metadata. The hydrated Story session does not own target choices; the server-owned target authority does.
 
 ## Readiness Terminal Rule
@@ -149,7 +149,7 @@ requires the owning Agent to prepare deterministic inputs first:
 
 - create an immutable input digest;
 - establish one global Chapter-owner skeleton by coherent narrative arc across the complete
-  Privacy-safe semantic projection, never by defaulting or mechanically copying `ownerId` from
+  bound reviewed semantic projection, never by defaulting or mechanically copying `ownerId` from
   `unitId` and never from a golden count;
 - derive canonical Chapter owners only from finalized Coverage `ownerId`;
 - write byte-balanced Story shards containing indivisible complete owner bundles;
@@ -167,7 +167,7 @@ requires the owning Agent to prepare deterministic inputs first:
 
 When host subagents are available, the parent must dispatch them in waves of no more than three
 live at once; silently performing all semantic reasoning in the parent is invalid. Each assignment
-reads exactly one Privacy-safe immutable `inputPath` and writes only its proposal. Workers never
+reads exactly one immutable provider-bound `inputPath` and writes only its proposal. Workers never
 write receipts, final manifests, SQLite, Viewer APIs, revisions, activation state, release state,
 or publication state. The parent exclusively runs recorders, installs authority, verifies
 exact union/no overlap, finalizes authority, performs Viewer mutations, and waits for all terminal
@@ -178,7 +178,7 @@ Every `story`-lane subagent assignment must convey this ordered contract before 
 
 1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
 2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
-3. Then read exactly the assignment's one generated Privacy-safe `inputPath`.
+3. Then read exactly the assignment's one generated provider-bound `inputPath`.
 4. Write only that assignment's proposal.
 
 Do not dispatch a Story worker unless its assignment names both required contract paths, its one
@@ -186,10 +186,11 @@ actual generated `inputPath`, and its proposal-only write boundary. The worker m
 other data input or write a receipt, final artifact, or authority file.
 
 Each Story input is self-contained for writing and contains complete owner bundles: all represented
-semantic units owned by that exact Coverage owner, the corresponding Privacy-reviewed narrative,
-canonical semantic/Coverage references, and equality-only actor tokens. It contains no excluded
-narrative, raw actor identity, Source Privacy rows, pre-redaction content, private sentinel, or
-provider metadata. One owner never spans workers; a shard may carry multiple complete owners.
+semantic units owned by that exact Coverage owner, the corresponding exact bound raw reviewed
+narrative, canonical semantic/Coverage references, and equality-only actor tokens. It contains no excluded
+narrative, raw actor identity, Source Privacy rows, source outside the exact reviewed boundary, or
+provider metadata. The narrative is the exact bound raw reviewed source and may be processed only
+by the contributor-selected current provider. One owner never spans workers; a shard may carry multiple complete owners.
 
 Story workers return phase-free Chapter proposals and do not author schema, Chapter keys, Phase,
 Coverage, exclusions, receipts, or authority. On a subagent-capable host the parent does not
@@ -204,9 +205,9 @@ Story outputs and exactly one receipt per shard install atomically only after th
 unchanged shared validator accept the complete package. Insight remains a separate later pass.
 
 Each Insight worker receives only assigned frozen Story candidates, their Story blocks and Evidence
-references, the minimum Privacy-reviewed narrative rows those blocks reference, and the existing
+references, the minimum exact bound reviewed narrative rows those blocks reference, and the existing
 validation-authority reference. `anchorStoryBlockId` controls card placement only; `quote.text` must
-be one exact current Privacy-reviewed trajectory substring bound to one supporting `quote.evidence`
+be one exact current bound reviewed trajectory substring bound to one supporting `quote.evidence`
 identity for that anchored passage. It is never reconstructed from Story prose. Invalid proposals
 create no output or receipt; finalization and Viewer activation independently reopen current
 authority and fail closed. Completed-zero is valid.
@@ -228,8 +229,8 @@ durable output. If host subagents are genuinely unavailable, the parent runs the
 serially, reports
 `executionMode=serial_capability_limited`, and continues through the identical recorder/finalizer
 authority without asking the contributor to create workers. Internal host subagents are not product
-provider/API calls, require no separate API key, and receive no raw/private source beyond the
-prepared bounded input. `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal boundary only.
+provider/API calls, require no separate API key, and receive no source beyond the exact bound
+reviewed input. `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal boundary only.
 
 For Story, the initial complete proposal set is non-authoritative and the two allowed corrections
 are lane-wide waves. Replacing a rejected proposal or replacing only the non-authoritative Phase
@@ -326,8 +327,9 @@ authority, and the Preference recorder binds that exact bundle unchanged.
 
 Story preparation takes the exact canonical reviewed run, current public Source Privacy projection,
 current semantic authority, and finalized current Coverage authority together. Its immutable input
-binds one minimal validation-authority bundle and Privacy-reviewed narrative context; it excludes
-raw actor identity, pre-redaction source text, redaction details, and provider metadata. Story
+binds one minimal validation-authority bundle and the exact bound raw reviewed narrative; it excludes
+raw actor identity, Source Privacy rows, redaction details, and provider metadata. Only that explicitly
+provider-bound input carries source narrative; validation authority does not. Story
 workers do not need to open the parent-only validation authority or any other generated file. Both the
 Story recorder and preparation finalizer directly reuse the unchanged Viewer
 `validateStorySourcePackage`, so complete People, Evidence, Phase, Coverage, and Insight-grounding
@@ -360,7 +362,7 @@ Activation revalidates the exact source package, semantic manifest, coverage man
 The contributor reviews the Story in the Viewer. The review session contains only the implemented fields documented in [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md). It does not store Preference answers. Preference questions are generated and validated before the human review opens, then remain unanswered until the contributor explicitly answers in the Preferences authority.
 
 AI Insight cards remain separate from Story prose and appear beside their one anchored paragraph;
-on narrow screens they follow it immediately. The exact safe source Quote and its anchor are
+on narrow screens they follow it immediately. The exact bound reviewed source Quote and its anchor are
 read-only while the explanatory fields are reviewed. Human-created Insight keeps its distinct exact
 user-selected Story-substring Quote origin and lifecycle. Release uses the accepted source Quote,
 not Story paragraph text, and strips anchor and Evidence identities.

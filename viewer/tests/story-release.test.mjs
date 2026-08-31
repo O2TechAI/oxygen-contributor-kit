@@ -578,7 +578,7 @@ async function serverFixture({
     eventType: item.event_type,
     actorId: item.actor_id,
     actorType: item.actor_type,
-    reviewedNarrative: `${initiallyRedacted ? '<redacted category="sensitive"/>' : storyPrivate} supporting evidence`,
+    reviewedNarrative: `${storyPrivate} supporting evidence`,
   }];
   const validation = validateStorySourcePackage(candidateRows, evidenceRows);
   assert.equal(validation.ok, true);
@@ -1045,6 +1045,40 @@ test("nonempty AI Insights force current source Quote validation even for a pass
       actorType: "user",
     }],
     { verifyCurrentSource: false },
+  );
+  assert.equal(validation.ok, true, validation.code);
+});
+
+test("Viewer Story activation grounds a Quote in exact reviewed source despite source release redaction", async () => {
+  const quoteText = `${PRIVATE} supporting evidence`;
+  const { db, currentSource } = await serverFixture();
+  const candidateSource = structuredClone(currentSource);
+  candidateSource.insights[0].quote = { text: quoteText, evidence };
+  const privacyAuthority = await readCoveragePrivacyAuthority(
+    db,
+    RUN_ID,
+    db.completeness.semantic,
+  );
+  assert.equal(privacyAuthority.ok, true);
+  assert.equal(
+    privacyAuthority.authority.reviewedNarrativeByItemId.get(evidence.eventId),
+    quoteText,
+  );
+  const validation = await validateCurrentStorySourcePackage(
+    db,
+    RUN_ID,
+    [{
+      id: evidence.eventId,
+      documentId: evidence.documentId,
+      summary: `${STORY_PREFIX}${JSON.stringify(candidateSource)}`,
+    }],
+    [{
+      id: evidence.eventId,
+      documentId: evidence.documentId,
+      eventType: "message",
+      actorId: "contributor",
+      actorType: "user",
+    }],
   );
   assert.equal(validation.ok, true, validation.code);
 });

@@ -1,6 +1,5 @@
 import type { getLocalDatabase } from "../db";
 import { computeSourceDigest } from "./redaction-pass.mjs";
-import { applyActiveRedactions } from "./release.mjs";
 import type { SemanticManifestAuthority } from "./story-readiness.ts";
 import { validActivatedSourceRevision } from "./authority-validation.mjs";
 import {
@@ -299,17 +298,9 @@ function privacyReviewedNarrative(
   redactions: JsonRecord[],
 ) {
   if (redactions.some((row) => row.review_state === "needs_confirmation")) return null;
-  const spans = new Map<string, JsonRecord[]>();
-  for (const row of redactions) {
-    if (row.status !== "active" || !FINAL_REDACTION_STATES.has(String(row.review_state))) continue;
-    const itemId = String(row.item_id);
-    const owned = spans.get(itemId) || [];
-    owned.push(row);
-    spans.set(itemId, owned);
-  }
   return new Map(items.map((row) => [
     row.id,
-    applyActiveRedactions(row.content, spans.get(row.id) || []),
+    row.content,
   ]));
 }
 

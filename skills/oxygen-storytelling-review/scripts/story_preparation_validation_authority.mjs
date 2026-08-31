@@ -1,6 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { applyActiveRedactions } from "../../../viewer/lib/release.mjs";
 import { computeSourceDigest } from "../../../viewer/lib/redaction-pass.mjs";
 import {
   canonicalAuthorityJson,
@@ -222,13 +221,6 @@ function projectEvidence(rows, sourcePrivacy) {
   if (sourcePrivacy.redactions.some((row) => row.review_state === "needs_confirmation")) {
     fail("SOURCE_PRIVACY_REVIEW_INCOMPLETE");
   }
-  const spans = new Map();
-  for (const row of sourcePrivacy.redactions) {
-    if (row.status === "active" && ["deterministic", "confirmed_redact"].includes(row.review_state)) {
-      if (!spans.has(row.item_id)) spans.set(row.item_id, []);
-      spans.get(row.item_id).push(row);
-    }
-  }
   const evidence = [];
   const reviewedNarrative = [];
   for (const row of rows) {
@@ -256,7 +248,7 @@ function projectEvidence(rows, sourcePrivacy) {
       interactionDirection: row.interactionDirection,
       relationId: row.relationId,
       relations: row.relations,
-      narrative: applyActiveRedactions(row.content, spans.get(row.id) || []),
+      narrative: row.content,
     });
   }
   return { evidence, reviewedNarrative };

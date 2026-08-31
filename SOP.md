@@ -311,11 +311,15 @@ Important boundaries:
 
 ## 5. Build Project Story and Review Story
 
-Once `work/<run>-review` is organized and has passed the required privacy preparation, read and
+Once `work/<run>-review` is organized and upstream source Privacy has established the required
+mandatory release authority, read and
 follow `skills/oxygen-storytelling-review/SKILL.md`. Derive project-specific Story data only from
 that reviewed boundary and bind the validated result to the canonical Storytelling capability in
-the existing Viewer and `viewer/lib/story-*` contracts. Do not build a separate Storytelling
-application or copy project prose into reusable source.
+the existing Viewer and `viewer/lib/story-*` contracts. Story owner selection and Story/Insight
+worker input use the exact bound raw reviewed narrative through the contributor-selected current
+provider. Source Privacy redactions remain mandatory release authority and are not applied before
+that narrative reaches Story authoring workers. Do not build a separate Storytelling application or
+copy project prose into reusable source.
 
 Build the complete Project Story with bounded semantic workers, then run an independent global
 sparse Insight pass. Prepare one Agent-authored, meaning-preserving proposal for every Story/Release
@@ -336,34 +340,39 @@ recorder, existing Preference producer, and preparation finalizer create and bin
 
 Parent-owned semantic work starts with the public deterministic preparer. It accepts the canonical
 Organization project map or bare semantic manifest through one bounded parser, freezes the exact
-assigned identities and input digest, and installs immutable provider-safe worker input before a
+assigned identities and input digest, and installs immutable bounded worker input before a
 proposal exists. Story, Insight, and Story Privacy remain multi-shard lanes, and the
 workflow-owning parent enumerates every nonempty manifest shard for them. Preference intentionally
 uses exactly one global bounded worker because it produces one deduplicated questionnaire
 authority, capped at 12 probes by default and 20 maximum; never fan Preference out. When host
 subagents are available, assignments run automatically with at most three live at once. Each
-assignment reads exactly one Privacy-safe immutable `inputPath` and writes only its proposal.
+assignment reads exactly one generated immutable `inputPath` and writes only its proposal. Story
+and Insight assignments receive only their exact bound raw reviewed narrative through the
+contributor-selected current provider.
 Workers never write receipts, final manifests, SQLite, Viewer APIs, revisions, activation state,
-release state, or publication state. Internal host subagents are not product provider/API calls,
-require no separate API key, and receive no raw/private source beyond the prepared input.
+release state, or publication state. Internal host subagents are not separate product provider/API
+calls, require no separate API key, and receive no source outside the exact reviewed boundary.
 
 Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
 
 1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
 2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
-3. Then read exactly the assignment's one generated Privacy-safe `inputPath`.
+3. Then read exactly the assignment's one generated immutable `inputPath`.
 4. Write only that assignment's proposal.
 
 Do not dispatch a Story worker until the assignment names both contract paths, the actual generated
 `inputPath`, and the proposal-only write boundary. No other data input is part of that assignment.
 
 Before Coverage finalization, the parent selects Chapter owners by coherent narrative arc across
-the complete Privacy-safe semantic projection; it never defaults or mechanically copies `ownerId`
-from `unitId`, and no source, semantic-unit, Chapter, or Phase count is golden. Finalized Coverage
+the complete exact-bound reviewed semantic projection; it never defaults or mechanically copies
+`ownerId` from `unitId`, and no source, semantic-unit, Chapter, or Phase count is golden. Finalized Coverage
 `ownerId` is then the sole Story Chapter-ownership source. The Story preparer keeps
-every owner's represented units in one complete, Privacy-safe, self-contained bundle and balances
-shards only by whole-bundle bytes. Story workers return phase-free proposals. On a subagent-capable
-host the parent does not initially write Story prose, People, Evidence choices, titles, overviews,
+every owner's represented units in one complete, exact-bound, self-contained bundle and balances
+shards only by whole-bundle bytes. Story worker input contains the exact bound raw reviewed
+narrative but no excluded or outside-boundary narrative, raw actor identity, Source Privacy rows,
+or provider metadata. The validation authority contains no source narrative, raw actor identity,
+or source outside the exact reviewed boundary. Story workers return phase-free proposals. On a
+subagent-capable host the parent does not initially write Story prose, People, Evidence choices, titles, overviews,
 or blocks. It waits for every proposal, reads each Chapter in full, binds all eight editorial
 decisions to the exact proposal digest, and rejects negative or stale review before Phase or
 receipt. After the initial proposal and two editorially rejected subagent corrections, the Ultra
@@ -636,8 +645,10 @@ lane proposal shapes.
 
 Story preparation freezes one minimal validation-authority bundle from the exact reviewed source
 generation, current semantic manifest, and current Coverage manifest. It projects private actor
-identity to equality-only tokens and applies current final Source Privacy redactions before any
-narrative reaches a worker input. The Story recorder and preparation finalizer both call the
+identity to equality-only tokens. It sends exact bound raw reviewed narrative to Story and Insight
+workers through the contributor-selected current Agent/model provider; it does not apply Source
+Privacy redactions before authoring. Source Privacy remains mandatory release authority. The Story
+recorder and preparation finalizer both call the
 unchanged Viewer `validateStorySourcePackage`; a complete Story failure creates no receipt, and a
 forged or stale pair cannot create terminal preparation authority.
 

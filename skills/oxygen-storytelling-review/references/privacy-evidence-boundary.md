@@ -4,9 +4,9 @@
 
 Do not collapse these steps into one ambiguous Privacy phase.
 
-Upstream source Privacy runs before Story generation. It prepares the reviewed input boundary by replacing non-conversational payloads with fixed labels, applying validated redaction spans, and blocking release while source-level review states remain unresolved.
+Upstream source Privacy runs before Story generation. It binds validated redaction spans and their current receipt to the reviewed source as mandatory release authority, and it blocks release while source-level review states remain unresolved. Those spans do not replace the exact bound raw reviewed narrative used by the contributor-selected current provider during Organize and Story authoring.
 
-Story/Release Privacy runs after the Story candidate exists. The Agent authors one meaning-preserving proposal for every release target, while candidates remain explanatory metadata outside `oxygen.story`. The contributor then chooses the exact release bytes through the server-owned target authority; the hydrated Story session does not own those choices.
+Story/Release Privacy runs after the Story candidate exists. The generated Story is non-release working state and cannot release until one meaning-preserving proposal exists for every current release target and the contributor chooses the exact reviewed release bytes through the server-owned target authority. An exact noncredential public occurrence may remain public only through that explicit reviewed choice. Candidates remain explanatory metadata outside `oxygen.story`; the hydrated Story session does not own those choices.
 
 ## Provider Processing And Final Export Boundary
 
