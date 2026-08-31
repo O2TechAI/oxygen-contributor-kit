@@ -84,8 +84,10 @@ proposal file for every current Story shard, reads every Chapter in full, and wr
 unversioned editorial review bound to each exact current proposal digest. The recorder rejects a
 missing, stale, foreign, incomplete, or negative review before it reads Phase and before any output
 or receipt exists. The parent then orders complete accepted Chapters with the production
-timestamp -> documentId -> sequence -> row-id comparator, supplies one transient unversioned Phase
-assignment for that exact ordered owner set, and invokes the Story recorder once. The recorder
+source-identity comparator. Strict timezone-qualified RFC3339 timestamps use normalized absolute
+chronology; meeting-local, missing, or malformed timestamps remain grouped by document and use
+source sequence. The parent supplies one transient unversioned Phase assignment for that exact
+ordered owner set, and invokes the Story recorder once. The recorder
 injects schema, Chapter keys equal to Coverage owner IDs, Phase, semantic/Coverage references,
 represented units, canonical exclusions, final row identity, and empty base-Story Insights. It then
 calls the unchanged exported `validateStorySourcePackage` on the complete candidate package. Only

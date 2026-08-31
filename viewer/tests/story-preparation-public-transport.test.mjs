@@ -310,37 +310,43 @@ function storySource(suffix, semantic, coverage, insights = [], {
 
 async function reviewedBoundary(root, projectMap, semantic, coverageRows = null, {
   documentId = "doc-canary", language = "en", narrativeBytes = 0, sourceRedactions = [],
+  eventIdentities = {},
 } = {}) {
   const review = join(root, "review");
-  const trajectory = join(review, "trajectories", documentId);
-  await mkdir(trajectory, { recursive: true });
+  const trajectories = join(review, "trajectories");
+  await mkdir(trajectories, { recursive: true });
   await json(join(review, "project-map.json"), projectMap);
   const events = semantic.units.map((unit, index) => {
     const suffix = unit.id.slice("unit-".length);
     const actorType = index % 2 === 0 ? "user" : "assistant";
     return {
     event_id: `event-${suffix}`,
-    trajectory_id: documentId,
+    trajectory_id: eventIdentities[suffix]?.documentId ?? documentId,
     turn_id: `turn-${suffix}`,
-    sequence: index + 1,
+    sequence: eventIdentities[suffix]?.sequence ?? index + 1,
     event_type: "message",
     actor: { id: `actor-${digest([documentId, actorType])}`, type: actorType },
     relation_id: `event-${digest([documentId, `event-${suffix}`])}`,
-    timestamp: null,
+    timestamp: eventIdentities[suffix]?.timestamp ?? null,
     payload: { role: actorType, text: `${language === "es"
       ? `observación segura revisada ${suffix}` : `safe reviewed canary ${suffix}`}${
       narrativeBytes ? ` ${"x".repeat(narrativeBytes)}` : ""}` },
     relations: [],
     };
   });
-  await writeFile(join(trajectory, "events.jsonl"), `${events.map(JSON.stringify).join("\n")}\n`, "utf8");
+  for (const eventDocumentId of new Set(events.map((event) => event.trajectory_id))) {
+    const trajectory = join(trajectories, eventDocumentId);
+    await mkdir(trajectory);
+    const documentEvents = events.filter((event) => event.trajectory_id === eventDocumentId);
+    await writeFile(join(trajectory, "events.jsonl"), `${documentEvents.map(JSON.stringify).join("\n")}\n`, "utf8");
+  }
   const sourceRows = events.map((event) => ({
     id: event.event_id,
     document_id: event.trajectory_id,
     sequence: event.sequence,
     event_type: event.event_type,
     actor_type: event.actor.type,
-    timestamp: null,
+    timestamp: event.timestamp,
     content: event.payload.text,
   }));
   const sourcePrivacy = join(root, "source-privacy.json");
@@ -610,7 +616,7 @@ async function createFlow({
 
 async function prepareStoryOnly({
   suffixes = ["a", "b"], coverageRows = null, narrativeBytes = 0,
-  reverseTransportInputs = false, sourceRedactions = [],
+  reverseTransportInputs = false, sourceRedactions = [], eventIdentities = {},
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "story-owner-batch-"));
   const semantic = semanticAuthority({ suffixes });
@@ -627,7 +633,7 @@ async function prepareStoryOnly({
   const projectMapPath = join(root, "project-map.json");
   await json(projectMapPath, projectMap);
   const boundary = await reviewedBoundary(root, projectMap, semantic, coverageRows, {
-    narrativeBytes, sourceRedactions,
+    narrativeBytes, sourceRedactions, eventIdentities,
   });
   if (reverseTransportInputs) {
     const reversedMap = structuredClone(projectMap);
@@ -1267,6 +1273,47 @@ test("Story batch recorder permits pre-receipt correction and makes the complete
     assert.deepEqual(await readFile(outputPath), beforeOutput);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Story batch recorder scopes cross-document local clocks before Phase validation", async () => {
+  const eventIdentities = {
+    a: { documentId: "meeting-a", timestamp: "2026-01-01T09:00:00" },
+    b: { documentId: "meeting-b", timestamp: "2026-01-01T17:00:00" },
+    c: { documentId: "meeting-c", timestamp: "2026-01-01T12:00:00" },
+  };
+  const value = await prepareStoryOnly({ suffixes: ["a", "b", "c"], eventIdentities });
+  try {
+    assert.equal(value.prepared.status, 0, value.prepared.stderr);
+    const phaseOne = { id: "phase-one", label: "Foundation" };
+    const phaseTwo = { id: "phase-two", label: "Closing" };
+    const phases = { a: phaseOne, b: phaseOne, c: phaseTwo };
+    const legacyClockOrder = Object.entries(eventIdentities)
+      .sort(([, left], [, right]) => left.timestamp.localeCompare(right.timestamp))
+      .map(([suffix]) => phases[suffix].id);
+    assert.deepEqual(legacyClockOrder, ["phase-one", "phase-two", "phase-one"]);
+
+    const records = ["a", "b", "c"].map((suffix) => {
+      const story = storySource(suffix, value.semantic, value.boundary.coverageAuthority, [], {
+        documentId: eventIdentities[suffix].documentId,
+      });
+      story.phase = phases[suffix];
+      return { id: `event-${suffix}`, story };
+    });
+    const batch = await storyBatchFiles(value.transport, value.root, records, "local-clock-order");
+    assert.equal(existsSync(join(value.transport, "story", "records")), false);
+    runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "0"]);
+    const outputs = (await Promise.all(batch.manifest.shards.map((shard) => (
+      readJson(join(value.transport, "story", "records", shard.id, "output.json"))
+    )))).flat();
+    assert.deepEqual(outputs.map((row) => row.story.key), ["story-a", "story-b", "story-c"]);
+    assert.deepEqual(outputs.map((row) => row.story.phase.id), ["phase-one", "phase-one", "phase-two"]);
+    assert.ok(batch.manifest.shards.every((shard) => existsSync(
+      join(value.transport, "story", "records", shard.id, "receipt.json"),
+    )));
+  } finally {
+    await value.cleanup();
   }
 });
 

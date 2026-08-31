@@ -82,16 +82,91 @@ test("Timeline kind labels and Insight markers are reachable in English and Chin
   assert.equal(timelinePresentation(story({ insights: [insight] })).marker, "ai_insight");
 });
 
-test("Story source identity has one permanent timestamp, document, sequence, and ID order", () => {
+test("strict absolute Story timestamps normalize offsets across documents", () => {
   const identities = [
-    { id: "z", timestamp: "2026-01-02T00:00:00Z", documentId: "doc-a", sequence: 1 },
-    { id: "b", timestamp: "2026-01-01T00:00:00Z", documentId: "doc-b", sequence: 1 },
-    { id: "c", timestamp: "2026-01-01T00:00:00Z", documentId: "doc-a", sequence: 2 },
-    { id: "a", timestamp: "2026-01-01T00:00:00Z", documentId: "doc-a", sequence: 2 },
-    { id: "missing", timestamp: null, documentId: "doc-z", sequence: 9 },
+    { id: "later", timestamp: "2025-12-31T20:30:00-04:00", documentId: "doc-c", sequence: 1 },
+    { id: "first-b", timestamp: "2026-01-01T00:00:00Z", documentId: "doc-b", sequence: 1 },
+    { id: "first-a", timestamp: "2026-01-01T01:00:00+01:00", documentId: "doc-a", sequence: 1 },
+    { id: "middle", timestamp: "2026-01-01T00:15:00.250Z", documentId: "doc-z", sequence: 1 },
   ];
-  identities.sort(compareStorySourceIdentity);
-  assert.deepEqual(identities.map((item) => item.id), ["missing", "a", "c", "b", "z"]);
+  assert.deepEqual(identities.sort(compareStorySourceIdentity).map((item) => item.id), [
+    "first-a", "first-b", "middle", "later",
+  ]);
+});
+
+test("absolute Story fractions remain exact while unknown or excess precision stays scoped", () => {
+  const identities = [
+    { id: "equivalent-b", timestamp: "2026-01-01T00:00:01.1Z", documentId: "doc-b", sequence: 1 },
+    { id: "later-sub-ms", timestamp: "2026-01-01T00:00:00.0009Z", documentId: "doc-a", sequence: 1 },
+    { id: "excess-precision", timestamp: "2026-01-01T00:00:00.1234567890Z", documentId: "doc-a", sequence: 2 },
+    { id: "equivalent-a", timestamp: "2026-01-01T00:00:01.100+00:00", documentId: "doc-a", sequence: 1 },
+    { id: "earlier-sub-ms", timestamp: "2026-01-01T00:00:00.0001Z", documentId: "doc-z", sequence: 1 },
+    { id: "unknown-offset", timestamp: "2026-01-01T00:00:00-00:00", documentId: "doc-a", sequence: 1 },
+  ];
+  assert.deepEqual(identities.sort(compareStorySourceIdentity).map((item) => item.id), [
+    "unknown-offset", "excess-precision", "earlier-sub-ms", "later-sub-ms",
+    "equivalent-a", "equivalent-b",
+  ]);
+});
+
+test("local, missing, and malformed Story timestamps remain document-scoped", () => {
+  const identities = [
+    { id: "doc-b-local", timestamp: "8:00 AM", documentId: "doc-b", sequence: 1 },
+    { id: "time-only", timestamp: "09:00:00", documentId: "doc-a", sequence: 5 },
+    { id: "date-only", timestamp: "2026-01-01", documentId: "doc-a", sequence: 4 },
+    { id: "timezone-less", timestamp: "2026-01-01T09:00:00", documentId: "doc-a", sequence: 3 },
+    { id: "invalid-calendar", timestamp: "2026-02-30T09:00:00Z", documentId: "doc-a", sequence: 2 },
+    { id: "missing", timestamp: null, documentId: "doc-a", sequence: 1 },
+    { id: "absolute", timestamp: "2020-01-01T00:00:00Z", documentId: "doc-0", sequence: 1 },
+  ];
+  assert.deepEqual(identities.sort(compareStorySourceIdentity).map((item) => item.id), [
+    "missing", "invalid-calendar", "timezone-less", "date-only", "time-only",
+    "doc-b-local", "absolute",
+  ]);
+});
+
+test("meeting-local clocks use document and source sequence, not clock text", () => {
+  const identities = [
+    { id: "doc-b-early-clock", timestamp: "8:00 AM", documentId: "doc-b", sequence: 1 },
+    { id: "doc-a-second", timestamp: "10:00 AM", documentId: "doc-a", sequence: 2 },
+    { id: "doc-a-first", timestamp: "9:00 PM", documentId: "doc-a", sequence: 1 },
+  ];
+  assert.deepEqual(identities.sort(compareStorySourceIdentity).map((item) => item.id), [
+    "doc-a-first", "doc-a-second", "doc-b-early-clock",
+  ]);
+});
+
+test("mixed Story identity keys form an exhaustive bounded total order", () => {
+  const identities = [
+    { id: "local-b", timestamp: "08:00", documentId: "doc-b", sequence: 1 },
+    { id: "local-a2", timestamp: "9:00 PM", documentId: "doc-a", sequence: 2 },
+    { id: "local-a1", timestamp: null, documentId: "doc-a", sequence: 1 },
+    { id: "absolute-later", timestamp: "2026-01-01T00:00:01Z", documentId: "doc-a", sequence: 1 },
+    { id: "absolute-b", timestamp: "2026-01-01T01:00:00+01:00", documentId: "doc-b", sequence: 1 },
+    { id: "absolute-a", timestamp: "2026-01-01T00:00:00Z", documentId: "doc-a", sequence: 1 },
+  ];
+  const expected = ["local-a1", "local-a2", "local-b", "absolute-a", "absolute-b", "absolute-later"];
+  for (const left of identities) for (const right of identities) {
+    const forward = Math.sign(compareStorySourceIdentity(left, right));
+    const reverse = Math.sign(compareStorySourceIdentity(right, left));
+    if (left === right) assert.equal(forward, reverse);
+    else {
+      assert.equal(forward, -reverse);
+      assert.notEqual(forward, 0);
+    }
+  }
+  for (const left of identities) for (const middle of identities) for (const right of identities) {
+    if (compareStorySourceIdentity(left, middle) <= 0
+      && compareStorySourceIdentity(middle, right) <= 0) {
+      assert.ok(compareStorySourceIdentity(left, right) <= 0);
+    }
+  }
+  const permutations = (rows) => rows.length < 2 ? [rows] : rows.flatMap((row, index) => (
+    permutations(rows.toSpliced(index, 1)).map((tail) => [row, ...tail])
+  ));
+  for (const permutation of permutations(identities)) {
+    assert.deepEqual(permutation.sort(compareStorySourceIdentity).map((item) => item.id), expected);
+  }
 });
 
 test("exact Evidence resolution accepts exact or unique bare identity and rejects uncertainty", () => {

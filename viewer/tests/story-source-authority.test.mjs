@@ -446,6 +446,24 @@ test("activation, Viewer, release selection, and digest share one total source o
       expected: ["doc-a:item-1", "doc-a:item-2", "doc-b:item"],
     },
     {
+      name: "meeting-local clocks remain scoped to document and sequence",
+      identities: [
+        { key: "chapter-c", id: "doc-b:item", document_id: "doc-b", sequence: 1, timestamp: "8:00 AM" },
+        { key: "chapter-b", id: "doc-a:item-2", document_id: "doc-a", sequence: 2, timestamp: "10:00 AM" },
+        { key: "chapter-a", id: "doc-a:item-1", document_id: "doc-a", sequence: 1, timestamp: "9:00 PM" },
+      ],
+      expected: ["doc-a:item-1", "doc-a:item-2", "doc-b:item"],
+    },
+    {
+      name: "absolute timestamps normalize timezone offsets",
+      identities: [
+        { key: "chapter-c", id: "doc-c:item", document_id: "doc-c", sequence: 1, timestamp: "2037-01-01T00:30:00Z" },
+        { key: "chapter-b", id: "doc-b:item", document_id: "doc-b", sequence: 1, timestamp: "2037-01-01T01:00:00+01:00" },
+        { key: "chapter-a", id: "doc-a:item", document_id: "doc-a", sequence: 1, timestamp: "2036-12-31T20:00:00-04:00" },
+      ],
+      expected: ["doc-a:item", "doc-b:item", "doc-c:item"],
+    },
+    {
       name: "stable ID final tie-breaker",
       identities: [
         { key: "chapter-c", id: "doc:item-c", document_id: "doc", sequence: 1, timestamp: "2037-03-01T00:00:00Z" },

@@ -120,11 +120,18 @@ Person, Story-block, and Insight evidence must all belong to the Chapter evidenc
 
 ## Chapter, Phase, And Ordering
 
-Candidate rows are ordered by the production comparator:
+Candidate rows use one deterministic source-identity order. A strict timezone-qualified RFC3339
+timestamp is normalized as an absolute instant and may establish chronology across documents.
+Meeting-local, missing, or malformed timestamps never establish cross-document chronology; those
+rows stay grouped by document and follow their authoritative source sequence. The complete order is:
 
 ```text
-timestamp -> documentId -> sequence -> row id
+scoped/local: documentId -> sequence -> row id
+absolute: normalized instant -> documentId -> sequence -> row id
 ```
+
+Scoped/local rows sort before absolute rows, preserving the established broad placement of source
+rows without an absolute timestamp.
 
 Every Chapter key must be unique. Phases are assigned only after Chapters are complete and ordered. A Phase ID must occupy one contiguous Chapter range, use one consistent one- or two-word label, and avoid generic labels such as `Project Evolution`, `General Work`, `Other`, or `Later Stage`.
 
