@@ -353,8 +353,9 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = null,
     category: "sensitive",
     confidence: "high",
     reason: "Synthetic protected context.",
-    review_state: "deterministic",
-    uncertainty_reason: null,
+    review_state: redaction.reviewState ?? "deterministic",
+    uncertainty_reason: redaction.reviewState === "needs_confirmation"
+      ? "Contributor decision required." : null,
     status: "active",
     created_by: "local-test",
     created_at: "2026-01-01T00:00:00Z",
@@ -600,6 +601,7 @@ async function createFlow({
   }
   return {
     root, semanticPath, projectMapPath, transport, candidates,
+    sourcePrivacy: boundary.sourcePrivacy,
     preferenceContext, preferenceCandidates, preferenceBundle, preferenceManifest,
     preparationManifest,
     cleanup: () => rm(root, { recursive: true, force: true }),
@@ -697,18 +699,30 @@ test("public commands execute the nonempty four-lane dependency chain determinis
   }
 });
 
-test("a Source Privacy-marked fragment reaches the real Insight Quote path and remains gated by Story Privacy", async () => {
+test("pending Source Privacy preserves exact raw Story and Insight narrative without deciding or applying spans", async () => {
   const reviewedNarrative = "safe reviewed canary a";
   const fragmentStart = Array.from(reviewedNarrative).length - 1;
   const quoteTarget = "story-a::insight:insight-a:quote";
   const flow = await createFlow({
     suffixes: ["a"],
-    sourceRedactions: [{ suffix: "a", startOffset: fragmentStart, endOffset: fragmentStart + 1 }],
+    sourceRedactions: [{
+      suffix: "a", startOffset: fragmentStart, endOffset: fragmentStart + 1,
+      reviewState: "needs_confirmation",
+    }],
     storyPrivacyReleaseTargets: [quoteTarget],
   });
   try {
     const insightManifest = await readJson(join(flow.transport, "insight", "shards.json"));
     assert.equal(insightManifest.shards.length, 1);
+    const sourcePrivacy = await readJson(flow.sourcePrivacy);
+    assert.deepEqual(sourcePrivacy.redactions.map((row) => ({
+      reviewState: row.review_state, startOffset: row.start_offset, endOffset: row.end_offset,
+    })), [{
+      reviewState: "needs_confirmation", startOffset: fragmentStart, endOffset: fragmentStart + 1,
+    }]);
+    const storyManifest = await readJson(join(flow.transport, "story", "shards.json"));
+    const storyInput = await readJson(join(flow.transport, ...storyManifest.shards[0].inputPath.split("/")));
+    assert.equal(storyInput.payload.ownerBundles[0].reviewedNarrative[0].narrative, reviewedNarrative);
     const insightShard = insightManifest.shards[0];
     const input = await readJson(join(flow.transport, ...insightShard.inputPath.split("/")));
     assert.deepEqual(input.payload.reviewedNarrative, [{
