@@ -674,7 +674,7 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                     MODULE.prepare_trajectories(source, output)
                 self.assertFalse(output.exists())
 
-    def test_meeting_review_input_is_canonical_text_only(self):
+    def test_meeting_review_input_preserves_exact_chronology(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "source"
@@ -710,10 +710,78 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                     "actor", ["meeting", "private-meeting-id", "Named Person"],
                 ),
                 "text": "reviewable text",
+                "timestamp": "2026-01-02T03:04:05Z",
             }])
             self.assertNotIn("Private title", json.dumps(prepared))
             self.assertNotIn("Named Person", json.dumps(prepared))
-            self.assertNotIn("2026-01-02", json.dumps(prepared))
+
+    def test_meeting_chronology_falls_back_only_when_timestamp_is_absent(self):
+        cases = [{
+            "name": "started-at-fallback",
+            "record": {"started_at": " exact started_at value "},
+            "expected": " exact started_at value ",
+        }, {
+            "name": "timestamp-precedence",
+            "record": {
+                "timestamp": "exact timestamp value",
+                "started_at": "unused started_at value",
+            },
+            "expected": "exact timestamp value",
+        }, {
+            "name": "null-timestamp-does-not-fall-back",
+            "record": {"timestamp": None, "started_at": "unused started_at value"},
+            "expected": None,
+        }, {
+            "name": "missing",
+            "record": {},
+            "expected": None,
+        }]
+        for case in cases:
+            with self.subTest(name=case["name"]), TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source"
+                output = root / "review"
+                write_meeting(source, "meeting-safe", records=[{
+                    "record_id": "record-safe", "order": 1,
+                    "speaker": "Named Person", "text": "reviewable text",
+                    **case["record"],
+                }])
+                meetings = MODULE.discover_meetings(source)
+
+                MODULE.prepare_meetings(meetings, output)
+
+                prepared = json.loads((
+                    output / "meetings" / "meeting-safe" / "meeting.json"
+                ).read_text(encoding="utf-8"))["records"][0]
+                if case["expected"] is None:
+                    self.assertNotIn("timestamp", prepared)
+                else:
+                    self.assertEqual(prepared["timestamp"], case["expected"])
+
+    def test_invalid_meeting_chronology_fails_atomically_at_input_boundary(self):
+        cases = {
+            "empty": "",
+            "oversized": "x" * 301,
+            "control-character": "2026-01-02\u0007T03:04:05Z",
+        }
+        for name, chronology in cases.items():
+            with self.subTest(name=name), TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source"
+                output = root / "review"
+                write_meeting(source, "meeting-safe", records=[{
+                    "record_id": "record-safe", "order": 1,
+                    "speaker": "Named Person", "timestamp": chronology,
+                    "text": "reviewable text",
+                }])
+                write_semantic_project_map(source)
+
+                with self.assertRaisesRegex(
+                    SystemExit, f"^{MODULE.INPUT_MEETING_INVALID}$",
+                ):
+                    MODULE.prepare_run(source, output)
+
+                self.assertFalse(output.exists())
 
     def test_single_plural_meeting_main_emits_only_plural_topology(self):
         with TemporaryDirectory() as temp:
@@ -989,10 +1057,14 @@ class PrepareAiReviewRunTest(unittest.TestCase):
                     [item["id"] for item in after_items],
                 )
                 self.assertTrue(all(
-                    set(record) == {"record_id", "order", "speaker", "text"}
+                    set(record) == {"record_id", "order", "speaker", "text", "timestamp"}
                     and re.fullmatch(r"actor-[0-9a-f]{64}", record["speaker"])
                     for record in meeting["dataset"]["records"]
                 ))
+                self.assertEqual(
+                    [record["timestamp"] for record in meeting["dataset"]["records"]],
+                    ["2026-01-02T03:04:05Z", "2026-01-02T03:04:06Z"],
+                )
 
     def test_meeting_actor_equality_is_scoped_without_invented_identity(self):
         with TemporaryDirectory() as temp:

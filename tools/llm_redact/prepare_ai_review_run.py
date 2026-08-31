@@ -430,7 +430,7 @@ def _record_sequence(record: dict) -> int:
 
 def _validated_meeting_records(
     meeting_id: str, records: list[dict],
-) -> list[tuple[int, str, str, str]]:
+) -> list[tuple[int, str, str, str, str | None]]:
     try:
         contribution_ids = project_map_authority.meeting_contribution_ids(meeting_id, records)
     except (TypeError, ValueError):
@@ -453,12 +453,22 @@ def _validated_meeting_records(
             or any(ord(character) < 32 or ord(character) == 127 for character in speaker)
         ):
             raise SystemExit(INPUT_MEETING_INVALID)
+        chronology = (
+            record["timestamp"] if "timestamp" in record
+            else record.get("started_at")
+        )
+        if chronology is not None and (
+            not isinstance(chronology, str) or not chronology.strip()
+            or len(chronology.encode("utf-8")) > 300
+            or any(ord(character) < 32 or ord(character) == 127 for character in chronology)
+        ):
+            raise SystemExit(INPUT_MEETING_INVALID)
         actor_seed = speaker if speaker is not None else {"record": record_id}
         prepared.append((
             _record_sequence(record), record_id,
-            _opaque_id("actor", ["meeting", meeting_id, actor_seed]), text,
+            _opaque_id("actor", ["meeting", meeting_id, actor_seed]), text, chronology,
         ))
-    sequences = [sequence for sequence, _, _, _ in prepared]
+    sequences = [sequence for sequence, _, _, _, _ in prepared]
     if sorted(sequences) != list(range(1, len(prepared) + 1)):
         raise SystemExit(INPUT_MEETING_INVALID)
     return sorted(prepared)
@@ -537,7 +547,7 @@ def prepare_meeting(
     source_warnings = meeting.get("warnings")
     warning_count = len(source_warnings) if isinstance(source_warnings, list) else 0
     records = []
-    for sequence, record_id, speaker, text in _validated_meeting_records(
+    for sequence, record_id, speaker, text, chronology in _validated_meeting_records(
         source_meeting_id, meeting.get("records") or [],
     ):
         records.append({
@@ -545,6 +555,7 @@ def prepare_meeting(
             "order": sequence,
             "speaker": speaker,
             "text": text,
+            **({"timestamp": chronology} if chronology is not None else {}),
         })
     destination = output / "meetings" / source_meeting_id
     write_json(destination / "meeting.json", {

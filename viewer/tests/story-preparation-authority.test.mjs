@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,12 @@ import {
   insightAuthorityValue,
   validateStoryPreparationManifest,
 } from "../lib/story-preparation.ts";
+import { computeSourceDigest } from "../lib/redaction-pass.mjs";
+import { finalizeCoverageManifestAuthority } from "../lib/story-readiness.ts";
+import {
+  buildStoryValidationAuthority,
+  insightReviewedNarrative,
+} from "../../skills/oxygen-storytelling-review/scripts/story_preparation_validation_authority.mjs";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -231,6 +237,87 @@ async function authorityFixture({
 }
 
 const clone = (value) => structuredClone(value);
+
+test("reviewed meeting chronology remains internal evidence, not writing-worker metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reviewed-meeting-chronology-"));
+  try {
+    const chronology = "2026-01-02T03:04:05.678+05:45";
+    const unit = {
+      id: "unit-a", revision: 1, projectId: "Synthetic Canary", kind: "decision_episode",
+      members: ["doc:a"], memberCount: 1,
+      membershipDigest: independentDigest([{
+        id: "doc:a", sourceDigest: independentDigest({ suffix: "a" }),
+      }]),
+      storyProjection: { label: "Canary A", summary: "A synthetic reviewed meeting record." },
+    };
+    const semanticCore = {
+      projectId: "Synthetic Canary", revision: 1,
+      sourceDigest: independentDigest(["doc:a"]),
+      universeDigest: independentDigest(["doc:a"]), units: [unit],
+    };
+    const semantic = { ...semanticCore, manifestDigest: independentDigest(semanticCore) };
+    const semanticPath = join(root, "semantic.json");
+    const coveragePath = join(root, "coverage.json");
+    const sourcePrivacyPath = join(root, "source-privacy.json");
+    const reviewRoot = join(root, "review");
+    const meetingRoot = join(reviewRoot, "meetings", "doc");
+    await mkdir(meetingRoot, { recursive: true });
+    await writeFile(semanticPath, JSON.stringify(semantic), "utf8");
+    await writeFile(join(reviewRoot, "project-map.json"), JSON.stringify(semantic), "utf8");
+    await writeFile(join(meetingRoot, "meeting.json"), JSON.stringify({
+      meeting_id: "doc",
+      records: [{
+        record_id: "a", order: 1, speaker: `actor-${"1".repeat(64)}`,
+        timestamp: chronology, text: "safe reviewed meeting narrative",
+      }],
+    }), "utf8");
+    const sourceDigest = await computeSourceDigest([{
+      id: "doc:a", document_id: "doc", sequence: 1, event_type: "record",
+      actor_type: "human", timestamp: chronology, content: "safe reviewed meeting narrative",
+    }]);
+    await writeFile(sourcePrivacyPath, JSON.stringify({
+      redactions: [],
+      job: {
+        id: "source-privacy-current", status: "complete", stage: "complete", model: null,
+        completed: 0, total: 0, rejected: 0, source_revision: 1,
+        source_digest: sourceDigest, receipt_digest: "8".repeat(64),
+        started_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:01Z",
+        completed_at: "2026-01-01T00:00:01Z",
+      },
+    }), "utf8");
+    const coverageResult = await finalizeCoverageManifestAuthority({
+      rows: [{ unitId: "unit-a", disposition: "represented", ownerId: "story-a" }],
+    }, semantic);
+    assert.equal(coverageResult.ok, true, coverageResult.code);
+    const coverage = coverageResult.authority;
+    await writeFile(coveragePath, JSON.stringify({
+      revision: coverage.revision,
+      semanticManifestRevision: coverage.semanticManifestRevision,
+      semanticManifestDigest: coverage.semanticManifestDigest,
+      coverageDigest: coverage.coverageDigest,
+      rows: coverage.rows.map(({ unitId, disposition, ownerId }) => ({
+        unitId, disposition, ownerId,
+      })),
+    }), "utf8");
+
+    const built = await buildStoryValidationAuthority(
+      semanticPath, coveragePath, sourcePrivacyPath, reviewRoot,
+    );
+
+    assert.equal(built.authority.evidence[0].timestamp, chronology);
+    assert.equal(Object.hasOwn(built.reviewedNarrative[0], "timestamp"), false);
+    const insightNarrative = insightReviewedNarrative(
+      [{ payload: { ownerBundles: [{ reviewedNarrative: built.reviewedNarrative }] } }],
+      [{ id: "doc:a", summary: `oxygen.story:${JSON.stringify(story("a", { insight: false }))}` }],
+    );
+    assert.deepEqual(insightNarrative, [{
+      id: "doc:a", documentId: "doc", narrative: "safe reviewed meeting narrative",
+    }]);
+    assert.equal(Object.hasOwn(insightNarrative[0], "timestamp"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("exact four terminal digest-bound receipts succeed and one candidate spans Chapters once", async () => {
   const fixture = await authorityFixture();
