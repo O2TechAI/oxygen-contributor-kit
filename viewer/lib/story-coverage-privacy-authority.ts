@@ -295,9 +295,7 @@ type SourceItemRow = {
 
 function privacyReviewedNarrative(
   items: SourceItemRow[],
-  redactions: JsonRecord[],
 ) {
-  if (redactions.some((row) => row.review_state === "needs_confirmation")) return null;
   return new Map(items.map((row) => [
     row.id,
     row.content,
@@ -472,7 +470,7 @@ export async function readCoveragePrivacyAuthority(
     content: row.content,
   }))) : undefined;
   const reviewedNarrativeByItemId = verifyCurrentSource
-    ? privacyReviewedNarrative(itemResult.results, redactionResult.results)
+    ? privacyReviewedNarrative(itemResult.results)
     : null;
   const storedCoverageManifestWitnessJson = JSON.stringify(storedCoverageManifest || null);
   const storedCoverageRowsWitnessJson = JSON.stringify(storedCoverageRows.results);

@@ -1049,9 +1049,16 @@ test("nonempty AI Insights force current source Quote validation even for a pass
   assert.equal(validation.ok, true, validation.code);
 });
 
-test("Viewer Story activation grounds a Quote in exact reviewed source despite source release redaction", async () => {
+test("Viewer Story activation grounds a Quote in exact reviewed source with pending source Privacy", async () => {
   const quoteText = `${PRIVATE} supporting evidence`;
   const { db, currentSource } = await serverFixture();
+  db.redactions[0] = {
+    ...db.redactions[0],
+    review_state: "needs_confirmation",
+    uncertainty_reason: "Contributor decision required.",
+  };
+  await rebindFakeSourcePrivacyReceipt({ db });
+  await rebindFixtureCoveragePrivacy({ db });
   const candidateSource = structuredClone(currentSource);
   candidateSource.insights[0].quote = { text: quoteText, evidence };
   const privacyAuthority = await readCoveragePrivacyAuthority(

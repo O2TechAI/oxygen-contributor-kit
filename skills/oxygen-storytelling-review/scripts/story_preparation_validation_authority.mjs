@@ -217,10 +217,7 @@ async function reviewedSourceRows(reviewRootInput, semantic) {
   return rows;
 }
 
-function projectEvidence(rows, sourcePrivacy) {
-  if (sourcePrivacy.redactions.some((row) => row.review_state === "needs_confirmation")) {
-    fail("SOURCE_PRIVACY_REVIEW_INCOMPLETE");
-  }
+function projectEvidence(rows) {
   const evidence = [];
   const reviewedNarrative = [];
   for (const row of rows) {
@@ -441,7 +438,7 @@ export async function buildStoryValidationAuthority(
     coverage, semantic, privacy.authority.authorizedUnitIds,
   );
   if (!coverageValidation.ok) fail(coverageValidation.code);
-  const { evidence, reviewedNarrative } = projectEvidence(rows, sourcePrivacy);
+  const { evidence, reviewedNarrative } = projectEvidence(rows);
   const authority = {
     schema: "oxygen.story-validation-authority",
     sourceDigest: currentSourceDigest,
