@@ -244,6 +244,33 @@ class ReleaseGateTest(unittest.TestCase):
                     [("POST", "/api/redactions")],
                 )
 
+    def test_direct_http_errors_close_unread_response_and_use_fixed_errors(self):
+        cases = ((409, "SOURCE_PRIVACY_MUTATION_CONFLICT"),
+                 (503, "SOURCE_PRIVACY_VIEWER_UNAVAILABLE"))
+        for status, expected in cases:
+            with self.subTest(status=status):
+                body = mock.Mock()
+                body.read.return_value = b"HOSTILE_BODY"
+                failure = PUSH.urllib.error.HTTPError(
+                    "http://127.0.0.1:3210/api/redactions", status,
+                    "HOSTILE_REASON", {"X-Hostile": "HOSTILE_HEADER"}, body,
+                )
+                opener = mock.Mock()
+                opener.open.side_effect = failure
+                with mock.patch.object(
+                        PUSH.urllib.request, "build_opener", return_value=opener), \
+                        self.assertRaises(SystemExit) as raised:
+                    PUSH.post(
+                        "http://127.0.0.1:3210", {"marker": "HOSTILE_SUBMITTED"}
+                    )
+                message = str(raised.exception)
+                self.assertEqual(message, expected)
+                body.read.assert_not_called()
+                body.close.assert_called_once_with()
+                for hostile in ("HOSTILE_BODY", "HOSTILE_REASON", "HOSTILE_HEADER",
+                                "HOSTILE_SUBMITTED", "127.0.0.1"):
+                    self.assertNotIn(hostile, message)
+
     def test_missing_worker_file_fails_coverage(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -284,10 +311,12 @@ class ReleaseGateTest(unittest.TestCase):
             redacted, report, receipt = write_push_fixture(root)
             class FailureHandler(http.server.BaseHTTPRequestHandler):
                 requests = 0
+                status = 503
                 def do_POST(self):
                     self.__class__.requests += 1
                     self.rfile.read(int(self.headers.get("content-length", "0")))
-                    self.send_response(503)
+                    self.send_response(self.__class__.status, "HOSTILE_VIEWER_REASON")
+                    self.send_header("X-Hostile", "HOSTILE_VIEWER_HEADER")
                     self.end_headers()
                     self.wfile.write(b"HOSTILE_VIEWER_SENTINEL")
                 def log_message(self, format, *args):
@@ -296,10 +325,13 @@ class ReleaseGateTest(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                cases = ((root / "missing.json", "SOURCE_PRIVACY_PUSH_INPUT_INVALID", 0),
-                         (report, "SOURCE_PRIVACY_VIEWER_UNAVAILABLE", 1))
-                for report_path, error, calls in cases:
+                cases = ((root / "missing.json", 503,
+                          "SOURCE_PRIVACY_PUSH_INPUT_INVALID", 0),
+                         (report, 409, "SOURCE_PRIVACY_MUTATION_CONFLICT", 1),
+                         (report, 503, "SOURCE_PRIVACY_VIEWER_UNAVAILABLE", 1))
+                for report_path, status, error, calls in cases:
                     before = FailureHandler.requests
+                    FailureHandler.status = status
                     result = subprocess.run([
                         sys.executable, str(TEST_ROOT.parent / "push_redactions.py"),
                         "--redacted", str(redacted), "--report", str(report_path),
