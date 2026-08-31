@@ -14,17 +14,64 @@ export type TimelineCandidate = StorySourceIdentity & {
 
 export const STORY_PREFIX = "oxygen.story:";
 
-/** Permanent total order for stored Story source identity. Missing timestamps
- * sort first; stable row ID is the final tie-breaker. */
+type StorySourceOrderKey =
+  | readonly [0, string, number, string]
+  | readonly [1, number, number, string, number, string];
+
+const strictRfc3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/u;
+
+function normalizedRfc3339Instant(value: unknown): readonly [number, number] | null {
+  if (typeof value !== "string") return null;
+  const match = strictRfc3339.exec(value);
+  if (!match) return null;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText,
+    fraction = "", zone, offsetSign, offsetHourText = "0", offsetMinuteText = "0"] = match;
+  const [year, month, day, hour, minute, second, offsetHour, offsetMinute] = [
+    yearText, monthText, dayText, hourText, minuteText, secondText,
+    offsetHourText, offsetMinuteText,
+  ].map(Number);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]
+    || hour > 23 || minute > 59 || second > 59
+    || offsetHour > 23 || offsetMinute > 59 || zone === "-00:00") return null;
+  const instant = new Date(0);
+  instant.setUTCFullYear(year, month - 1, day);
+  instant.setUTCHours(hour, minute, second, 0);
+  const offset = zone === "Z" ? 0 : (offsetHour * 60 + offsetMinute) * (offsetSign === "+" ? 1 : -1);
+  const normalizedWholeSecond = instant.getTime() / 1_000 - offset * 60;
+  const fractionalNanoseconds = Number(fraction.padEnd(9, "0"));
+  return Number.isFinite(normalizedWholeSecond)
+    ? [normalizedWholeSecond, fractionalNanoseconds] : null;
+}
+
+function storySourceOrderKey(identity: StorySourceIdentity): StorySourceOrderKey {
+  const documentId = String(identity.documentId || identity.document_id || "");
+  const sequence = typeof identity.sequence === "number" && Number.isFinite(identity.sequence)
+    ? identity.sequence : 0;
+  const instant = normalizedRfc3339Instant(identity.timestamp);
+  return instant === null
+    ? [0, documentId, sequence, identity.id]
+    : [1, instant[0], instant[1], documentId, sequence, identity.id];
+}
+
+/** Permanent total order for stored Story source identity. Local or invalid
+ * clocks stay document-scoped; strict absolute instants retain chronology. */
 export function compareStorySourceIdentity(a: StorySourceIdentity, b: StorySourceIdentity) {
-  const compareText = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
-  return compareText(String(a.timestamp || ""), String(b.timestamp || ""))
-    || compareText(
-      String(a.documentId || a.document_id || ""),
-      String(b.documentId || b.document_id || ""),
-    )
-    || Number(a.sequence || 0) - Number(b.sequence || 0)
-    || compareText(a.id, b.id);
+  const left = storySourceOrderKey(a);
+  const right = storySourceOrderKey(b);
+  for (let index = 0; index < left.length; index += 1) {
+    const leftPart = left[index];
+    const rightPart = right[index];
+    if (typeof leftPart === "number" && typeof rightPart === "number") {
+      if (leftPart < rightPart) return -1;
+      if (leftPart > rightPart) return 1;
+    } else if (typeof leftPart === "string" && typeof rightPart === "string") {
+      if (leftPart < rightPart) return -1;
+      if (leftPart > rightPart) return 1;
+    }
+  }
+  return 0;
 }
 
 export type StoryKind =
