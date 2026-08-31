@@ -67,6 +67,8 @@ NON_SPEAKER_FIRST_WORDS = {"action", "chapter", "meeting", "phase", "project", "
 MEETING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 MEETING_ID_DIGEST_LENGTH = 64
 STRUCTURAL_FAILURE_CODE = "MEETING_TRANSCRIPT_STRUCTURE_INVALID"
+MISSING_DATE_CODE = "MEETING_DATE_REQUIRED"
+INVALID_DATE_CODE = "MEETING_DATE_INVALID"
 
 class MeetingStructureError(ValueError):
     pass
@@ -416,7 +418,7 @@ def main(argv=None) -> int:
                         help="explicit local run output directory")
     parser.add_argument("--meeting-id", default=None)
     parser.add_argument("--title", default=None)
-    parser.add_argument("--date", default=None, help="YYYY-MM-DD (default today)")
+    parser.add_argument("--date", default=None, help="resolved meeting date (YYYY-MM-DD)")
     parser.add_argument("--model", default="small", help="ASR model when source is audio")
     parser.add_argument("--language", default=None)
     parser.add_argument("--hf-token", default=None)
@@ -427,6 +429,17 @@ def main(argv=None) -> int:
         if not source.is_file():
             print("MEETING_SOURCE_INVALID", file=sys.stderr)
             return 1
+    if args.date is None:
+        print(MISSING_DATE_CODE, file=sys.stderr)
+        return 1
+    try:
+        date = dt.date.fromisoformat(args.date).isoformat()
+    except ValueError:
+        print(INVALID_DATE_CODE, file=sys.stderr)
+        return 1
+    if date != args.date:
+        print(INVALID_DATE_CODE, file=sys.stderr)
+        return 1
     if len(sources) > 1 and (args.meeting_id or args.title):
         raise fail("--meeting-id and --title require exactly one source")
     if args.meeting_id is not None and not MEETING_ID_RE.fullmatch(args.meeting_id):
@@ -439,7 +452,6 @@ def main(argv=None) -> int:
     if len(set(meeting_ids)) != len(meeting_ids):
         raise fail("duplicate meeting IDs in one collection run")
 
-    date = args.date or dt.date.today().isoformat()
     try:
         base_out = validate_output_root(args.out)
     except ValueError as error:

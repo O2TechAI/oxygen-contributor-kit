@@ -37,10 +37,27 @@ python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/repo-
   --progress-url http://127.0.0.1:<port> --workflow-run-id <run-id>
 python3 tools/ingest/import_anthropic_export.py export.zip --out work/claude-run
 python3 tools/ingest/import_meeting.py meeting.txt --out work/meeting-run \
-  --title "Project meeting"
+  --title "Project meeting" --date 2026-08-30
 python3 tools/ingest/import_meeting.py meeting-a.txt meeting-b.txt \
-  --out work/meeting-run
+  --out work/meeting-run --date 2026-08-30
 ```
+
+Before importing, the selected workflow Agent must resolve exactly one date for each meeting
+source. Use the first level below that has one unambiguous credible date, and do not consult a
+lower-priority level after resolving a higher-priority one:
+
+1. One corresponding date in the filename.
+2. Otherwise, the transcript's own meeting or recording date in its content, excluding incidental
+   dates mentioned in discussion.
+3. Otherwise, a contiguous ancestor-directory date hierarchy such as year/month/day.
+
+If the selected level has multiple credible candidates, or all three levels lack a credible date,
+pause Collect and ask the contributor for that source's date. Never substitute the current date,
+filesystem metadata, another source's date, or one collection-wide date. Pass the resolved date
+normalized to `YYYY-MM-DD` with `--date`. Sources with distinct dates must be imported in separate
+commands with their exact dates; a multi-source command is valid only when every source
+intentionally has the same resolved date. `MEETING_DATE_REQUIRED` and `MEETING_DATE_INVALID` are
+recoverable correction or contributor-input states, not security or whole-workflow failures.
 
 The meeting importer always tries its deterministic known formats and ordinary plain notes first.
 If it returns only `MEETING_TRANSCRIPT_STRUCTURE_UNSUPPORTED`, the currently selected workflow
@@ -81,10 +98,10 @@ python .\tools\ingest\import_anthropic_export.py `
   "D:\Downloads\export.zip" --out "work\claude-run"
 python .\tools\ingest\import_meeting.py `
   "D:\Meetings\meeting.txt" --out "work\meeting-run" `
-  --title "Project meeting"
+  --title "Project meeting" --date "2026-08-30"
 python .\tools\ingest\import_meeting.py `
   "D:\Meetings\meeting-a.txt" "D:\Meetings\meeting-b.txt" `
-  --out "work\meeting-run"
+  --out "work\meeting-run" --date "2026-08-30"
 ```
 
 Codex discovery defaults to the contributor's global
@@ -116,7 +133,7 @@ user and pass it at runtime; never store it:
 
 ```bash
 HF_TOKEN="<current-user-token>" python3 tools/ingest/import_meeting.py meeting.m4a \
-  --out work/meeting-run --language en
+  --out work/meeting-run --language en --date 2026-08-30
 ```
 
 Windows audio remains optional and project-local. The importer recognizes
@@ -128,7 +145,7 @@ $AudioPython = ".\tools\ingest\.venv-audio\Scripts\python.exe"
 $env:HF_TOKEN = "<current-user-token>"
 try {
   python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.m4a" `
-    --out "work\meeting-run" --language en
+    --out "work\meeting-run" --language en --date "2026-08-30"
 }
 finally {
   Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue

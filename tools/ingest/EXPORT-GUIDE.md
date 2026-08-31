@@ -51,7 +51,7 @@ python3 tools/ingest/import_anthropic_export.py ~/Downloads/data-export.zip \
 1. 注册 [huggingface.co](https://huggingface.co);
 2. 在 [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) 与 [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) 页面接受使用条款;
 3. Settings → Access Tokens → 新建 **read** token;
-4. `python3 tools/ingest/import_meeting.py 会议.m4a --out work/meeting-run --hf-token hf_xxx`(或 `export HF_TOKEN=hf_xxx`)。
+4. `python3 tools/ingest/import_meeting.py 会议.m4a --out work/meeting-run --hf-token hf_xxx --date 2026-08-30`(或 `export HF_TOKEN=hf_xxx`)。
 
 没有 token 也能转写,只是所有句子都标成 Speaker A。
 

@@ -50,7 +50,7 @@ class UnicodeWorkflowTest(unittest.TestCase):
                 "--out",
                 meeting_out,
                 "--title",
-                "会议 标题 😀",
+                "会议 标题 😀", "--date", "2026-08-30",
             )
             self.assertEqual(meeting.returncode, 0, meeting.stderr)
             summary = json.loads(meeting.stdout.strip().splitlines()[-1])
@@ -252,7 +252,7 @@ class UnicodeWorkflowTest(unittest.TestCase):
                 "tools/ingest/import_meeting.py",
                 source,
                 "--out",
-                Path(temporary, "out"),
+                Path(temporary, "out"), "--date", "2026-08-30",
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("UnicodeDecodeError", result.stderr)
