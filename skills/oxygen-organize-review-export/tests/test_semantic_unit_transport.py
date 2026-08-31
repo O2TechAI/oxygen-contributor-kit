@@ -145,10 +145,12 @@ def write_meeting(run: Path, meeting_id: str, texts: list[str]) -> list[str]:
     return [f"{meeting_id}:record-{index}" for index in range(1, len(texts) + 1)]
 
 
-def run_builder(run: Path) -> subprocess.CompletedProcess[str]:
+def run_builder(
+    run: Path, project: str = "Synthetic Project",
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run([
         sys.executable, str(SCRIPTS / "build_project_map.py"), str(run),
-        "--primary-project", "Synthetic Project", "--summary", "Safe summary.",
+        "--primary-project", project, "--summary", "Safe summary.",
     ], capture_output=True, text=True, encoding="utf-8", check=False)
 
 
@@ -173,8 +175,28 @@ def directory_link_or_skip(test_case: unittest.TestCase, link: Path, target: Pat
     test_case.skipTest("directory link creation is unavailable")
 
 
-def prepare(run: Path, output: Path, maximum: int = 4096) -> dict:
-    value = preparer.build_preparation(run, maximum)
+def registry_proposal(*unit_ids: str, kind: str = "discussion") -> dict:
+    return {"units": [{
+        "unitId": unit_id,
+        "kind": kind,
+        "definition": f"Records belonging to {unit_id}.",
+        "disambiguation": f"Use only when the record matches {unit_id}.",
+        "storyProjection": {
+            "label": f"Label {unit_id}",
+            "summary": f"Safe semantic summary for {unit_id}.",
+        },
+    } for unit_id in unit_ids]}
+
+
+def prepare(
+    run: Path,
+    output: Path,
+    maximum: int = 4096,
+    registry: dict | None = None,
+) -> dict:
+    value = preparer.build_preparation(
+        run, maximum, registry if registry is not None else registry_proposal("unit-one"),
+    )
     preparer.install_preparation(output, value)
     return value
 
@@ -188,12 +210,7 @@ def write_worker_results(output: Path, unit_for_id) -> None:
             grouped.setdefault(unit, []).append(contribution_id)
         proposals = [{
             "unitId": unit_id,
-            "kind": "discussion",
             "contributionIds": sorted(members, key=lambda value: value.encode("utf-8")),
-            "storyProjection": {
-                "label": f"Label {unit_id}",
-                "summary": f"Safe semantic summary for {unit_id}.",
-            },
         } for unit_id, members in sorted(grouped.items(), key=lambda item: item[0].encode("utf-8"))]
         worker_output = {
             "shardId": shard["id"],
@@ -342,12 +359,11 @@ class SemanticUnitTransportTests(unittest.TestCase):
             self.assertEqual(run_builder(run).returncode, 0)
             project_map_before = (run / "project-map.json").read_bytes()
             semantic = root / "semantic"
-            prepared = prepare(run, semantic)
+            prepared = prepare(run, semantic, registry=registry_proposal("unit-discussion"))
             shard = prepared["manifest"]["shards"][0]
             shard_id = shard["id"]
             proposals = [{
                 "unitId": "unit-discussion",
-                "kind": "discussion",
                 "contributionIds": [contribution_id],
             }]
             outside_proposal = root / "outside.proposals.json"
@@ -398,11 +414,12 @@ class SemanticUnitTransportTests(unittest.TestCase):
             contribution_id = write_trajectory(run, "traj", ["one"])[0]
             self.assertEqual(run_builder(run).returncode, 0)
             semantic = root / "semantic output with a long name"
-            shard = prepare(run, semantic)["manifest"]["shards"][0]
+            shard = prepare(
+                run, semantic, registry=registry_proposal("unit-discussion"),
+            )["manifest"]["shards"][0]
             proposal = semantic / "handoffs" / f"{shard['id']}.proposals.json"
             proposal.write_text(json.dumps([{
                 "unitId": "unit-discussion",
-                "kind": "discussion",
                 "contributionIds": [contribution_id],
             }]), encoding="utf-8")
             short_root = short_path(semantic)
@@ -417,23 +434,26 @@ class SemanticUnitTransportTests(unittest.TestCase):
                 ], capture_output=True, text=True, encoding="utf-8", check=False)
                 self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_invalid_kind_can_be_explicitly_corrected_only_before_receipt(self):
+    def test_invalid_mapping_can_be_explicitly_corrected_only_before_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             run = root / "run"
             contribution_id = write_trajectory(run, "traj", ["one"])[0]
             self.assertEqual(run_builder(run).returncode, 0)
             semantic = root / "semantic"
-            prepared = prepare(run, semantic)
+            prepared = prepare(
+                run, semantic,
+                registry=registry_proposal(
+                    "unit-direction", "unit-root", kind="direction_change",
+                ),
+            )
             shard = prepared["manifest"]["shards"][0]
             shard_id = shard["id"]
             shard_input = semantic / shard["inputPath"]
             input_before = shard_input.read_bytes()
             proposal_path = semantic / "handoffs" / f"{shard_id}.proposals.json"
-            invalid_kind = "Direction Change RAW_KIND_SENTINEL"
             proposal_path.write_text(json.dumps([{
-                "unitId": "unit-direction",
-                "kind": invalid_kind,
+                "unitId": "unit-unknown",
                 "contributionIds": [contribution_id],
             }]), encoding="utf-8")
             command = [
@@ -444,9 +464,8 @@ class SemanticUnitTransportTests(unittest.TestCase):
                 command, capture_output=True, text=True, encoding="utf-8", check=False,
             )
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertEqual(rejected.stderr.strip(), builder.SEMANTIC_WORKER_KIND_INVALID)
-            self.assertNotIn(invalid_kind, rejected.stderr)
-            self.assertNotIn("RAW_KIND_SENTINEL", rejected.stderr)
+            self.assertEqual(rejected.stderr.strip(), finalizer.SEMANTIC_WORKER_MAPPING_INVALID)
+            self.assertNotIn("unit-unknown", rejected.stderr)
             self.assertNotIn("Traceback", rejected.stderr)
             record_path = semantic / "records" / shard_id
             output_path = record_path / "output.json"
@@ -457,7 +476,6 @@ class SemanticUnitTransportTests(unittest.TestCase):
 
             proposal_path.write_text(json.dumps([{
                 "unitId": "unit-direction",
-                "kind": "direction_change",
                 "contributionIds": [contribution_id],
             }]), encoding="utf-8")
             accepted = subprocess.run(
@@ -483,8 +501,7 @@ class SemanticUnitTransportTests(unittest.TestCase):
             self.assertEqual(finalized["semantic_manifest"]["units"][0]["memberCount"], 1)
 
             proposal_path.write_text(json.dumps([{
-                "unitId": "unit-direction",
-                "kind": "root_cause",
+                "unitId": "unit-root",
                 "contributionIds": [contribution_id],
             }]), encoding="utf-8")
             immutable = subprocess.run(
@@ -509,7 +526,6 @@ class SemanticUnitTransportTests(unittest.TestCase):
                 proposal_path = semantic / "handoffs" / f"{shard['id']}.proposals.json"
                 proposal_path.write_text(json.dumps([{
                     "unitId": "unit-one",
-                    "kind": "discussion",
                     "contributionIds": [contribution_id],
                 }]), encoding="utf-8")
                 skeleton = (run / "project-map.json").read_bytes()
@@ -553,7 +569,6 @@ class SemanticUnitTransportTests(unittest.TestCase):
             proposal_path = semantic / "handoffs" / f"{shard['id']}.proposals.json"
             proposal_path.write_text(json.dumps([{
                 "unitId": "unit-one",
-                "kind": "discussion",
                 "contributionIds": [contribution_id],
             }]), encoding="utf-8")
             destination = semantic / "records" / shard["id"]
@@ -598,6 +613,113 @@ class SemanticUnitTransportTests(unittest.TestCase):
         ]
 
         self.assertEqual(finalizer.compose(proposals, ["item-a", "item-b"]), proposals)
+
+    def test_two_unrelated_domains_share_one_frozen_registry_across_shard_layouts(self):
+        cases = (
+            (
+                "archive",
+                ["unit-catalog", "unit-preservation"],
+                "A cataloger compared handwritten shelf cards with indexed artifact records. ",
+            ),
+            (
+                "greenhouse",
+                ["unit-irrigation", "unit-temperature"],
+                "A grower compared irrigation timing with greenhouse temperature readings. ",
+            ),
+        )
+        for domain, unit_ids, sentence in cases:
+            with self.subTest(domain=domain), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run = root / "run"
+                ids = write_trajectory(
+                    run, f"traj-{domain}", [sentence * 18 for _ in range(6)],
+                )
+                self.assertEqual(
+                    run_builder(run, f"Synthetic {domain} project").returncode, 0,
+                )
+                registry = registry_proposal(*unit_ids)
+                narrow = root / "semantic-narrow"
+                wide = root / "semantic-wide"
+                first = prepare(run, narrow, 4096, registry)
+                second = prepare(run, wide, 16384, registry)
+                self.assertGreater(len(first["inputs"]), 1)
+                self.assertNotEqual(len(first["inputs"]), len(second["inputs"]))
+                self.assertEqual(first["registry"], second["registry"])
+                registry_bytes = builder.canonical_json(first["registry"]).encode("utf-8")
+                for prepared in (first, second):
+                    manifest = prepared["manifest"]
+                    self.assertEqual(manifest["registryPath"], "semantic-registry.json")
+                    self.assertEqual(
+                        manifest["registryDigest"], prepared["registry"]["registryDigest"],
+                    )
+                    for shard, input_value in zip(manifest["shards"], prepared["inputs"]):
+                        self.assertEqual(
+                            builder.canonical_json(input_value["registry"]).encode("utf-8"),
+                            registry_bytes,
+                        )
+                        self.assertEqual(shard["inputPath"], f"inputs/{shard['id']}.json")
+                        self.assertEqual(
+                            shard["proposalPath"],
+                            f"handoffs/{shard['id']}.proposals.json",
+                        )
+                        self.assertEqual(
+                            shard["receiptPath"], f"records/{shard['id']}/receipt.json",
+                        )
+                first_unit_members = set(ids[:3])
+                mapping = lambda contribution_id: (
+                    unit_ids[0] if contribution_id in first_unit_members else unit_ids[1]
+                )
+                write_worker_results(narrow, mapping)
+                write_worker_results(wide, mapping)
+                first_map = finalizer.finalize(run, narrow)
+                second_map = finalizer.finalize(run, wide)
+                self.assertEqual(
+                    first_map["semantic_manifest"], second_map["semantic_manifest"],
+                )
+
+    def test_registry_tampering_stale_digest_and_worker_metadata_fail_before_receipt(self):
+        mutations = {
+            "registry-tampering": lambda semantic, manifest, shard, proposal: self._field(
+                semantic / "semantic-registry.json", "registryDigest", "0" * 64,
+            ),
+            "stale-digest": lambda semantic, manifest, shard, proposal: self._field(
+                semantic / "shards.json", "registryDigest", "0" * 64,
+            ),
+            "input-registry-tampering": lambda semantic, manifest, shard, proposal: self._field(
+                semantic / shard["inputPath"], "registry", {},
+            ),
+            "worker-metadata-disagreement": lambda semantic, manifest, shard, proposal: (
+                proposal.write_text(json.dumps([{
+                    "unitId": "unit-a",
+                    "kind": "conflicting_worker_metadata",
+                    "contributionIds": shard["contributionIds"],
+                }]), encoding="utf-8")
+            ),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run = root / "run"
+                write_trajectory(run, "traj", [
+                    "alpha " * 400, "beta " * 400, "gamma " * 400, "delta " * 400,
+                ])
+                self.assertEqual(run_builder(run).returncode, 0)
+                semantic = root / "semantic"
+                prepared = prepare(
+                    run, semantic, 8192, registry_proposal("unit-a", "unit-b"),
+                )
+                self.assertGreaterEqual(len(prepared["inputs"]), 2)
+                manifest = prepared["manifest"]
+                shard = manifest["shards"][0]
+                proposal = semantic / shard["proposalPath"]
+                proposal.write_text(json.dumps([{
+                    "unitId": "unit-a",
+                    "contributionIds": shard["contributionIds"],
+                }]), encoding="utf-8")
+                mutate(semantic, manifest, shard, proposal)
+                with self.assertRaises(ValueError):
+                    recorder.record(semantic, shard["id"], proposal)
+                self.assertFalse((semantic / "records" / shard["id"]).exists())
 
     def test_current_ingest_sanitizer_closes_every_worker_secret_rule(self):
         unsafe = (
@@ -652,7 +774,9 @@ class SemanticUnitTransportTests(unittest.TestCase):
             )
             ids = write_trajectory(run, "traj-sanitized", sanitized)
             self.assertEqual(run_builder(run).returncode, 0)
-            prepared = preparer.build_preparation(run, 4096)
+            prepared = preparer.build_preparation(
+                run, 4096, registry_proposal("unit-sanitized"),
+            )
             records = prepared["context"]["contributions"]
             shard_records = [
                 record for shard in prepared["inputs"] for record in shard["contributions"]
@@ -697,7 +821,9 @@ class SemanticUnitTransportTests(unittest.TestCase):
                     result = run_builder(run)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     output = root / "semantic"
-                    prepared = prepare(run, output)
+                    prepared = prepare(
+                        run, output, registry=registry_proposal("unit-composed"),
+                    )
                     context_text = (output / "semantic-context.json").read_text(encoding="utf-8")
                     self.assertNotIn("provider-not-forwarded", context_text)
                     self.assertNotIn("private/not-forwarded", context_text)
@@ -722,7 +848,9 @@ class SemanticUnitTransportTests(unittest.TestCase):
             ids = write_trajectory(run, "traj-unicode", ["😀" * 350, "é" * 700, "二" * 500])
             self.assertEqual(run_builder(run).returncode, 0)
             output = root / "semantic"
-            prepared = prepare(run, output, 4096)
+            prepared = prepare(
+                run, output, 4096, registry_proposal("unit-跨分片"),
+            )
             self.assertGreaterEqual(len(prepared["inputs"]), 2)
             write_worker_results(output, lambda _: "unit-跨分片")
             first = finalizer.finalize(run, output)
@@ -750,7 +878,7 @@ class SemanticUnitTransportTests(unittest.TestCase):
                     write_trajectory(run, "traj", ["one", "two", "three"])
                     self.assertEqual(run_builder(run).returncode, 0)
                     semantic = root / "semantic"
-                    prepare(run, semantic)
+                    prepare(run, semantic, registry=registry_proposal("unit-all"))
                     write_worker_results(semantic, lambda _: "unit-all")
                     shard = json.loads((semantic / "shards.json").read_text(encoding="utf-8"))["shards"][0]
                     record = semantic / "records" / shard["id"]
@@ -797,7 +925,10 @@ class SemanticUnitTransportTests(unittest.TestCase):
             second_ids = write_trajectory(run, "second", ["three"])
             self.assertEqual(run_builder(run).returncode, 0)
             semantic1 = root / "semantic-1"
-            prepare(run, semantic1)
+            prepare(
+                run, semantic1,
+                registry=registry_proposal("unit-first", "unit-second"),
+            )
             write_worker_results(
                 semantic1,
                 lambda contribution_id: "unit-first" if contribution_id in first_ids else "unit-second",
@@ -807,7 +938,10 @@ class SemanticUnitTransportTests(unittest.TestCase):
             rebuilt = run_builder(run)
             self.assertEqual(rebuilt.returncode, 0, rebuilt.stderr)
             semantic2 = root / "semantic-2"
-            prepare(run, semantic2)
+            prepare(
+                run, semantic2,
+                registry=registry_proposal("unit-first", "unit-second"),
+            )
             write_worker_results(
                 semantic2,
                 lambda contribution_id: "unit-first" if contribution_id in first_ids else "unit-second",
@@ -845,7 +979,7 @@ class SemanticUnitTransportTests(unittest.TestCase):
             except OSError as error:
                 self.skipTest(f"hard links unavailable: {error}")
             with self.assertRaisesRegex(ValueError, "hard-link"):
-                preparer.build_preparation(run, 4096)
+                preparer.build_preparation(run, 4096, registry_proposal("unit-one"))
 
     def test_secret_like_content_and_output_junction_fail_before_writes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -854,7 +988,7 @@ class SemanticUnitTransportTests(unittest.TestCase):
             write_trajectory(run, "traj", ["token=secret-value"])
             self.assertEqual(run_builder(run).returncode, 0)
             with self.assertRaisesRegex(ValueError, "secret-like"):
-                preparer.build_preparation(run, 4096)
+                preparer.build_preparation(run, 4096, registry_proposal("unit-one"))
             self.assertFalse((root / "semantic").exists())
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -862,7 +996,9 @@ class SemanticUnitTransportTests(unittest.TestCase):
             run = root / "run"
             write_trajectory(run, "traj", ["safe contribution"])
             self.assertEqual(run_builder(run).returncode, 0)
-            prepared = preparer.build_preparation(run, 4096)
+            prepared = preparer.build_preparation(
+                run, 4096, registry_proposal("unit-one"),
+            )
             physical = root / "physical"
             physical.mkdir()
             alias = root / "alias"

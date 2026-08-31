@@ -37,7 +37,12 @@ Stage ownership:
 
 Repository-development Agents are outside the Toolkit runtime contract. During a normal Toolkit
 request, the workflow-owning parent Agent automatically executes every nonempty immutable semantic
-shard. Story, Insight, and Story Privacy remain multi-shard lanes. Preference intentionally uses
+shard. Before Organization mapping, that parent derives one project-local registry from the
+complete current Privacy-safe projected universe and freezes its stable IDs, kinds, bounded
+definitions/disambiguation, optional Story projections, and duplicate relations. Every immutable
+Organization mapping input embeds that byte-identical run-bound registry and digest; workers map
+only contribution IDs to declared registry IDs and cannot author metadata. Each durable assignment
+names its exact input, proposal, and receipt paths. Story, Insight, and Story Privacy remain multi-shard lanes. Preference intentionally uses
 exactly one global bounded worker because it produces one deduplicated questionnaire authority,
 capped at 12 probes by default and 20 maximum; never fan Preference out across multiple workers.
 When host subagents are available, the parent dispatches with no more than three live at once; each

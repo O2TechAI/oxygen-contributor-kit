@@ -387,9 +387,16 @@ test("Python Organization finalizer and Viewer validator share one digest contra
     ], { cwd: repository, encoding: "utf8" });
     assert.equal(skeleton.status, 0, skeleton.stderr);
     const semanticRoot = join(root, "semantic-transport");
+    const registryPath = join(root, "semantic-registry.proposal.json");
+    writeFileSync(registryPath, JSON.stringify({ units: [{
+      unitId: "unit-parity",
+      kind: "direction_change",
+      definition: "Records describing the synthetic direction change.",
+      disambiguation: "Use only for the synthetic direction-change episode.",
+    }] }), "utf8");
     const prepared = spawnSync("python", [
       join(repository, "skills", "oxygen-organize-review-export", "scripts", "prepare_semantic_units.py"),
-      root, semanticRoot,
+      root, semanticRoot, registryPath,
     ], { cwd: repository, encoding: "utf8" });
     assert.equal(prepared.status, 0, prepared.stderr);
     const shards = JSON.parse(readFileSync(join(semanticRoot, "shards.json"), "utf8"));
@@ -397,7 +404,7 @@ test("Python Organization finalizer and Viewer validator share one digest contra
     const shardId = shards.shards[0].id;
     const proposalPath = join(semanticRoot, "handoffs", `${shardId}.proposals.json`);
     writeFileSync(proposalPath, JSON.stringify([{
-      unitId: "unit-parity", kind: "direction_change", contributionIds: [contributionId],
+      unitId: "unit-parity", contributionIds: [contributionId],
     }]), "utf8");
     const receipt = spawnSync("python", [
       join(repository, "skills", "oxygen-organize-review-export", "scripts", "record_semantic_worker.py"),

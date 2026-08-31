@@ -152,6 +152,25 @@ test("Source Privacy docs attach the reviewed generation before the receipt wind
   assert.doesNotMatch(organizerSkill, /reattach[^\n]{0,160}idempotent/i);
 });
 
+test("Organization workers map against one parent-owned run-bound registry", async () => {
+  const [agents, organizerSkill, projectMapContract] = await Promise.all([
+    read("AGENTS.md"),
+    read("skills/oxygen-organize-review-export/SKILL.md"),
+    read("skills/oxygen-organize-review-export/references/project-map-contract.md"),
+  ]);
+  for (const document of [agents, organizerSkill, projectMapContract]) {
+    assert.match(document, /project-local (?:semantic )?registry/iu);
+    assert.match(document, /complete\s+current Privacy-safe projected (?:contribution )?universe/iu);
+    assert.match(document, /byte-identical[\s\S]{0,100}registry[\s\S]{0,80}digest/iu);
+    assert.match(document, /mapping-only|map\s+only/iu);
+  }
+  for (const document of [organizerSkill, projectMapContract]) {
+    assert.match(document, /`inputPath`[\s\S]{0,120}`proposalPath`[\s\S]{0,120}`receiptPath`/u);
+    assert.match(document, /Unknown (?:registry )?IDs[\s\S]{0,400}before any (?:output or )?receipt/iu);
+    assert.match(document, /definition[\s\S]{0,80}disambiguation/iu);
+  }
+});
+
 test("reviewed Story has no numeric quota and Preferences stays inside the reviewed boundary", async () => {
   const paths = [
     "README.md",
