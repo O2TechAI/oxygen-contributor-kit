@@ -33,30 +33,60 @@ two unchanged 2,200,000-byte semantic-manifest budgets cover the intentional `se
 remaining bounded project metadata. The builder checks the exact bytes its atomic writer emits.
 This transport envelope is independent of source domain and historical unit or Chapter counts.
 
-## 2. Prepare immutable bounded worker inputs
+## 2. Freeze one registry and prepare immutable bounded mapping inputs
+
+The workflow-owning parent first derives one project-local registry proposal from the complete
+current Privacy-safe projected contribution universe. The registry is per-run semantic authority,
+not a hard-coded product or domain vocabulary. Its input shape is:
+
+```json
+{
+  "units": [{
+    "unitId": "unit-source-boundary-decision",
+    "kind": "decision_episode",
+    "definition": "Records that establish the source-boundary decision.",
+    "disambiguation": "Do not use for later implementation or validation records.",
+    "storyProjection": {
+      "label": "Source boundary",
+      "summary": "The recorded discussion narrows the contribution source boundary."
+    }
+  }]
+}
+```
+
+Definitions and disambiguation guidance are each limited to 300 UTF-8 bytes, and the canonical
+registry is limited to 98,304 serialized UTF-8 bytes so it fits inside the default shard envelope.
+Unit count, kind, duplicate topology, Story projection, control-character, and secret-safety bounds
+reuse the canonical Organization limits. Empty and nonempty registries must exactly match empty and
+nonempty contribution universes.
 
 POSIX:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/prepare_semantic_units.py \
-  work/<run> work/<run>-organization
+  work/<run> work/<run>-organization work/<run>-semantic-registry.proposal.json
 ```
 
 Windows PowerShell:
 
 ```powershell
 python .\skills\oxygen-organize-review-export\scripts\prepare_semantic_units.py `
-  "work\<run>" "work\<run>-organization"
+  "work\<run>" "work\<run>-organization" `
+  "work\<run>-semantic-registry.proposal.json"
 ```
 
-Preparation writes `semantic-context.json`, `shards.json`, and immutable
-`inputs/<shard-id>.json` files. It balances serialized UTF-8 bytes and content bytes while keeping
+Preparation binds the registry to the exact project, source digest, and universe digest, then
+writes `semantic-context.json`, `semantic-registry.json`, `shards.json`, and immutable
+`inputs/<shard-id>.json` files. Every mapping input embeds the byte-identical canonical registry
+and digest. The manifest carries each assignment's exact `inputPath`, `proposalPath`, and
+`receiptPath`. Preparation balances serialized UTF-8 bytes and content bytes while keeping
 each qualified contribution ID in exactly one shard. Worker context contains only normalized
 semantic fields: contribution and document identity, sequence, event type, actor type, timestamp,
 and content. It excludes raw tool envelopes/results, raw commands/output, local storage paths,
 actor identity, provider/model metadata, projection drop ledgers, and source secrets or metadata.
 
-This preparation/validation step is provider-free. It does not make semantic grouping decisions.
+This preparation/validation step is provider-free. It validates and freezes the parent-owned
+registry but does not infer, rewrite, or repair semantic grouping decisions.
 The exact successful handoff marker is:
 
 ```text
@@ -65,25 +95,22 @@ PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS
 
 ## 3. Bounded worker proposal and terminal receipt
 
-Each external worker reads exactly one `inputs/<shard-id>.json` and returns one JSON array at
-`handoffs/<shard-id>.proposals.json`. The worker uses the user's configured model and credentials;
-semantic reasoning is not provider-free. A proposal has only these fields:
+Each external worker reads exactly one manifest-declared `inputPath` and returns one JSON array at
+that assignment's manifest-declared `proposalPath`. The worker uses the user's configured model
+and credentials; semantic mapping is not provider-free. A proposal has only these fields:
 
 ```json
 {
   "unitId": "unit-source-boundary-decision",
-  "kind": "decision_episode",
-  "contributionIds": ["evt-..."],
-  "storyProjection": {
-    "label": "Source boundary",
-    "summary": "The recorded discussion narrows the contribution source boundary."
-  }
+  "contributionIds": ["evt-..."]
 }
 ```
 
-`duplicateOfUnitId` is allowed only for a `duplicate` unit and must name a current direct
-non-duplicate unit. `storyProjection` is optional; its label is at most 120 UTF-8 bytes and its
-summary at most 300 UTF-8 bytes. `kind` is required and is an open machine label matching exactly
+Workers are mapping-only. `unitId` must exist in the frozen registry, and workers cannot declare,
+omit, or override `kind`, duplicate authority, Story projection, definitions, or disambiguation.
+In the registry, `duplicateOfUnitId` is allowed only for a `duplicate` unit and must name a current
+direct non-duplicate unit. `storyProjection` is optional; its label is at most 120 UTF-8 bytes and
+its summary at most 300 UTF-8 bytes. `kind` is required and is an open machine label matching exactly
 `^[a-z][a-z0-9_]{0,63}$`. Ordinary labels including `direction_change`, `root_cause`,
 `laboratory_observation`, and industry-specific lower-snake-case values require no enum edit,
 registration, fallback, or compatibility mapping. `duplicate` is reserved for the direct
@@ -116,9 +143,12 @@ Viewer, or release call and do not store prompts or responses in product output.
 If proposal validation fails while the atomic `records/<shard-id>/` output-and-receipt directory is
 absent, the failure is pre-receipt authoring feedback. The external
 worker may explicitly replace only `handoffs/<shard-id>.proposals.json` and run the recorder again
-against the same immutable shard input. Invalid kind syntax exits nonzero with the fixed safe code
-`SEMANTIC_WORKER_KIND_INVALID`; it does not echo the rejected label, contribution content, paths,
-tracebacks, or raw exception details. There is no automatic retry, rewrite, fallback, or repair.
+against the same immutable shard input. Unknown registry IDs, extra worker-authored metadata, and
+invalid mapping syntax fail before any output or receipt and exit nonzero with the fixed safe code
+`SEMANTIC_WORKER_MAPPING_INVALID`;
+invalid registry kind syntax fails during preparation. Neither path echoes rejected values,
+contribution content, paths, tracebacks, or raw exception details. There is no automatic retry,
+rewrite, fallback, or repair.
 After the record directory exists, its durable artifact pair is immutable and any differing
 resubmission fails closed. The recorder stages both files together and publishes the directory with
 one no-clobber atomic rename; a staged-write or publication fault exposes neither final artifact and
@@ -138,8 +168,8 @@ python .\skills\oxygen-organize-review-export\scripts\finalize_semantic_units.py
   "work\<run>" "work\<run>-organization"
 ```
 
-Composition merges matching cross-shard `unitId` proposals only when kind, duplicate relation, and
-bounded Story projection agree. It then proves the exact global union with no missing, foreign,
+Composition applies kind, duplicate relation, and bounded Story projection only from the frozen
+registry to every matching cross-shard `unitId`. It then proves the exact global union with no missing, foreign,
 duplicate, or overlapping contribution. Missing, failed, stale, foreign, duplicated, overlapping,
 or tampered receipts and outputs fail before installation. Completed-zero is invalid for a
 nonempty universe.

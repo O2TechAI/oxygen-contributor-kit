@@ -18,7 +18,6 @@ from build_project_map import (
     canonical_project_map,
     digest,
     read_object,
-    valid_semantic_unit_kind,
     validate_current_project_map_skeleton,
 )
 from prepare_semantic_units import (
@@ -26,7 +25,6 @@ from prepare_semantic_units import (
     MIN_MAX_SHARD_BYTES,
     build_preparation,
     safe_record,
-    secret_like_text,
 )
 
 TOOLS_ROOT = Path(__file__).resolve().parents[3] / "tools"
@@ -40,17 +38,17 @@ SHARD_ID = re.compile(r"shard-[0-9]{4}")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 MANIFEST_KEYS = {
     "inputDigest", "projectId", "sourceDigest", "universeDigest",
-    "maximumShardBytes", "contributionIds", "shards",
+    "registryDigest", "registryPath", "maximumShardBytes", "contributionIds", "shards",
 }
-SHARD_KEYS = {"id", "inputDigest", "contributionIds", "inputPath", "receiptPath"}
+SHARD_KEYS = {
+    "id", "inputDigest", "contributionIds", "inputPath", "proposalPath", "receiptPath",
+}
 RECEIPT_KEYS = {
     "status", "shardId", "inputDigest", "contributionIds",
     "outputPath", "outputDigest", "outputCount",
 }
 OUTPUT_KEYS = {"shardId", "inputDigest", "proposals"}
-PROPOSAL_KEYS = {
-    "unitId", "kind", "contributionIds", "duplicateOfUnitId", "storyProjection",
-}
+SEMANTIC_WORKER_MAPPING_INVALID = "SEMANTIC_WORKER_MAPPING_INVALID"
 
 
 def exact_keys(value: Any, required: set[str], optional: set[str] = set()) -> bool:
@@ -113,52 +111,43 @@ def validate_context(
         raise ValueError("semantic preparation context universe is stale")
 
 
-def proposal(value: Any, assigned: set[str]) -> dict[str, Any]:
-    if not exact_keys(
-        value,
-        {"unitId", "kind", "contributionIds"},
-        {"duplicateOfUnitId", "storyProjection"},
-    ):
-        raise ValueError("worker unit proposal has unsupported or missing fields")
+def proposal(
+    value: Any,
+    assigned: set[str],
+    registry_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if not exact_keys(value, {"unitId", "contributionIds"}):
+        raise ValueError(SEMANTIC_WORKER_MAPPING_INVALID)
     unit_id = value["unitId"]
     contribution_ids = value["contributionIds"]
-    if not valid_semantic_unit_kind(value["kind"]):
-        raise ValueError(SEMANTIC_WORKER_KIND_INVALID)
     if (
-        not stable_id(unit_id)
+        not stable_id(unit_id) or unit_id not in registry_by_id
         or not isinstance(contribution_ids, list) or not contribution_ids
         or any(not stable_id(member) for member in contribution_ids)
         or len(contribution_ids) != len(set(contribution_ids))
         or not set(contribution_ids) <= assigned
     ):
-        raise ValueError("worker unit proposal is invalid or foreign")
+        raise ValueError(SEMANTIC_WORKER_MAPPING_INVALID)
     ordered = sorted(contribution_ids, key=lambda item: item.encode("utf-8"))
     if contribution_ids != ordered:
-        raise ValueError("worker proposal contribution IDs are not in UTF-8 byte order")
-    duplicate_of = value.get("duplicateOfUnitId")
-    if duplicate_of is not None and not stable_id(duplicate_of):
-        raise ValueError("worker duplicate proposal is invalid")
-    projection = value.get("storyProjection")
-    if projection is not None and (
-        not isinstance(projection, dict) or set(projection) != {"label", "summary"}
-        or not bounded_text(projection.get("label"), 120)
-        or not bounded_text(projection.get("summary"), 300)
-        or CONTROL.search(projection["label"]) is not None
-        or CONTROL.search(projection["summary"]) is not None
-        or secret_like_text(projection["label"])
-        or secret_like_text(projection["summary"])
-    ):
-        raise ValueError("worker Story projection is invalid")
+        raise ValueError(SEMANTIC_WORKER_MAPPING_INVALID)
+    registry_unit = registry_by_id[unit_id]
     return {
         "id": unit_id,
-        "kind": value["kind"],
+        "kind": registry_unit["kind"],
         "members": ordered,
-        **({"duplicateOfUnitId": duplicate_of} if duplicate_of is not None else {}),
-        **({"storyProjection": projection} if projection is not None else {}),
+        **({"duplicateOfUnitId": registry_unit["duplicateOfUnitId"]}
+           if registry_unit.get("duplicateOfUnitId") is not None else {}),
+        **({"storyProjection": registry_unit["storyProjection"]}
+           if registry_unit.get("storyProjection") is not None else {}),
     }
 
 
-def read_shard_proposals(root: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
+def read_shard_proposals(
+    root: Path,
+    manifest: dict[str, Any],
+    registry: dict[str, Any],
+) -> list[dict[str, Any]]:
     seen_shards: set[str] = set()
     globally_assigned: set[str] = set()
     proposals: list[dict[str, Any]] = []
@@ -168,6 +157,7 @@ def read_shard_proposals(root: Path, manifest: dict[str, Any]) -> list[dict[str,
         shard_id = shard["id"]
         contribution_ids = shard["contributionIds"]
         expected_input_path = f"inputs/{shard_id}.json"
+        expected_proposal_path = f"handoffs/{shard_id}.proposals.json"
         expected_receipt_path = f"records/{shard_id}/receipt.json"
         expected_output_path = f"records/{shard_id}/output.json"
         if (
@@ -178,6 +168,7 @@ def read_shard_proposals(root: Path, manifest: dict[str, Any]) -> list[dict[str,
             or contribution_ids != sorted(contribution_ids, key=lambda item: item.encode("utf-8"))
             or len(contribution_ids) != len(set(contribution_ids))
             or shard["inputPath"] != expected_input_path
+            or shard["proposalPath"] != expected_proposal_path
             or shard["receiptPath"] != expected_receipt_path
         ):
             raise ValueError("semantic shard manifest entry is invalid")
@@ -190,6 +181,7 @@ def read_shard_proposals(root: Path, manifest: dict[str, Any]) -> list[dict[str,
             "projectId": manifest["projectId"],
             "sourceDigest": manifest["sourceDigest"],
             "universeDigest": manifest["universeDigest"],
+            "registry": registry,
             "shardId": shard_id,
             "contributions": input_value.get("contributions"),
         }
@@ -197,6 +189,7 @@ def read_shard_proposals(root: Path, manifest: dict[str, Any]) -> list[dict[str,
             set(input_value) != {*input_core, "inputDigest"}
             or input_value.get("inputDigest") != shard["inputDigest"]
             or digest(input_core) != shard["inputDigest"]
+            or input_value.get("registry") != registry
             or not isinstance(input_value.get("contributions"), list)
             or [record.get("id") for record in input_value["contributions"]] != contribution_ids
             or any(safe_record(record) != record for record in input_value["contributions"])
@@ -227,9 +220,10 @@ def read_shard_proposals(root: Path, manifest: dict[str, Any]) -> list[dict[str,
         ):
             raise ValueError("semantic worker output or receipt digest is tampered")
         assigned = set(contribution_ids)
+        registry_by_id = {unit["unitId"]: unit for unit in registry["units"]}
         shard_owned: set[str] = set()
         for raw in output["proposals"]:
-            normalized = proposal(raw, assigned)
+            normalized = proposal(raw, assigned, registry_by_id)
             overlap = shard_owned.intersection(normalized["members"])
             if overlap:
                 raise ValueError("semantic worker proposals overlap within a shard")
@@ -282,7 +276,16 @@ def finalize(run: Path, root: Path) -> dict[str, Any]:
         or not MIN_MAX_SHARD_BYTES <= maximum_shard_bytes <= MAX_MAX_SHARD_BYTES
     ):
         raise ValueError("semantic shard byte authority is invalid")
-    expected_preparation = build_preparation(run, maximum_shard_bytes)
+    registry_path = manifest.get("registryPath")
+    if registry_path != "semantic-registry.json":
+        raise ValueError("semantic registry path authority is invalid")
+    registry = read_object(contained_relative(root, registry_path))
+    proposed_registry = {"units": registry.get("units")}
+    expected_preparation = build_preparation(run, maximum_shard_bytes, proposed_registry)
+    if registry != expected_preparation["registry"] or registry.get("registryDigest") != manifest.get(
+        "registryDigest"
+    ):
+        raise ValueError("semantic registry is stale or tampered")
     if manifest != expected_preparation["manifest"]:
         raise ValueError("semantic shard manifest is stale or tampered")
     ids = manifest.get("contributionIds")
@@ -298,7 +301,7 @@ def finalize(run: Path, root: Path) -> dict[str, Any]:
     ):
         raise ValueError("semantic shard manifest is stale, foreign, or incomplete")
     validate_context(root, manifest, project_map, expected_preparation["context"])
-    proposals = read_shard_proposals(root, manifest)
+    proposals = read_shard_proposals(root, manifest, registry)
     units = compose(proposals, ids)
     previous_manifest = project_map.get("semantic_manifest")
     output = canonical_project_map(

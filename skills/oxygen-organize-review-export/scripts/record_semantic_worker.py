@@ -11,7 +11,6 @@ import sys
 import tempfile
 
 from build_project_map import (
-    SEMANTIC_WORKER_KIND_INVALID,
     assert_literal_physical_path,
     atomic_write_json,
     digest,
@@ -19,13 +18,14 @@ from build_project_map import (
 )
 from finalize_semantic_units import (
     MANIFEST_KEYS,
+    SEMANTIC_WORKER_MAPPING_INVALID,
     SHARD_ID,
     SHARD_KEYS,
     contained_relative,
     proposal,
     stable_id,
 )
-from prepare_semantic_units import safe_record
+from prepare_semantic_units import safe_record, semantic_registry
 
 TOOLS_ROOT = Path(__file__).resolve().parents[3] / "tools"
 if str(TOOLS_ROOT) not in sys.path:
@@ -94,7 +94,20 @@ def record(root: Path, shard_id: str, proposal_path: Path) -> dict:
         raise ValueError("semantic worker shard identity is foreign or duplicated")
     shard = matches[0]
     contribution_ids = shard.get("contributionIds")
+    registry_path = manifest.get("registryPath")
+    if registry_path != "semantic-registry.json":
+        raise ValueError("semantic registry path authority is invalid")
+    registry = read_object(contained_relative(root, registry_path))
+    if (
+        registry != semantic_registry(
+            manifest.get("projectId"), manifest.get("sourceDigest"),
+            manifest.get("universeDigest"), {"units": registry.get("units")},
+        )
+        or registry.get("registryDigest") != manifest.get("registryDigest")
+    ):
+        raise ValueError("semantic registry is stale or tampered")
     expected_input_path = f"inputs/{shard_id}.json"
+    expected_proposal_relative = f"handoffs/{shard_id}.proposals.json"
     expected_receipt_path = f"records/{shard_id}/receipt.json"
     if (
         not isinstance(shard, dict)
@@ -105,6 +118,7 @@ def record(root: Path, shard_id: str, proposal_path: Path) -> dict:
         or contribution_ids != sorted(contribution_ids, key=lambda item: item.encode("utf-8"))
         or len(contribution_ids) != len(set(contribution_ids))
         or shard.get("inputPath") != expected_input_path
+        or shard.get("proposalPath") != expected_proposal_relative
         or shard.get("receiptPath") != expected_receipt_path
     ):
         raise ValueError("semantic shard manifest entry is invalid")
@@ -113,6 +127,7 @@ def record(root: Path, shard_id: str, proposal_path: Path) -> dict:
         "projectId": manifest["projectId"],
         "sourceDigest": manifest["sourceDigest"],
         "universeDigest": manifest["universeDigest"],
+        "registry": registry,
         "shardId": shard_id,
         "contributions": input_value.get("contributions"),
     }
@@ -120,13 +135,14 @@ def record(root: Path, shard_id: str, proposal_path: Path) -> dict:
         set(input_value) != {*input_core, "inputDigest"}
         or input_value.get("inputDigest") != shard.get("inputDigest")
         or digest(input_core) != shard.get("inputDigest")
+        or input_value.get("registry") != registry
         or not isinstance(input_value.get("contributions"), list)
         or [record.get("id") for record in input_value["contributions"]] != contribution_ids
         or any(safe_record(record) != record for record in input_value["contributions"])
     ):
         raise ValueError("semantic shard input is stale or tampered")
     expected_proposal_path = assert_literal_physical_path(
-        root / "handoffs" / f"{shard_id}.proposals.json",
+        root.joinpath(*expected_proposal_relative.split("/")),
         allow_missing_leaf=True,
     )
     supplied_proposal_path = assert_literal_physical_path(proposal_path)
@@ -137,15 +153,16 @@ def record(root: Path, shard_id: str, proposal_path: Path) -> dict:
     if not same_proposal:
         raise ValueError("semantic worker proposal path is not canonical")
     expected_proposal_path = contained_relative(
-        root, f"handoffs/{shard_id}.proposals.json"
+        root, expected_proposal_relative
     )
     assigned = set(contribution_ids)
     raw = json.loads(expected_proposal_path.read_text(encoding="utf-8"))
     if not isinstance(raw, list):
         raise ValueError("semantic worker proposal file must contain one JSON array")
     owned: set[str] = set()
+    registry_by_id = {unit["unitId"]: unit for unit in registry["units"]}
     for value in raw:
-        normalized = proposal(value, assigned)
+        normalized = proposal(value, assigned, registry_by_id)
         if owned.intersection(normalized["members"]):
             raise ValueError("semantic worker proposals overlap within a shard")
         owned.update(normalized["members"])
@@ -191,6 +208,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        if isinstance(error, ValueError) and str(error) == SEMANTIC_WORKER_KIND_INVALID:
-            raise SystemExit(SEMANTIC_WORKER_KIND_INVALID) from None
+        if isinstance(error, ValueError) and str(error) == SEMANTIC_WORKER_MAPPING_INVALID:
+            raise SystemExit(SEMANTIC_WORKER_MAPPING_INVALID) from None
         raise SystemExit("SEMANTIC_WORKER_RECORD_INVALID") from None

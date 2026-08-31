@@ -20,7 +20,7 @@ On POSIX, create the canonical skeleton and immutable worker handoff:
 python3 skills/oxygen-organize-review-export/scripts/build_project_map.py work/<run> \
   --primary-project "<project>" --summary "<summary>"
 python3 skills/oxygen-organize-review-export/scripts/prepare_semantic_units.py \
-  work/<run> work/<run>-organization
+  work/<run> work/<run>-organization work/<run>-semantic-registry.proposal.json
 ```
 
 On Windows PowerShell:
@@ -29,10 +29,15 @@ On Windows PowerShell:
 python .\skills\oxygen-organize-review-export\scripts\build_project_map.py `
   "work\<run>" --primary-project "<project>" --summary "<summary>"
 python .\skills\oxygen-organize-review-export\scripts\prepare_semantic_units.py `
-  "work\<run>" "work\<run>-organization"
+  "work\<run>" "work\<run>-organization" `
+  "work\<run>-semantic-registry.proposal.json"
 ```
 
-Preparation validates only current ingest projections and the exact current skeleton. If a
+Before preparation, the workflow-owning parent derives one project-local semantic registry from
+the complete current Privacy-safe projected universe. Each registry entry fixes a stable `unitId`,
+open `kind`, bounded definition and disambiguation guidance, optional bounded Story projection,
+and any direct duplicate relation. This registry is per-run semantic authority, never a built-in
+domain vocabulary. Preparation validates only that proposal, current ingest projections, and the exact current skeleton. If a
 projection is absent or an old project map is present, stop and re-collect through current ingest;
 never read or upgrade a historical map. The command ends with the exact internal handoff marker
 `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS`. This is an internal orchestration boundary, not a human-review
@@ -71,6 +76,13 @@ host subagents are not product provider/API calls, need no separate API key, and
 raw/private source beyond that bounded input. Silently performing all semantic reasoning in the
 parent while subagents are available is invalid.
 
+Every immutable mapping input embeds the byte-identical canonical registry and its digest. The
+durable shard manifest carries each assignment's exact `inputPath`, `proposalPath`, and
+`receiptPath`, so resumed orchestration does not reconstruct the proposal destination by convention.
+Workers are mapping-only: they may return only a declared `unitId` and that shard's ordered
+`contributionIds`. They cannot declare, omit, or override registry metadata. Unknown IDs, extra
+metadata, stale digests, or registry tampering fail before any output or receipt.
+
 If the host genuinely lacks subagent capability, the parent processes the same immutable shards
 serially, reports `executionMode=serial_capability_limited`, and continues without asking the
 contributor to create workers. This uses the identical recorder and finalizer authority and is not
@@ -78,8 +90,9 @@ a fallback contract. In either execution mode, the parent exclusively invokes re
 immutable output/receipt pairs, checks exact union and no overlap, waits for every terminal receipt,
 finalizes authority, and performs later Viewer mutations.
 
-Each proposal requires `unitId`, `kind`, and the shard's UTF-8-ordered `contributionIds`.
-`kind` is an open machine label matching exactly `^[a-z][a-z0-9_]{0,63}$`; labels such as
+Each registry entry requires `unitId`, `kind`, `definition`, and `disambiguation`; each mapping
+proposal requires only `unitId` and the shard's UTF-8-ordered `contributionIds`.
+Registry `kind` is an open machine label matching exactly `^[a-z][a-z0-9_]{0,63}$`; labels such as
 `direction_change`, `root_cause`, and domain-specific lower-snake-case values need no product-code
 registration. Never map an unrecognized label to a fallback. The reserved `duplicate` kind alone
 permits `duplicateOfUnitId`, which must name one direct non-duplicate unit. The reserved `routine`
@@ -115,8 +128,8 @@ proposal, and correction may never replace durable output. Once an output or rec
 durable authority is immutable; a differing resubmission fails closed and must not replace or
 repair either artifact.
 
-Workers may use the same stable `unitId` across shards. The deterministic composition stage merges
-those proposals, rejects conflicting metadata, and proves the exact global union. After every
+Workers may use the same declared stable `unitId` across shards. The deterministic composition
+stage applies metadata only from the frozen registry and proves the exact global union. After every
 receipt is complete, finalize and install atomically:
 
 ```bash
