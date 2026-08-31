@@ -13,6 +13,7 @@ import json
 import pathlib
 import re
 import sys
+import urllib.error
 import urllib.request
 
 TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -83,6 +84,12 @@ def post(base_url: str, body: dict) -> dict:
         )
         with opener.open(request, timeout=60) as response:
             return json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as error:
+        is_conflict = error.code == 409
+        error.close()
+        if is_conflict:
+            raise SystemExit("SOURCE_PRIVACY_MUTATION_CONFLICT") from None
+        raise SystemExit("SOURCE_PRIVACY_VIEWER_UNAVAILABLE") from None
     except (OSError, UnicodeError, json.JSONDecodeError, http.client.HTTPException):
         raise SystemExit("SOURCE_PRIVACY_VIEWER_UNAVAILABLE") from None
 
