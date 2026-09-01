@@ -100,7 +100,7 @@ collection**:
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
   --target /path/to/repo \
-  --save-state /external/private/.old/oxygen-session-<fresh-id>
+  --save-state /external/private-state/oxygen-session-<fresh-id>
 ```
 
 The launcher reserves an arbitrary free loopback port, opens the sanitized Workflow Progress UI,
@@ -110,7 +110,7 @@ target-confirmed flag, fixed stage/status/blocker codes, justified counts, times
 action state—never the target path, session names, reasoning, prompts, raw model/tool data,
 private messages, Story/Evidence payloads, or removed content.
 
-Select a fresh external private `.old` session directory for every owned launch; an existing
+Select a fresh external private `private-state` session directory for every owned launch; an existing
 destination is never replaced. After the Viewer stops and releases its port, the launcher verifies
 SQLite integrity, saves the complete Viewer-owned state, and prints the exact resumable session
 path. Pending, blocked, partially reviewed, and complete states are all saveable. If the Viewer or
@@ -454,7 +454,7 @@ run ID. Continue in that Viewer without reattaching the source.
 The initial launcher validates Node/npm, resolves the platform-native npm command, repairs missing
 or cross-OS `node_modules` with lockfile-preserving `npm ci`, and starts native Next with one fresh
 process-owned temporary local state directory. Every owned launch must pass `--save-state` with a
-fresh external private `.old` session destination. After stop and port release, the complete state
+fresh external private `private-state` session destination. After stop and port release, the complete state
 directory is saved there and the temporary runtime is cleaned. It reserves an OS-selected free
 `127.0.0.1` port by default and announces only the exact healthy URL. There is no online deployment
 path. An explicit occupied `--port` fails immediately without killing the owning process or
@@ -471,7 +471,7 @@ $Kit = (Get-Location).Path
 $Target = "D:\Coding Projects\my-project"
 $Viewer = "http://127.0.0.1:3210"
 $WorkflowRun = "oxygen-local-review-001"
-$SavedSession = "D:\private\.old\oxygen-session-<fresh-id>"
+$SavedSession = "D:\private-state\oxygen-session-<fresh-id>"
 Set-Location -LiteralPath $Kit
 
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
@@ -537,7 +537,7 @@ When Bruce later says `resume`, use the exact saved path printed by the prior la
 
 ```powershell
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  --resume-state "D:\private\.old\oxygen-session-<exact-id>"
+  --resume-state "D:\private-state\oxygen-session-<exact-id>"
 ```
 
 Resume starts the Viewer on that same saved state. Do not rerun collection, import, Story
@@ -877,21 +877,7 @@ Requirements:
   available, provide an immediately usable clickable local file/download link.
 - Do not finish with only a filesystem path the contributor cannot access.
 
-Before final handoff, run:
-
-```powershell
-python .\skills\oxygen-organize-review-export\tests\test_run_local_review.py
-python -m py_compile .\skills\oxygen-organize-review-export\tests\test_run_local_review.py
-Push-Location -LiteralPath ".\viewer"
-node --test .\tests\workflow-contracts.test.mjs
-npm test
-npm run lint
-npx tsc --noEmit --strict
-npm run build
-Pop-Location
-git diff --check
-git status --short
-```
+Repository-development verification belongs to CI and maintainers; it is not part of contributor runtime.
 
 ## 9. Handoff and stop
 

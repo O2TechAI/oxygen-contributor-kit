@@ -15,7 +15,7 @@ before scanning any history:
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
   --target /path/to/repo \
-  --save-state /external/private/.old/oxygen-session-<fresh-id>
+  --save-state /external/private-state/oxygen-session-<fresh-id>
 ```
 
 The launcher reserves an arbitrary free loopback port, opens the sanitized Workflow Progress
