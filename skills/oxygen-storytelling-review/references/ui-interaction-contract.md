@@ -18,7 +18,8 @@ Project identity and overview
 Chapters, Phases, and source orientation
 Phase
 Chapter date/type/title
-Before -> After when supported
+Reserved Before -> After location: true values when supported, otherwise the English empty state
+`No evidence-supported transition`
 chips when supported
 Evidence metadata and Read chapter
 ```
@@ -26,6 +27,8 @@ Evidence metadata and Read chapter
 Keep the Timeline centered in the available canvas. On wide screens, a secondary Phase directory may help navigation; on narrow screens it collapses rather than squeezing the Story.
 
 Values are derived from the current Story. Do not hardcode example counts, ports, paths, evidence IDs, project names, or screenshots.
+The transition empty state is Timeline-only presentation. It never enters Story authority, Privacy
+targets, reviewed release, HTML, or ZIP.
 
 ## Chapter Layout
 

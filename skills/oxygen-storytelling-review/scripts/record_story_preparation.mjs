@@ -117,7 +117,7 @@ const storyEditorialCriteriaKeys = [
   "responsesAndChangesAreExplained",
   "arcIsCoherent",
   "endingIsClear",
-  "interactionsAreEvidenceSupported",
+  "claimsAreEvidenceSupported",
   "proseIsReadable",
 ];
 
@@ -142,6 +142,10 @@ function storyProposal(value) {
     fail("STORY_PROPOSAL_PARENT_FIELD_FORBIDDEN");
   }
   if (!exactAllowedKeys(value.chapter, storyChapterRequiredKeys, storyChapterOptionalKeys)
+    || !Array.isArray(value.chapter.chips) || value.chapter.chips.length === 0
+    || value.chapter.chips.length > 12
+    || value.chapter.chips.some((chip) => !safeText(chip, 200))
+    || new Set(value.chapter.chips).size !== value.chapter.chips.length
     || !Array.isArray(value.chapter.insights) || value.chapter.insights.length !== 0
     || !isObject(value.chapter.evidence)
     || !exactKeys(value.chapter.evidence, ["primary", "supporting"])

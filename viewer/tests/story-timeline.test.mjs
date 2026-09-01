@@ -52,6 +52,9 @@ test("canonical Story language classification uses one exact 80-percent Han/Lati
 test("strict final Story parser accepts only the canonical unversioned source", () => {
   const source = story();
   assert.deepEqual(parseStorySource(serialized(source)), source);
+  assert.equal(Object.hasOwn(parseStorySource(serialized(source)), "chips"), false);
+  assert.equal(Object.hasOwn(parseStorySource(serialized(source)), "transition"), false);
+  assert.deepEqual(timelinePresentation(parseStorySource(serialized(source))), {});
   assert.equal(parseStorySource(JSON.stringify(source)), null);
   assert.equal(parseStorySource(`${STORY_PREFIX}{not-json`), null);
   assert.equal(parseStorySource(serialized({ ...source, schema: "oxygen.unknown" })), null);

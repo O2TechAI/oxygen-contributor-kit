@@ -556,6 +556,8 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
   assert.match(publicContracts, /related (?:semantic )?units may share one owner/i);
   assert.match(publicContracts, /multiple Chapters may (?:later )?share one Phase/i);
   assert.match(publicContracts, /proposal[- ]digest[- ]bound editorial (?:review|acceptance)/i);
+  assert.match(publicContracts, /claimsAreEvidenceSupported/);
+  assert.doesNotMatch(`${storyTransport}\n${narrativeContract}\n${recorder}`, /interactionsAreEvidenceSupported/);
   assert.match(publicContracts, /After the initial\s+proposal plus two rejected subagent corrections,[\s\S]{0,200}Ultra parent may complete/i);
   assert.match(publicContracts, /(?:complete|every phase-free)[^\n]{0,80}(?:Story )?proposal[^\n]{0,80}(?:before|collected before)[^\n]{0,80}(?:receipt|authority)/i);
   assert.match(publicContracts, /one Story batch recorder/i);

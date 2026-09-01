@@ -274,6 +274,7 @@ mark.redactionHit{background:#ffe08a;padding:1px 0}
 .transition{display:grid;grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);gap:10px;align-items:center;max-width:760px}
 .transition>div{min-width:0}.transition small{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.09em}
 .transition p{margin:5px 0 0;color:var(--ink);font-size:14px;line-height:1.45}.transition>b{color:var(--blue);text-align:center}
+.transitionEmpty p{grid-column:1/-1;color:var(--muted);font-style:italic}
 .storyChapter .storyChapterChips{display:flex;flex-wrap:wrap;gap:7px;margin:15px 0 0}
 .storyChapter .storyChapterChips span{padding:5px 9px;border:1px solid #d7dcff;border-radius:999px;background:#edf0ff;color:#283fba;font:11px/1.2 Arial,"PingFang SC",sans-serif}
 .storyChapter footer{display:flex;justify-content:space-between;align-items:center;margin-top:17px;color:var(--muted);font-size:11px}

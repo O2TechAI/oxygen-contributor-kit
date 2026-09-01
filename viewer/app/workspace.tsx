@@ -1298,9 +1298,9 @@ export function InlineWorkspace({
                   <div className="storyChapterList">{group.events.map((event) => <article className="storyChapter" data-kind={event.kind} data-story-key={event.key} key={event.key} aria-labelledby={`story-chapter-${event.key}`}>
                     <div className="storyChapterMeta">{event.dateLabel && <time dateTime={event.timestamp}>{event.dateLabel}</time>}{event.kind && <span>{storyKindLabel(event.kind,"en")}</span>}{event.timelineMarker === "ai_insight" && <strong>{workspaceUi.en.timelineAiInsight}</strong>}</div>
                     <h3 id={`story-chapter-${event.key}`}>{event.title}</h3>
-                    {event.before && event.after && <div className="transition" aria-label={`${workspaceUi.en.before} to ${workspaceUi.en.after}`}>
-                      <div><small>{workspaceUi.en.before}</small><p>{event.before}</p></div><b aria-hidden="true">→</b><div><small>{workspaceUi.en.after}</small><p>{event.after}</p></div>
-                    </div>}
+                    <div className={`transition${event.before && event.after ? "" : " transitionEmpty"}`} aria-label={`${workspaceUi.en.before} to ${workspaceUi.en.after}`}>
+                      {event.before && event.after ? <><div><small>{workspaceUi.en.before}</small><p>{event.before}</p></div><b aria-hidden="true">→</b><div><small>{workspaceUi.en.after}</small><p>{event.after}</p></div></> : <p>No evidence-supported transition</p>}
+                    </div>
                     {event.chips && event.chips.length > 0 && <div className="storyChapterChips" aria-label="Key facts">{event.chips.map((chip) => <span key={chip}>{chip}</span>)}</div>}
                     <footer><span>{event.evidenceCount} {workspaceUi.en.evidence}{event.evidenceCount!==1?"s":""}</span><button id={`story-open-${event.key}`} onClick={() => openStory(event.key)}>{workspaceUi.en.read} · ≈ {event.readingMinutes} min →</button></footer>
                   </article>)}</div>
