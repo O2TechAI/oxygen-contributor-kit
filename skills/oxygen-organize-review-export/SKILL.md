@@ -94,7 +94,8 @@ durable shard manifest carries each assignment's exact `inputPath`, `proposalPat
 `receiptPath`, so resumed orchestration does not reconstruct the proposal destination by convention.
 Workers are mapping-only: they may return only a declared `unitId` and that shard's ordered
 `contributionIds`. They cannot declare, omit, or override registry metadata. Unknown IDs, extra
-metadata, stale digests, or registry tampering fail before any output or receipt.
+metadata, malformed mapping, overlap, or incomplete shard coverage are correctable mapping
+feedback; stale digests or registry tampering are fatal authority failures.
 
 If the host genuinely lacks subagent capability, the parent processes the same immutable shards
 serially, reports `executionMode=serial_capability_limited`, and continues without asking the
@@ -126,9 +127,10 @@ python .\skills\oxygen-organize-review-export\scripts\record_semantic_worker.py 
 ```
 
 A recorder validation failure is pre-receipt authoring feedback only when the atomic
-`records/<shard-id>/` output-and-receipt directory is absent. The parent automatically
-returns only the fixed safe validation code as authoring feedback. Each shard assignment gets one
-initial proposal plus at most two automatic proposal-only correction attempts.
+`records/<shard-id>/` output-and-receipt directory is absent. The parent returns only the fixed
+safe validation code as authoring feedback. Each shard assignment gets one initial proposal plus
+at most two parent-orchestrated proposal-only correction attempts; the recorder never retries
+internally.
 `correctionAttemptCount` is assignment-local, counts corrections only, excludes the initial
 proposal, and is always `0..2`; never sum it across the multi-shard Organization lane. Every
 correction uses the byte-identical immutable shard input, and every invalid initial or correction

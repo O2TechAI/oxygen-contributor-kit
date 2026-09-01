@@ -115,6 +115,7 @@ def write_semantic_project_map(
         units = [{"id": "unit-all", "kind": "discussion", "members": ids}]
     project_map = MODULE.project_map_authority.canonical_project_map(
         run, "Synthetic Project", "Synthetic organization.", units,
+        registry_digest="c" * 64,
     )
     if include_events:
         project_map["events"] = {

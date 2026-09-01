@@ -96,7 +96,7 @@ complete terminal `story/records` directory. Before success there are zero Story
 Story receipts; after success there is exactly one receipt per expected Story shard. Other lanes
 retain their per-shard atomic output/receipt recorder.
 
-Each shard assignment gets one initial proposal plus at most two automatic proposal-only correction
+Each shard assignment gets one initial proposal plus at most two parent-orchestrated proposal-only correction
 attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
 initial proposal, and is always `0..2`; never sum it across a multi-shard lane. Every correction
 uses the byte-identical immutable input. Every invalid initial or correction attempt leaves both
@@ -236,7 +236,7 @@ it runs the shown recorder once per shard using the actual `<manifest-shard-id>`
 `<proposal-path>`. After the
 Preference `prepare` command, the parent requires exactly one global shard and dispatches exactly
 one bounded worker. For any assignment, only a fixed safe pre-receipt authoring-validation code may
-trigger at most two automatic proposal-only corrections against the byte-identical input. The
+trigger at most two parent-orchestrated proposal-only corrections against the byte-identical input. The
 parent requires one terminal receipt per assignment before compose/finalize and continues without
 a contributor pause only when the lane has no exhaustion or immediate-stop failure.
 

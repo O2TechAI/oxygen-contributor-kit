@@ -52,7 +52,14 @@ parent runs validation and recording, owns the immutable output/receipt pair, an
 asking the contributor to create a worker. If subagents are unavailable, the parent uses the same
 input and authority serially with `executionMode=serial_capability_limited`.
 
-The global Preference assignment gets one initial proposal plus at most two automatic
+The regular `oxygen.preference-context` gives the worker only Insight-cited rows from the verified
+redacted bundles. Each row has exactly `{documentId,eventId,documentKind,sequence,role,timestamp,redactedText}`;
+`redactedText` is the canonical reviewed text, never raw text. Rows are ordered by UTF-8
+`documentId`, numeric `sequence`, and UTF-8 `eventId`. The worker never receives uncited neighboring
+turns, paths, provider metadata, or Privacy internals. A regeneration context is separate and keeps
+its identity-only evidence shape under schema-specific validation.
+
+The global Preference assignment gets one initial proposal plus at most two parent-orchestrated
 proposal-only correction attempts. `correctionAttemptCount` counts corrections only, excludes the
 initial proposal, and is always `0..2`. Every correction uses the byte-identical immutable input,
 and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed

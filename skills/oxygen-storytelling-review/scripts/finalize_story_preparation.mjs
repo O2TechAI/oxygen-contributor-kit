@@ -232,6 +232,23 @@ function preferenceOption(value) {
   return exactKeys(value, ["id", "text"]) && boundedId(value.id, 200) && boundedText(value.text);
 }
 
+function preferenceContextEvidence(context) {
+  if (!isObject(context) || context.schema !== "oxygen.preference-context"
+    || !Array.isArray(context.reviewedEvidence)) return null;
+  const evidence = new Map();
+  for (const record of context.reviewedEvidence) {
+    if (!exactKeys(record, ["documentId", "eventId", "documentKind", "sequence", "role", "timestamp", "redactedText"])
+      || !boundedId(record.documentId) || !boundedId(record.eventId, 1_000)
+      || !validPreferenceDocumentKind(record.documentKind) || !nonnegative(record.sequence) || record.sequence === 0
+      || (record.role !== null && !boundedText(record.role))
+      || (record.timestamp !== null && !boundedText(record.timestamp)) || !boundedText(record.redactedText)) return null;
+    const identity = canonicalAuthorityJson([record.documentId, record.eventId]);
+    if (evidence.has(identity)) return null;
+    evidence.set(identity, record.documentKind);
+  }
+  return evidence;
+}
+
 function preferenceProbe(value, evidence, reviewedEvidence, scope) {
   if (!exactKeys(value, probeKeys) || !boundedId(value.id) || !boundedId(value.documentId)
     || !validPreferenceDocumentKind(value.documentKind)
@@ -403,17 +420,10 @@ async function finalize(args) {
   const preferenceInputDigest = await storyPreparationDigest(lessons);
   const preferenceAuthorityRecord = await readLaneAuthority(shardRootInput, "preference");
   const preferenceContext = preferenceAuthorityRecord.input.payload?.preferenceContext;
-  if (!isObject(preferenceContext) || !Array.isArray(preferenceContext.reviewedEvidence)) {
+  const reviewedEvidence = preferenceContextEvidence(preferenceContext);
+  if (!reviewedEvidence) {
     fail("PREFERENCE_INPUT_STALE");
   }
-  const reviewedEvidence = new Map(preferenceContext.reviewedEvidence.map((record) => [
-    canonicalAuthorityJson([record?.documentId, record?.eventId]), record?.documentKind,
-  ]));
-  if (reviewedEvidence.size !== preferenceContext.reviewedEvidence.length
-    || preferenceContext.reviewedEvidence.some((record) => !exactKeys(
-      record, ["documentId", "eventId", "documentKind"],
-    ) || !boundedId(record.documentId) || !boundedId(record.eventId, 1_000)
-      || !validPreferenceDocumentKind(record.documentKind))) fail("PREFERENCE_INPUT_STALE");
   const preferenceScope = new Map(lessons.map(({ storyKey, insightId, insightAuthorityDigest }) => [
     canonicalAuthorityJson([storyKey, insightId]), { storyKey, insightId, insightAuthorityDigest },
   ]));

@@ -405,7 +405,7 @@ IDs and labels, injects canonical Coverage and exclusions, and invokes one compl
 recorder. No Story receipt exists before editorial and full-package validation; all outputs and
 exactly one receipt per shard install together. Insight remains a separate later pass.
 
-Each assignment gets one initial proposal plus at most two automatic proposal-only correction attempts. `correctionAttemptCount` is
+Each assignment gets one initial proposal plus at most two parent-orchestrated proposal-only correction attempts. `correctionAttemptCount` is
 assignment-local, counts corrections only, excludes the initial proposal, and is always `0..2`;
 never sum it across a multi-shard lane. Every correction uses the byte-identical immutable input,
 and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed

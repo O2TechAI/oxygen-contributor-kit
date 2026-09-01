@@ -18,9 +18,12 @@ story-candidates.json       [{"id":"existing-imported-item-id","summary":"oxygen
 Each candidate has exactly `id` and `summary`, matching the sole Story activation contract. Context
 preparation sorts that plain array by the UTF-8 bytes of candidate `id` before projecting lessons,
 Insight identities, or evidence, so input reordering cannot change context bytes or digests.
-`summary` is a valid `oxygen.story:` JSON source. The preparation step projects only
-`documentId`, `documentKind`, and exact imported item identities from the reviewed bundles; source
-text and redacted text never enter the Preference context. The report's per-document counts and
+`summary` is a valid `oxygen.story:` JSON source. The preparation step projects only Insight-cited
+rows from the reviewed bundles. In the regular context each row has exactly
+`{documentId,eventId,documentKind,sequence,role,timestamp,redactedText}`; `redactedText` is copied
+from the canonical reviewed bundle after verification. Raw source text, uncited neighboring turns,
+paths, provider metadata, and Privacy internals never enter the Preference context. The report's
+per-document counts and
 category aggregate must exactly bind those bundles. Every redaction span must be in the producer's
 deterministic non-overlapping order and use one of its six categories: `credential`,
 `private-personal`, `sensitive`, `internal-metric`, `internal-timeline`, or
@@ -45,7 +48,9 @@ The output has exactly these fields:
 `insightScope` row carries the exact Chapter-local `{storyKey, insightId, insightAuthorityDigest}`
 triple, where the digest binds the full canonical Insight content. `reviewedEvidence` contains only Insight-cited
 reviewed event identities. `autoRemoved` is derived only from the completed report after its counts
-are recomputed from and matched to the exact reviewed bundles.
+are recomputed from and matched to the exact reviewed bundles. Rows are ordered by UTF-8
+`documentId`, numeric `sequence`, and UTF-8 `eventId`. Regeneration keeps its separate
+identity-only `reviewedEvidence` shape and schema-specific validation.
 
 ## Candidate and final bundle
 

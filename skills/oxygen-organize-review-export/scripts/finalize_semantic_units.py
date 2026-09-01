@@ -310,6 +310,7 @@ def finalize(run: Path, root: Path) -> dict[str, Any]:
         project_map["summary"],
         units,
         previous_manifest,
+        registry_digest=registry["registryDigest"],
     )
     atomic_write_json(project_map_path, output)
     return output

@@ -165,6 +165,7 @@ function projectSemanticMembershipStructure(
     revision: semanticManifest.revision,
     sourceDigest: semanticManifest.sourceDigest,
     universeDigest: semanticManifest.universeDigest,
+    registryDigest: semanticManifest.registryDigest,
     units: semanticManifest.units,
   };
   return {
@@ -320,7 +321,7 @@ export async function readCoveragePrivacyAuthority(
     storedCoverageManifest, storedCoverageRows] = await Promise.all([
     db.prepare(`SELECT r.id AS workflow_run_id,r.story_generation_status,r.story_source_revision,
         m.source_revision,m.project_id,m.revision,m.source_digest,m.universe_digest,
-        m.manifest_digest,m.unit_count,m.serialized_bytes,m.story_projection_bytes,
+        m.registry_digest,m.manifest_digest,m.unit_count,m.serialized_bytes,m.story_projection_bytes,
         m.corpus_revision,m.corpus_digest,
         m.corpus_document_count,m.corpus_item_count,f.corpus_revision AS finalized_revision,
         f.corpus_digest AS finalized_digest,f.document_count,f.item_count,
@@ -372,6 +373,7 @@ export async function readCoveragePrivacyAuthority(
     || Number(binding.revision) !== semanticManifest.revision
     || binding.source_digest !== semanticManifest.sourceDigest
     || binding.universe_digest !== semanticManifest.universeDigest
+    || binding.registry_digest !== semanticManifest.registryDigest
     || binding.manifest_digest !== semanticManifest.manifestDigest
     || Number(binding.unit_count) !== semanticManifest.units.length
     || Number(binding.corpus_revision) !== Number(binding.finalized_revision)

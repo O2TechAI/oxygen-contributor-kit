@@ -203,7 +203,7 @@ test("Organization workers map against one parent-owned run-bound registry", asy
   }
   for (const document of [organizerSkill, projectMapContract]) {
     assert.match(document, /`inputPath`[\s\S]{0,120}`proposalPath`[\s\S]{0,120}`receiptPath`/u);
-    assert.match(document, /Unknown (?:registry )?IDs[\s\S]{0,400}before any (?:output or )?receipt/iu);
+    assert.match(document, /Unknown (?:registry )?IDs[\s\S]{0,500}(?:correctable\s+(?:mapping\s+)?feedback|before any (?:output or )?receipt)/iu);
     assert.match(document, /definition[\s\S]{0,80}disambiguation/iu);
   }
 });
@@ -375,7 +375,7 @@ test("Story preparation bounds proposal correction and keeps Preference global",
   for (const document of [
     agents, sop, storySkill, storyTransport, productContract, preferenceSkill, organizerSkill,
   ]) {
-    assert.match(document, /one\s+initial\s+proposal\s+plus\s+at\s+most\s+two\s+automatic[\s\S]{0,60}proposal-only\s+correction\s+attempts/i);
+    assert.match(document, /one\s+initial\s+proposal\s+plus\s+at\s+most\s+two\s+parent-orchestrated\s+proposal-only\s+correction\s+attempts/i);
     assert.match(document, /`correctionAttemptCount`[\s\S]{0,120}counts corrections only[\s\S]{0,120}`0\.\.2`/i);
     assert.match(document, /byte-identical immutable(?: shard)? input/i);
     assert.match(document, /invalid\s+initial\s+or\s+correction\s+attempt[\s\S]{0,100}(?:leaves\s+both|creates\s+neither)[\s\S]{0,60}output[\s\S]{0,40}receipt/i);

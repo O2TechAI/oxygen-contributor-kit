@@ -210,6 +210,7 @@ export type SemanticManifestAuthority = {
   revision: number;
   sourceDigest: string;
   universeDigest: string;
+  registryDigest: string;
   manifestDigest: string;
   serializedBytes: number;
   units: SemanticUnitAuthority[];
@@ -221,6 +222,7 @@ export function projectSemanticManifestForStory(manifest: SemanticManifestAuthor
     revision: manifest.revision,
     sourceDigest: manifest.sourceDigest,
     universeDigest: manifest.universeDigest,
+    registryDigest: manifest.registryDigest,
     manifestDigest: manifest.manifestDigest,
     units: manifest.units.map((unit) => ({
       id: unit.id,
@@ -454,9 +456,11 @@ export async function validateSemanticManifestAuthority(
   }
   const manifest = input as Record<string, unknown>;
   if (!authorityOnlyKeys(manifest, [
-    "projectId", "revision", "sourceDigest", "universeDigest", "manifestDigest", "units",
+    "projectId", "revision", "sourceDigest", "universeDigest", "registryDigest",
+    "manifestDigest", "units",
   ]) || !boundedAuthorityId(manifest.projectId) || !positiveRevision(manifest.revision)
     || !hexDigest(manifest.sourceDigest) || !hexDigest(manifest.universeDigest)
+    || !hexDigest(manifest.registryDigest)
     || !hexDigest(manifest.manifestDigest) || !Array.isArray(manifest.units)) {
     return { ok: false, code: "SEMANTIC_MANIFEST_INVALID" };
   }
@@ -571,6 +575,7 @@ export async function validateSemanticManifestAuthority(
     revision: manifest.revision,
     sourceDigest: manifest.sourceDigest,
     universeDigest: manifest.universeDigest,
+    registryDigest: manifest.registryDigest,
     units,
   };
   if (await authoritySha256(canonicalAuthorityJson(canonicalManifest)) !== manifest.manifestDigest) {
@@ -607,6 +612,7 @@ function comparableSemanticManifest(manifest: SemanticManifestAuthority) {
     projectId: manifest.projectId,
     sourceDigest: manifest.sourceDigest,
     universeDigest: manifest.universeDigest,
+    registryDigest: manifest.registryDigest,
     units: manifest.units.map(comparableSemanticUnit),
   };
 }
@@ -890,7 +896,7 @@ export async function readStoredSemanticManifestAuthority(
   workflowRunId: string,
 ): Promise<SemanticManifestAuthority | null> {
   const manifest = await db.prepare(`SELECT project_id,revision,source_digest,
-      universe_digest,manifest_digest,serialized_bytes
+      universe_digest,registry_digest,manifest_digest,serialized_bytes
       FROM semantic_manifests WHERE workflow_run_id=?`)
     .bind(workflowRunId).first<Record<string, unknown>>();
   if (!manifest) return null;
@@ -916,6 +922,7 @@ export async function readStoredSemanticManifestAuthority(
     revision: Number(manifest.revision),
     sourceDigest: manifest.source_digest,
     universeDigest: manifest.universe_digest,
+    registryDigest: manifest.registry_digest,
     manifestDigest: manifest.manifest_digest,
     units: unitRows.map((row) => {
       const storyProjection = JSON.parse(String(row.story_projection_json || "{}"));

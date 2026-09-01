@@ -68,6 +68,7 @@ function manifest(contributionIds, units, overrides = {}) {
     revision: 1,
     sourceDigest: hash(contributionRecords(utf8Sort(contributionIds))),
     universeDigest: hash(utf8Sort(contributionIds)),
+    registryDigest: "c".repeat(64),
     units: normalizedUnits,
   };
   return { ...core, manifestDigest: hash(core), ...overrides };
@@ -95,6 +96,7 @@ function lineageManifest(records, revision, unitRevision) {
     revision,
     sourceDigest: hash(normalizedRecords),
     universeDigest: hash(normalizedRecords.map((record) => record.id)),
+    registryDigest: "c".repeat(64),
     units,
   };
   return { ...core, manifestDigest: hash(core) };

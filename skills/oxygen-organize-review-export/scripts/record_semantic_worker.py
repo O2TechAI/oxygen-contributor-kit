@@ -156,18 +156,21 @@ def record(root: Path, shard_id: str, proposal_path: Path) -> dict:
         root, expected_proposal_relative
     )
     assigned = set(contribution_ids)
-    raw = json.loads(expected_proposal_path.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(expected_proposal_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise ValueError(SEMANTIC_WORKER_MAPPING_INVALID) from None
     if not isinstance(raw, list):
-        raise ValueError("semantic worker proposal file must contain one JSON array")
+        raise ValueError(SEMANTIC_WORKER_MAPPING_INVALID)
     owned: set[str] = set()
     registry_by_id = {unit["unitId"]: unit for unit in registry["units"]}
     for value in raw:
         normalized = proposal(value, assigned, registry_by_id)
         if owned.intersection(normalized["members"]):
-            raise ValueError("semantic worker proposals overlap within a shard")
+            raise ValueError(SEMANTIC_WORKER_MAPPING_INVALID)
         owned.update(normalized["members"])
     if owned != assigned:
-        raise ValueError("semantic worker proposals do not cover the exact shard")
+        raise ValueError(SEMANTIC_WORKER_MAPPING_INVALID)
     output = {
         "shardId": shard_id,
         "inputDigest": shard["inputDigest"],

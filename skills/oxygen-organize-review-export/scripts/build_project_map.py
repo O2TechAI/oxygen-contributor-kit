@@ -495,7 +495,8 @@ def validate_previous_manifest(value: Any, project_id: str) -> dict[str, Any]:
     if serialized_bytes > MAX_SEMANTIC_MANIFEST_BYTES:
         raise ValueError("previous semantic manifest serialized-byte limit exceeded")
     if not isinstance(value, dict) or set(value) != {
-        "projectId", "revision", "sourceDigest", "universeDigest", "manifestDigest", "units",
+        "projectId", "revision", "sourceDigest", "universeDigest", "registryDigest",
+        "manifestDigest", "units",
     }:
         raise ValueError("previous semantic manifest is invalid")
     if (
@@ -504,7 +505,7 @@ def validate_previous_manifest(value: Any, project_id: str) -> dict[str, Any]:
         or isinstance(value.get("revision"), bool)
         or value["revision"] <= 0
         or not all(valid_digest(value.get(key)) for key in (
-            "sourceDigest", "universeDigest", "manifestDigest",
+            "sourceDigest", "universeDigest", "registryDigest", "manifestDigest",
         ))
         or not isinstance(value.get("units"), list)
         or len(value["units"]) > MAX_SEMANTIC_UNITS
@@ -594,6 +595,7 @@ def validate_previous_manifest(value: Any, project_id: str) -> dict[str, Any]:
         "projectId": project_id,
         "sourceDigest": value["sourceDigest"],
         "universeDigest": value["universeDigest"],
+        "registryDigest": value["registryDigest"],
         "units": units,
         "revision": value["revision"],
     }
@@ -604,6 +606,7 @@ def validate_previous_manifest(value: Any, project_id: str) -> dict[str, Any]:
         "revision": value["revision"],
         "sourceDigest": value["sourceDigest"],
         "universeDigest": value["universeDigest"],
+        "registryDigest": value["registryDigest"],
         "manifestDigest": value["manifestDigest"],
         "units": [{
             "id": unit["id"],
@@ -629,6 +632,7 @@ def finalize_units(
     source_digest: str,
     raw_units: Any,
     previous_manifest: Any = None,
+    registry_digest: str | None = None,
 ) -> dict[str, Any]:
     if not bounded_text(project_id, 300):
         raise ValueError("project identity is invalid")
@@ -636,6 +640,10 @@ def finalize_units(
         raise ValueError("Organization must supply semantic_units before finalization")
     if previous_manifest is not None:
         previous_manifest = validate_previous_manifest(previous_manifest, project_id)
+        if registry_digest is None:
+            registry_digest = previous_manifest["registryDigest"]
+    if not valid_digest(registry_digest):
+        raise ValueError("semantic registry digest is invalid")
     if len(raw_units) > MAX_SEMANTIC_UNITS:
         raise ValueError(f"semantic unit limit exceeded: {len(raw_units)} > {MAX_SEMANTIC_UNITS}")
     known = set(contribution_ids)
@@ -742,13 +750,14 @@ def finalize_units(
         "projectId": project_id,
         "sourceDigest": source_digest,
         "universeDigest": digest(contribution_ids),
+        "registryDigest": registry_digest,
         "units": units,
     }
     previous_base = None
     if previous_manifest is not None:
         previous_base = {
             key: value for key, value in previous_manifest.items()
-            if key in {"projectId", "sourceDigest", "universeDigest", "units"}
+            if key in {"projectId", "sourceDigest", "universeDigest", "registryDigest", "units"}
         }
     revision = (
         1 if previous_manifest is None
@@ -764,6 +773,7 @@ def finalize_units(
         "revision": revision,
         "sourceDigest": source_digest,
         "universeDigest": manifest["universeDigest"],
+        "registryDigest": manifest["registryDigest"],
         "manifestDigest": manifest["manifestDigest"],
         "units": [{
             "id": unit["id"],
@@ -790,6 +800,7 @@ def canonical_project_map(
     *,
     finalize: bool = True,
     existing_manifest: Any = None,
+    registry_digest: str | None = None,
 ) -> dict[str, Any]:
     """Build the single Organization project map for ``run``."""
     if (
@@ -802,6 +813,8 @@ def canonical_project_map(
         "id": contribution_id,
         "sourceDigest": contribution_source_digests[contribution_id],
     } for contribution_id in contribution_ids])
+    if registry_digest is None and isinstance(existing_manifest, dict):
+        registry_digest = existing_manifest.get("registryDigest")
     project_map = {
         "schema": PROJECT_MAP_SCHEMA,
         "primary_project": primary_project,
@@ -824,6 +837,7 @@ def canonical_project_map(
             source_digest,
             raw_units,
             previous_manifest,
+            registry_digest,
         ) if finalize else existing_manifest,
     }
     if len(transport_json_bytes(project_map)) > MAX_PROJECT_MAP_BYTES:
@@ -910,6 +924,7 @@ def validate_project_map_authority(
         project_map.get("summary"),
         project_map.get("semantic_units"),
         manifest,
+        registry_digest=manifest.get("registryDigest"),
     )
     if (
         expected["semantic_manifest"] != manifest
@@ -926,6 +941,10 @@ def main() -> None:
     parser.add_argument("--primary-project", required=True)
     parser.add_argument("--summary", required=True)
     parser.add_argument("--finalize", action="store_true")
+    parser.add_argument(
+        "--registry-digest",
+        help="Required for a fresh finalized map; an existing manifest may supply it.",
+    )
     parser.add_argument(
         "--previous", type=Path,
         help="Explicit prior project-map or semantic-manifest file used for revision lineage.",
@@ -962,6 +981,7 @@ def main() -> None:
         previous_manifest,
         finalize=args.finalize,
         existing_manifest=existing.get("semantic_manifest"),
+        registry_digest=args.registry_digest,
     )
     atomic_write_json(destination, output)
     print(json.dumps({

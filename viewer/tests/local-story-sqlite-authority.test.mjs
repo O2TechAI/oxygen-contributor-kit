@@ -154,11 +154,11 @@ test("real SQLite enforces Story activation and review-session CAS authority", a
     ).run();
     await db.prepare(`INSERT INTO semantic_manifests
       (workflow_run_id,project_id,revision,source_revision,source_digest,universe_digest,
-       manifest_digest,unit_count,serialized_bytes,story_projection_bytes,corpus_revision,
+       registry_digest,manifest_digest,unit_count,serialized_bytes,story_projection_bytes,corpus_revision,
        corpus_digest,corpus_document_count,corpus_item_count,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
       RUN_ID, "synthetic-project", 1, INITIAL_SOURCE_REVISION,
-      "c".repeat(64), "d".repeat(64), SEMANTIC_DIGEST,
+      "c".repeat(64), "d".repeat(64), "e".repeat(64), SEMANTIC_DIGEST,
       0, 2, 2, 1, "e".repeat(64), 1, 1,
       "2037-12-31T00:00:00.000Z", "2037-12-31T00:00:00.000Z",
     ).run();
@@ -541,6 +541,7 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       revision: 1,
       sourceDigest: await hash(contributionRecords),
       universeDigest: await hash(contributionRecords.map((record) => record.id)),
+      registryDigest: "e".repeat(64),
       units,
     };
     const semanticValidation = await validateSemanticManifestAuthority({
@@ -551,11 +552,11 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     const semantic = semanticValidation.authority;
     await db.prepare(`INSERT INTO semantic_manifests
       (workflow_run_id,project_id,revision,source_revision,source_digest,universe_digest,
-       manifest_digest,unit_count,serialized_bytes,story_projection_bytes,corpus_revision,
+       registry_digest,manifest_digest,unit_count,serialized_bytes,story_projection_bytes,corpus_revision,
        corpus_digest,corpus_document_count,corpus_item_count,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
       RUN_ID, semantic.projectId, semantic.revision, INITIAL_SOURCE_REVISION,
-      semantic.sourceDigest, semantic.universeDigest, semantic.manifestDigest,
+      semantic.sourceDigest, semantic.universeDigest, semantic.registryDigest, semantic.manifestDigest,
       semantic.units.length, semantic.serializedBytes, semanticValidation.storyProjectionBytes,
       1, "c".repeat(64), 1, 2, timestamp, timestamp,
     ).run();

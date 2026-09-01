@@ -93,9 +93,11 @@ export function selectSemanticManifest(document, transportBytes) {
 
 export function validateSemanticAuthority(value) {
   if (!exactKeys(value, [
-    "projectId", "revision", "sourceDigest", "universeDigest", "manifestDigest", "units",
+    "projectId", "revision", "sourceDigest", "universeDigest", "registryDigest",
+    "manifestDigest", "units",
   ]) || !stableId(value.projectId) || !Number.isSafeInteger(value.revision) || value.revision < 1
     || !hex.test(value.sourceDigest) || !hex.test(value.universeDigest)
+    || !hex.test(value.registryDigest)
     || !hex.test(value.manifestDigest) || !Array.isArray(value.units)) {
     fail("SEMANTIC_MANIFEST_INVALID");
   }
@@ -109,6 +111,7 @@ export function validateSemanticAuthority(value) {
     revision: value.revision,
     sourceDigest: value.sourceDigest,
     universeDigest: value.universeDigest,
+    registryDigest: value.registryDigest,
     units,
   };
   if (canonicalDigest(core) !== value.manifestDigest) fail("SEMANTIC_MANIFEST_DIGEST_STALE");

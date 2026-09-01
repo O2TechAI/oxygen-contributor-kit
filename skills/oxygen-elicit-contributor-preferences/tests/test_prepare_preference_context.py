@@ -107,7 +107,28 @@ class PrepareContextTests(unittest.TestCase):
         )
         self.assertEqual(output["reviewedEvidence"], [{
             "documentId": "trajectory-a", "eventId": "event-a", "documentKind": "trajectory",
+            "sequence": 1, "role": "user", "timestamp": None,
+            "redactedText": "safe synthetic reviewed text",
         }])
+
+    def test_context_exposes_only_cited_reviewed_redacted_text(self):
+        span = {
+            "start": 0, "end": len("secret raw sentinel"), "category": "credential", "confidence": 0.9,
+            "reason": "synthetic", "review_state": "deterministic", "uncertainty_reason": None,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidates, redacted, report = inputs(root, spans=[span])
+            bundle = json.loads((redacted / "trajectory-a.json").read_text(encoding="utf-8"))
+            bundle["turns"][0]["text"] = "secret raw sentinel"
+            bundle["turns"][0]["redacted_text"] = PREPARE.apply_spans(bundle["turns"][0]["text"], [span])
+            bundle["chars"] = len(bundle["turns"][0]["text"])
+            (redacted / "trajectory-a.json").write_text(json.dumps(bundle), encoding="utf-8")
+            output = PREPARE.prepare(candidates, redacted, report)
+        encoded = json.dumps(output, ensure_ascii=False)
+        self.assertNotIn("secret raw sentinel", encoded)
+        self.assertIn('<redacted category="credential"/>', output["reviewedEvidence"][0]["redactedText"])
+        self.assertEqual(set(output["reviewedEvidence"][0]), PREPARE.PREFERENCE_EVIDENCE_KEYS)
 
     def test_plain_array_is_the_only_story_candidate_shape(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -151,6 +172,41 @@ class PrepareContextTests(unittest.TestCase):
         self.assertEqual(
             [lesson["storyKey"] for lesson in first["reusableLessons"]],
             ["chapter-private-use", "chapter-emoji"],
+        )
+
+    def test_cited_evidence_is_sorted_by_document_sequence_and_event(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidates, redacted, report = inputs(root)
+            bundle_path = redacted / "trajectory-a.json"
+            bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+            bundle["turns"][0]["sequence"] = 2
+            bundle["turns"].append({
+                "event_id": "event-b", "document_id": "trajectory-a", "item_id": "event-b",
+                "sequence": 1, "role": "assistant", "timestamp": "2036-01-01T00:00:00Z",
+                "text": "Earlier reviewed event.", "redactions": [],
+                "redacted_text": "Earlier reviewed event.",
+            })
+            bundle["turns"].append({
+                "event_id": "event-c", "document_id": "trajectory-a", "item_id": "event-c",
+                "sequence": 3, "role": "user", "timestamp": None,
+                "text": "Uncited neighboring event.", "redactions": [],
+                "redacted_text": "Uncited neighboring event.",
+            })
+            bundle["chars"] += len("Earlier reviewed event.") + len("Uncited neighboring event.")
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+            privacy = json.loads(report.read_text(encoding="utf-8"))
+            privacy["per_trajectory"][0]["turns"] = 3
+            report.write_text(json.dumps(privacy), encoding="utf-8")
+            candidate = json.loads(candidates.read_text(encoding="utf-8"))[0]
+            source = json.loads(candidate["summary"][len("oxygen.story:"):])
+            source["insights"][0]["evidence"] = [{"documentId": "trajectory-a", "eventId": "event-b"}]
+            candidate["summary"] = "oxygen.story:" + json.dumps(source)
+            candidates.write_text(json.dumps([candidate]), encoding="utf-8")
+            output = PREPARE.prepare(candidates, redacted, report)
+        self.assertEqual(
+            [(row["sequence"], row["eventId"]) for row in output["reviewedEvidence"]],
+            [(1, "event-b"), (2, "event-a")],
         )
 
     def test_rejects_internal_controls_and_oversized_privacy_integers(self):
@@ -373,6 +429,8 @@ class PrepareContextTests(unittest.TestCase):
         self.assertEqual(output["reviewedEvidence"], [{
             "documentId": "meeting-a", "eventId": "meeting-a:event-a",
             "documentKind": "meeting",
+            "sequence": 1, "role": "user", "timestamp": None,
+            "redactedText": "safe synthetic reviewed text",
         }])
 
     def test_open_bounded_document_kind_crosses_reviewed_preparation(self):

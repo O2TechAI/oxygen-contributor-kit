@@ -55,7 +55,7 @@ def digest(value: Any) -> str:
     return hashlib.sha256(PREPARE.canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def context_evidence(context: Any) -> tuple[dict[tuple[str, str], str], dict[tuple[str, str], str]]:
+def context_evidence(context: Any) -> tuple[dict[tuple[str, str], Any], dict[tuple[str, str], str]]:
     regeneration = isinstance(context, dict) and context.get("schema") == "oxygen.preference-regeneration-context"
     keys = {"schema", "reusableLessons", "insightScope", "reviewedEvidence", "autoRemoved"} if not regeneration else {
         "schema", "binding", "reusableLessons", "insightScope", "reviewedEvidence", "targets", "exportDigest"}
@@ -81,11 +81,18 @@ def context_evidence(context: Any) -> tuple[dict[tuple[str, str], str], dict[tup
         seen.add(identity); expected.append({"storyKey": identity[0], "insightId": identity[1], "insightAuthorityDigest": lesson["insightAuthorityDigest"]})
     if scope != expected or not isinstance(context["reviewedEvidence"], list):
         raise ValueError("preference context identities or evidence are stale")
-    evidence: dict[tuple[str, str], str] = {}
+    evidence: dict[tuple[str, str], Any] = {}
+    evidence_keys = {"documentId", "eventId", "documentKind"} if regeneration else PREPARE.PREFERENCE_EVIDENCE_KEYS
     for record in context["reviewedEvidence"]:
-        if (not exact(record, {"documentId", "eventId", "documentKind"})
+        if (not exact(record, evidence_keys)
                 or not stable_id(record["documentId"]) or not stable_id(record["eventId"], 1_000)
                 or not PREPARE.valid_document_kind(record["documentKind"])):
+            raise ValueError("preference context has malformed reviewed evidence")
+        if not regeneration and (
+                not PREPARE.nonnegative_integer(record["sequence"]) or record["sequence"] == 0
+                or (record["role"] is not None and not safe_text(record["role"]))
+                or (record["timestamp"] is not None and not safe_text(record["timestamp"]))
+                or not safe_text(record["redactedText"])):
             raise ValueError("preference context has malformed reviewed evidence")
         identity = (record["documentId"], record["eventId"])
         if identity in evidence:
@@ -114,7 +121,11 @@ def presentations(value: Any, options: list[dict[str, str]], bulk: bool = False)
     return True
 
 
-def probe(value: Any, evidence: dict[tuple[str, str], str], scope: dict[tuple[str, str], str]) -> dict[str, Any]:
+def evidence_document_kind(record: Any) -> Any:
+    return record["documentKind"] if isinstance(record, dict) else record
+
+
+def probe(value: Any, evidence: dict[tuple[str, str], Any], scope: dict[tuple[str, str], str]) -> dict[str, Any]:
     if not exact(value, PROBE_KEYS):
         raise ValueError("candidate probe has extra, unknown, or missing fields")
     if not stable_id(value["id"]) or not stable_id(value["documentId"]) or not PREPARE.valid_document_kind(value["documentKind"]) or value["signal"] not in SIGNALS:
@@ -133,7 +144,7 @@ def probe(value: Any, evidence: dict[tuple[str, str], str], scope: dict[tuple[st
     if (not isinstance(event_ids, list) or not 1 <= len(event_ids) <= PREPARE.MAX_PREFERENCE_EVIDENCE_IDS
             or not all(stable_id(event, 1_000) for event in event_ids) or len(set(event_ids)) != len(event_ids)):
         raise ValueError("candidate probe evidence is invalid")
-    if any(evidence.get((value["documentId"], event)) != value["documentKind"] for event in event_ids):
+    if any(evidence_document_kind(evidence.get((value["documentId"], event))) != value["documentKind"] for event in event_ids):
         raise ValueError("candidate probe cites foreign or cross-document evidence")
     options = value["options"]
     if not isinstance(options, list) or len(options) not in {2, 3}:
@@ -151,7 +162,7 @@ def probe(value: Any, evidence: dict[tuple[str, str], str], scope: dict[tuple[st
     return {key: value[key] for key in PROBE_KEYS}
 
 
-def bulk(value: Any, evidence: dict[tuple[str, str], str]) -> dict[str, Any]:
+def bulk(value: Any, evidence: dict[tuple[str, str], Any]) -> dict[str, Any]:
     if not exact(value, BULK_KEYS):
         raise ValueError("candidate bulk decision has extra, unknown, or missing fields")
     if (not stable_id(value["id"]) or not safe_text(value["kind"])

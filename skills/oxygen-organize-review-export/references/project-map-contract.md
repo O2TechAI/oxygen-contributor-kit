@@ -146,9 +146,13 @@ worker may explicitly replace only `handoffs/<shard-id>.proposals.json` and run 
 against the same immutable shard input. Unknown registry IDs, extra worker-authored metadata, and
 invalid mapping syntax fail before any output or receipt and exit nonzero with the fixed safe code
 `SEMANTIC_WORKER_MAPPING_INVALID`;
-invalid registry kind syntax fails during preparation. Neither path echoes rejected values,
-contribution content, paths, tracebacks, or raw exception details. There is no automatic retry,
-rewrite, fallback, or repair.
+malformed JSON, a non-array proposal, overlap, and incomplete shard coverage use the same
+pre-receipt code. Invalid registry kind syntax fails during preparation. Neither path echoes
+rejected values, contribution content, paths, tracebacks, or raw exception details. The recorder
+performs no automatic retry, rewrite, fallback, or repair. The workflow-owning parent may replace
+the proposal and explicitly invoke the recorder again, up to the already documented two correction
+attempts, using the same immutable shard input. Authority, path, I/O, tamper, stale, and installed-
+artifact failures remain fatal `SEMANTIC_WORKER_RECORD_INVALID` failures.
 After the record directory exists, its durable artifact pair is immutable and any differing
 resubmission fails closed. The recorder stages both files together and publishes the directory with
 one no-clobber atomic rename; a staged-write or publication fault exposes neither final artifact and
