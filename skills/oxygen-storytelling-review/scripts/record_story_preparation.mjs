@@ -491,6 +491,23 @@ function preferenceOption(value) {
   return exactKeys(value, ["id", "text"]) && boundedId(value.id, 200) && safeText(value.text);
 }
 
+function preferenceContextEvidence(context) {
+  if (!isObject(context) || context.schema !== "oxygen.preference-context"
+    || !Array.isArray(context.reviewedEvidence)) return null;
+  const evidence = new Map();
+  for (const record of context.reviewedEvidence) {
+    if (!exactKeys(record, ["documentId", "eventId", "documentKind", "sequence", "role", "timestamp", "redactedText"])
+      || !boundedId(record.documentId) || !boundedId(record.eventId, 1_000)
+      || !validPreferenceDocumentKind(record.documentKind) || !nonnegative(record.sequence) || record.sequence === 0
+      || (record.role !== null && !safeText(record.role))
+      || (record.timestamp !== null && !safeText(record.timestamp)) || !safeText(record.redactedText)) return null;
+    const identity = canonicalAuthorityJson([record.documentId, record.eventId]);
+    if (evidence.has(identity)) return null;
+    evidence.set(identity, record.documentKind);
+  }
+  return evidence;
+}
+
 function preferenceProbe(value, evidence, scope) {
   if (!exactKeys(value, probeKeys) || !boundedId(value.id) || !boundedId(value.documentId)
     || !validPreferenceDocumentKind(value.documentKind)
@@ -532,7 +549,8 @@ function preferenceBulk(value, evidenceIds) {
 
 function validatePreference(value, input) {
   const context = input.payload?.preferenceContext;
-  if (!isObject(context) || !Array.isArray(context.reviewedEvidence)
+  const evidence = preferenceContextEvidence(context);
+  if (!evidence
     || !exactKeys(value, preferenceKeys) || !boundedId(value.workflowRunId, 1_000)
     || !nonnegative(value.sourceRevision) || value.sourceRevision < 1
     || value.inputDigest !== input.inputDigest
@@ -542,9 +560,6 @@ function validatePreference(value, input) {
     fail("PREFERENCE_BUNDLE_INVALID");
   }
   rejectMetadata({ probes: value.probes, bulkDecisions: value.bulkDecisions });
-  const evidence = new Map(context.reviewedEvidence.map((record) => [
-    canonicalAuthorityJson([record?.documentId, record?.eventId]), record?.documentKind,
-  ]));
   const evidenceIds = new Set(context.reviewedEvidence.map((record) => record?.eventId));
   const scope = new Map(context.insightScope?.map((item) => [
     canonicalAuthorityJson([item?.storyKey, item?.insightId]), item?.insightAuthorityDigest,

@@ -25,6 +25,9 @@ from tools.llm_redact.merge_and_apply import (  # noqa: E402
 
 
 CONTEXT_SCHEMA = "oxygen.preference-context"
+PREFERENCE_EVIDENCE_KEYS = {
+    "documentId", "eventId", "documentKind", "sequence", "role", "timestamp", "redactedText",
+}
 AUTO_REMOVED_KINDS = frozenset(MERGE_ALLOWED)
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_PREFERENCE_QUESTIONS = 20
@@ -254,7 +257,7 @@ def read_privacy_authority(
     if not bundle_paths:
         raise ValueError("reviewed redaction directory is empty")
 
-    events: dict[tuple[str, str], str] = {}
+    events: dict[tuple[str, str], dict[str, Any]] = {}
     observed_documents: dict[str, tuple[int, int]] = {}
     observed_counts: dict[str, int] = {}
     for path in bundle_paths:
@@ -282,12 +285,23 @@ def read_privacy_authority(
                     or turn["event_id"] != turn["item_id"]
                     or not nonnegative_integer(turn["sequence"]) or turn["sequence"] == 0
                     or not isinstance(turn["text"], str) or not isinstance(turn["redacted_text"], str)
+                    or (turn["role"] is not None and not safe_text(turn["role"]))
+                    or (turn["timestamp"] is not None and not safe_text(turn["timestamp"]))
+                    or not safe_text(turn["redacted_text"])
                     or not isinstance(turn["redactions"], list)):
                 raise ValueError("reviewed redaction turn is malformed")
             identity = (document_id, turn["item_id"])
             if identity in events:
                 raise ValueError("reviewed evidence authority is duplicated")
-            events[identity] = document_kind
+            events[identity] = {
+                "documentId": document_id,
+                "eventId": turn["item_id"],
+                "documentKind": document_kind,
+                "sequence": turn["sequence"],
+                "role": turn["role"],
+                "timestamp": turn["timestamp"],
+                "redactedText": turn["redacted_text"],
+            }
             character_count += len(turn["text"])
             previous_end = 0
             for span in turn["redactions"]:
@@ -342,7 +356,7 @@ def prepare(
 
     lessons: list[dict[str, Any]] = []
     scope: list[dict[str, str]] = []
-    evidence: list[dict[str, str]] = []
+    evidence: list[dict[str, Any]] = []
     seen_story_keys: set[str] = set()
     seen_candidate_ids: set[str] = set()
     seen_identities: set[tuple[str, str]] = set()
@@ -375,10 +389,10 @@ def prepare(
                     raise ValueError("Story Insight cites foreign, raw, or unreviewed evidence")
                 if event_identity not in seen_evidence:
                     seen_evidence.add(event_identity)
-                    evidence.append({
-                        "documentId": event_identity[0], "eventId": event_identity[1],
-                        "documentKind": reviewed[event_identity],
-                    })
+                    evidence.append(reviewed[event_identity].copy())
+    evidence.sort(key=lambda record: (
+        record["documentId"].encode("utf-8"), record["sequence"], record["eventId"].encode("utf-8"),
+    ))
     return {
         "schema": CONTEXT_SCHEMA,
         "reusableLessons": lessons,

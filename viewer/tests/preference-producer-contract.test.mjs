@@ -32,7 +32,8 @@ const context = {
     background: "Reviewed background.", directlyAcquiredExperience: "Reviewed experience.",
     principle: "Reviewed principle." }],
   insightScope: [{ storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: INSIGHT_DIGEST }],
-  reviewedEvidence: [{ documentId: "doc-a", eventId: "event-a", documentKind: "trajectory" }],
+  reviewedEvidence: [{ documentId: "doc-a", eventId: "event-a", documentKind: "trajectory",
+    sequence: 1, role: "user", timestamp: null, redactedText: "A reviewed source set a boundary." }],
   autoRemoved: { total: 0, reversible: true, categories: [] },
 };
 const candidates = {

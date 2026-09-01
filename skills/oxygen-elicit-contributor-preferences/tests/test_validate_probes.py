@@ -25,7 +25,11 @@ def context(count=1):
         "schema": "oxygen.preference-context",
         "reusableLessons": lessons,
         "insightScope": [{key: item[key] for key in ("storyKey", "insightId", "insightAuthorityDigest")} for item in lessons],
-        "reviewedEvidence": [{"documentId": "trajectory-a", "eventId": "event-a", "documentKind": "trajectory"}],
+        "reviewedEvidence": [{
+            "documentId": "trajectory-a", "eventId": "event-a", "documentKind": "trajectory",
+            "sequence": 1, "role": "user", "timestamp": None,
+            "redactedText": "The reviewed event records a deployment boundary.",
+        }],
         "autoRemoved": {"total": 1, "reversible": True, "categories": [{"kind": "credential", "count": 1}]},
     }
 
@@ -52,6 +56,7 @@ def bulk(identifier="bulk-a", evidence=None):
 
 def regeneration_context():
     value = context(); value.pop("autoRemoved"); value["schema"] = "oxygen.preference-regeneration-context"
+    value["reviewedEvidence"] = [{key: item[key] for key in ("documentId", "eventId", "documentKind")} for item in value["reviewedEvidence"]]
     value["binding"] = {"workflowRunId": "run-a", "sourceRevision": 7, "activeStoryDigest": "a" * 64,
                         "serverVersion": 3, "lifecycleDigest": "b" * 64}
     value["targets"] = [{"id": "probe-a", "storyKey": "chapter-0", "insightId": "lesson-0",
@@ -94,6 +99,20 @@ class FinalizerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "completed-zero"):
             VALIDATOR.finalize(context(), {"probes": [], "bulkDecisions": [], "setAside": 1}, "run-a", 7)
 
+    def test_regular_context_requires_exact_enriched_evidence_and_regeneration_stays_identity_only(self):
+        for mutation in (lambda row: row.pop("redactedText"), lambda row: row.update({"text": "not allowed"})):
+            invalid = context()
+            mutation(invalid["reviewedEvidence"][0])
+            with self.subTest(invalid=invalid["reviewedEvidence"][0]):
+                with self.assertRaisesRegex(ValueError, "reviewed evidence"):
+                    VALIDATOR.finalize(invalid, {"probes": [], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
+        self.assertEqual(
+            VALIDATOR.finalize_regeneration(
+                regeneration_context(), {"probes": [probe()], "bulkDecisions": [], "setAside": 0},
+            )["probes"][0]["id"],
+            "probe-a",
+        )
+
     def test_reordering_is_byte_stable(self):
         first = VALIDATOR.finalize(context(2), {"probes": [probe("probe-z", 1), probe("probe-a", 0)], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
         second = VALIDATOR.finalize(context(2), {"probes": [probe("probe-a", 0), probe("probe-z", 1)], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
@@ -114,8 +133,10 @@ class FinalizerTests(unittest.TestCase):
         bounded_context = context()
         event_ids = [f"event-{index:03d}" for index in range(501)]
         bounded_context["reviewedEvidence"] = [
-            {"documentId": "trajectory-a", "eventId": event_id, "documentKind": "trajectory"}
-            for event_id in event_ids
+            {"documentId": "trajectory-a", "eventId": event_id, "documentKind": "trajectory",
+             "sequence": index + 1, "role": "user", "timestamp": None,
+             "redactedText": f"Reviewed event {event_id}."}
+            for index, event_id in enumerate(event_ids)
         ]
         candidate = probe()
         candidate["eventIds"] = event_ids[:500]

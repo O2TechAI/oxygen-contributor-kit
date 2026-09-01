@@ -254,6 +254,7 @@ function semanticAuthority({
     revision: 1,
     sourceDigest: digest(units.map((unit) => unit.members[0])),
     universeDigest: digest(units.flatMap((unit) => unit.members)),
+    registryDigest: "d".repeat(64),
     units,
   };
   return { ...core, manifestDigest: digest(core) };
@@ -939,6 +940,7 @@ test("one oversized owner bundle fails before Story lane installation instead of
       revision: initial.revision,
       sourceDigest: initial.sourceDigest,
       universeDigest: initial.universeDigest,
+      registryDigest: initial.registryDigest,
       units,
     };
     const semantic = { ...core, manifestDigest: digest(core) };

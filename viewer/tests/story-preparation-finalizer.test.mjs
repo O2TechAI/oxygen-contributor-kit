@@ -137,7 +137,7 @@ async function fixture({
     membershipDigest: digest([{ id: eventIds.get(key), sourceDigest: digest(key) }]),
   })).sort((left, right) => utf8(left.id, right.id));
   const semanticCore = { projectId: "project", revision: 1, sourceDigest: "c".repeat(64),
-    universeDigest: digest([...eventIds.values()].sort(utf8)), units: semanticUnits };
+    universeDigest: digest([...eventIds.values()].sort(utf8)), registryDigest: "d".repeat(64), units: semanticUnits };
   const semantic = { ...semanticCore, manifestDigest: digest(semanticCore) };
   const coverageCore = {
     revision: 1, semanticManifestRevision: 1, semanticManifestDigest: semantic.manifestDigest,
@@ -265,6 +265,8 @@ async function fixture({
           insightScope: preference.insightScope,
           reviewedEvidence: [...eventIds.values()].map((eventId) => ({
             documentId: "doc", eventId, documentKind,
+            sequence: eventId === eventIds.get("z") ? 2 : 1, role: "user", timestamp: null,
+            redactedText: `Reviewed ${eventId}.`,
           })),
           autoRemoved: preference.autoRemoved,
         },

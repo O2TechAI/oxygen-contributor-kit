@@ -253,7 +253,7 @@ test("reviewed meeting narrative preserves exact bound text outside validation m
     const semanticCore = {
       projectId: "Synthetic Canary", revision: 1,
       sourceDigest: independentDigest(["doc:a"]),
-      universeDigest: independentDigest(["doc:a"]), units: [unit],
+      universeDigest: independentDigest(["doc:a"]), registryDigest: "d".repeat(64), units: [unit],
     };
     const semantic = { ...semanticCore, manifestDigest: independentDigest(semanticCore) };
     const semanticPath = join(root, "semantic.json");
