@@ -355,7 +355,7 @@ test("story progress counts resolved AI versions and presents zero as affirmativ
   assert.doesNotMatch(storyEditor, /source\.insights\.length\s*\?\s*"No AI Insights required"/);
 });
 
-test("story Timeline executes the exact source mapping without manufacturing fields", () => {
+test("story Timeline preserves source metadata and renders the local transition empty state", () => {
   const transition = { before: "Manual review", after: "Approved release" };
   const chips = ["reviewed", "local-only"];
   const present = timelinePresentation({
@@ -386,6 +386,7 @@ test("story Timeline executes the exact source mapping without manufacturing fie
   assert.match(timelineRows, /event\.timelineMarker === "ai_insight" && <strong>\{workspaceUi\.en\.timelineAiInsight\}<\/strong>/);
   assert.match(timelineRows, /event\.kind && <span>\{storyKindLabel\(event\.kind,"en"\)\}<\/span>/);
   assert.match(timelineRows, /event\.before && event\.after/);
+  assert.match(timelineRows, /No evidence-supported transition/);
   assert.match(timelineRows, /event\.chips && event\.chips\.length > 0/);
   assert.doesNotMatch(timelineRows, /Date unavailable|日期不可用/);
 });

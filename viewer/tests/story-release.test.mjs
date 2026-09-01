@@ -574,8 +574,9 @@ async function serverFixture({
   includeHuman = false,
   storyPrivate = PRIVATE,
   initiallyRedacted = true,
+  sourceOverrides = {},
 } = {}) {
-  const currentSource = source(sourceInsights, {}, storyPrivate);
+  const currentSource = source(sourceInsights, sourceOverrides, storyPrivate);
   const item = {
     id: evidence.eventId,
     document_id: evidence.documentId,
@@ -1378,10 +1379,16 @@ test("a confirmation timestamp mutation during assembly fails closed", async () 
 test("story HTML and ZIP use the same canonical reviewed release bytes", async () => {
   const safeHtmlEscapeSentinel = "SAFE_HTML_ESCAPE_</script><script>";
   const exactSelectedBytes = "EXACT_AGENT_SELECTED_BYTES";
+  const chipSentinel = "SUPPORTED_CHIP_MUST_NOT_RELEASE";
+  const transition = {
+    before: "The release boundary was implicit.",
+    after: "The release boundary is explicit and remains under human review.",
+  };
   const { db } = await serverFixture({
     sourceInsights: [insight("insight-html-escape", "story-block-safe", {
       background: safeHtmlEscapeSentinel,
     })],
+    sourceOverrides: { chips: [chipSentinel], transition },
   });
   const selectedTarget = db.storyPrivacyTargets.find((row) => (
     row.target_id === "chapter-release::overview"
@@ -1404,6 +1411,10 @@ test("story HTML and ZIP use the same canonical reviewed release bytes", async (
   assert.match(html, new RegExp(exactSelectedBytes));
   assert.match(zipEntry.data, new RegExp(exactSelectedBytes));
   assert.match(zipEntry.data, new RegExp(safeHtmlEscapeSentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(release.story.chapters[0].en.transition.before, transition.before);
+  assert.equal(release.story.chapters[0].en.transition.after, transition.after);
+  assert.doesNotMatch([release.serializedStory, html, zipEntry.data].join("\n"),
+    /No evidence-supported transition|SUPPORTED_CHIP_MUST_NOT_RELEASE/u);
   assert.equal(html.includes(safeHtmlEscapeSentinel), false, "HTML embedding must escape script-sensitive JSON copy");
   assert.deepEqual(JSON.parse(embedded), JSON.parse(zipEntry.data));
 

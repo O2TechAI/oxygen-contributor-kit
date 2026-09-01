@@ -123,7 +123,7 @@ Each Story worker reads its manifest `inputPath` and writes a JSON array with ex
 phase-free proposal per assigned owner:
 
 ```json
-[{"ownerId":"coverage-owner-id","chapter":{"title":"...","overview":"...","people":[],"story":{"blocks":[]},"insights":[],"evidence":{"primary":{"documentId":"...","eventId":"..."},"supporting":[]}}}]
+[{"ownerId":"coverage-owner-id","chapter":{"title":"...","overview":"...","transition":{"before":"...","after":"current open boundary"},"chips":["supported descriptor"],"people":[],"story":{"blocks":[]},"insights":[],"evidence":{"primary":{"documentId":"...","eventId":"..."},"supporting":[]}}}]
 ```
 
 Each row has exactly `ownerId` and `chapter`. `ownerId` is only the assigned selector. `chapter`
@@ -131,13 +131,16 @@ contains existing authorable Story content and empty `insights`; it must not con
 Phase, Coverage, exclusions, receipt, or authority. Primary and supporting Evidence must belong to
 the complete assigned owner bundle. The parent does not rewrite prose, People, Evidence, titles,
 overviews, or blocks while assigning Phase.
+New-proposal `chips` and optional `transition` semantics are owned by
+[story-data-contract.md](story-data-contract.md); this transport does not create another metadata
+schema or validator.
 
 After reading all complete proposals, the parent writes one transient editorial-review row per
 owner. This is pre-receipt validation input and is never copied into Story output, receipts,
 authority, Viewer state, release HTML, or ZIP:
 
 ```json
-[{"ownerId":"coverage-owner-id","inputDigest":"current-story-lane-input-digest","proposalDigest":"sha256-of-canonical-proposal","criteria":{"beginningIsUnderstandable":true,"participantsAreIdentifiable":true,"chronologyIsTraceable":true,"responsesAndChangesAreExplained":true,"arcIsCoherent":true,"endingIsClear":true,"interactionsAreEvidenceSupported":true,"proseIsReadable":true}}]
+[{"ownerId":"coverage-owner-id","inputDigest":"current-story-lane-input-digest","proposalDigest":"sha256-of-canonical-proposal","criteria":{"beginningIsUnderstandable":true,"participantsAreIdentifiable":true,"chronologyIsTraceable":true,"responsesAndChangesAreExplained":true,"arcIsCoherent":true,"endingIsClear":true,"claimsAreEvidenceSupported":true,"proseIsReadable":true}}]
 ```
 
 `inputDigest` is the current immutable Story lane input digest from `story/shards.json`; it prevents
@@ -148,6 +151,9 @@ decisions by reading the prose and Evidence, not through a word/paragraph count,
 keyword detector, domain enum, or mandatory template. A negative decision triggers a specific
 proposal-only correction naming the missing narrative relationship; the corrected proposal is
 re-read and receives a new digest-bound review against the byte-identical worker input.
+`claimsAreEvidenceSupported` covers factual prose, People, optional transition, chips, and all
+interaction claims. It broadens the prior interaction question within this same eight-criterion
+gate; it is not a ninth criterion or a second semantic authority.
 
 Each Insight worker reads its manifest `inputPath` and returns exactly one record for every
 assigned Story key, including an empty array when no Insight is warranted:

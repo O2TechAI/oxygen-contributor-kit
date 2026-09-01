@@ -16,7 +16,7 @@ import {
   validateStorySourcePackage,
 } from "../lib/story-readiness.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
-import { parseStorySource } from "../lib/timeline.ts";
+import { parseStorySource, timelinePresentation } from "../lib/timeline.ts";
 import { canonicalPreferenceQuestionBatch, deriveStoryReleaseTargetContents } from "../lib/story-preparation.ts";
 
 const repository = resolve(import.meta.dirname, "../..");
@@ -114,7 +114,7 @@ const acceptedStoryEditorialCriteria = () => ({
   responsesAndChangesAreExplained: true,
   arcIsCoherent: true,
   endingIsClear: true,
-  interactionsAreEvidenceSupported: true,
+  claimsAreEvidenceSupported: true,
   proseIsReadable: true,
 });
 
@@ -292,6 +292,7 @@ function storySource(suffix, semantic, coverage, insights = [], {
     phase: { id: `phase-${suffix}`, label: localized.phase },
     title: localized.title,
     overview: localized.overview,
+    chips: [language === "zh" ? "审阅证据" : `reviewed canary ${suffix.toUpperCase()}`],
     people: [{
       id: `person-${suffix}`,
       releaseLabel: localized.person,
@@ -1159,6 +1160,115 @@ test("multi-owner multi-shard recording accepts one cross-shard Phase and inject
   }
 });
 
+test("generated Story transition and supported chips survive recording and composition", async () => {
+  const value = await prepareStoryOnly({ suffixes: ["a", "b"] });
+  try {
+    assert.equal(value.prepared.status, 0, value.prepared.stderr);
+    const records = ["a", "b"].map((suffix) => ({
+      id: `event-${suffix}`,
+      story: storySource(suffix, value.semantic, value.boundary.coverageAuthority),
+    }));
+    records[0].story.transition = {
+      before: "The reviewed boundary was not yet explicit.",
+      after: "The reviewed boundary is explicit; release remains open pending human review.",
+    };
+    records[0].story.chips = ["explicit reviewed boundary", "open human review"];
+    records[1].story.chips = ["reviewed evidence only"];
+
+    const batch = await storyBatchFiles(value.transport, value.root, records, "timeline-metadata");
+    runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "0"]);
+    const composedPath = join(value.root, "timeline-metadata-base.json");
+    runOk(process.execPath, [prepare, "compose", "story", value.transport, composedPath]);
+    const stories = (await readJson(composedPath)).map((row) => parseStorySource(row.summary));
+    const changed = stories.find((story) => story.key === "story-a");
+    const unchanged = stories.find((story) => story.key === "story-b");
+    assert.deepEqual(changed.transition, records[0].story.transition);
+    assert.deepEqual(changed.chips, records[0].story.chips);
+    assert.deepEqual(timelinePresentation(changed), {
+      before: records[0].story.transition.before,
+      after: records[0].story.transition.after,
+      chips: records[0].story.chips,
+    });
+    assert.equal(Object.hasOwn(unchanged, "transition"), false);
+    assert.deepEqual(unchanged.chips, records[1].story.chips);
+  } finally {
+    await value.cleanup();
+  }
+});
+
+test("new Story chips fail structurally or at the exact claims editorial gate before receipt", async () => {
+  const value = await prepareStoryOnly({ suffixes: ["a"] });
+  try {
+    assert.equal(value.prepared.status, 0, value.prepared.stderr);
+    const records = [{
+      id: "event-a",
+      story: storySource("a", value.semantic, value.boundary.coverageAuthority),
+    }];
+    const batch = await storyBatchFiles(value.transport, value.root, records, "chip-contract");
+    const proposalPath = join(batch.proposalDirectory, `${batch.manifest.shards[0].id}.json`);
+    const validProposal = await readJson(proposalPath);
+    const invoke = () => run(process.execPath, [record, value.transport, "story",
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", "0"]);
+    const assertNoAuthority = () => {
+      assert.equal(existsSync(join(value.transport, "story", "records")), false);
+    };
+    const invalidCases = {
+      missing: (proposal) => { delete proposal[0].chapter.chips; },
+      empty: (proposal) => { proposal[0].chapter.chips = []; },
+      duplicate: (proposal) => { proposal[0].chapter.chips = ["supported", "supported"]; },
+      malformed: (proposal) => { proposal[0].chapter.chips = ["   "]; },
+      overLimit: (proposal) => { proposal[0].chapter.chips = Array.from({ length: 13 }, (_, i) => `chip-${i}`); },
+      overBound: (proposal) => { proposal[0].chapter.chips = ["x".repeat(201)]; },
+    };
+    for (const [name, mutate] of Object.entries(invalidCases)) {
+      const proposal = structuredClone(validProposal);
+      mutate(proposal);
+      await json(proposalPath, proposal);
+      const rejected = invoke();
+      assert.notEqual(rejected.status, 0, name);
+      assert.match(rejected.stderr, /^STORY_PROPOSAL_INVALID\r?\n$/u, name);
+      assertNoAuthority();
+    }
+
+    await json(proposalPath, validProposal);
+    const obsoleteKeyReview = storyEditorialReviews(validProposal, batch.manifest.inputDigest);
+    obsoleteKeyReview[0].criteria.interactionsAreEvidenceSupported = true;
+    delete obsoleteKeyReview[0].criteria.claimsAreEvidenceSupported;
+    await json(batch.editorialReviewPath, obsoleteKeyReview);
+    const obsoleteKey = invoke();
+    assert.notEqual(obsoleteKey.status, 0);
+    assert.match(obsoleteKey.stderr, /^STORY_EDITORIAL_REVIEW_INVALID\r?\n$/u);
+    assertNoAuthority();
+
+    const unsupportedProposal = structuredClone(validProposal);
+    unsupportedProposal[0].chapter.chips = ["Unsupported speculative success"];
+    await json(proposalPath, unsupportedProposal);
+    await refreshStoryEditorialReview(batch, {
+      "story-a": { claimsAreEvidenceSupported: false },
+    });
+    const unsupported = invoke();
+    assert.notEqual(unsupported.status, 0);
+    assert.match(unsupported.stderr, /^STORY_EDITORIAL_REVIEW_REJECTED\r?\n$/u);
+    assertNoAuthority();
+
+    await json(proposalPath, validProposal);
+    await refreshStoryEditorialReview(batch);
+    runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "1"]);
+    const output = await readJson(join(
+      value.transport, "story", "records", batch.manifest.shards[0].id, "output.json",
+    ));
+    assert.deepEqual(output[0].story.chips, validProposal[0].chapter.chips);
+    assert.equal(existsSync(join(
+      value.transport, "story", "records", batch.manifest.shards[0].id, "receipt.json",
+    )), true);
+  } finally {
+    await value.cleanup();
+  }
+});
+
 test("real multi-shard manifests reject missing, duplicate, overlap, and foreign assignments", async () => {
   const flow = await createFlow({
     suffixes: ["a", "b", "c", "d", "e"], narrativeBytes: 300_000,
@@ -1628,6 +1738,7 @@ function combinedStory(semantic, coverage, collapsed) {
     phase: { id: "phase-combined", label: "Reviewed phase" },
     title: "Combined canary",
     overview: "Two reviewed actor signatures remain distinct.",
+    chips: ["two supported participants"],
     people: collapsed
       ? [person("combined", references)]
       : [person("a", [references[0]]), person("b", [references[1]])],

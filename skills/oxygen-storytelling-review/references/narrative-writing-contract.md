@@ -121,7 +121,8 @@ determines all of the following for that exact proposal:
 4. The prose shows supported response and change rather than merely enumerating facts.
 5. The Chapter forms one coherent arc.
 6. The ending explains what changed or what remains unresolved.
-7. Every claimed interaction is supported by exact bound reviewed Evidence.
+7. Every factual claim in prose, People, transition, and chips is supported by exact bound reviewed
+   Evidence, including every claimed interaction.
 8. The prose is readable enough that a human could voluntarily continue.
 
 The parent records those eight decisions in the transient proposal-digest-bound editorial review
@@ -129,6 +130,8 @@ input. The batch recorder rejects a missing, stale, foreign, incomplete, or nega
 reading Phase assignments and before creating any Story output or receipt. This is a semantic
 editorial decision by the parent, not a prose score, word or paragraph count, keyword detector,
 domain enum, or mandatory Story template.
+The transient exact key for criterion 7 is `claimsAreEvidenceSupported`; interaction support remains
+part of that one claim-support decision.
 
 Reject before receipt when the proposal mechanically creates one Chapter per semantic unit or one
 block per Evidence row; isolates one-sentence facts despite a supported exchange; repeatedly uses

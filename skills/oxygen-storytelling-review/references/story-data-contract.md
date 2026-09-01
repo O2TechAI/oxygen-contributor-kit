@@ -146,7 +146,15 @@ that exact owner ID. Story workers return phase-free authorable Chapter proposal
 author schema, keys, Phase, Coverage, exclusions, receipts, or authority. The parent assigns Phase
 only after every complete Chapter exists and has been ordered with the production comparator.
 
-`kind`, `transition`, and `chips` are optional presentation metadata. Emit `transition` only for an Evidence-supported before/after change. Emit at most 12 unique supported chips, each at most 200 characters. Absence is valid.
+The source parser keeps `kind`, `transition`, and `chips` optional so historical and current stored
+Stories remain readable when that metadata is absent. It does not synthesize missing metadata.
+
+New Story worker proposals recorded through `record_story_preparation.mjs` must include a nonempty
+`chips` array. Emit at most 12 unique chips, each at most 200 characters. Chips are concise,
+Evidence-supported descriptors, never filler, SEO terms, speculative motive, or unsupported
+outcome. Emit `transition` only for an Evidence-supported before/after change. For ongoing work,
+`after` states the current or open boundary rather than fabricated success; omit `transition` when
+no supported change exists.
 
 ## People And Story Blocks
 
