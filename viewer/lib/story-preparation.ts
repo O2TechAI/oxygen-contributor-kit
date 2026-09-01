@@ -2,11 +2,18 @@ import { canonicalAuthorityJson, type StoryCandidateRow } from "./story-readines
 import { validActivatedSourceRevision } from "./authority-validation.mjs";
 import {
   parseStorySource,
+  type StoryLanguage,
   type StoryReleaseTarget,
   type StoryReleaseTargetDescriptor,
   type StoryReleaseTargetName,
   type StorySource,
 } from "./timeline.ts";
+import {
+  hasRequiredProbePresentation,
+  normalizeProbePresentations,
+  type PreferenceOptionPresentation,
+  type ProbePresentations,
+} from "./preference-presentation.ts";
 
 export const STORY_PREPARATION_SCHEMA = "oxygen.story-preparation" as const;
 export const STORY_PREPARATION_LANES = [
@@ -65,8 +72,21 @@ export type StoryPreparationManifest = {
   schema: typeof STORY_PREPARATION_SCHEMA;
   workflowRunId: string;
   sourceRevision: number;
+  languagePolicy: StoryLanguagePolicy;
   receipts: StoryPreparationReceipt[];
   storyPrivacy: StoryPreparationPrivacyOutput;
+};
+
+export type StoryLanguagePolicy = {
+  schema: "oxygen.story-language-policy";
+  workflowRunId: string;
+  sourceRevision: number;
+  sourceDigest: string;
+  sourcePrivacyDigest: string;
+  sourceInputDigest: string;
+  detectedLanguage: StoryLanguage | "mixed";
+  selection: "all-english" | "all-chinese" | "preserve-per-story";
+  stories: Array<{ storyKey: string; language: StoryLanguage }>;
 };
 
 export type PreferenceBatchAuthority = {
@@ -76,6 +96,11 @@ export type PreferenceBatchAuthority = {
   outputDigest: string;
   outputCount: number;
   insightScope: PreferenceInsightBinding[];
+  probes: Array<{
+    storyKey: string;
+    options: PreferenceOptionPresentation[];
+    presentations?: ProbePresentations;
+  }>;
   lifecycleDigest?: string;
 };
 
@@ -274,7 +299,7 @@ function insightLaneOutput(rows: StoryCandidateRow[], stories: StorySource[]) {
 
 async function reusableLessonOutput(stories: StorySource[]) {
   return Promise.all(stories.flatMap((story) => story.insights.map(async (insight) => ({
-    storyKey: story.key, insightId: insight.id,
+    storyKey: story.key, insightId: insight.id, language: story.language,
     insightAuthorityDigest: await storyPreparationDigest(insightAuthorityValue(story.key, insight)),
     ...(insight.title === undefined ? {} : { title: insight.title }),
     background: insight.background, directlyAcquiredExperience: insight.directlyAcquiredExperience,
@@ -420,12 +445,46 @@ export async function normalizeStoryPrivacyOutput(
 
 const mismatch = (code: string): StoryPreparationValidation => ({ ok: false, code });
 
+export function normalizeStoryLanguagePolicy(
+  input: unknown,
+  workflowRunId: string,
+  sourceRevision: number,
+): StoryLanguagePolicy | null {
+  if (!isObject(input) || !onlyKeys(input, [
+    "schema", "workflowRunId", "sourceRevision", "sourceDigest", "sourcePrivacyDigest",
+    "sourceInputDigest", "detectedLanguage", "selection", "stories",
+  ]) || input.schema !== "oxygen.story-language-policy"
+    || input.workflowRunId !== workflowRunId || input.sourceRevision !== sourceRevision
+    || !validActivatedSourceRevision(input.sourceRevision)
+    || ![input.sourceDigest, input.sourcePrivacyDigest, input.sourceInputDigest]
+      .every((digest) => typeof digest === "string" && digestPattern.test(digest))
+    || !["en", "zh", "mixed"].includes(String(input.detectedLanguage))
+    || !["all-english", "all-chinese", "preserve-per-story"].includes(String(input.selection))
+    || !Array.isArray(input.stories) || input.stories.length === 0) return null;
+  const stories: StoryLanguagePolicy["stories"] = [];
+  for (const story of input.stories) {
+    if (!isObject(story) || !onlyKeys(story, ["storyKey", "language"])
+      || !stableId(story.storyKey) || (story.language !== "en" && story.language !== "zh")) return null;
+    stories.push({ storyKey: story.storyKey, language: story.language });
+  }
+  if (new Set(stories.map((story) => story.storyKey)).size !== stories.length
+    || canonicalAuthorityJson(stories) !== canonicalAuthorityJson(
+      [...stories].sort((left, right) => compareUtf8(left.storyKey, right.storyKey)),
+    )
+    || (input.detectedLanguage === "en" && input.selection !== "all-english")
+    || (input.detectedLanguage === "zh" && input.selection !== "all-chinese")
+    || (input.detectedLanguage !== "mixed" && input.selection === "preserve-per-story")
+    || (input.selection === "all-english" && stories.some((story) => story.language !== "en"))
+    || (input.selection === "all-chinese" && stories.some((story) => story.language !== "zh"))) return null;
+  return { ...(input as unknown as StoryLanguagePolicy), stories };
+}
+
 export async function validateStoryPreparationManifest(
   input: unknown,
   context: StoryPreparationContext,
 ): Promise<StoryPreparationValidation> {
   if (!isObject(input) || !onlyKeys(input, [
-    "schema", "workflowRunId", "sourceRevision", "receipts", "storyPrivacy",
+    "schema", "workflowRunId", "sourceRevision", "languagePolicy", "receipts", "storyPrivacy",
   ]) || input.schema !== STORY_PREPARATION_SCHEMA
     || input.workflowRunId !== context.workflowRunId
     || !validActivatedSourceRevision(context.sourceRevision)
@@ -451,6 +510,21 @@ export async function validateStoryPreparationManifest(
   }
   const storyKeys = sortedUniqueIds(stories.map((story) => story.key));
   if (!storyKeys) return mismatch("STORY_PREPARATION_SCOPE_INVALID");
+  const languagePolicy = normalizeStoryLanguagePolicy(
+    input.languagePolicy,
+    context.workflowRunId,
+    context.sourceRevision,
+  );
+  if (!languagePolicy) return mismatch("STORY_PREPARATION_LANGUAGE_POLICY_INVALID");
+  const languagePolicyDigest = await storyPreparationDigest(languagePolicy);
+  const candidateLanguages = [...stories].map((story) => ({
+    storyKey: story.key,
+    language: story.language,
+  })).sort((left, right) => compareUtf8(left.storyKey, right.storyKey));
+  if (canonicalAuthorityJson(candidateLanguages) !== canonicalAuthorityJson(languagePolicy.stories)
+    || stories.some((story) => story.languagePolicyDigest !== languagePolicyDigest)) {
+    return mismatch("STORY_PREPARATION_LANGUAGE_POLICY_STALE");
+  }
   const lessonOutput = await reusableLessonOutput(stories);
   const insightScope = canonicalPreferenceInsightScope(lessonOutput.map(({
     storyKey, insightId, insightAuthorityDigest,
@@ -476,6 +550,15 @@ export async function validateStoryPreparationManifest(
     || canonicalAuthorityJson(context.preference.insightScope) !== canonicalAuthorityJson(insightScope)) {
     return mismatch("STORY_PREPARATION_PREFERENCE_AUTHORITY_INVALID");
   }
+  const storyLanguages = new Map(stories.map((story) => [story.key, story.language]));
+  if (!Array.isArray(context.preference.probes)
+    || context.preference.probes.some((probe) => {
+      const language = storyLanguages.get(probe.storyKey);
+      const presentations = normalizeProbePresentations(probe.presentations, probe.options);
+      return !language || presentations === null
+        || canonicalAuthorityJson(presentations) !== canonicalAuthorityJson(probe.presentations)
+        || !hasRequiredProbePresentation(presentations, language);
+    })) return mismatch("STORY_PREPARATION_PREFERENCE_PRESENTATION_INVALID");
 
   const storyOutput = storyLaneOutput(context.storyCandidates, stories);
   const completeStoryOutput = finalStoryOutput(context.storyCandidates, stories);

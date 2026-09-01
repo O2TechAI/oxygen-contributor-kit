@@ -160,7 +160,9 @@ Rules that decide whether this works:
   is a single option.
 - Always include both escape hatches: "Something else" and "Nothing worth recording here". A
   probe with no exit forces a false positive into the dataset.
-- Write the recap in the contributor's own language, matching the source.
+- Write the recap in the linked Story language required by the canonical
+  [Story language contract](../oxygen-storytelling-review/references/bilingual-contract.md); keep
+  Preference identity and Insight binding language-free.
 - Recap ≤ 3 sentences. State what they were doing, what friction occurred, and how it ended.
 - Never quote unsafe content that Stage 1 removed.
 - Ask about the preference, not about the events. "Which of these should the agent remember?"

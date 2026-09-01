@@ -105,7 +105,9 @@ const sourceInsight = {
   evidence: [evidence],
 };
 const source = {
-  schema: "oxygen.story",
+    schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
   key: "chapter-one",
   phase: { id: "phase-one", label: "Build" },
   title: "Stable title",
@@ -326,6 +328,8 @@ function stagedSource(index) {
   const reference = { documentId:"staged-doc", eventId:`staged-event-${index}` };
   return {
     schema:"oxygen.story",
+    language:"en",
+    languagePolicyDigest:"f".repeat(64),
     key:`staged-chapter-${index}`,
     phase:{ id:"review", label:"Review" },
     title:`Safe staged title ${index}`,

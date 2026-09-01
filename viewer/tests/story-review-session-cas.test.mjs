@@ -43,7 +43,9 @@ function serverContract() {
 
 const storyEvidence = { documentId: "story-doc", eventId: "story-doc:story-item" };
 const storySource = {
-  schema: "oxygen.story",
+    schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
   key: "story-chapter",
   phase: { id: "phase-review", label: "Review" },
   title: "Synthetic story Chapter",

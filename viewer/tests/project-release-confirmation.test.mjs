@@ -182,6 +182,8 @@ function source(key, itemId, index, insights = []) {
   const evidence = { documentId: "release-doc", eventId: itemId };
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key,
     phase: { id: `phase-${index}`, label: `Phase ${index}` },
     kind: "validation",
@@ -496,7 +498,10 @@ async function setup({ anonymization = false, preference = false } = {}) {
   const probe = preference ? { id:"preference-question", ...preferenceScope[0], documentId:"release-doc",
     documentKind:"trajectory", eventIds:["release-doc:event-1"], timestamp:null, signal:"explicit_rule",
     score:90, turns:2, recap:"The reviewed event records a release boundary.", question:"Keep this release boundary?",
-    options:[{id:"yes",text:"Keep it."},{id:"no",text:"Do not keep it."}], presentations:{},
+    options:[{id:"yes",text:"Keep it."},{id:"no",text:"Do not keep it."}],
+    presentations:{ en:{ recap:"The reviewed event records a release boundary.",
+      question:"Keep this release boundary?",
+      options:[{id:"yes",text:"Keep it."},{id:"no",text:"Do not keep it."}] } },
     allowOther:true, allowSkip:true } : null;
   const preferenceInputDigest = await storyPreparationDigest(reusableLessons);
   const preferenceDigest = await storyPreparationDigest(canonicalPreferenceQuestionBatch(probe ? [probe] : [], []));
@@ -1029,8 +1034,13 @@ test("production Preference regeneration preserves history and rolls back atomic
     assert.match(result.stderr, /regeneration is foreign or unchanged/u);
     candidate.question = "Keep the revised release boundary?";
     candidate.options = [{id:"yes",text:"Keep the revised boundary."},{id:"no",text:"Do not keep it."}];
-    candidate.presentations = { zh:{ recap:"审阅事件记录了修订后的发布边界。", question:"保留修订后的发布边界吗？",
-      options:[{id:"yes",text:"保留修订后的边界。"},{id:"no",text:"不保留。"}] } };
+    candidate.presentations = {
+      en:{ recap:"The reviewed event records a revised release boundary.",
+        question:"Keep the revised release boundary?",
+        options:[{id:"yes",text:"Keep the revised boundary."},{id:"no",text:"Do not keep it."}] },
+      zh:{ recap:"审阅事件记录了修订后的发布边界。", question:"保留修订后的发布边界吗？",
+        options:[{id:"yes",text:"保留修订后的边界。"},{id:"no",text:"不保留。"}] },
+    };
     await writeFile(candidatesPath, JSON.stringify({ probes:[candidate], bulkDecisions:[], setAside:0 }));
     result = await runPython([validateProbes,"--regeneration","--context",contextPath,
       "--candidates",candidatesPath,"--output",importPath]);

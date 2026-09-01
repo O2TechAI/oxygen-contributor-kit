@@ -88,6 +88,8 @@ type StoryCoverage = {
 type StorySource = {
   schema: "oxygen.story";
   key: string;
+  language: "en" | "zh";
+  languagePolicyDigest: string;
   phase: { id: string; label: string };
   kind?: StoryKind;
   title: string;
@@ -108,7 +110,7 @@ type StorySource = {
 };
 ```
 
-`key` is the stable Chapter identity. `phase.id`, `people[].id`, `story.blocks[].id`, and `insights[].id` are stable primitive-string identities. Display titles, rendered prose, array position, numeric coercion, and localized text are not identities.
+`key` is the stable Chapter identity. `phase.id`, `people[].id`, `story.blocks[].id`, and `insights[].id` are stable primitive-string identities. Display titles, rendered prose, array position, numeric coercion, and language are not identities. `language` and `languagePolicyDigest` are required canonical metadata owned by [bilingual-contract.md](bilingual-contract.md); old or malformed sources do not receive a fallback.
 
 ## Evidence Rules
 
@@ -119,6 +121,9 @@ Each Evidence reference has `documentId`, `eventId`, and optional `label`. For a
 Person, Story-block, and Insight evidence must all belong to the Chapter evidence set. The Quote Evidence is implicit required Insight grounding even when the broader top-level `evidence` array is empty. Evidence belonging to an excluded semantic unit cannot support Story copy.
 
 ## Chapter, Phase, And Ordering
+
+Phase IDs and labels remain English for every Story language. Authorable Story language selection
+is defined only in [bilingual-contract.md](bilingual-contract.md).
 
 Candidate rows use one deterministic source-identity order. A strict timezone-qualified RFC3339
 timestamp is normalized as an absolute instant and may establish chronology across documents.
@@ -349,6 +354,11 @@ type ReviewedStoryRelease = {
   }>;
 };
 ```
+
+The existing release envelope remains one authority. Its reviewed content is selected and edited
+using the canonical `StorySource.language`; it is not a declaration that English is canonical and
+must not be forked into per-language release histories. See
+[bilingual-contract.md](bilingual-contract.md).
 
 An accepted AI Insight is nested beside the same reviewed Story passage selected by
 `anchorStoryBlockId` and serializes the exact accepted safe `quote.text`. The Quote has its own

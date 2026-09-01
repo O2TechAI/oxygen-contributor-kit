@@ -34,6 +34,8 @@ const detailEvidence = { documentId: "roundtrip-document", eventId: "roundtrip-d
 function sourceFixture({ insights = true } = {}) {
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key: "final-roundtrip-chapter",
     phase: { id: "proof", label: "Final Proof" },
     kind: "validation",

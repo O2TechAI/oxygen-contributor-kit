@@ -55,7 +55,7 @@ def digest(value: Any) -> str:
     return hashlib.sha256(PREPARE.canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def context_evidence(context: Any) -> tuple[dict[tuple[str, str], Any], dict[tuple[str, str], str]]:
+def context_evidence(context: Any) -> tuple[dict[tuple[str, str], Any], dict[tuple[str, str], str], dict[tuple[str, str], str]]:
     regeneration = isinstance(context, dict) and context.get("schema") == "oxygen.preference-regeneration-context"
     keys = {"schema", "reusableLessons", "insightScope", "reviewedEvidence", "autoRemoved"} if not regeneration else {
         "schema", "binding", "reusableLessons", "insightScope", "reviewedEvidence", "targets", "exportDigest"}
@@ -66,12 +66,14 @@ def context_evidence(context: Any) -> tuple[dict[tuple[str, str], Any], dict[tup
         raise ValueError("preference context is malformed")
     expected, seen = [], set()
     for lesson in lessons:
-        allowed = ({"storyKey", "insightId", "insightAuthorityDigest", "background", "directlyAcquiredExperience", "principle"},
-                   {"storyKey", "insightId", "insightAuthorityDigest", "title", "background", "directlyAcquiredExperience", "principle"})
+        language_fields = {"language"} if not regeneration else set()
+        allowed = ({"storyKey", "insightId", "insightAuthorityDigest", "background", "directlyAcquiredExperience", "principle"} | language_fields,
+                   {"storyKey", "insightId", "insightAuthorityDigest", "title", "background", "directlyAcquiredExperience", "principle"} | language_fields)
         if (not isinstance(lesson, dict) or set(lesson) not in allowed
                 or not stable_id(lesson.get("storyKey")) or not stable_id(lesson.get("insightId"))
                 or not isinstance(lesson.get("insightAuthorityDigest"), str) or len(lesson["insightAuthorityDigest"]) != 64
                 or any(character not in "0123456789abcdef" for character in lesson["insightAuthorityDigest"])
+                or (not regeneration and lesson.get("language") not in {"en", "zh"})
                 or not all(safe_text(lesson.get(field)) for field in ("background", "directlyAcquiredExperience", "principle"))
                 or ("title" in lesson and not safe_text(lesson["title"]))):
             raise ValueError("preference context has malformed reusable lessons")
@@ -103,11 +105,17 @@ def context_evidence(context: Any) -> tuple[dict[tuple[str, str], Any], dict[tup
         evidence[identity] = record["documentKind"]
     if not regeneration and PREPARE.canonical_auto_removed(context["autoRemoved"]) != context["autoRemoved"]:
         raise ValueError("preference context Privacy aggregate is not canonical")
-    return evidence, {(item["storyKey"], item["insightId"]): item["insightAuthorityDigest"] for item in scope}
+    languages = {} if regeneration else {
+        (item["storyKey"], item["insightId"]): item["language"] for item in lessons
+    }
+    return evidence, {(item["storyKey"], item["insightId"]): item["insightAuthorityDigest"] for item in scope}, languages
 
 
-def presentations(value: Any, options: list[dict[str, str]], bulk: bool = False) -> bool:
+def presentations(value: Any, options: list[dict[str, str]], bulk: bool = False,
+                  required_language: str | None = None) -> bool:
     if not isinstance(value, dict) or set(value) - {"en", "zh"}:
+        return False
+    if required_language is not None and required_language not in value:
         return False
     for item in value.values():
         fields = {"question"} if bulk else {"recap", "question", "options"}
@@ -128,7 +136,8 @@ def evidence_document_kind(record: Any) -> Any:
     return record["documentKind"] if isinstance(record, dict) else record
 
 
-def probe(value: Any, evidence: dict[tuple[str, str], Any], scope: dict[tuple[str, str], str]) -> dict[str, Any]:
+def probe(value: Any, evidence: dict[tuple[str, str], Any], scope: dict[tuple[str, str], str],
+          languages: dict[tuple[str, str], str]) -> dict[str, Any]:
     if not exact(value, PROBE_KEYS):
         raise ValueError("candidate probe has extra, unknown, or missing fields")
     if not stable_id(value["id"]) or not stable_id(value["documentId"]) or not PREPARE.valid_document_kind(value["documentKind"]) or value["signal"] not in SIGNALS:
@@ -160,7 +169,9 @@ def probe(value: Any, evidence: dict[tuple[str, str], Any], scope: dict[tuple[st
         if option["id"] in seen_ids or normalized in seen_texts or normalized in GENERIC:
             raise ValueError("candidate probe options are not distinct or grounded")
         seen_ids.add(option["id"]); seen_texts.add(normalized)
-    if value["allowOther"] is not True or value["allowSkip"] is not True or not presentations(value["presentations"], options):
+    required_language = languages.get((value["storyKey"], value["insightId"]))
+    if (languages and required_language is None) or value["allowOther"] is not True or value["allowSkip"] is not True \
+            or not presentations(value["presentations"], options, required_language=required_language):
         raise ValueError("candidate probe flags or presentations are invalid")
     return {key: value[key] for key in PROBE_KEYS}
 
@@ -182,7 +193,7 @@ def bulk(value: Any, evidence: dict[tuple[str, str], Any]) -> dict[str, Any]:
 
 
 def finalize(context: Any, candidates: Any, workflow_run_id: str, source_revision: int) -> dict[str, Any]:
-    evidence, scope = context_evidence(context)
+    evidence, scope, languages = context_evidence(context)
     if (not stable_id(workflow_run_id, 1_000)
             or not PREPARE.nonnegative_integer(source_revision) or source_revision < 1):
         raise ValueError("workflow authority is invalid")
@@ -192,7 +203,7 @@ def finalize(context: Any, candidates: Any, workflow_run_id: str, source_revisio
             or len(candidates["probes"]) + len(candidates["bulkDecisions"]) > PREPARE.MAX_PREFERENCE_QUESTIONS
             or not PREPARE.nonnegative_integer(candidates["setAside"])):
         raise ValueError("candidates must contain only valid probes, bulkDecisions, and setAside")
-    probes = [probe(item, evidence, scope) for item in candidates["probes"]]
+    probes = [probe(item, evidence, scope, languages) for item in candidates["probes"]]
     decisions = [bulk(item, evidence) for item in candidates["bulkDecisions"]]
     ids = [item["id"] for item in probes + decisions]
     bindings = [(item["storyKey"], item["insightId"]) for item in probes]
@@ -214,12 +225,12 @@ def finalize(context: Any, candidates: Any, workflow_run_id: str, source_revisio
 
 
 def finalize_regeneration(context: Any, candidates: Any) -> dict[str, Any]:
-    evidence, scope = context_evidence(context)
+    evidence, scope, languages = context_evidence(context)
     draft = {key: context[key] for key in context if key != "exportDigest"}
     if context["exportDigest"] != digest(draft) or not exact(candidates, {"probes", "bulkDecisions", "setAside"}) \
             or candidates["bulkDecisions"] != [] or candidates["setAside"] != 0:
         raise ValueError("regeneration authority is invalid")
-    probes = [probe(item, evidence, scope) for item in candidates["probes"]]
+    probes = [probe(item, evidence, scope, languages) for item in candidates["probes"]]
     targets = context["targets"]
     if not isinstance(targets, list) or len(probes) != len(targets):
         raise ValueError("regeneration scope is incomplete")

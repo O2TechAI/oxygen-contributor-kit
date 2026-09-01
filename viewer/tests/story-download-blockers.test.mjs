@@ -16,7 +16,9 @@ const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 const evidence = { documentId: "doc", eventId: "doc:event" };
 const insightId = "safe-insight";
 const source = {
-  schema: "oxygen.story",
+    schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
   key: "chapter-one",
   phase: { id: "review", label: "Review" },
   title: "Synthetic Chapter",

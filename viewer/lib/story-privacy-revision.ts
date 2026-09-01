@@ -104,7 +104,7 @@ function targetValues(
     }
     for (const block of source.story.blocks) {
       add(source.key, `story:${block.id}`, review
-        ? applyStoryReviewToBlock(block.text, block.id, "en", review)
+        ? applyStoryReviewToBlock(block.text, block.id, source.language, review)
         : block.text);
     }
     if (source.story.uncertainty !== undefined) {

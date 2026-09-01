@@ -12,6 +12,7 @@ import {
   validateStorySourcePackage,
 } from "../../../viewer/lib/story-readiness.ts";
 import {
+  classifyStoryLanguageText,
   compareStorySourceIdentity,
   parseStorySource,
   STORY_PREFIX,
@@ -38,6 +39,8 @@ import {
 import {
   buildStoryValidationAuthority,
   insightReviewedNarrative,
+  readStoryValidationAuthority,
+  storyLanguageProjection,
 } from "./story_preparation_validation_authority.mjs";
 
 export const TARGET_STORY_PREPARATION_SHARD_BYTES = 1_000_000;
@@ -248,16 +251,85 @@ function semanticMembers(semantic) {
   return members;
 }
 
-async function prepareStory(semanticPath, coveragePath, sourcePrivacyPath, reviewRoot, root) {
-  const { semantic, authority, reviewedNarrative } = await buildStoryValidationAuthority(
+async function storyLanguageMappings(path, ownerIds) {
+  if (!path) return new Map();
+  const value = await readBounded(path);
+  if (!isObject(value) || Object.values(value).some((language) => language !== "en" && language !== "zh")
+    || Object.keys(value).some((ownerId) => !ownerIds.includes(ownerId))) {
+    fail("STORY_LANGUAGE_MAPPING_INVALID");
+  }
+  return new Map(Object.entries(value));
+}
+
+async function storyLanguagePolicy(baseAuthority, ownerBundles, {
+  workflowRunId, sourceRevision, choice, mappingPath,
+}) {
+  if (!stableId(workflowRunId) || !Number.isSafeInteger(sourceRevision) || sourceRevision < 1) {
+    fail("STORY_LANGUAGE_AUTHORITY_INVALID");
+  }
+  const sourceInput = ownerBundles.map((bundle) => ({
+    storyKey: bundle.ownerId,
+    reviewedNarrative: bundle.reviewedNarrative,
+  }));
+  const detectedLanguage = classifyStoryLanguageText(sourceInput.flatMap((story) => (
+    story.reviewedNarrative.map((row) => row.narrative)
+  )));
+  let selection;
+  if (detectedLanguage === "en") {
+    if (choice && choice !== "all-english") fail("STORY_LANGUAGE_CHOICE_INVALID");
+    selection = "all-english";
+  } else if (detectedLanguage === "zh") {
+    if (choice && choice !== "all-chinese") fail("STORY_LANGUAGE_CHOICE_INVALID");
+    selection = "all-chinese";
+  } else {
+    if (!choice) fail("STORY_LANGUAGE_CHOICE_REQUIRED");
+    selection = choice;
+  }
+  if (!["all-english", "all-chinese", "preserve-per-story"].includes(selection)) {
+    fail("STORY_LANGUAGE_CHOICE_INVALID");
+  }
+  if (selection !== "preserve-per-story" && mappingPath) fail("STORY_LANGUAGE_MAPPING_INVALID");
+  const mappings = await storyLanguageMappings(mappingPath, ownerBundles.map((bundle) => bundle.ownerId));
+  const stories = ownerBundles.map((bundle) => {
+    let language = selection === "all-english" ? "en" : selection === "all-chinese" ? "zh" : null;
+    if (selection === "preserve-per-story") {
+      const detected = classifyStoryLanguageText(bundle.reviewedNarrative.map((row) => row.narrative));
+      const explicit = mappings.get(bundle.ownerId);
+      if (detected === "mixed" && !explicit) fail("STORY_LANGUAGE_MAPPING_REQUIRED");
+      if (detected !== "mixed" && explicit && explicit !== detected) fail("STORY_LANGUAGE_MAPPING_INVALID");
+      language = explicit || detected;
+    }
+    return { storyKey: bundle.ownerId, language };
+  }).sort((left, right) => compareUtf8(left.storyKey, right.storyKey));
+  const ambiguousOwners = ownerBundles.filter((bundle) => (
+    classifyStoryLanguageText(bundle.reviewedNarrative.map((row) => row.narrative)) === "mixed"
+  )).map((bundle) => bundle.ownerId);
+  if (selection === "preserve-per-story"
+    && (mappings.size !== ambiguousOwners.length
+      || ambiguousOwners.some((ownerId) => !mappings.has(ownerId)))) {
+    fail("STORY_LANGUAGE_MAPPING_INVALID");
+  }
+  return {
+    schema: "oxygen.story-language-policy",
+    workflowRunId,
+    sourceRevision,
+    sourceDigest: baseAuthority.sourceDigest,
+    sourcePrivacyDigest: baseAuthority.sourcePrivacyDigest,
+    sourceInputDigest: canonicalDigest(sourceInput),
+    detectedLanguage,
+    selection,
+    stories,
+  };
+}
+
+async function prepareStory(semanticPath, coveragePath, sourcePrivacyPath, reviewRoot, root, options) {
+  const { semantic, authority: baseAuthority, reviewedNarrative } = await buildStoryValidationAuthority(
     semanticPath, coveragePath, sourcePrivacyPath, reviewRoot,
   );
   semanticMembers(semantic);
-  const validationAuthorityDigest = canonicalDigest(authority);
-  const narrativeDigest = canonicalDigest(reviewedNarrative);
   const narrativeById = new Map(reviewedNarrative.map((row) => [row.id, row]));
   const unitsById = new Map(semantic.units.map((unit) => [unit.id, unit]));
-  const represented = authority.coverageManifest.rows.filter((row) => row.disposition === "represented");
+  const represented = baseAuthority.coverageManifest.rows.filter((row) => row.disposition === "represented");
   if (represented.length === 0) fail("STORY_ZERO_REPRESENTED_OWNER_UNSUPPORTED");
   const unitsByOwner = new Map();
   for (const row of represented) {
@@ -278,12 +350,12 @@ async function prepareStory(semanticPath, coveragePath, sourcePrivacyPath, revie
       return {
         ownerId,
         semanticManifest: {
-          revision: authority.semanticManifest.revision,
-          digest: authority.semanticManifest.manifestDigest,
+          revision: baseAuthority.semanticManifest.revision,
+          digest: baseAuthority.semanticManifest.manifestDigest,
         },
         coverageManifest: {
-          revision: authority.coverageManifest.revision,
-          digest: authority.coverageManifest.coverageDigest,
+          revision: baseAuthority.coverageManifest.revision,
+          digest: baseAuthority.coverageManifest.coverageDigest,
         },
         semanticUnits,
         reviewedNarrative: narrative.sort((left, right) => (
@@ -293,7 +365,10 @@ async function prepareStory(semanticPath, coveragePath, sourcePrivacyPath, revie
         )),
       };
     });
-  const inputDigest = canonicalDigest({ validationAuthorityDigest, narrativeDigest });
+  const languagePolicy = await storyLanguagePolicy(baseAuthority, ownerBundles, options);
+  const authority = { ...baseAuthority, languagePolicy };
+  const validationAuthorityDigest = canonicalDigest(authority);
+  const inputDigest = canonicalDigest({ validationAuthorityDigest, languagePolicy });
   for (const bundle of ownerBundles) {
     const singleOwnerInput = {
       schema: "oxygen.story-preparation-worker-input",
@@ -304,6 +379,7 @@ async function prepareStory(semanticPath, coveragePath, sourcePrivacyPath, revie
       payload: {
         validationAuthorityPath: "story/validation-authority.json",
         validationAuthorityDigest,
+        languagePolicy: storyLanguageProjection(languagePolicy, [bundle.ownerId]),
         ownerBundles: [bundle],
       },
     };
@@ -320,6 +396,7 @@ async function prepareStory(semanticPath, coveragePath, sourcePrivacyPath, revie
     payload: {
       validationAuthorityPath: "story/validation-authority.json",
       validationAuthorityDigest,
+      languagePolicy: storyLanguageProjection(languagePolicy, group.map((entry) => entry.id)),
       ownerBundles: group.map((entry) => entry.value),
     },
   }));
@@ -331,6 +408,8 @@ async function prepareInsight(candidatesPath, root) {
   const rows = candidateRows(await readBounded(candidatesPath));
   const records = rows.map(({ id, story }) => ({ id, story }));
   const storyAuthority = await readLaneAuthority(root, "story");
+  const validationAuthority = await readStoryValidationAuthority(storyAuthority);
+  const languagePolicy = validationAuthority.languagePolicy;
   const { validationAuthorityPath, validationAuthorityDigest } = storyAuthority.input.payload;
   const groups = balancedGroups(rows.map((row) => ({ id: row.story.key, value: row })));
   return installLane(root, "insight", canonicalDigest(records), groups.map((group) => {
@@ -340,6 +419,7 @@ async function prepareInsight(candidatesPath, root) {
       payload: {
         validationAuthorityPath,
         validationAuthorityDigest,
+        languagePolicy: storyLanguageProjection(languagePolicy, group.map((entry) => entry.id)),
         storyCandidates,
         reviewedNarrative: insightReviewedNarrative(storyAuthority.inputs, storyCandidates),
       },
@@ -352,6 +432,8 @@ async function preparePrivacy(candidatesPath, root) {
   const records = rows.map(({ id, story }) => ({ id, story }));
   const catalog = deriveStoryReleaseTargetCatalog(rows.map((row) => row.story));
   if (!catalog) fail("PRIVACY_CATALOG_INVALID");
+  const storyAuthority = await readLaneAuthority(root, "story");
+  const validationAuthority = await readStoryValidationAuthority(storyAuthority);
   const storyByTarget = new Map();
   for (const row of rows) {
     const targets = deriveStoryReleaseTargetCatalog([row.story]);
@@ -371,6 +453,10 @@ async function preparePrivacy(candidatesPath, root) {
     return {
       unitIds: [...targetIds],
       payload: {
+        languagePolicy: storyLanguageProjection(
+          validationAuthority.languagePolicy,
+          shardRows.map((row) => row.story.key),
+        ),
         storyCandidates: shardRows.map(({ id, summary }) => ({ id, summary })),
         releaseTargetCatalog: catalog.filter((target) => targetIds.has(target.id)),
       },
@@ -382,6 +468,7 @@ function lessonProjection(rows) {
   return rows.flatMap((row) => row.story.insights.map((insight) => ({
     storyKey: row.story.key,
     insightId: insight.id,
+    language: row.story.language,
     insightAuthorityDigest: canonicalDigest(insightAuthorityValue(row.story.key, insight)),
     ...(insight.title === undefined ? {} : { title: insight.title }),
     background: insight.background,
@@ -409,7 +496,13 @@ async function preparePreference(candidatesPath, contextPath, root) {
   }
   return installLane(root, "preference", canonicalDigest(lessons), [{
     unitIds: identities.map((identity) => canonicalAuthorityJson(identity)),
-    payload: { preferenceContext: context },
+    payload: {
+      languagePolicy: storyLanguageProjection(
+        (await readStoryValidationAuthority(await readLaneAuthority(root, "story"))).languagePolicy,
+        rows.map((row) => row.story.key),
+      ),
+      preferenceContext: context,
+    },
   }]);
 }
 
@@ -471,8 +564,27 @@ async function composeFinal(root, outputPath) {
 
 async function main(args) {
   const [action, lane, ...rest] = args;
-  if (action === "prepare" && lane === "story" && rest.length === 5) {
-    return prepareStory(rest[0], rest[1], rest[2], rest[3], rest[4]);
+  if (action === "prepare" && lane === "story") {
+    const [semanticPath, coveragePath, sourcePrivacyPath, reviewRoot, root, ...markers] = rest;
+    const values = new Map();
+    for (let index = 0; index < markers.length; index += 2) {
+      const marker = markers[index];
+      const value = markers[index + 1];
+      if (!["--workflow-run-id", "--source-revision", "--language-choice", "--story-language-map"].includes(marker)
+        || value === undefined || values.has(marker)) fail("CLI_USAGE");
+      values.set(marker, value);
+    }
+    const sourceRevision = Number(values.get("--source-revision"));
+    if (!semanticPath || !coveragePath || !sourcePrivacyPath || !reviewRoot || !root
+      || markers.length % 2 !== 0 || !values.has("--workflow-run-id")
+      || !/^[1-9][0-9]*$/u.test(values.get("--source-revision") || "")
+      || !Number.isSafeInteger(sourceRevision)) fail("CLI_USAGE");
+    return prepareStory(semanticPath, coveragePath, sourcePrivacyPath, reviewRoot, root, {
+      workflowRunId: values.get("--workflow-run-id"),
+      sourceRevision,
+      choice: values.get("--language-choice"),
+      mappingPath: values.get("--story-language-map"),
+    });
   }
   if (action === "prepare" && lane === "insight" && rest.length === 2) {
     return prepareInsight(rest[0], rest[1]);

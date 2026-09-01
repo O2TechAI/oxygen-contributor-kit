@@ -714,6 +714,8 @@ function storyCandidate(semantic, coverage, evidenceId = "doc:item-a") {
   const evidence = { documentId: "doc", eventId: evidenceId };
   const source = {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key: "chapter-a",
     phase: { id: "phase-a", label: "Discovery" },
     title: "A bounded synthetic chapter",

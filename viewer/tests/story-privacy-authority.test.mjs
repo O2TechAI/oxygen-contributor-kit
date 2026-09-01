@@ -35,6 +35,8 @@ function story(key) {
   const evidence = { documentId: "doc", eventId: `doc:${key}` };
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key,
     phase: { id: `phase-${key}`, label: "Build" },
     title: `Chapter ${key}`,

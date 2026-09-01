@@ -31,6 +31,7 @@ const localReview = join(repository, "skills", "oxygen-organize-review-export", 
 const digest = (value) => createHash("sha256").update(canonicalAuthorityJson(value)).digest("hex");
 const json = (path, value) => writeFile(path, JSON.stringify(value), "utf8");
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
+const storyAuthorityArgs = ["--workflow-run-id", "public-canary-run", "--source-revision", "4"];
 
 function run(command, args) {
   return spawnSync(command, args, { cwd: repository, encoding: "utf8" });
@@ -97,8 +98,10 @@ const laneDirectory = {
 };
 
 function phaseFreeProposal(record) {
-  const { schema, key, coverage, ...chapter } = record.story;
+  const { schema, key, language, languagePolicyDigest, coverage, ...chapter } = record.story;
   assert.equal(schema, "oxygen.story");
+  assert.ok(language === "en" || language === "zh");
+  assert.match(languagePolicyDigest, /^[0-9a-f]{64}$/u);
   assert.ok(coverage);
   delete chapter.phase;
   return { ownerId: key, chapter };
@@ -264,14 +267,14 @@ function storySource(suffix, semantic, coverage, insights = [], {
   documentId = "doc-canary", language = "en",
 } = {}) {
   const evidence = { documentId, eventId: `event-${suffix}` };
-  const localized = language === "es" ? {
-    phase: "Ensayo revisado",
-    title: `Ensayo ${suffix.toUpperCase()}`,
-    overview: `Una nota de laboratorio revisada ${suffix.toUpperCase()}.`,
-    person: `Investigador ${suffix.toUpperCase()}`,
-    role: "investigador",
-    description: `El investigador documentó el ensayo ${suffix.toUpperCase()}.`,
-    block: `Observación revisada ${suffix.toUpperCase()}.`,
+  const localized = language === "zh" ? {
+    phase: "Reviewed phase",
+    title: "经过审阅的中文测试",
+    overview: "这是一段经过审阅的中文测试说明。",
+    person: "中文测试参与者",
+    role: "审阅参与者",
+    description: "参与者记录了这次经过审阅的中文测试。",
+    block: "这是一条经过审阅的中文观察记录。",
   } : {
     phase: "Reviewed phase",
     title: `Canary ${suffix.toUpperCase()}`,
@@ -283,6 +286,8 @@ function storySource(suffix, semantic, coverage, insights = [], {
   };
   return {
     schema: "oxygen.story",
+    language,
+    languagePolicyDigest: "f".repeat(64),
     key: `story-${suffix}`,
     phase: { id: `phase-${suffix}`, label: localized.phase },
     title: localized.title,
@@ -311,7 +316,7 @@ function storySource(suffix, semantic, coverage, insights = [], {
 
 async function reviewedBoundary(root, projectMap, semantic, coverageRows = null, {
   documentId = "doc-canary", language = "en", narrativeBytes = 0, sourceRedactions = [],
-  eventIdentities = {},
+  eventIdentities = {}, narratives = {},
 } = {}) {
   const review = join(root, "review");
   const trajectories = join(review, "trajectories");
@@ -329,9 +334,9 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = null,
     actor: { id: `actor-${digest([documentId, actorType])}`, type: actorType },
     relation_id: `event-${digest([documentId, `event-${suffix}`])}`,
     timestamp: eventIdentities[suffix]?.timestamp ?? null,
-    payload: { role: actorType, text: `${language === "es"
-      ? `observación segura revisada ${suffix}` : `safe reviewed canary ${suffix}`}${
-      narrativeBytes ? ` ${"x".repeat(narrativeBytes)}` : ""}` },
+    payload: { role: actorType, text: `${narratives[suffix] ?? (language === "zh"
+      ? `这是一条安全且经过审阅的中文观察记录${suffix}` : `safe reviewed canary ${suffix}`)}${
+      narrativeBytes ? ` ${(language === "zh" ? "中" : "x").repeat(narrativeBytes)}` : ""}` },
     relations: [],
     };
   });
@@ -405,26 +410,26 @@ function insight(suffix, documentId = "doc-canary", language = "en") {
   const evidence = { documentId, eventId: `event-${suffix}` };
   return {
     id: `insight-${suffix}`,
-    title: language === "es" ? `Lección ${suffix.toUpperCase()}` : `Canary lesson ${suffix.toUpperCase()}`,
-    background: language === "es" ? `Contexto revisado ${suffix.toUpperCase()}.` : `Reviewed background ${suffix.toUpperCase()}.`,
+    title: language === "zh" ? "经过审阅的中文经验" : `Canary lesson ${suffix.toUpperCase()}`,
+    background: language === "zh" ? "这是经过审阅的中文背景说明。" : `Reviewed background ${suffix.toUpperCase()}.`,
     anchorStoryBlockId: `block-${suffix}`,
     quote: {
-      text: `${language === "es" ? "observación segura revisada" : "safe reviewed canary"} ${suffix}`,
+      text: language === "zh" ? `这是一条安全且经过审阅的中文观察记录${suffix}` : `safe reviewed canary ${suffix}`,
       evidence,
     },
-    directlyAcquiredExperience: language === "es"
-      ? `Experiencia revisada ${suffix.toUpperCase()}.` : `Reviewed experience ${suffix.toUpperCase()}.`,
-    principle: language === "es"
-      ? `Principio acotado ${suffix.toUpperCase()}.` : `Bounded principle ${suffix.toUpperCase()}.`,
+    directlyAcquiredExperience: language === "zh"
+      ? "这是一条直接获得的中文经验。" : `Reviewed experience ${suffix.toUpperCase()}.`,
+    principle: language === "zh"
+      ? "这是一条边界明确的中文原则。" : `Bounded principle ${suffix.toUpperCase()}.`,
     evidence: [],
   };
 }
 
 async function privacyAuthority(root, suffixes = ["a", "b"], documentId = "doc-canary",
-  documentKind = "trajectory", evidenceCount = suffixes.length) {
+  documentKind = "trajectory", evidenceCount = suffixes.length, language = "en") {
   const redacted = join(root, "redacted");
   await mkdir(redacted);
-  const text = "safe reviewed canary";
+  const text = language === "zh" ? "这是一条安全且经过审阅的中文观察记录" : "safe reviewed canary";
   const eventIds = suffixes.map((suffix) => `event-${suffix}`);
   while (eventIds.length < evidenceCount) eventIds.push(`preference-event-${eventIds.length}`);
   const turns = eventIds.map((eventId, index) => ({
@@ -490,7 +495,7 @@ async function createFlow({
   });
 
   runOk(process.execPath, [prepare, "prepare", "story", projectMapPath,
-    boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+    boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
   if (reverseManifests) await reverseLaneManifest(transport, "story");
   const storyProposal = join(root, "story-proposal.json");
   const storyRecords = suffixes.map((suffix) => ({
@@ -520,7 +525,9 @@ async function createFlow({
   const candidates = join(root, "story-candidates.json");
   runOk(process.execPath, [prepare, "compose", "final", transport, candidates]);
 
-  const privacy = await privacyAuthority(root, suffixes, documentId, documentKind, preferenceEvidenceCount);
+  const privacy = await privacyAuthority(
+    root, suffixes, documentId, documentKind, preferenceEvidenceCount, language,
+  );
   if (preferenceEvidenceCount > suffixes.length) {
     const rows = await readJson(candidates);
     const first = JSON.parse(rows[0].summary.slice("oxygen.story:".length));
@@ -580,7 +587,24 @@ async function createFlow({
         { id: "one", text: "Retain the reviewed canary boundary." },
         { id: "two", text: "Request confirmation before changing the boundary." },
       ],
-      presentations: {},
+      presentations: {
+        en: {
+          recap: "A reviewed canary records a bounded choice.",
+          question: "Which bounded canary behavior should be retained?",
+          options: [
+            { id: "one", text: "Retain the reviewed canary boundary." },
+            { id: "two", text: "Request confirmation before changing the boundary." },
+          ],
+        },
+        zh: {
+          recap: "一段经过审阅的测试记录形成了明确选择。",
+          question: "应该保留哪一种有边界的测试行为？",
+          options: [
+            { id: "one", text: "保留经过审阅的测试边界。" },
+            { id: "two", text: "改变边界前请求确认。" },
+          ],
+        },
+      },
       allowOther: true,
       allowSkip: true,
     }],
@@ -617,7 +641,8 @@ async function createFlow({
 
 async function prepareStoryOnly({
   suffixes = ["a", "b"], coverageRows = null, narrativeBytes = 0,
-  reverseTransportInputs = false, sourceRedactions = [], eventIdentities = {},
+  reverseTransportInputs = false, sourceRedactions = [], eventIdentities = {}, language = "en",
+  narratives = {}, languageChoice, storyLanguageMap,
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "story-owner-batch-"));
   const semantic = semanticAuthority({ suffixes });
@@ -634,7 +659,7 @@ async function prepareStoryOnly({
   const projectMapPath = join(root, "project-map.json");
   await json(projectMapPath, projectMap);
   const boundary = await reviewedBoundary(root, projectMap, semantic, coverageRows, {
-    narrativeBytes, sourceRedactions, eventIdentities,
+    narrativeBytes, sourceRedactions, eventIdentities, language, narratives,
   });
   if (reverseTransportInputs) {
     const reversedMap = structuredClone(projectMap);
@@ -650,8 +675,16 @@ async function prepareStoryOnly({
     await writeFile(eventsPath, `${lines.join("\n")}\n`, "utf8");
   }
   const transport = join(root, "transport");
+  const languageArgs = [];
+  if (languageChoice) languageArgs.push("--language-choice", languageChoice);
+  if (storyLanguageMap) {
+    const mappingPath = join(root, "story-language-map.json");
+    await json(mappingPath, storyLanguageMap);
+    languageArgs.push("--story-language-map", mappingPath);
+  }
   const prepared = run(process.execPath, [prepare, "prepare", "story", projectMapPath,
-    boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+    boundary.coverage, boundary.sourcePrivacy, boundary.review, transport,
+    ...storyAuthorityArgs, ...languageArgs]);
   return {
     root, semantic, projectMapPath, boundary, transport, prepared,
     cleanup: () => rm(root, { recursive: true, force: true }),
@@ -691,7 +724,7 @@ test("public commands execute the nonempty four-lane dependency chain determinis
       review: join(first.root, "review"),
     };
     runOk(process.execPath, [prepare, "prepare", "story", first.semanticPath,
-      boundary.coverage, boundary.sourcePrivacy, boundary.review, parityRoot]);
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, parityRoot, ...storyAuthorityArgs]);
     assert.equal(
       await readFile(join(first.transport, "story", "shards.json"), "utf8"),
       await readFile(join(parityRoot, "story", "shards.json"), "utf8"),
@@ -839,7 +872,7 @@ test("Story preparation preserves validated opaque actor topology and rejects ra
       await writeEvents();
       const transport = join(root, `invalid-${name}`);
       const rejected = run(process.execPath, [prepare, "prepare", "story", semanticPath,
-        boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+        boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
       assert.notEqual(rejected.status, 0);
       assert.match(rejected.stderr, /^REVIEWED_SOURCE_INVALID\r?\n$/u);
       assert.doesNotMatch(`${rejected.stdout}${rejected.stderr}`, /RAW-/u);
@@ -855,7 +888,7 @@ test("Story preparation preserves validated opaque actor topology and rejects ra
       await writeEvents();
       const transport = join(root, `invalid-${name}`);
       const rejected = run(process.execPath, [prepare, "prepare", "story", semanticPath,
-        boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+        boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
       assert.notEqual(rejected.status, 0);
       assert.match(rejected.stderr, /^REVIEWED_SOURCE_INVALID\r?\n$/u);
       assert.equal(existsSync(join(transport, "story", "validation-authority.json")), false);
@@ -865,7 +898,7 @@ test("Story preparation preserves validated opaque actor topology and rejects ra
     await writeEvents();
     const transport = join(root, "valid");
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
-      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
     const authority = await readJson(join(transport, "story", "validation-authority.json"));
     assert.notEqual(authority.evidence[0].actorEquivalence, authority.evidence[1].actorEquivalence);
     assert.equal(authority.evidence[0].parentActorEquivalence, parent);
@@ -923,6 +956,80 @@ test("zero represented owners fail before Story lane installation without invent
   }
 });
 
+test("Story language policy selects strong input and stops mixed input until one explicit continuation", async () => {
+  const english = await prepareStoryOnly({ suffixes: ["a"] });
+  const chinese = await prepareStoryOnly({ suffixes: ["a"], language: "zh" });
+  const mixedNoChoice = await prepareStoryOnly({
+    narratives: { a: "englishreviewedtext", b: "中文审阅内容中文审阅内容" },
+  });
+  const allEnglish = await prepareStoryOnly({
+    narratives: { a: "englishreviewedtext", b: "中文审阅内容中文审阅内容" },
+    languageChoice: "all-english",
+  });
+  const allChinese = await prepareStoryOnly({
+    narratives: { a: "englishreviewedtext", b: "中文审阅内容中文审阅内容" },
+    languageChoice: "all-chinese",
+  });
+  const preserved = await prepareStoryOnly({
+    narratives: { a: "englishreviewedtext", b: "中文审阅内容中文审阅内容" },
+    languageChoice: "preserve-per-story",
+  });
+  try {
+    for (const [flow, detectedLanguage, selection, languages] of [
+      [english, "en", "all-english", ["en"]],
+      [chinese, "zh", "all-chinese", ["zh"]],
+      [allEnglish, "mixed", "all-english", ["en", "en"]],
+      [allChinese, "mixed", "all-chinese", ["zh", "zh"]],
+      [preserved, "mixed", "preserve-per-story", ["en", "zh"]],
+    ]) {
+      assert.equal(flow.prepared.status, 0, flow.prepared.stderr);
+      const authority = await readJson(join(flow.transport, "story", "validation-authority.json"));
+      assert.equal(authority.languagePolicy.workflowRunId, "public-canary-run");
+      assert.equal(authority.languagePolicy.sourceRevision, 4);
+      assert.equal(authority.languagePolicy.detectedLanguage, detectedLanguage);
+      assert.equal(authority.languagePolicy.selection, selection);
+      assert.deepEqual(authority.languagePolicy.stories.map((row) => row.language), languages);
+      const policyDigest = digest(authority.languagePolicy);
+      const manifest = await readJson(join(flow.transport, "story", "shards.json"));
+      for (const shard of manifest.shards) {
+        const input = await readJson(join(flow.transport, ...shard.inputPath.split("/")));
+        assert.equal(input.payload.languagePolicy.policyDigest, policyDigest);
+        assert.equal(input.payload.languagePolicy.workflowRunId, "public-canary-run");
+        assert.equal(input.payload.languagePolicy.sourceRevision, 4);
+      }
+    }
+    assert.notEqual(mixedNoChoice.prepared.status, 0);
+    assert.match(mixedNoChoice.prepared.stderr, /^STORY_LANGUAGE_CHOICE_REQUIRED\r?\n$/u);
+    assert.equal(existsSync(join(mixedNoChoice.transport, "story", "shards.json")), false);
+    assert.equal(existsSync(join(mixedNoChoice.transport, "story", "records")), false);
+  } finally {
+    await Promise.all([english, chinese, mixedNoChoice, allEnglish, allChinese, preserved]
+      .map((flow) => flow.cleanup()));
+  }
+});
+
+test("preserve-per-Story requires an exact mapping for an ambiguous owner", async () => {
+  const narratives = { a: "abcdefghij中文中文中文中文中文" };
+  const missing = await prepareStoryOnly({
+    suffixes: ["a"], narratives, languageChoice: "preserve-per-story",
+  });
+  const mapped = await prepareStoryOnly({
+    suffixes: ["a"], narratives, languageChoice: "preserve-per-story",
+    storyLanguageMap: { "story-a": "zh" },
+  });
+  try {
+    assert.notEqual(missing.prepared.status, 0);
+    assert.match(missing.prepared.stderr, /^STORY_LANGUAGE_MAPPING_REQUIRED\r?\n$/u);
+    assert.equal(existsSync(join(missing.transport, "story", "shards.json")), false);
+    assert.equal(mapped.prepared.status, 0, mapped.prepared.stderr);
+    const authority = await readJson(join(mapped.transport, "story", "validation-authority.json"));
+    assert.deepEqual(authority.languagePolicy.stories, [{ storyKey: "story-a", language: "zh" }]);
+  } finally {
+    await missing.cleanup();
+    await mapped.cleanup();
+  }
+});
+
 test("one oversized owner bundle fails before Story lane installation instead of splitting", async () => {
   const root = await mkdtemp(join(tmpdir(), "story-oversized-owner-"));
   try {
@@ -959,7 +1066,7 @@ test("one oversized owner bundle fails before Story lane installation instead of
     })), { narrativeBytes: 3_350_000 });
     const transport = join(root, "transport");
     const result = run(process.execPath, [prepare, "prepare", "story", projectMapPath,
-      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /^STORY_OWNER_BUNDLE_TOO_LARGE\r?\n$/u);
     assert.equal(existsSync(join(transport, "story")), false);
@@ -974,7 +1081,7 @@ test("laboratory notes cross real Story and Insight shard waves without domain s
     projectId: "Cuaderno de Laboratorio",
     kinds: ["experiment_observation", "instrument_calibration", "hypothesis_revision"],
     documentId: "notas-laboratorio",
-    language: "es",
+    language: "zh",
     narrativeBytes: 300_000,
     insightSuffixes: ["uno", "tres"],
   };
@@ -993,9 +1100,9 @@ test("laboratory notes cross real Story and Insight shard waves without domain s
     assert.equal(candidates.reduce((total, row) => (
       total + parseStorySource(row.summary).insights.length
     ), 0), 2);
-    assert.match(candidates[0].summary, /laboratorio|Ensayo|Observación/u);
+    assert.match(candidates[0].summary, /经过审阅|中文观察/u);
     console.log("THIRD_DOMAIN_CANARY", JSON.stringify({
-      domain: "laboratory-notes", language: "es", records: options.suffixes.length,
+      domain: "laboratory-notes", language: "zh", records: options.suffixes.length,
       semanticKinds: new Set(options.kinds).size, chapters: candidates.length, insights: 2,
       storyShards: storyManifest.shards.length, insightShards: insightManifest.shards.length,
       reorderedCandidatesByteIdentical: true, reorderedAuthorityByteIdentical: true,
@@ -1226,13 +1333,35 @@ test("Story batch recorder permits pre-receipt correction and makes the complete
     });
     const boundary = await reviewedBoundary(root, await readJson(projectMapPath), semantic);
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
-      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
     const validRecords = ["a", "b"].map((suffix) => ({
       id: `event-${suffix}`,
       story: storySource(suffix, semantic, boundary.coverageAuthority),
     }));
     const batch = await storyBatchFiles(transport, root, validRecords, "correction");
     const firstProposalPath = join(batch.proposalDirectory, `${batch.manifest.shards[0].id}.json`);
+    const languageMismatch = await readJson(firstProposalPath);
+    languageMismatch[0].chapter.title = "中文标题";
+    languageMismatch[0].chapter.overview = "这是一段完整的中文概述。";
+    languageMismatch[0].chapter.people = languageMismatch[0].chapter.people.map((person) => ({
+      ...person, releaseLabel: "参与者", role: "负责人", description: "负责人记录了中文过程。",
+    }));
+    languageMismatch[0].chapter.story.blocks = languageMismatch[0].chapter.story.blocks.map((block) => ({
+      ...block, text: "这是一段完整且经过审阅的中文故事内容。",
+    }));
+    await json(firstProposalPath, languageMismatch);
+    await refreshStoryEditorialReview(batch);
+    const mismatched = run(process.execPath, [record, transport, "story",
+      batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
+      "--correction-attempt-count", "0"]);
+    assert.notEqual(mismatched.status, 0);
+    assert.match(mismatched.stderr, /^STORY_LANGUAGE_INVALID\r?\n$/u);
+    assert.equal(existsSync(join(transport, "story", "records")), false);
+
+    await json(firstProposalPath, batch.manifest.shards[0].unitIds.map((ownerId) => (
+      phaseFreeProposal(validRecords.find((candidate) => candidate.story.key === ownerId))
+    )));
+    await refreshStoryEditorialReview(batch);
     const invalidProposal = await readJson(firstProposalPath);
     invalidProposal[0].ownerId = "foreign";
     await json(firstProposalPath, invalidProposal);
@@ -1246,6 +1375,7 @@ test("Story batch recorder permits pre-receipt correction and makes the complete
     await json(firstProposalPath, batch.manifest.shards[0].unitIds.map((ownerId) => (
       phaseFreeProposal(validRecords.find((candidate) => candidate.story.key === ownerId))
     )));
+    await refreshStoryEditorialReview(batch);
     runOk(process.execPath, [record, transport, "story", batch.proposalDirectory,
       batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "1"]);
     const recordRoot = join(transport, "story", "records", batch.manifest.shards[0].id);
@@ -1492,6 +1622,8 @@ function combinedStory(semantic, coverage, collapsed) {
   });
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key: "story-combined",
     phase: { id: "phase-combined", label: "Reviewed phase" },
     title: "Combined canary",
@@ -1563,7 +1695,7 @@ test("parent editorial gate rejects three record-by-record proposals before same
     ];
     const boundary = await reviewedBoundary(root, projectMap, semantic, coverageRows);
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
-      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
 
     const manifest = await readJson(join(transport, "story", "shards.json"));
     assert.equal(manifest.shards.length, 1);
@@ -1642,7 +1774,8 @@ test("parent editorial gate rejects three record-by-record proposals before same
     await json(freshBoundary.sourcePrivacy, freshPrivacy);
     const freshTransport = join(freshRoot, "transport");
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
-      freshBoundary.coverage, freshBoundary.sourcePrivacy, freshBoundary.review, freshTransport]);
+      freshBoundary.coverage, freshBoundary.sourcePrivacy, freshBoundary.review, freshTransport,
+      ...storyAuthorityArgs]);
     const freshManifest = await readJson(join(freshTransport, "story", "shards.json"));
     assert.notEqual(freshManifest.inputDigest, manifest.inputDigest);
     const replayedReview = run(process.execPath, [record, freshTransport, "story",
@@ -1687,7 +1820,7 @@ test("shared Story validation rejects collapsed People before receipt and accept
       { unitId: "unit-b", disposition: "represented", ownerId: "story-combined" },
     ]);
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
-      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
     const inputBefore = await readFile(join(transport, "story", "inputs", "story-0001.json"));
     const invalidRecord = {
       id: "event-a", story: combinedStory(semantic, boundary.coverageAuthority, true),
@@ -1756,7 +1889,7 @@ test("Insight source Quote matrix fails before receipt, permits proposal-only co
     ]);
     const transport = join(root, "transport");
     runOk(process.execPath, [prepare, "prepare", "story", projectMapPath,
-      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
     const combined = combinedStory(semantic, boundary.coverageAuthority, false);
     // Event B belongs to broader Chapter context but is intentionally absent from every
     // Story block. It therefore is not represented as a Person, its reviewed narrative
@@ -1780,7 +1913,8 @@ test("Insight source Quote matrix fails before receipt, permits proposal-only co
     const inputBefore = await readFile(inputPath);
     const input = JSON.parse(inputBefore.toString("utf8"));
     assert.deepEqual(Object.keys(input.payload).sort(), [
-      "reviewedNarrative", "storyCandidates", "validationAuthorityDigest", "validationAuthorityPath",
+      "languagePolicy", "reviewedNarrative", "storyCandidates", "validationAuthorityDigest",
+      "validationAuthorityPath",
     ]);
     assert.deepEqual(input.payload.reviewedNarrative, [{
       id: "event-a", documentId: "doc-canary", narrative: "safe reviewed canary a",

@@ -19,6 +19,9 @@ unchanged byte limit, canonical digest, and exact unit membership.
 The preparer verifies the Source Privacy digest against the exact current reviewed source rows,
 normalizes Coverage with the existing Coverage validator, preserves the exact bound raw reviewed
 narrative for the selected-provider Story input, and writes `story/validation-authority.json` once.
+Before writing any shard it also derives and binds the one run language policy owned by
+[bilingual-contract.md](bilingual-contract.md). That policy is not a localization sidecar or a
+second Story authority.
 That minimal bundle contains the
 semantic and Coverage authorities plus evidence identity, event/actor type, and opaque
 actor-equivalence tokens. It contains no source text, raw actor ID, redaction row, provider
@@ -271,7 +274,9 @@ node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   prepare story "$Review\project-map.json" `
   "$Review\story-coverage-manifest.json" `
   "$Review\current-public-source-privacy.json" `
-  "$Review" "$Transport"
+  "$Review" "$Transport" `
+  --workflow-run-id "$WorkflowRun" `
+  --source-revision $SourceRevision
 # Parent collects one phase-free <shard-id>.json proposal per manifest shard, reads every Chapter,
 # writes the digest-bound editorial review, then orders the accepted Chapter set with the production
 # comparator and writes one transient smallest coherent global Phase assignment.
@@ -281,6 +286,24 @@ node .\skills\oxygen-storytelling-review\scripts\record_story_preparation.mjs `
 node .\skills\oxygen-storytelling-review\scripts\prepare_story_preparation.mjs `
   compose story "$Transport" "$Review\story-base-candidates.json"
 ```
+
+For mixed input that command stops with `STORY_LANGUAGE_CHOICE_REQUIRED` before creating worker
+assignments or receipts. Re-run it with exactly one explicit continuation:
+
+```powershell
+# Choose one whole-run language:
+--language-choice all-english
+--language-choice all-chinese
+
+# Or preserve each Coverage owner/Chapter language. The JSON file maps every ambiguous exact
+# owner ID, and no clear owner, to exactly "en" or "zh":
+--language-choice preserve-per-story `
+  --story-language-map "$Review\story-language-map.json"
+```
+
+Append one of those alternatives to the prepare-story command only after its fixed mixed stop.
+The exact selection rule and policy shape are defined only in
+[bilingual-contract.md](bilingual-contract.md); this transport does not redefine them.
 
 Prepare, record, and compose the dependent Insight pass:
 

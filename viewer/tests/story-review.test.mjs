@@ -22,7 +22,9 @@ import {
 
 const evidence = { documentId: "doc", eventId: "event" };
 const reviewSource = {
-  schema: "oxygen.story",
+    schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
   key: "chapter",
   phase: { id: "phase-review", label: "Review" },
   title: "Synthetic edit Chapter",

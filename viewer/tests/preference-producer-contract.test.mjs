@@ -29,13 +29,13 @@ const INSIGHT_DIGEST = "a".repeat(64);
 const context = {
   schema: "oxygen.preference-context",
   reusableLessons: [
-    { storyKey: "zeta", insightId: "insight-c", insightAuthorityDigest: "c".repeat(64),
+    { storyKey: "zeta", insightId: "insight-c", insightAuthorityDigest: "c".repeat(64), language: "en",
       background: "Reviewed background Z.", directlyAcquiredExperience: "Reviewed experience Z.",
       principle: "Reviewed principle Z." },
-    { storyKey: "故事", insightId: "insight-a", insightAuthorityDigest: "b".repeat(64),
+    { storyKey: "故事", insightId: "insight-a", insightAuthorityDigest: "b".repeat(64), language: "zh",
       background: "Reviewed background U.", directlyAcquiredExperience: "Reviewed experience U.",
       principle: "Reviewed principle U." },
-    { storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: INSIGHT_DIGEST,
+    { storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: INSIGHT_DIGEST, language: "en",
       background: "Reviewed background.", directlyAcquiredExperience: "Reviewed experience.",
       principle: "Reviewed principle." },
   ],
@@ -54,7 +54,12 @@ const candidates = {
     documentId: "doc-a", documentKind: "trajectory", eventIds: ["event-a"], timestamp: null,
     signal: "explicit_rule", score: 90, turns: 1, recap: "A reviewed source set a boundary.",
     question: "What should the agent remember?", options: [{ id: "one", text: "Ask before changing this boundary." }, { id: "two", text: "Use a separate branch for this boundary." }],
-    presentations: {}, allowOther: true, allowSkip: true,
+    presentations: { en: {
+      recap: "A reviewed source set a boundary.",
+      question: "What should the agent remember?",
+      options: [{ id: "one", text: "Ask before changing this boundary." },
+        { id: "two", text: "Use a separate branch for this boundary." }],
+    } }, allowOther: true, allowSkip: true,
   }],
   bulkDecisions: [], setAside: 0,
 };

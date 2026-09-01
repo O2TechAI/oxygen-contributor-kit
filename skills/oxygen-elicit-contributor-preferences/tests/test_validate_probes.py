@@ -18,6 +18,7 @@ SPEC.loader.exec_module(VALIDATOR)
 def context(count=1):
     lessons = [{
         "storyKey": f"chapter-{index}", "insightId": f"lesson-{index}", "insightAuthorityDigest": "d" * 64,
+        "language": "en",
         "title": "Lesson A", "background": "A reviewed background.",
         "directlyAcquiredExperience": "A learned fact.", "principle": "A bounded principle.",
     } for index in range(count)]
@@ -44,7 +45,13 @@ def probe(identifier="probe-a", binding_index=0):
         "insightAuthorityDigest": "d" * 64, "documentId": "trajectory-a", "documentKind": "trajectory", "eventIds": ["event-a"],
         "timestamp": None, "signal": "explicit_rule", "score": 80, "turns": 2,
         "recap": "The reviewed event records a deployment boundary.", "question": "What should the agent remember?",
-        "options": options, "presentations": {"zh": {"recap": "已审阅事件记录了部署边界。", "question": "代理应该记住什么？", "options": [{"id": "one", "text": "修改部署文件前先询问。"}, {"id": "two", "text": "把部署工作放在单独分支。"}]}},
+        "options": options, "presentations": {
+            "en": {"recap": "The reviewed event records a deployment boundary.",
+                   "question": "What should the agent remember?", "options": options},
+            "zh": {"recap": "已审阅事件记录了部署边界。", "question": "代理应该记住什么？",
+                   "options": [{"id": "one", "text": "修改部署文件前先询问。"},
+                               {"id": "two", "text": "把部署工作放在单独分支。"}]},
+        },
         "allowOther": True, "allowSkip": True,
     }
 
@@ -59,6 +66,8 @@ def bulk(identifier="bulk-a", evidence=None):
 
 def regeneration_context():
     value = context(); value.pop("autoRemoved"); value["schema"] = "oxygen.preference-regeneration-context"
+    for lesson in value["reusableLessons"]:
+        lesson.pop("language")
     value["reviewedEvidence"] = [{key: item[key] for key in ("documentId", "eventId", "documentKind")} for item in value["reviewedEvidence"]]
     value["binding"] = {"workflowRunId": "run-a", "sourceRevision": 7, "activeStoryDigest": "a" * 64,
                         "serverVersion": 3, "lifecycleDigest": "b" * 64}
@@ -121,8 +130,8 @@ class FinalizerTests(unittest.TestCase):
         self.assertEqual(set(bundle), {
             "workflowRunId", "sourceRevision", "inputDigest", "outputDigest", "outputCount", "setAside",
             "insightScope", "probes", "bulkDecisions", "autoRemoved"})
-        self.assertEqual(bundle["inputDigest"], "e1c6d1d5d5b85b5dd73c0e87ae7cdaff9d9cb75672c90220e9d52de235fd1fc4")
-        self.assertEqual(bundle["outputDigest"], "1b2cb1e9b96d9f1d5996772f5e141a8297d4af7bd535952ec08ede98592c1f18")
+        self.assertEqual(bundle["inputDigest"], "ec4ea10cc5c70d2e73373db3e3a7bab2b7fb019083ba12b363e479fcb68788d5")
+        self.assertEqual(bundle["outputDigest"], "9087f672d0ab9566aa41652e063a37a2e929efdff74418d78008fdadb088b0f1")
 
     def test_completed_zero_and_nonzero_set_aside_rejection(self):
         bundle = VALIDATOR.finalize(context(), {"probes": [], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
@@ -211,7 +220,11 @@ class FinalizerTests(unittest.TestCase):
             {"id": "one", "text": "Straße"},
             {"id": "two", "text": "STRASSE"},
         ]
-        candidate["presentations"] = {}
+        candidate["presentations"] = {"en": {
+            "recap": candidate["recap"], "question": candidate["question"],
+            "options": [{"id": "one", "text": "German sharp s"},
+                        {"id": "two", "text": "ASCII double s"}],
+        }}
         VALIDATOR.finalize(
             context(), {"probes": [candidate], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
         )

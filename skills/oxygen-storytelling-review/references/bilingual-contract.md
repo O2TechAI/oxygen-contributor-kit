@@ -1,51 +1,77 @@
-# Localization Contract
+# Canonical Story Language Contract
 
-## Current Authority
+This file is the sole owner of Story language selection and propagation. Language changes
+authorable text, not Story, Insight, Preference-answer, Privacy, review, or release identity. A run
+has one canonical `oxygen.story` source per Chapter and one shared review/release authority; do not
+create per-language Story schemas, sidecars, histories, Privacy decisions, answers, or releases.
 
-The final `oxygen.story` source parser accepts the English Story fields documented in [story-data-contract.md](story-data-contract.md). It does not accept an alternate localized source schema and does not store a localized Story sidecar in the parsed `StorySource`.
+## Bound language policy
 
-English is therefore the canonical source-readiness and release surface on this base. Do not claim localization exists, blocks activation, or ships in `oxygen.reviewed-story` unless production code implements that authority.
+Before any Story worker assignment, output, or receipt, preparation derives and persists this exact
+policy in the existing `story/validation-authority.json` and carries it unchanged in the final
+`oxygen.story-preparation` manifest:
 
-## Optional Presentation
-
-If a safe localized presentation exists outside `oxygen.story`, it is optional and must share the same Chapter keys, Phase IDs, Person IDs, Story-block IDs, Insight IDs, Privacy candidate IDs, Evidence references, revision history, and All set state.
-
-Missing, incomplete, stale, or unsafe localization must not invalidate a valid English candidate. Omit unsafe localized presentation rather than weakening English, Privacy, Evidence, or release gates.
-
-## What May Localize
-
-Viewer chrome may localize labels such as navigation, status, buttons, blockers, Preferences, Evidence-view chrome, and review actions. Exact Evidence content and technical identifiers remain in the original source language.
-
-If localized Story or Insight presentation is implemented later, it must preserve the same factual claims, causal relationships, failures, uncertainty, decisions, and Insight meanings:
-
-```text
-Background
-Quote
-Directly Acquired Experience
-Principle
+```ts
+type StoryLanguagePolicy = {
+  schema: "oxygen.story-language-policy";
+  workflowRunId: string;
+  sourceRevision: number; // positive JavaScript-safe integer
+  sourceDigest: string; // exact current semantic source authority
+  sourcePrivacyDigest: string; // exact current public Source Privacy projection
+  sourceInputDigest: string; // exact represented Privacy-reviewed Story input
+  detectedLanguage: "en" | "zh" | "mixed";
+  selection: "all-english" | "all-chinese" | "preserve-per-story";
+  stories: Array<{ storyKey: string; language: "en" | "zh" }>;
+};
 ```
 
-A local reviewed Quote may contain exact bound raw source text. Any localized final release uses the
-same contributor-reviewed Story Privacy bytes as the canonical release and cannot bypass its target
-choices or release gate.
+Rows are unique and sorted by UTF-8 `storyKey`. The policy digest is SHA-256 of canonical JSON.
+Every bounded lane input carries the exact relevant `stories` projection plus the whole-policy
+digest, workflow run, and source revision. A stale, foreign, malformed, or tampered policy fails
+before output or receipt. Existing receipt fields keep their established meanings; policy binding
+is through the immutable lane input, validation authority, output metadata, and final manifest.
 
-## Shared Review State
+Every final `StorySource` carries exactly one `language` and the whole `languagePolicyDigest`.
+Missing or invalid metadata is rejected and regenerated; there is no old-payload fallback. A Story
+worker authors only its assigned language. Phase labels and Timeline navigation labels remain
+English at the data boundary regardless of Story language.
 
-Review state is keyed by Chapter and stable Story identities, not by language. Do not create separate All set histories or Preference answers per language.
+## Deterministic classification and mixed continuation
 
-Direct edits in one language may create informational paired-presentation debt when such a presentation exists. That debt is local review metadata, not a canonical English blocker unless production code explicitly makes it one.
+The sole classifier counts Unicode Han and Latin letters in the exact represented
+Privacy-reviewed Story input. Han at or above 80 percent of those letters is `zh`; Latin at or
+above 80 percent is `en`; every other ratio, including no language evidence, is `mixed`. This
+tolerates a bounded minority of technical terms without maintaining a second classifier.
 
-## Evidence Language Rule
+Strong `en` selects `all-english`; strong `zh` selects `all-chinese`. Mixed input stops before any
+worker assignment, output, or receipt with the fixed code `STORY_LANGUAGE_CHOICE_REQUIRED` until
+the parent supplies exactly one of:
 
-Story UI may switch language when safe presentation exists. Evidence stays source-language. Never translate Evidence and present it as original.
+- `all-english`
+- `all-chinese`
+- `preserve-per-story`
 
-## Required Checks
+`preserve-per-story` classifies each exact Coverage owner/Chapter with the same rule. Clear owners
+are deterministic. Every mixed or no-language owner must appear exactly once in the explicit map
+as `en` or `zh`; the parent may not guess, default, translate, or silently fall back.
 
-Verify:
+## Review, Preference, and release reuse
 
-1. English-only Story can activate, complete review, and export.
-2. Localization absence does not block English.
-3. Any localized UI labels preserve the same review state.
-4. Evidence IDs and technical anchors remain stable.
-5. Evidence content remains source-language.
-6. Localized presentation, if present, is omitted from release when stale or unsafe.
+Review block projection and review/release edit application use `StorySource.language`; the same
+Chapter keys, block IDs, Insight IDs, Privacy targets, review decisions, and release gate survive
+either language. Evidence remains exact source-language evidence and is never presented as a
+translation.
+
+Preference `insightScope` remains exactly
+`{storyKey, insightId, insightAuthorityDigest}`. Language is display metadata carried by the
+linked reusable lesson and bounded assignment, never part of Insight binding, option IDs, question
+IDs, or answer identity. A probe may contain reviewed `en` and `zh` presentations, but the exact
+linked Story language presentation must exist and validate before activation. Missing copy fails
+preparation/activation; there is no fallback, automatic synthesis, or translation.
+
+## Required behavior
+
+Behavior tests cover strong English and Chinese input, every mixed continuation, ambiguous-owner
+mapping failure, policy tamper/stale/foreign rejection before receipt, worker language mismatch,
+English Phase labels, required Preference presentation, stable identities and authorities, and
+current-shape fixture migration without compatibility parsing.

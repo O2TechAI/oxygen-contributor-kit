@@ -22,6 +22,7 @@ import {
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
 import { parseStorySource, type StorySource } from "./timeline.ts";
+import { hasRequiredProbePresentation } from "./preference-presentation.ts";
 import { isWorkflowRunId } from "./workflow-progress.ts";
 import {
   captureStoryReleasePrivacySnapshot,
@@ -108,7 +109,8 @@ export async function projectPreferenceLifecycle(stories:StorySource[],
   const byId=new Map(probes.map((probe)=>[String(probe.id),probe])),projected=[];
   for(const question of state.questions){
     const probe=byId.get(question.id),story=stories.find((item)=>item.key===question.storyKey),insight=story?.insights.find(
-      (item)=>item.id===question.insightId);if(!insight)return null;
+      (item)=>item.id===question.insightId);if(!story||!insight)return null;
+    if(!probe||!hasRequiredProbePresentation(preferenceQuestionValue(probe).presentations,story.language))return null;
     const review=reviews?.[question.storyKey]?.sourceInsightReviews[question.insightId];
     let status:PreferenceLifecycleStatus="inactive";
     if(review?.decision==="accepted"&&review.resolution==="applied"&&review.appliedVersion===review.version){
@@ -117,7 +119,7 @@ export async function projectPreferenceLifecycle(stories:StorySource[],
       const questionCurrent=probe&&await preferenceQuestionDigest(probe)===question.questionDigest;
       status=current===question.insightAuthorityDigest&&questionCurrent?"active":"needs_update";
     }
-    projected.push({...probe,...question,lifecycle_status:status,lifecycle_key:`current:${question.id}`});
+    projected.push({...probe,...question,language:story.language,lifecycle_status:status,lifecycle_key:`current:${question.id}`});
   }
   return projected;
 }
