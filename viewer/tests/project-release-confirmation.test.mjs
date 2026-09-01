@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -176,6 +176,48 @@ async function completedPrivacyImport(snapshot, candidates = [], completedAt = "
     terminalReceipt,
     importDigest: await storyPreparationDigest(core),
   };
+}
+
+async function refreshReviewedStoryPrivacy(db, tag) {
+  const prepared = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN);
+  assert.equal(prepared.ok, true, JSON.stringify(prepared));
+  const directory = await mkdtemp(join(tmpdir(), `release-confirmation-${tag}-`));
+  try {
+    const snapshotPath = join(directory, "snapshot.json");
+    const root = join(directory, "prepared");
+    const proposals = join(directory, "proposals");
+    const bundlePath = join(directory, "import.json");
+    await writeFile(snapshotPath, JSON.stringify(prepared.snapshot));
+    await mkdir(proposals);
+    const scripts = join(import.meta.dirname, "..", "..", "skills", "oxygen-storytelling-review", "scripts");
+    const runNode = async (script, args) => {
+      const child = spawn(process.execPath, [script, ...args], {
+        cwd: join(import.meta.dirname, ".."), stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      const [status] = await once(child, "close");
+      assert.equal(status, 0, stderr);
+    };
+    await runNode(join(scripts, "prepare_reviewed_story_privacy.mjs"), [snapshotPath, root]);
+    const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8"));
+    for (const shard of manifest.shards) {
+      const input = JSON.parse(await readFile(join(root, shard.inputPath), "utf8"));
+      await writeFile(
+        join(proposals, `${shard.id}.proposals.json`),
+        JSON.stringify(await privacyForTargets(input.targets, [])),
+      );
+    }
+    await runNode(join(scripts, "finalize_reviewed_story_privacy.mjs"), [root, proposals, bundlePath]);
+    const imported = await importReviewedStoryPrivacyAuthority(
+      db,
+      JSON.parse(await readFile(bundlePath, "utf8")),
+      "2026-08-27T08:00:01.000Z",
+    );
+    assert.equal(imported.ok, true, JSON.stringify(imported));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 function source(key, itemId, index, insights = []) {
@@ -570,6 +612,7 @@ async function setup({ anonymization = false, preference = false } = {}) {
   await db.prepare(`INSERT INTO story_review_sessions
     (workflow_run_id,state_json,updated_at,server_version) VALUES (?,?,?,?)`)
     .bind(RUN, JSON.stringify({ sourceRevision: REVISION, session }), NOW, VERSION).run();
+  if (preference) await refreshReviewedStoryPrivacy(db, "preference");
   const currentRun = await db.prepare("SELECT active_story_digest FROM workflow_runs WHERE id=?")
     .bind(RUN).first();
   const preferenceLifecycle = probe

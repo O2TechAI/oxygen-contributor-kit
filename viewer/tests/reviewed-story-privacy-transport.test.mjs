@@ -195,6 +195,18 @@ function unchangedReviewedState() {
   return markChapterReady(state, context(state));
 }
 
+function untouchedReviewedState() {
+  return emptyChapterReview(source);
+}
+
+function acceptedUnappliedReviewedState() {
+  return updateAiInsightDecision(emptyChapterReview(source), source, sourceInsight.id, "accepted");
+}
+
+function rejectedReviewedState() {
+  return updateAiInsightDecision(emptyChapterReview(source), source, sourceInsight.id, "rejected");
+}
+
 function blockOnlyReviewedState(blockText) {
   let state = updateAiInsightDecision(emptyChapterReview(source), source, sourceInsight.id, "rejected");
   state = applyChapterReview(state, context(state)).state;
@@ -537,6 +549,94 @@ test("Story Privacy import rejects source revision zero before database initiali
   }
 });
 
+test("source Insight targets enter Story Privacy only after accepted Apply", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "reviewed-story-insight-visibility-"));
+  const previous = process.env.OXYGEN_VIEWER_STATE_DIR;
+  process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
+  try {
+    const { getLocalDatabase } = await import("../db/index.ts");
+    const db = await getLocalDatabase();
+    await insertInitial(db);
+    const initialTargets = deriveStoryReleaseTargetContents([source]);
+    assert.ok(initialTargets);
+    assert.ok(initialTargets.every((target) => !target.id.includes("::insight:")));
+
+    const persist = async (state, serverVersion) => {
+      const session = createStoryReviewSession(RUN_ID, { [source.key]: state }, {});
+      await db.prepare(`INSERT INTO story_review_sessions
+        (workflow_run_id,state_json,updated_at,server_version) VALUES (?,?,?,?)
+        ON CONFLICT(workflow_run_id) DO UPDATE SET state_json=excluded.state_json,
+          updated_at=excluded.updated_at,server_version=excluded.server_version`)
+        .bind(
+          RUN_ID,
+          JSON.stringify({ sourceRevision: SOURCE_REVISION, session }),
+          NOW,
+          serverVersion,
+        ).run();
+    };
+    const expectCurrentWithoutTransitions = async (state, serverVersion) => {
+      await persist(state, serverVersion);
+      const revision = await reconstructReviewedStoryPrivacyRevision(db, RUN_ID);
+      assert.equal(revision.ok, true, JSON.stringify(revision));
+      assert.deepEqual(revision.revision.targetTransitions, []);
+      assert.deepEqual(revision.revision.changedTargets, []);
+      const authority = await readStoryPrivacyAuthority(db, RUN_ID);
+      assert.equal(authority.ok, true, JSON.stringify(authority));
+      assert.equal(authority.authority.status, "completed_with_candidates");
+    };
+
+    await expectCurrentWithoutTransitions(untouchedReviewedState(), 1);
+    await expectCurrentWithoutTransitions(acceptedUnappliedReviewedState(), 2);
+    await expectCurrentWithoutTransitions(rejectedReviewedState(), 3);
+
+    const applied = unchangedReviewedState();
+    await persist(applied, 4);
+    const revision = await reconstructReviewedStoryPrivacyRevision(db, RUN_ID);
+    assert.equal(revision.ok, true, JSON.stringify(revision));
+    const expectedInsightTargets = [
+      "chapter-one::insight:source-insight:title",
+      "chapter-one::insight:source-insight:background",
+      "chapter-one::insight:source-insight:quote",
+      "chapter-one::insight:source-insight:directlyAcquiredExperience",
+      "chapter-one::insight:source-insight:principle",
+    ];
+    assert.deepEqual(revision.revision.changedTargets.map((target) => target.id), expectedInsightTargets);
+    assert.deepEqual(revision.revision.targetTransitions.map((target) => ({
+      id: target.id,
+      previousContentDigest: target.previousContentDigest,
+      added: target.contentDigest !== null,
+    })), expectedInsightTargets.map((id) => ({
+      id,
+      previousContentDigest: null,
+      added: true,
+    })).sort((left, right) => Buffer.compare(Buffer.from(left.id), Buffer.from(right.id))));
+    const pending = await readStoryPrivacyAuthority(db, RUN_ID);
+    assert.equal(pending.ok, true, JSON.stringify(pending));
+    assert.equal(pending.authority.status, "preparation_required");
+
+    const prepared = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN_ID);
+    assert.equal(prepared.ok, true, JSON.stringify(prepared));
+    assert.deepEqual(prepared.snapshot.changedTargets.map((target) => target.id), expectedInsightTargets);
+    const imported = await importReviewedStoryPrivacyAuthority(
+      db,
+      await bundle(prepared.snapshot, []),
+      "2044-01-03T00:00:00.000Z",
+    );
+    assert.equal(imported.ok, true, JSON.stringify(imported));
+    await persist(applied, 5);
+    const current = await readStoryPrivacyAuthority(db, RUN_ID);
+    assert.equal(current.ok, true, JSON.stringify(current));
+    assert.equal(current.authority.status, "completed_with_candidates");
+    assert.equal((await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN_ID)).ok, false);
+  } finally {
+    globalThis.__oxygenLocalSqlite?.database.close();
+    delete globalThis.__oxygenLocalSqlite;
+    if (previous === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
+    else process.env.OXYGEN_VIEWER_STATE_DIR = previous;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("reviewed Story changes replace one atomic target authority", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "reviewed-story-privacy-"));
   const previous = process.env.OXYGEN_VIEWER_STATE_DIR;
@@ -552,7 +652,7 @@ test("reviewed Story changes replace one atomic target authority", async () => {
 
     const unchangedSession = createStoryReviewSession(
       RUN_ID,
-      { [source.key]: unchangedReviewedState() },
+      { [source.key]: untouchedReviewedState() },
       {},
     );
     await db.prepare(`INSERT INTO story_review_sessions
@@ -575,6 +675,9 @@ test("reviewed Story changes replace one atomic target authority", async () => {
       "chapter-one::story:block-one",
       "chapter-one::insight:source-insight:title",
       "chapter-one::insight:source-insight:background",
+      "chapter-one::insight:source-insight:quote",
+      "chapter-one::insight:source-insight:directlyAcquiredExperience",
+      "chapter-one::insight:source-insight:principle",
       "chapter-one::insight:human:added:background",
       "chapter-one::insight:human:added:quote",
       "chapter-one::insight:human:added:directlyAcquiredExperience",

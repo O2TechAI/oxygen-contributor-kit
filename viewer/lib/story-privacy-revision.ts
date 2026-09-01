@@ -66,7 +66,7 @@ const validRevision = (value: unknown): value is number => Number.isSafeInteger(
 const digestPattern = /^[0-9a-f]{64}$/;
 function sourceInsightContent(source: StorySource, review: StoryReviewSession["chapterReviews"][string] | null) {
   return source.insights.flatMap((insight) => {
-    if (!review) return [{ id: insight.id, content: insight }];
+    if (!review) return [];
     const current = review.sourceInsightReviews[insight.id];
     if (!current || current.decision === "rejected") return [];
     if (current.decision !== "accepted" || current.resolution !== "applied"

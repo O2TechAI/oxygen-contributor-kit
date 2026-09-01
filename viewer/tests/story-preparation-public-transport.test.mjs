@@ -707,6 +707,13 @@ test("public commands execute the nonempty four-lane dependency chain determinis
     assert.ok(manifest.receipts.every((receipt) => receipt.outputCount > 0));
     const finalStories = (await readJson(first.candidates)).map((row) => parseStorySource(row.summary));
     assert.ok(finalStories.every(Boolean));
+    const initialTargets = deriveStoryReleaseTargetContents(finalStories);
+    assert.ok(initialTargets);
+    assert.ok(initialTargets.every((target) => !target.id.includes("::insight:")));
+    assert.deepEqual(
+      manifest.storyPrivacy.targetProposals.map((proposal) => proposal.targetId),
+      initialTargets.map((target) => target.id),
+    );
     const compactStoryManifest = await readJson(join(first.transport, "story", "shards.json"));
     assert.equal(compactStoryManifest.shards.length, 1);
     assert.equal(compactStoryManifest.shards[0].unitIds.length, 2);
@@ -743,14 +750,14 @@ test("public commands execute the nonempty four-lane dependency chain determinis
 test("pending Source Privacy preserves exact raw Story and Insight narrative without deciding or applying spans", async () => {
   const reviewedNarrative = "safe reviewed canary a";
   const fragmentStart = Array.from(reviewedNarrative).length - 1;
-  const quoteTarget = "story-a::insight:insight-a:quote";
+  const initialTarget = "story-a::title";
   const flow = await createFlow({
     suffixes: ["a"],
     sourceRedactions: [{
       suffix: "a", startOffset: fragmentStart, endOffset: fragmentStart + 1,
       reviewState: "needs_confirmation",
     }],
-    storyPrivacyReleaseTargets: [quoteTarget],
+    storyPrivacyReleaseTargets: [initialTarget],
   });
   try {
     const insightManifest = await readJson(join(flow.transport, "insight", "shards.json"));
@@ -778,15 +785,16 @@ test("pending Source Privacy preserves exact raw Story and Insight narrative wit
     assert.equal(finalizedStory.insights[0].quote.text, reviewedNarrative);
 
     const authority = await readJson(flow.preparationManifest);
+    assert.ok(authority.storyPrivacy.targetProposals.every((row) => !row.targetId.includes("::insight:")));
     const candidate = authority.storyPrivacy.candidates.find((row) => (
-      row.releaseTargets.includes(quoteTarget)
+      row.releaseTargets.includes(initialTarget)
     ));
     assert.equal(candidate.reviewState, "needs_confirmation");
-    const proposal = authority.storyPrivacy.targetProposals.find((row) => row.targetId === quoteTarget);
-    assert.equal(proposal.proposedText, "safe reviewed canary Anonymous");
+    const proposal = authority.storyPrivacy.targetProposals.find((row) => row.targetId === initialTarget);
+    assert.equal(proposal.proposedText, "Canary Anonymous");
     assert.deepEqual(proposal.occurrences.map(({ originalStartOffset, originalEndOffset }) => ({
       originalStartOffset, originalEndOffset,
-    })), [{ originalStartOffset: fragmentStart, originalEndOffset: fragmentStart + 1 }]);
+    })), [{ originalStartOffset: 7, originalEndOffset: 8 }]);
   } finally {
     await flow.cleanup();
   }

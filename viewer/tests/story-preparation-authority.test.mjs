@@ -615,7 +615,7 @@ test("scope omission, duplicate, foreign, overlapping Story keys, and Chapter-lo
   });
 });
 
-test("final target catalog is exact, namespaced, deterministic, and contains no retired vocabulary", async () => {
+test("initial target catalog contains every base Story field and no pending source Insight field", async () => {
   const fixture = await authorityFixture();
   const ids = fixture.targetCatalog.map((target) => target.id);
   assert.equal(new Set(ids).size, ids.length);
@@ -623,10 +623,12 @@ test("final target catalog is exact, namespaced, deterministic, and contains no 
     "a::phase", "a::title", "a::overview", "a::transition:before", "a::transition:after",
     "a::people:person-a:releaseLabel", "a::people:person-a:role",
     "a::people:person-a:description", "a::story:block-a", "a::uncertainty",
-    "a::insight:insight-a:title", "a::insight:insight-a:background",
-    "a::insight:insight-a:quote",
-    "a::insight:insight-a:directlyAcquiredExperience", "a::insight:insight-a:principle",
   ]) assert.ok(ids.includes(expected), expected);
+  assert.ok(ids.every((id) => !id.includes("::insight:")));
+  assert.deepEqual(
+    deriveStoryReleaseTargetCatalog([story("a")]),
+    deriveStoryReleaseTargetCatalog([story("a", { insight: false })]),
+  );
   assert.doesNotMatch(JSON.stringify(ids), /scene|reconstruction-|detail-|outcome/);
   assert.deepEqual(deriveStoryReleaseTargetCatalog([story("a"), story("b")]), fixture.targetCatalog);
 });

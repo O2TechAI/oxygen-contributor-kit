@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
+import { execFile as execFileCallback } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerHooks } from "node:module";
+import { promisify } from "node:util";
 import {
   applyChapterReview,
   editAiInsight,
@@ -34,6 +36,11 @@ import {
   reconstructReviewedStoryReleaseFromDatabase,
 } from "../lib/story-release-server.ts";
 import { readActiveStoryReviewContract } from "../lib/story-review-session-server.ts";
+import {
+  buildReviewedStoryPrivacyPreparationSnapshot,
+  importReviewedStoryPrivacyAuthority,
+} from "../lib/story-privacy-authority.ts";
+import { reconstructReviewedStoryPrivacyRevision } from "../lib/story-privacy-revision.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { captureStoryReleasePrivacySnapshot } from "../lib/release-privacy-snapshot.ts";
 import {
@@ -60,10 +67,11 @@ import {
 import { STORY_PREFIX } from "../lib/timeline.ts";
 import {
   deriveStoryReleaseTargetContents,
-  deriveStoryReleaseTargetCatalog,
   insightAuthorityValue,
   storyPreparationDigest,
 } from "../lib/story-preparation.ts";
+
+const execFile = promisify(execFileCallback);
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -267,10 +275,34 @@ test("multiple accepted AI Insights, rejection, optional title, and four-part Qu
   assert.doesNotMatch(JSON.stringify(projected), /"(?:anchorStoryBlockId|documentId|eventId|evidence|origin|appliedVersion|revisionHistory)"/);
 });
 
-test("AI source Quote uses its own exact release Privacy target", () => {
+test("AI source Quote becomes its own exact release Privacy target only after accepted Apply", async () => {
   const currentSource = source([insight("insight-quote-target")]);
   const quoteTarget = `${currentSource.key}::insight:insight-quote-target:quote`;
-  assert.ok(deriveStoryReleaseTargetCatalog([currentSource]).some((target) => (
+  const fixture = await serverFixture({ sourceInsights: currentSource.insights, initiallyRedacted: false });
+  const sessionFor = (review) => ({
+    ...fixture.db.session,
+    state_json: JSON.stringify({
+      sourceRevision: SOURCE_REVISION,
+      session: createStoryReviewSession(RUN_ID, { [currentSource.key]: review }, {}),
+    }),
+  });
+  fixture.db.session = sessionFor(emptyChapterReview(currentSource));
+  const pending = await reconstructReviewedStoryPrivacyRevision(fixture.db, RUN_ID);
+  assert.equal(pending.ok, true, JSON.stringify(pending));
+  assert.ok(pending.revision.targets.every((target) => target.id !== quoteTarget));
+
+  const accepted = updateAiInsightDecision(
+    emptyChapterReview(currentSource), currentSource, "insight-quote-target", "accepted",
+  );
+  fixture.db.session = sessionFor(accepted);
+  const acceptedUnapplied = await reconstructReviewedStoryPrivacyRevision(fixture.db, RUN_ID);
+  assert.equal(acceptedUnapplied.ok, true, JSON.stringify(acceptedUnapplied));
+  assert.ok(acceptedUnapplied.revision.targets.every((target) => target.id !== quoteTarget));
+
+  fixture.db.session = sessionFor(reviewedState(currentSource));
+  const applied = await reconstructReviewedStoryPrivacyRevision(fixture.db, RUN_ID);
+  assert.equal(applied.ok, true, JSON.stringify(applied));
+  assert.ok(applied.revision.targets.some((target) => (
     target.id === quoteTarget && target.target === "insight:insight-quote-target:quote"
   )));
 
@@ -451,6 +483,7 @@ class FakeStoryReleaseDb {
     this.completeness = completeness;
     this.storyPrivacyCandidates = storyPrivacyCandidates;
     this.storyPrivacyTargets = storyPrivacyTargets;
+    this.storyPrivacyAuthority = null;
   }
 
   prepare(sql) {
@@ -487,7 +520,9 @@ class FakeStoryReleaseDb {
         if (/FROM story_coverage_rows/.test(sql)) {
           return { results: structuredClone(this.completeness.coverageRows) };
         }
-        if (/FROM story_privacy_authorities/.test(sql)) return { results: [] };
+        if (/FROM story_privacy_authorities/.test(sql)) {
+          return { results: this.storyPrivacyAuthority ? [structuredClone(this.storyPrivacyAuthority)] : [] };
+        }
         if (/FROM story_privacy_candidates/.test(sql)) {
           return { results: structuredClone(this.storyPrivacyCandidates) };
         }
@@ -548,7 +583,9 @@ class FakeStoryReleaseDb {
         if (/FROM story_review_sessions WHERE workflow_run_id=\?/.test(sql)) {
           return this.session ? structuredClone(this.session) : null;
         }
-        if (/FROM story_privacy_authorities/.test(sql)) return null;
+        if (/FROM story_privacy_authorities/.test(sql)) {
+          return this.storyPrivacyAuthority ? structuredClone(this.storyPrivacyAuthority) : null;
+        }
         if (/FROM story_preparation_receipts/.test(sql)) {
           return structuredClone(this.receipts.find((receipt) => receipt.lane === "story_privacy") || null);
         }
@@ -557,11 +594,85 @@ class FakeStoryReleaseDb {
         }
         throw new Error(`Unexpected story release first SQL: ${sql}`);
       },
+      run: async () => {
+        if (/^DELETE FROM story_privacy_candidates/.test(sql)) {
+          this.storyPrivacyCandidates = this.storyPrivacyCandidates.filter((row) => row.workflow_run_id !== values[0]);
+        } else if (/^DELETE FROM story_privacy_targets/.test(sql)) {
+          this.storyPrivacyTargets = this.storyPrivacyTargets.filter((row) => row.workflow_run_id !== values[0]);
+        } else if (/^INSERT INTO story_privacy_candidates/.test(sql)) {
+          this.storyPrivacyCandidates.push({
+            workflow_run_id: values[0], candidate_id: values[1], candidate_json: values[2],
+          });
+        } else if (/^INSERT INTO story_privacy_targets/.test(sql)) {
+          this.storyPrivacyTargets.push({
+            workflow_run_id: values[0], target_id: values[1], target_content_digest: values[2],
+            proposed_text: values[3], occurrences_json: values[4], selected_text: values[5],
+            public_overrides_json: values[6], decided_at: values[7],
+          });
+        } else if (/^INSERT INTO story_privacy_authorities/.test(sql)) {
+          this.storyPrivacyAuthority = {
+            workflow_run_id: values[0], source_revision: values[1], active_story_digest: values[2],
+            server_version: values[3], reviewed_story_digest: values[4], target_catalog_json: values[5],
+            target_catalog_digest: values[6], changed_target_digest: values[7], changed_target_count: values[8],
+            receipt_digest: values[9], proposal_digest: values[10], proposal_count: values[11], imported_at: values[12],
+          };
+        } else if (/^DELETE FROM project_release_confirmations/.test(sql)) {
+          this.releaseConfirmation = null;
+        } else {
+          throw new Error(`Unexpected story release run SQL: ${sql}`);
+        }
+        return { success: true };
+      },
     };
   }
 
   batch(statements) {
     return Promise.all(statements.map((statement) => statement.all()));
+  }
+
+  transaction(operation) {
+    return operation();
+  }
+}
+
+async function refreshReviewedStoryPrivacy(db, importedAt) {
+  const revision = await reconstructReviewedStoryPrivacyRevision(db, RUN_ID);
+  assert.equal(revision.ok, true, JSON.stringify(revision));
+  if (revision.revision.targetTransitions.length === 0) return;
+  const prepared = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN_ID);
+  assert.equal(prepared.ok, true, JSON.stringify(prepared));
+  const directory = await mkdtemp(join(tmpdir(), "story-release-reviewed-privacy-"));
+  try {
+    const snapshotPath = join(directory, "snapshot.json");
+    const root = join(directory, "prepared");
+    const proposals = join(directory, "proposals");
+    const bundlePath = join(directory, "import.json");
+    await writeFile(snapshotPath, JSON.stringify(prepared.snapshot));
+    await mkdir(proposals);
+    const scripts = join(import.meta.dirname, "..", "..", "skills", "oxygen-storytelling-review", "scripts");
+    await execFile(process.execPath, [join(scripts, "prepare_reviewed_story_privacy.mjs"), snapshotPath, root]);
+    const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8"));
+    for (const shard of manifest.shards) {
+      const input = JSON.parse(await readFile(join(root, shard.inputPath), "utf8"));
+      await writeFile(join(proposals, `${shard.id}.proposals.json`), JSON.stringify({
+        candidates: [],
+        targetProposals: input.targets.map((target) => ({
+          targetId: target.id,
+          targetContentDigest: target.contentDigest,
+          proposedText: target.content,
+          occurrences: [],
+        })),
+      }));
+    }
+    await execFile(process.execPath, [
+      join(scripts, "finalize_reviewed_story_privacy.mjs"), root, proposals, bundlePath,
+    ]);
+    const imported = await importReviewedStoryPrivacyAuthority(
+      db, JSON.parse(await readFile(bundlePath, "utf8")), importedAt,
+    );
+    assert.equal(imported.ok, true, JSON.stringify(imported));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 }
 
@@ -572,6 +683,7 @@ async function serverFixture({
   ],
   decisions = {},
   includeHuman = false,
+  refreshStoryPrivacy = true,
   storyPrivate = PRIVATE,
   initiallyRedacted = true,
   sourceOverrides = {},
@@ -911,6 +1023,9 @@ async function serverFixture({
   assert.equal(privacyAuthority.ok, true);
   db.completeness.coverageManifestRow.privacy_authority_digest =
     privacyAuthority.authority.snapshotDigest;
+  if (refreshStoryPrivacy) {
+    await refreshReviewedStoryPrivacy(db, "2026-08-25T00:00:10.500Z");
+  }
   const current = await reconstructReviewedStoryReleaseFromDatabase(db, request(), {
     allowUnsetReleaseConfirmation: true,
   });
@@ -1263,7 +1378,9 @@ test("synthetic live server flow releases zero and source Insights with byte par
     assert.deepEqual(JSON.parse(embedded), JSON.parse(zipEntry.data));
     assert.equal(release.story.publication_approved, false);
   }
-  const edited = await serverFixture({ sourceInsights: [], includeHuman: true });
+  const edited = await serverFixture({
+    sourceInsights: [], includeHuman: true, refreshStoryPrivacy: false,
+  });
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(edited.db, request())).code,
     RELEASE_ERROR.preparationInvalid);
 });

@@ -196,6 +196,7 @@ the finalizer reuses the same owner after composing all shards. An array-only ou
 and neither boundary synthesizes an omitted unchanged proposal. Completed-zero means
 `candidates: []` plus the complete set of unchanged target proposals; it never means an omitted or
 empty `targetProposals` array when targets were assigned.
+Initial preparation catalogs only base Story fields; a source Insight enters release targets only after its current accepted version is successfully applied.
 
 The one global Preference worker reads its one manifest `inputPath` and writes only the candidate
 shape owned by the Preference Skill. It produces one deduplicated questionnaire authority and is
