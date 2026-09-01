@@ -236,6 +236,68 @@ def write_worker_results(output: Path, unit_for_id) -> None:
 
 
 class SemanticUnitTransportTests(unittest.TestCase):
+    def test_recorder_separates_correctable_mapping_feedback_from_fatal_authority(self):
+        cases = {
+            "malformed-json": ("{", "SEMANTIC_WORKER_MAPPING_INVALID"),
+            "non-array": (json.dumps({}), "SEMANTIC_WORKER_MAPPING_INVALID"),
+            "unknown-id": (lambda ids: json.dumps([{
+                "unitId": "unknown-unit", "contributionIds": ids,
+            }]), "SEMANTIC_WORKER_MAPPING_INVALID"),
+            "overlap": (lambda ids: json.dumps([
+                {"unitId": "unit-one", "contributionIds": [ids[0]]},
+                {"unitId": "unit-one", "contributionIds": [ids[0]]},
+            ]), "SEMANTIC_WORKER_MAPPING_INVALID"),
+            "missing-coverage": (lambda ids: json.dumps([{
+                "unitId": "unit-one", "contributionIds": [ids[0]],
+            }]), "SEMANTIC_WORKER_MAPPING_INVALID"),
+        }
+        for label, (payload, expected) in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run = root / "run"
+                ids = write_trajectory(run, f"traj-{label}", ["one", "two"])
+                self.assertEqual(run_builder(run).returncode, 0)
+                semantic = root / "semantic"
+                prepared = prepare(run, semantic, registry=registry_proposal("unit-one"))
+                shard = prepared["manifest"]["shards"][0]
+                proposal_path = semantic / shard["proposalPath"]
+                value = payload(ids) if callable(payload) else payload
+                proposal_path.write_text(value, encoding="utf-8")
+                result = subprocess.run([
+                    sys.executable, str(SCRIPTS / "record_semantic_worker.py"),
+                    str(semantic), shard["id"], str(proposal_path),
+                ], capture_output=True, text=True, encoding="utf-8", check=False)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, f"{expected}\n")
+                self.assertFalse((semantic / "records" / shard["id"]).exists())
+
+    def test_recorder_keeps_input_tampering_fatal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / "run"
+            ids = write_trajectory(run, "traj-fatal", ["one", "two"])
+            self.assertEqual(run_builder(run).returncode, 0)
+            semantic = root / "semantic"
+            prepared = prepare(run, semantic, registry=registry_proposal("unit-one"))
+            shard = prepared["manifest"]["shards"][0]
+            proposal_path = semantic / shard["proposalPath"]
+            proposal_path.write_text(json.dumps([{
+                "unitId": "unit-one", "contributionIds": sorted(ids,
+                    key=lambda value: value.encode("utf-8")),
+            }]), encoding="utf-8")
+            input_path = semantic / shard["inputPath"]
+            input_value = json.loads(input_path.read_text(encoding="utf-8"))
+            input_value["registry"] = {}
+            input_path.write_text(json.dumps(input_value), encoding="utf-8")
+            result = subprocess.run([
+                sys.executable, str(SCRIPTS / "record_semantic_worker.py"),
+                str(semantic), shard["id"], str(proposal_path),
+            ], capture_output=True, text=True, encoding="utf-8", check=False)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stderr, "SEMANTIC_WORKER_RECORD_INVALID\n")
+            self.assertFalse((semantic / "records" / shard["id"]).exists())
+
     def test_worker_clis_map_missing_inputs_to_fixed_safe_errors(self):
         with tempfile.TemporaryDirectory() as temporary:
             missing = Path(temporary) / "HOSTILE_SENTINEL_https_example.invalid_exception-body"
@@ -297,9 +359,11 @@ class SemanticUnitTransportTests(unittest.TestCase):
             ]
             first = builder.canonical_project_map(
                 run, "Synthetic Project", "Safe cross-runtime summary.", raw_units,
+                registry_digest="d" * 64,
             )
             second = builder.canonical_project_map(
                 run, "Synthetic Project", "Safe cross-runtime summary.", raw_units,
+                registry_digest="d" * 64,
             )
             first_bytes = builder.transport_json_bytes(first)
             self.assertEqual(first_bytes, builder.transport_json_bytes(second))

@@ -107,6 +107,9 @@ def semantic_source_digest(ids, source_digests):
     } for contribution_id in ids])
 
 
+REGISTRY_DIGEST = "c" * 64
+
+
 class BuildProjectMapTests(unittest.TestCase):
     def test_cli_maps_missing_run_to_fixed_safe_error(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -138,6 +141,7 @@ class BuildProjectMapTests(unittest.TestCase):
             "Synthetic Project", ids, digests, source_digest, [{
                 "id": f"unit-{index}", "kind": kind, "members": [ids[index]],
             } for index, kind in enumerate(valid_kinds)],
+            registry_digest=REGISTRY_DIGEST,
         )
         self.assertEqual(
             [unit["kind"] for unit in manifest["units"]],
@@ -166,6 +170,7 @@ class BuildProjectMapTests(unittest.TestCase):
                         "Synthetic Project", ["item"], {"item": "b" * 64},
                         "a" * 64,
                         [{"id": "unit", "kind": invalid, "members": ["item"]}],
+                        registry_digest=REGISTRY_DIGEST,
                     )
                 self.assertEqual(
                     str(failure.exception), MODULE.SEMANTIC_WORKER_KIND_INVALID,
@@ -181,6 +186,7 @@ class BuildProjectMapTests(unittest.TestCase):
                 "Synthetic Project",
                 "Safe summary.",
                 [{"id": "unit-one", "kind": "discussion", "members": ids}],
+                registry_digest=REGISTRY_DIGEST,
             )
             self.assertEqual(
                 MODULE.validate_project_map_authority(run, project_map), project_map,
@@ -218,6 +224,7 @@ class BuildProjectMapTests(unittest.TestCase):
                 "Synthetic Project", ids, digests,
                 semantic_source_digest(ids, digests),
                 [{"id": "unit-all", "kind": "discussion", "members": ids}],
+                registry_digest=REGISTRY_DIGEST,
             )
             self.assertEqual(manifest["units"][0]["memberCount"], 3)
 
@@ -268,6 +275,7 @@ class BuildProjectMapTests(unittest.TestCase):
             project_map = MODULE.canonical_project_map(
                 run, "Synthetic Project", "Filtered.",
                 [{"id": "unit-current", "kind": "discussion", "members": ids}],
+                registry_digest=REGISTRY_DIGEST,
             )
             self.assertEqual(project_map["source_authority"]["sourceCount"], 3)
             self.assertEqual(project_map["semantic_manifest"]["units"][0]["members"], ids)
@@ -279,6 +287,7 @@ class BuildProjectMapTests(unittest.TestCase):
             self.assertEqual(MODULE.indexed_trajectory_directories(run), [])
             project_map = MODULE.canonical_project_map(
                 run, "Synthetic Project", "No current history.", [],
+                registry_digest=REGISTRY_DIGEST,
             )
             self.assertEqual(project_map["source_authority"]["sourceCount"], 0)
             self.assertEqual(project_map["semantic_manifest"]["units"], [])
@@ -458,6 +467,7 @@ class BuildProjectMapTests(unittest.TestCase):
             units = [{"id": "unit-one", "kind": "decision_episode", "members": ids}]
             first = MODULE.finalize_units(
                 "Synthetic Project", ids, digests, source_digest, units,
+                registry_digest=REGISTRY_DIGEST,
             )
             manifest_path = directory / "manifest.json"
             trajectory_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -468,6 +478,7 @@ class BuildProjectMapTests(unittest.TestCase):
             second = MODULE.finalize_units(
                 "Synthetic Project", next_ids, next_digests,
                 semantic_source_digest(next_ids, next_digests), units, first,
+                registry_digest=REGISTRY_DIGEST,
             )
             self.assertEqual(second["sourceDigest"], first["sourceDigest"])
             self.assertEqual(second["manifestDigest"], first["manifestDigest"])
@@ -495,11 +506,14 @@ class BuildProjectMapTests(unittest.TestCase):
 
     def test_utf8_byte_bounds_are_shared_by_project_and_unit_authority(self):
         with self.assertRaisesRegex(ValueError, "project identity is invalid"):
-            MODULE.finalize_units("😀" * 76, [], {}, "a" * 64, [])
+            MODULE.finalize_units(
+                "😀" * 76, [], {}, "a" * 64, [], registry_digest=REGISTRY_DIGEST,
+            )
         with self.assertRaisesRegex(ValueError, "semantic unit identity"):
             MODULE.finalize_units(
                 "Synthetic Project", ["item"], {"item": "b" * 64}, "a" * 64,
                 [{"id": "😀" * 76, "kind": "discussion", "members": ["item"]}],
+                registry_digest=REGISTRY_DIGEST,
             )
 
     def test_previous_manifest_requires_explicit_valid_content_bound_lineage(self):
@@ -509,9 +523,11 @@ class BuildProjectMapTests(unittest.TestCase):
         units = [{"id": "unit-one", "kind": "discussion", "members": ids}]
         first = MODULE.finalize_units(
             "Synthetic Project", ids, digests, source_digest, units,
+            registry_digest=REGISTRY_DIGEST,
         )
         retried_without_lineage = MODULE.finalize_units(
             "Synthetic Project", ids, digests, source_digest, units,
+            registry_digest=REGISTRY_DIGEST,
         )
         self.assertEqual(retried_without_lineage["revision"], 1)
         self.assertEqual(retried_without_lineage["units"][0]["revision"], 1)
@@ -520,7 +536,8 @@ class BuildProjectMapTests(unittest.TestCase):
         forged["revision"] = 900
         with self.assertRaisesRegex(ValueError, "manifest digest is stale"):
             MODULE.finalize_units(
-                "Synthetic Project", ids, digests, source_digest, units, forged,
+            "Synthetic Project", ids, digests, source_digest, units, forged,
+                registry_digest=REGISTRY_DIGEST,
             )
 
     def test_duplicate_topology_is_exact_and_non_chained(self):
@@ -533,6 +550,7 @@ class BuildProjectMapTests(unittest.TestCase):
                     {"id": "unit-primary", "kind": "discussion", "members": ["item-one"]},
                     {"id": "unit-duplicate", "kind": "duplicate", "members": ["item-two", "item-three"]},
                 ],
+                registry_digest=REGISTRY_DIGEST,
             )
         with self.assertRaisesRegex(ValueError, "non-duplicate unit declares"):
             MODULE.finalize_units(
@@ -540,6 +558,7 @@ class BuildProjectMapTests(unittest.TestCase):
                     {"id": "unit-primary", "kind": "discussion", "members": ["item-one"], "duplicateOfUnitId": "unit-other"},
                     {"id": "unit-other", "kind": "discussion", "members": ["item-two", "item-three"]},
                 ],
+                registry_digest=REGISTRY_DIGEST,
             )
         with self.assertRaisesRegex(ValueError, "duplicate relation is invalid"):
             MODULE.finalize_units(
@@ -548,6 +567,7 @@ class BuildProjectMapTests(unittest.TestCase):
                     {"id": "unit-duplicate-a", "kind": "duplicate", "members": ["item-two"], "duplicateOfUnitId": "unit-duplicate-b"},
                     {"id": "unit-duplicate-b", "kind": "duplicate", "members": ["item-three"], "duplicateOfUnitId": "unit-primary"},
                 ],
+                registry_digest=REGISTRY_DIGEST,
             )
 
     def test_cli_edit_cycle_preserves_and_advances_semantic_revisions(self):
@@ -557,6 +577,7 @@ class BuildProjectMapTests(unittest.TestCase):
             command = [
                 sys.executable, str(MODULE_PATH), str(run),
                 "--primary-project", "Synthetic Project", "--summary", "Safe summary.",
+                "--registry-digest", REGISTRY_DIGEST,
             ]
             first_skeleton = subprocess.run(
                 command, capture_output=True, text=True, encoding="utf-8", check=False,

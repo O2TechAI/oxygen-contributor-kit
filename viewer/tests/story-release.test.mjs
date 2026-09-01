@@ -546,6 +546,7 @@ async function serverFixture({
     revision: 1,
     sourceDigest: await sha256(canonicalAuthorityJson([contribution])),
     universeDigest: await sha256(canonicalAuthorityJson([item.id])),
+    registryDigest: "d".repeat(64),
     units: [semanticUnit],
   };
   const semanticValidation = await validateSemanticManifestAuthority({
@@ -777,6 +778,7 @@ async function serverFixture({
         revision: semantic.revision,
         source_digest: semantic.sourceDigest,
         universe_digest: semantic.universeDigest,
+        registry_digest: semantic.registryDigest,
         manifest_digest: semantic.manifestDigest,
         serialized_bytes: semantic.serializedBytes,
       },
@@ -820,6 +822,7 @@ async function serverFixture({
         revision: semantic.revision,
         source_digest: semantic.sourceDigest,
         universe_digest: semantic.universeDigest,
+        registry_digest: semantic.registryDigest,
         manifest_digest: semantic.manifestDigest,
         unit_count: semantic.units.length,
         serialized_bytes: semantic.serializedBytes,

@@ -150,7 +150,7 @@ async function status(db: Awaited<ReturnType<typeof getLocalDatabase>>, workflow
         (SELECT COUNT(*) FROM semantic_unit_members WHERE workflow_run_id=?) AS completed`)
       .bind(workflowRunId).first<{ total: number; completed: number }>(),
     db.prepare("SELECT COUNT(*) AS count FROM documents").first<{ count: number }>(),
-    db.prepare(`SELECT m.revision,m.source_revision,m.manifest_digest,m.unit_count,
+    db.prepare(`SELECT m.revision,m.source_revision,m.registry_digest,m.manifest_digest,m.unit_count,
         m.corpus_revision,m.corpus_digest,m.corpus_document_count,m.corpus_item_count,
         r.story_source_revision,f.corpus_revision AS finalized_corpus_revision,
         f.corpus_digest AS finalized_corpus_digest,
@@ -174,7 +174,9 @@ async function status(db: Awaited<ReturnType<typeof getLocalDatabase>>, workflow
     && Number(manifest.corpus_document_count) === Number(manifest.finalized_document_count)
     && Number(manifest.corpus_item_count) === Number(manifest.finalized_item_count)
     && Number(manifest.current_document_count) === Number(manifest.finalized_document_count)
-    && Number(manifest.current_item_count) === Number(manifest.finalized_item_count);
+    && Number(manifest.current_item_count) === Number(manifest.finalized_item_count)
+    && typeof manifest.registry_digest === "string"
+    && /^[0-9a-f]{64}$/.test(manifest.registry_digest);
   const complete = Boolean(currentManifest && completed === total);
   return {
     status: complete ? "complete" : recordedStatus === "complete" ? "idle" : recordedStatus,
@@ -186,6 +188,7 @@ async function status(db: Awaited<ReturnType<typeof getLocalDatabase>>, workflow
     semanticManifest: currentManifest ? {
       revision: Number(manifest.revision),
       sourceRevision: Number(manifest.source_revision),
+      registryDigest: String(manifest.registry_digest),
       digest: String(manifest.manifest_digest),
       unitCount: Number(manifest.unit_count),
       finalizedCorpus: {
@@ -211,7 +214,7 @@ async function exactCurrentSemanticResponse(
           timestamp,content,original_json FROM items ORDER BY id`)
         .all<ContributionItemRow>(),
       db.prepare(`SELECT m.project_id,m.revision,m.source_revision,m.source_digest,
-          m.universe_digest,m.manifest_digest,m.unit_count,m.serialized_bytes,
+          m.universe_digest,m.registry_digest,m.manifest_digest,m.unit_count,m.serialized_bytes,
           m.story_projection_bytes,
           m.corpus_revision,m.corpus_digest,m.corpus_document_count,m.corpus_item_count,
           (SELECT COUNT(*) FROM semantic_units) AS current_unit_count,
@@ -260,6 +263,8 @@ async function exactCurrentSemanticResponse(
     if (!binding || !storedManifest
       || Number(binding.revision) !== manifest.revision
       || storedManifest.revision !== manifest.revision
+      || binding.registry_digest !== manifest.registryDigest
+      || storedManifest.registryDigest !== manifest.registryDigest
       || binding.manifest_digest !== manifest.manifestDigest
       || storedManifest.manifestDigest !== manifest.manifestDigest
       || Number(binding.source_revision) !== finalizedCorpus.storySourceRevision
@@ -285,7 +290,7 @@ async function readSemanticProjection(
   workflowRunId: string,
 ) {
   const manifest = await db.prepare(`SELECT m.project_id,m.revision,m.source_revision,m.source_digest,
-      m.universe_digest,m.manifest_digest,m.unit_count,m.serialized_bytes,m.story_projection_bytes,
+      m.universe_digest,m.registry_digest,m.manifest_digest,m.unit_count,m.serialized_bytes,m.story_projection_bytes,
       m.corpus_revision,m.corpus_digest,m.corpus_document_count,m.corpus_item_count,
       r.story_source_revision,f.corpus_revision AS finalized_corpus_revision,
       f.corpus_digest AS finalized_corpus_digest,
@@ -304,7 +309,9 @@ async function readSemanticProjection(
     || Number(manifest.corpus_document_count) !== Number(manifest.finalized_document_count)
     || Number(manifest.corpus_item_count) !== Number(manifest.finalized_item_count)
     || Number(manifest.current_document_count) !== Number(manifest.finalized_document_count)
-    || Number(manifest.current_item_count) !== Number(manifest.finalized_item_count)) return null;
+    || Number(manifest.current_item_count) !== Number(manifest.finalized_item_count)
+    || typeof manifest.registry_digest !== "string"
+    || !/^[0-9a-f]{64}$/.test(manifest.registry_digest)) return null;
   const { results } = await db.prepare(`SELECT id,revision,kind,member_count,membership_digest,
       duplicate_of_unit_id,story_projection_json
       FROM semantic_units WHERE workflow_run_id=? ORDER BY id`).bind(workflowRunId)
@@ -315,6 +322,7 @@ async function readSemanticProjection(
     sourceRevision: Number(manifest.source_revision),
     sourceDigest: manifest.source_digest,
     universeDigest: manifest.universe_digest,
+    registryDigest: manifest.registry_digest,
     manifestDigest: manifest.manifest_digest,
     unitCount: Number(manifest.unit_count),
     serializedBytes: Number(manifest.serialized_bytes),
@@ -548,15 +556,16 @@ export async function POST(request: Request) {
         .bind(authority.workflowRunId, ...leaseBindings),
       db.prepare(`INSERT INTO semantic_manifests
         (workflow_run_id,project_id,revision,source_revision,source_digest,universe_digest,
-         manifest_digest,unit_count,serialized_bytes,story_projection_bytes,
+         registry_digest,manifest_digest,unit_count,serialized_bytes,story_projection_bytes,
          corpus_revision,corpus_digest,corpus_document_count,corpus_item_count,created_at,updated_at)
-        SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ${leaseSql}`).bind(
+        SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ${leaseSql}`).bind(
         authority.workflowRunId,
         manifest.projectId,
         manifest.revision,
         leasedRevision + 1,
         manifest.sourceDigest,
         manifest.universeDigest,
+        manifest.registryDigest,
         manifest.manifestDigest,
         manifest.units.length,
         manifest.serializedBytes,

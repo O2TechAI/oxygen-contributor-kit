@@ -102,7 +102,7 @@ const statements = [
     workflow_run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
     revision INTEGER NOT NULL, source_revision INTEGER NOT NULL,
     source_digest TEXT NOT NULL, universe_digest TEXT NOT NULL,
-    manifest_digest TEXT NOT NULL, unit_count INTEGER NOT NULL,
+    registry_digest TEXT NOT NULL, manifest_digest TEXT NOT NULL, unit_count INTEGER NOT NULL,
     serialized_bytes INTEGER NOT NULL, story_projection_bytes INTEGER NOT NULL,
     corpus_revision INTEGER NOT NULL, corpus_digest TEXT NOT NULL,
     corpus_document_count INTEGER NOT NULL, corpus_item_count INTEGER NOT NULL,
@@ -355,6 +355,24 @@ function refreshLegacyStoryPrivacySchema(database: DatabaseSync) {
   }
 }
 
+function assertSemanticManifestSchema(database: DatabaseSync) {
+  const columns = database.prepare("PRAGMA table_info(semantic_manifests)").all() as Array<{
+    name?: unknown;
+    notnull?: unknown;
+  }>;
+  const registryColumn = columns.find((column) => column.name === "registry_digest");
+  if (!registryColumn || Number(registryColumn.notnull) !== 1) {
+    throw new Error("SEMANTIC_MANIFEST_SCHEMA_INVALID");
+  }
+  const rows = database.prepare("SELECT registry_digest FROM semantic_manifests").all() as Array<{
+    registry_digest?: unknown;
+  }>;
+  if (rows.some((row) => typeof row.registry_digest !== "string"
+    || !/^[0-9a-f]{64}$/.test(row.registry_digest))) {
+    throw new Error("SEMANTIC_MANIFEST_SCHEMA_INVALID");
+  }
+}
+
 type Row = Record<string, unknown>;
 type StatementResult = { success: true; meta: { changes: number }; results?: Row[] };
 
@@ -481,6 +499,7 @@ export async function getLocalDatabase() {
   try {
     refreshLegacyStoryPrivacySchema(database);
     database.exec(statements.join(";\n"));
+    assertSemanticManifestSchema(database);
     runtime.__oxygenLocalSqlite = new LocalDatabase(database);
     return runtime.__oxygenLocalSqlite;
   } catch (error) {

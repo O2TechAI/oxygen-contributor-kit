@@ -90,6 +90,7 @@ export async function seedCoveragePrivacyAuthority(db, {
     revision: 1,
     sourceDigest: await sha256(canonicalAuthorityJson(records)),
     universeDigest: await sha256(canonicalAuthorityJson(records.map((record) => record.id))),
+    registryDigest: "d".repeat(64),
     units: semanticUnits,
   };
   const semanticInput = {
@@ -149,11 +150,11 @@ export async function seedCoveragePrivacyAuthority(db, {
   });
   await db.prepare(`INSERT INTO semantic_manifests
     (workflow_run_id,project_id,revision,source_revision,source_digest,universe_digest,
-     manifest_digest,unit_count,serialized_bytes,story_projection_bytes,corpus_revision,
+     registry_digest,manifest_digest,unit_count,serialized_bytes,story_projection_bytes,corpus_revision,
      corpus_digest,corpus_document_count,corpus_item_count,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?)`).bind(
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?)`).bind(
     workflowRunId, projectId, 1, sourceRevision, semantic.sourceDigest,
-    semantic.universeDigest, semantic.manifestDigest, semantic.units.length,
+    semantic.universeDigest, semantic.registryDigest, semantic.manifestDigest, semantic.units.length,
     semantic.serializedBytes, semanticValidation.storyProjectionBytes, corpusDigest,
     documentCount, itemCount, now, now,
   ).run();

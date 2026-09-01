@@ -83,6 +83,7 @@ async function semanticAuthority(unitBOverrides = {}) {
     revision: 1,
     sourceDigest: hash(contributionRecords(contributionIds)),
     universeDigest: hash(contributionIds),
+    registryDigest: "d".repeat(64),
     units,
   };
   const validation = await validateSemanticManifestAuthority(
@@ -112,6 +113,7 @@ async function semanticAuthorityForIdentities(contributionIds, unitCount) {
     revision: 1,
     sourceDigest: hash(records),
     universeDigest: hash(contributionIds),
+    registryDigest: "d".repeat(64),
     units,
   };
   const validation = await validateSemanticManifestAuthority(
@@ -237,6 +239,7 @@ test("provider-free Privacy projection cannot make a forged membership digest du
     revision: semantic.revision,
     sourceDigest: semantic.sourceDigest,
     universeDigest: semantic.universeDigest,
+    registryDigest: semantic.registryDigest,
     units: semantic.units.map((unit, index) => ({
       ...unit,
       membershipDigest: index === 0 ? "f".repeat(64) : unit.membershipDigest,
@@ -834,6 +837,7 @@ test("coverage bookkeeping remains bounded at 512 units", async (context) => {
     revision: 1,
     sourceDigest: "c".repeat(64),
     universeDigest: "d".repeat(64),
+    registryDigest: "a".repeat(64),
     manifestDigest: "e".repeat(64),
     serializedBytes: 0,
     units: Array.from({ length: 512 }, (_, index) => ({

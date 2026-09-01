@@ -107,6 +107,7 @@ const semanticCore = {
   revision: 1,
   sourceDigest: await sha256(canonicalAuthorityJson([authorityRecord])),
   universeDigest: await sha256(canonicalAuthorityJson([authorityRecord.id])),
+  registryDigest: "e".repeat(64),
   units: [semanticUnitCore],
 };
 const semanticValidation = await validateSemanticManifestAuthority({
@@ -240,7 +241,7 @@ class SqliteReviewDb {
         workflow_run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
         revision INTEGER NOT NULL, source_revision INTEGER NOT NULL,
         source_digest TEXT NOT NULL, universe_digest TEXT NOT NULL,
-        manifest_digest TEXT NOT NULL, unit_count INTEGER NOT NULL,
+        registry_digest TEXT NOT NULL, manifest_digest TEXT NOT NULL, unit_count INTEGER NOT NULL,
         serialized_bytes INTEGER NOT NULL, story_projection_bytes INTEGER NOT NULL,
         corpus_revision INTEGER NOT NULL, corpus_digest TEXT NOT NULL,
         corpus_document_count INTEGER NOT NULL, corpus_item_count INTEGER NOT NULL,
@@ -315,10 +316,10 @@ class SqliteReviewDb {
     this.sqlite.prepare(`INSERT INTO finalized_corpus_manifests
       VALUES (?,1,?,1,1,?)`).run("review-run", "c".repeat(64), AUTHORITY_NOW);
     this.sqlite.prepare(`INSERT INTO semantic_manifests
-      VALUES (?,?,?,?,?,?,?,?,?,?,1,?,1,1,?,?)`).run(
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,1,1,?,?)`).run(
         "review-run", semanticAuthority.projectId, semanticAuthority.revision, 1,
         semanticAuthority.sourceDigest, semanticAuthority.universeDigest,
-        semanticAuthority.manifestDigest, 1, semanticAuthority.serializedBytes,
+        semanticAuthority.registryDigest, semanticAuthority.manifestDigest, 1, semanticAuthority.serializedBytes,
         semanticValidation.storyProjectionBytes, "c".repeat(64), AUTHORITY_NOW, AUTHORITY_NOW,
       );
     this.sqlite.prepare(`INSERT INTO semantic_units
@@ -474,6 +475,7 @@ class FakeReviewDb {
           revision: semanticAuthority.revision,
           source_digest: semanticAuthority.sourceDigest,
           universe_digest: semanticAuthority.universeDigest,
+          registry_digest: semanticAuthority.registryDigest,
           manifest_digest: semanticAuthority.manifestDigest,
           serialized_bytes: semanticAuthority.serializedBytes,
         };
@@ -489,6 +491,7 @@ class FakeReviewDb {
             revision: semanticAuthority.revision,
             source_digest: semanticAuthority.sourceDigest,
             universe_digest: semanticAuthority.universeDigest,
+            registry_digest: semanticAuthority.registryDigest,
             manifest_digest: semanticAuthority.manifestDigest,
             unit_count: 1,
             serialized_bytes: semanticAuthority.serializedBytes,
