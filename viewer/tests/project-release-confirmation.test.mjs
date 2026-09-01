@@ -1026,6 +1026,9 @@ test("production Preference regeneration preserves history and rolls back atomic
     assert.equal(result.status, 0, result.stderr);
     const context = JSON.parse(await readFile(contextPath,"utf8"));
     assert.equal(context.targets.length, 1);
+    assert.equal(context.reusableLessons[0].language, story.language);
+    assert.deepEqual(Object.keys(context.insightScope[0]).sort(),
+      ["insightAuthorityDigest","insightId","storyKey"]);
     const candidate = { ...probe, ...context.insightScope[0] };
     await writeFile(candidatesPath, JSON.stringify({ probes:[candidate], bulkDecisions:[], setAside:0 }));
     result = await runPython([validateProbes,"--regeneration","--context",contextPath,
@@ -1045,6 +1048,19 @@ test("production Preference regeneration preserves history and rolls back atomic
     result = await runPython([validateProbes,"--regeneration","--context",contextPath,
       "--candidates",candidatesPath,"--output",importPath]);
     assert.equal(result.status, 0, result.stderr);
+
+    const missingPresentation = JSON.parse(await readFile(importPath,"utf8"));
+    delete missingPresentation.probes[0].presentations[story.language];
+    missingPresentation.receipt.outputDigest = await storyPreparationDigest(missingPresentation.probes);
+    const unsignedMissing = { schema:missingPresentation.schema, binding:missingPresentation.binding,
+      targets:missingPresentation.targets, probes:missingPresentation.probes, receipt:missingPresentation.receipt };
+    missingPresentation.importDigest = await storyPreparationDigest(unsignedMissing);
+    const beforeMissingPresentation = await authorityBytes(db);
+    const rejectedMissingPresentation = await regenerationRoute.POST(new Request(
+      "http://localhost/api/probes/regeneration", { method:"POST", body:JSON.stringify(missingPresentation) }));
+    assert.equal(rejectedMissingPresentation.status, 409);
+    assert.deepEqual(await authorityBytes(db), beforeMissingPresentation,
+      "missing linked-language presentation must fail before persistence");
 
     const before = await authorityBytes(db), originalPrepare = db.prepare;
     db.prepare = function failConfirmationDelete(sql) {

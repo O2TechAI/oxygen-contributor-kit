@@ -66,8 +66,6 @@ def bulk(identifier="bulk-a", evidence=None):
 
 def regeneration_context():
     value = context(); value.pop("autoRemoved"); value["schema"] = "oxygen.preference-regeneration-context"
-    for lesson in value["reusableLessons"]:
-        lesson.pop("language")
     value["reviewedEvidence"] = [{key: item[key] for key in ("documentId", "eventId", "documentKind")} for item in value["reviewedEvidence"]]
     value["binding"] = {"workflowRunId": "run-a", "sourceRevision": 7, "activeStoryDigest": "a" * 64,
                         "serverVersion": 3, "lifecycleDigest": "b" * 64}
@@ -112,7 +110,14 @@ class FinalizerTests(unittest.TestCase):
             regeneration_context(), {"probes": [candidate], "bulkDecisions": [], "setAside": 0})
         self.assertEqual(result["schema"], "oxygen.preference-regeneration-import")
         self.assertEqual(result["targets"][0]["id"], result["probes"][0]["id"])
+        self.assertEqual(set(result["probes"][0]["presentations"]), {"en", "zh"})
         self.assertEqual(result["importDigest"], VALIDATOR.digest({key: result[key] for key in result if key != "importDigest"}))
+
+        missing = probe(); missing["question"] = "What should the agent remember now?"
+        missing["presentations"].pop("en")
+        with self.assertRaisesRegex(ValueError, "presentations"):
+            VALIDATOR.finalize_regeneration(
+                regeneration_context(), {"probes": [missing], "bulkDecisions": [], "setAside": 0})
 
     def test_regeneration_rejects_tampered_export_and_unchanged_question(self):
         tampered = regeneration_context(); tampered["binding"]["serverVersion"] = 4

@@ -2,6 +2,7 @@ import { getLocalDatabase } from "../../../../db";
 import { preferenceQuestionDigest, readCurrentPreferenceLifecycle } from "../../../../lib/story-release-server";
 import { insightAuthorityValue, storyPreparationDigest } from "../../../../lib/story-preparation";
 import { canonicalAuthorityJson } from "../../../../lib/story-readiness";
+import { hasRequiredProbePresentation } from "../../../../lib/preference-presentation";
 import { normalizeProbe, preferenceQuestionAuthority } from "../route";
 const object=(value:unknown):value is Record<string,unknown>=>Boolean(value)&&typeof value==="object"&&!Array.isArray(value);
 const exact=(value:Record<string,unknown>,keys:string[])=>Object.keys(value).length===keys.length
@@ -22,7 +23,7 @@ export async function GET(request: Request) {
     const source = story.insights.find((item) => item.id === target.insightId)!;
     const edited = lifecycle.reviews?.[target.storyKey]?.sourceInsightReviews[target.insightId]?.editedContent;
     const content = edited ? { ...source, ...edited, id:source.id } : source;
-    return { storyKey:target.storyKey, insightId:target.insightId,
+    return { storyKey:target.storyKey, insightId:target.insightId, language:story.language,
       insightAuthorityDigest:await storyPreparationDigest(insightAuthorityValue(target.storyKey, content)),
       ...(content.title === undefined ? {} : { title:content.title }), background:content.background,
       directlyAcquiredExperience:content.directlyAcquiredExperience, principle:content.principle,
@@ -87,6 +88,11 @@ export async function POST(request:Request){
     if(!lifecycle.ok||binding.sourceRevision!==lifecycle.active.sourceRevision
       ||binding.serverVersion!==lifecycle.record.serverVersion
       ||binding.lifecycleDigest!==lifecycle.row.state_digest)throw new Error();
+    const storyLanguages=new Map(lifecycle.stories.map((story)=>[story.key,story.language]));
+    if(probes.some((item)=>{
+      const language=storyLanguages.get(item.storyKey);
+      return !language||!hasRequiredProbePresentation(item.presentations,language);
+    }))throw new Error();
     const current=new Map(lifecycle.current.map((item)=>[item.id,item]));if(probes.some((item)=>
       current.get(item.id)?.lifecycle_status!=="needs_update"))throw new Error();
     const [documents,items]=await Promise.all([db.prepare("SELECT id,kind FROM documents").all<{id:string;kind:string}>(),

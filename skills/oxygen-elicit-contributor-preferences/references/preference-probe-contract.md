@@ -133,5 +133,8 @@ The Agent reads only the exported context. Candidates contain exactly `probes`,
 `bulkDecisions: []`, and `setAside: 0`; preserve each target `id`, `storyKey`, and `insightId`, copy
 the current `insightAuthorityDigest`, and change question/options/presentations bytes. Stop on any
 export, validation, stale-authority, or import error; never invent or retry with hand-built authority.
+Each regeneration `reusableLessons` row carries the linked Story `language` as display metadata;
+`insightScope`, targets, question identity, and answers remain language-free. Validation and Core
+POST require that language's reviewed presentation without fallback, while allowing extra reviewed copy.
 Successful import archives replaced question bytes, clears their answers, leaves Story review state
 unchanged, and requires the contributor to answer each regenerated active Preference again.

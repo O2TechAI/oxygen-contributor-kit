@@ -66,14 +66,14 @@ def context_evidence(context: Any) -> tuple[dict[tuple[str, str], Any], dict[tup
         raise ValueError("preference context is malformed")
     expected, seen = [], set()
     for lesson in lessons:
-        language_fields = {"language"} if not regeneration else set()
+        language_fields = {"language"}
         allowed = ({"storyKey", "insightId", "insightAuthorityDigest", "background", "directlyAcquiredExperience", "principle"} | language_fields,
                    {"storyKey", "insightId", "insightAuthorityDigest", "title", "background", "directlyAcquiredExperience", "principle"} | language_fields)
         if (not isinstance(lesson, dict) or set(lesson) not in allowed
                 or not stable_id(lesson.get("storyKey")) or not stable_id(lesson.get("insightId"))
                 or not isinstance(lesson.get("insightAuthorityDigest"), str) or len(lesson["insightAuthorityDigest"]) != 64
                 or any(character not in "0123456789abcdef" for character in lesson["insightAuthorityDigest"])
-                or (not regeneration and lesson.get("language") not in {"en", "zh"})
+                or lesson.get("language") not in {"en", "zh"}
                 or not all(safe_text(lesson.get(field)) for field in ("background", "directlyAcquiredExperience", "principle"))
                 or ("title" in lesson and not safe_text(lesson["title"]))):
             raise ValueError("preference context has malformed reusable lessons")
@@ -105,7 +105,7 @@ def context_evidence(context: Any) -> tuple[dict[tuple[str, str], Any], dict[tup
         evidence[identity] = record["documentKind"]
     if not regeneration and PREPARE.canonical_auto_removed(context["autoRemoved"]) != context["autoRemoved"]:
         raise ValueError("preference context Privacy aggregate is not canonical")
-    languages = {} if regeneration else {
+    languages = {
         (item["storyKey"], item["insightId"]): item["language"] for item in lessons
     }
     return evidence, {(item["storyKey"], item["insightId"]): item["insightAuthorityDigest"] for item in scope}, languages
