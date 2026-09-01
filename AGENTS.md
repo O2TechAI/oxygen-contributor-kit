@@ -62,7 +62,7 @@ receipt exists, and one batch recorder installs all Story outputs plus exactly o
 only after complete editorial and global validation. Other lanes retain their per-shard
 atomic output/receipt pairs.
 
-Each shard assignment gets one initial proposal plus at most two automatic proposal-only correction
+Each shard assignment gets one initial proposal plus at most two parent-orchestrated proposal-only correction
 attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
 initial proposal, and is always `0..2`; never sum it across a multi-shard lane. Every correction
 uses the byte-identical immutable input. Every invalid initial or correction attempt leaves both

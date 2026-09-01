@@ -59,7 +59,7 @@ redacted bundles. Each row has exactly `{documentId,eventId,documentKind,sequenc
 turns, paths, provider metadata, or Privacy internals. A regeneration context is separate and keeps
 its identity-only evidence shape under schema-specific validation.
 
-The global Preference assignment gets one initial proposal plus at most two automatic
+The global Preference assignment gets one initial proposal plus at most two parent-orchestrated
 proposal-only correction attempts. `correctionAttemptCount` counts corrections only, excludes the
 initial proposal, and is always `0..2`. Every correction uses the byte-identical immutable input,
 and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed

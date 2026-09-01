@@ -536,9 +536,28 @@ class BuildProjectMapTests(unittest.TestCase):
         forged["revision"] = 900
         with self.assertRaisesRegex(ValueError, "manifest digest is stale"):
             MODULE.finalize_units(
-            "Synthetic Project", ids, digests, source_digest, units, forged,
+                "Synthetic Project", ids, digests, source_digest, units, forged,
                 registry_digest=REGISTRY_DIGEST,
             )
+
+    def test_registry_change_advances_manifest_without_revising_unchanged_units(self):
+        ids = ["item-one"]
+        digests = {"item-one": "b" * 64}
+        source_digest = semantic_source_digest(ids, digests)
+        units = [{"id": "unit-one", "kind": "discussion", "members": ids}]
+        first = MODULE.finalize_units(
+            "Synthetic Project", ids, digests, source_digest, units,
+            registry_digest="c" * 64,
+        )
+        second = MODULE.finalize_units(
+            "Synthetic Project", ids, digests, source_digest, units, first,
+            registry_digest="d" * 64,
+        )
+
+        self.assertEqual(second["registryDigest"], "d" * 64)
+        self.assertEqual(second["revision"], first["revision"] + 1)
+        self.assertNotEqual(second["manifestDigest"], first["manifestDigest"])
+        self.assertEqual(second["units"][0]["revision"], first["units"][0]["revision"])
 
     def test_duplicate_topology_is_exact_and_non_chained(self):
         ids = ["item-one", "item-two", "item-three"]

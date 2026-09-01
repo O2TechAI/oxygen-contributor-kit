@@ -111,7 +111,7 @@ Exact union, no
 overlap, no foreign identities, no stale digest, deterministic deduplication, and deterministic
 composition are executable checks.
 
-Each assignment gets one initial proposal plus at most two automatic proposal-only correction
+Each assignment gets one initial proposal plus at most two parent-orchestrated proposal-only correction
 attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
 initial proposal, and is always `0..2`. Every correction uses the byte-identical immutable input;
 an invalid initial or correction attempt creates neither output nor receipt. Only a fixed safe

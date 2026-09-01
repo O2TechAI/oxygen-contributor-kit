@@ -148,6 +148,8 @@ class UnicodeWorkflowTest(unittest.TestCase):
                 "氧气 Windows 🚀",
                 "--summary",
                 "在原生 Windows 上保留中文与 emoji 😀",
+                "--registry-digest",
+                "c" * 64,
                 "--finalize",
             )
             self.assertEqual(finalized.returncode, 0, finalized.stderr)

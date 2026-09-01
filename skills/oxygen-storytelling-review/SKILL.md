@@ -187,7 +187,7 @@ identity for that anchored passage. It is never reconstructed from Story prose. 
 create no output or receipt; finalization and Viewer activation independently reopen current
 authority and fail closed. Completed-zero is valid.
 
-A shard assignment gets one initial proposal plus at most two automatic proposal-only correction
+A shard assignment gets one initial proposal plus at most two parent-orchestrated proposal-only correction
 attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
 initial proposal, and is always `0..2`; never sum it across a multi-shard lane. Every correction
 uses the byte-identical immutable input, and every invalid initial or correction attempt leaves both
