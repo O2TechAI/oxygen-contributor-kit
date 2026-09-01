@@ -45,7 +45,10 @@ The output has exactly these fields:
 }
 ```
 
-`reusableLessons` is exactly Core's activated Story/Insight narrative-order lesson projection.
+`reusableLessons` is exactly Core's activated Story/Insight narrative-order lesson projection and
+each lesson also carries its linked canonical Story `language`. Language is presentation metadata,
+not identity; [the Story language contract](../../oxygen-storytelling-review/references/bilingual-contract.md)
+owns its derivation and propagation.
 `insightScope` is independently canonicalized by UTF-8 `storyKey` and then UTF-8 `insightId`.
 Every lesson and scope row carries the exact Chapter-local
 `{storyKey, insightId, insightAuthorityDigest}` triple, where the digest binds the full canonical
@@ -67,10 +70,13 @@ The Agent writes exactly:
 
 Candidate probes use the `/api/probes` camelCase nested shape: all seventeen probe keys, including
 one exact `storyKey`, `insightId`, and `insightAuthorityDigest` triple from `insightScope`, plus 2–3
-distinct canonical options, valid `en`/`zh` presentations when supplied, `allowOther: true`, and
+distinct canonical options, the linked Story's required valid presentation, `allowOther: true`, and
 `allowSkip: true`. Copy each `insightAuthorityDigest` exactly from `insightScope`; candidates must
 not invent any other digest. Candidate bulk decisions use the exact six API keys. Candidates cannot
 supply `autoRemoved`, defaults, answers, model/provider information, or publication state.
+Both reviewed `en` and `zh` presentations may coexist. The required linked language must exist and
+validate without fallback, synthesis, or translation; extra reviewed presentation does not change
+question, option, Insight-binding, or answer identity.
 Other and Skip are flags, never option rows. A probe's evidence must belong to its document; every
 bulk evidence ID must be in the reviewed authority. The producer binds `documentKind` to the exact
 reviewed bundle that supplied each cited identity; Core POST independently rechecks that kind and
@@ -127,5 +133,8 @@ The Agent reads only the exported context. Candidates contain exactly `probes`,
 `bulkDecisions: []`, and `setAside: 0`; preserve each target `id`, `storyKey`, and `insightId`, copy
 the current `insightAuthorityDigest`, and change question/options/presentations bytes. Stop on any
 export, validation, stale-authority, or import error; never invent or retry with hand-built authority.
+Each regeneration `reusableLessons` row carries the linked Story `language` as display metadata;
+`insightScope`, targets, question identity, and answers remain language-free. Validation and Core
+POST require that language's reviewed presentation without fallback, while allowing extra reviewed copy.
 Successful import archives replaced question bytes, clears their answers, leaves Story review state
 unchanged, and requires the contributor to answer each regenerated active Preference again.

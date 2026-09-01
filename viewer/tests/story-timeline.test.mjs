@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
 import {
   STORY_PREFIX,
+  classifyStoryLanguageText,
   compareStorySourceIdentity,
   parseStorySource,
   resolveEvidenceTarget,
@@ -24,6 +25,8 @@ const insight = {
 function story(overrides = {}) {
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key: "chapter-one",
     phase: { id: "review", label: "Review" },
     title: "The bounded decision",
@@ -38,6 +41,13 @@ function story(overrides = {}) {
 }
 
 const serialized = (source) => `${STORY_PREFIX}${JSON.stringify(source)}`;
+
+test("canonical Story language classification uses one exact 80-percent Han/Latin rule", () => {
+  assert.equal(classifyStoryLanguageText("abcdefgh中中"), "en");
+  assert.equal(classifyStoryLanguageText("中文中文中文中文ab"), "zh");
+  assert.equal(classifyStoryLanguageText("abcde中文中文中"), "mixed");
+  assert.equal(classifyStoryLanguageText("123 --"), "mixed");
+});
 
 test("strict final Story parser accepts only the canonical unversioned source", () => {
   const source = story();

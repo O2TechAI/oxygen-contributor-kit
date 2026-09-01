@@ -97,6 +97,29 @@ export type EvidenceReference = {
 };
 
 export type StoryLanguage = "en" | "zh";
+export type StoryLanguageClassification = StoryLanguage | "mixed";
+
+export const STORY_LANGUAGE_DOMINANCE_PERCENT = 80;
+
+/** Canonical deterministic language rule for Story preparation. Only Han and
+ * Latin letters are evidence; punctuation, digits, and other scripts do not
+ * influence the result. */
+export function classifyStoryLanguageText(
+  value: string | readonly string[],
+): StoryLanguageClassification {
+  const text = Array.isArray(value) ? value.join("\n") : value;
+  let han = 0;
+  let latin = 0;
+  for (const character of text) {
+    if (/\p{Script=Han}/u.test(character)) han += 1;
+    else if (/\p{Script=Latin}/u.test(character)) latin += 1;
+  }
+  const total = han + latin;
+  if (total === 0) return "mixed";
+  if (latin * 100 >= total * STORY_LANGUAGE_DOMINANCE_PERCENT) return "en";
+  if (han * 100 >= total * STORY_LANGUAGE_DOMINANCE_PERCENT) return "zh";
+  return "mixed";
+}
 
 export type StoryReleaseTargetName =
   | "phase"
@@ -183,6 +206,8 @@ export type StoryCoverage = {
 export type StorySource = {
   schema: "oxygen.story";
   key: string;
+  language: StoryLanguage;
+  languagePolicyDigest: string;
   phase: { id: string; label: string };
   kind?: StoryKind;
   title: string;
@@ -348,11 +373,14 @@ export function parseStorySource(summary?: string): StorySource | null {
     const value = JSON.parse(summary.slice(STORY_PREFIX.length)) as Partial<StorySource>;
     if (!value || typeof value !== "object" || Array.isArray(value)
       || !onlyKeys(value, [
-        "schema", "key", "phase", "kind", "title", "overview", "transition", "chips",
+        "schema", "key", "language", "languagePolicyDigest", "phase", "kind", "title", "overview", "transition", "chips",
         "people", "story", "insights", "evidence", "coverage",
       ])
       || value.schema !== "oxygen.story"
       || !validStableId(value.key)
+      || (value.language !== "en" && value.language !== "zh")
+      || typeof value.languagePolicyDigest !== "string"
+      || !/^[0-9a-f]{64}$/u.test(value.languagePolicyDigest)
       || !value.phase || typeof value.phase !== "object" || Array.isArray(value.phase)
       || !onlyKeys(value.phase, ["id", "label"])
       || !validStableId(value.phase.id) || !nonEmptyString(value.phase.label)

@@ -12,6 +12,7 @@ import type { StoryLanguage } from "../lib/timeline";
 export type Probe = {
   id: string; document_id: string; document_kind?: string;
   storyKey?: string; insightId?: string; lifecycle_key?: string;
+  language?: StoryLanguage;
   lifecycle_status?: "active"|"inactive"|"needs_update"|"history"|"legacy";
   event_ids: string[]; timestamp?: string; signal: string;
   score: number; turns: number; recap: string; question: string;
@@ -41,7 +42,7 @@ const preferenceUi = {
     setAside: "lower-scoring moments were set aside.", judgements: "Judgement calls", passages: "passages", defaultKeep: "default: keep",
     choices: { remove: "remove", keep: "keep", inspect: "inspect" }, questionList: "Questions", score: "score", turns: "turns", evidence: "evidence",
     skip: "Nothing worth recording here", other: "Something else — type it and press Save", save: "Save", recorded: "Recorded", nothing: "nothing recorded", clear: "clear",
-    localeMissing: "This preference does not yet have reviewed English display copy. Its answer state is unchanged.",
+    localeMissing: "This preference does not have its required reviewed Story-language display copy. Its answer state is unchanged.",
     stale: "Needs update", inactive: "Inactive", history: "History", legacy: "Legacy",
     staleHelp: "Run the Toolkit Agent Preference regeneration export → validation → import flow.",
     inactiveHelp: "Accept and apply the linked AI Insight to activate this question.",
@@ -58,7 +59,7 @@ const preferenceUi = {
     setAside: "个得分较低的时刻未进入提问。", judgements: "需要判断的事项", passages: "段内容", defaultKeep: "默认：保留",
     choices: { remove: "移除", keep: "保留", inspect: "检查" }, questionList: "问题", score: "得分", turns: "轮次", evidence: "证据",
     skip: "这里没有值得记录的内容", other: "其他内容——输入后点击保存", save: "保存", recorded: "已记录", nothing: "未记录内容", clear: "清除",
-    localeMissing: "此偏好尚无经过审阅的中文展示文本；其回答状态未改变。",
+    localeMissing: "此偏好缺少所需且经过审阅的故事语言展示文本；其回答状态未改变。",
     stale: "需要更新", inactive: "未启用", history: "历史版本", legacy: "旧版问题",
     staleHelp: "运行 Toolkit Agent 的偏好重新生成导出 → 校验 → 导入流程。",
     inactiveHelp: "接受并应用关联的 AI 洞察后，此问题才会启用。",
@@ -80,6 +81,7 @@ export function ProbePanel(props: {
 }) {
   const { language, run, lifecycleCurrent, probes, bulkDecisions, busyId, onAnswer, onReviewInsight } = props;
   const labels = preferenceUi[language];
+  const interfaceLang = language === "zh" ? "zh-CN" : "en";
   const [drafts, setDrafts] = useState<Record<string, string>>({});
 
   if (run && run.status === "running") {
@@ -137,22 +139,24 @@ export function ProbePanel(props: {
 
     <h3>{labels.questionList}</h3>
     {probes.map((probe) => {
-      const display = resolveProbePresentation(probe, language);
+      const linked = probe.storyKey !== undefined || probe.insightId !== undefined || probe.language !== undefined;
+      const displayLanguage = linked ? probe.language : language;
+      const display = displayLanguage ? resolveProbePresentation(probe, displayLanguage) : null;
       const chosen = probe.answer_choice;
       const inactive = probe.lifecycle_status !== "active";
       const status=probe.lifecycle_status;
       const statusLabel=status==="needs_update"?labels.stale:status==="history"?labels.history:status==="legacy"?labels.legacy:labels.inactive;
       const instruction=status==="needs_update"?labels.staleHelp:status==="history"?labels.historyHelp:status==="legacy"?labels.legacyHelp:labels.inactiveHelp;
       const reviewable=(status==="inactive"||status==="needs_update")&&probe.storyKey&&probe.insightId;
-      const statusLine=inactive?<div className="probeMeta" role="status"><b>⚠ {statusLabel}</b> · {instruction} {reviewable
+      const statusLine=inactive?<div className="probeMeta" role="status" lang={interfaceLang}><b>⚠ {statusLabel}</b> · {instruction} {reviewable
         ?<button onClick={()=>onReviewInsight(probe.storyKey!,probe.insightId!)}>{labels.review}</button>:null}</div>:null;
       if (!display) return <div className="probeCard localeMissing" data-preference-id={probe.id} key={probe.lifecycle_key||probe.id}>
         {statusLine}<div className="probeMeta"><code>{probe.id}</code></div>
         <p className="redactionMuted" role="alert">{labels.localeMissing}</p>
       </div>;
-      return <div className={`probeCard ${chosen ? "answered" : ""}`} data-preference-id={probe.id} key={probe.lifecycle_key||probe.id}>
+      return <div className={`probeCard ${chosen ? "answered" : ""}`} data-preference-id={probe.id} lang={displayLanguage === "zh" ? "zh-CN" : "en"} key={probe.lifecycle_key||probe.id}>
         {statusLine}
-        <div className="probeMeta">
+        <div className="probeMeta" lang={interfaceLang}>
           {probe.signal} · {labels.score} {probe.score} · {probe.turns} {labels.turns} ·
           {" "}<code>{probe.document_id}</code>
           {probe.event_ids.length ? ` · ${labels.evidence}: ${probe.event_ids.join(", ")}` : ""}
@@ -168,11 +172,12 @@ export function ProbePanel(props: {
           >{option.id}. {option.text}</button>)}
           {probe.allow_skip ? <button
             className={chosen === "none" ? "chosen" : ""}
+            lang={interfaceLang}
             disabled={inactive || busyId === probe.id}
             onClick={() => onAnswer(probe.id, { choice: "none" })}
           >{labels.skip}</button> : null}
         </div>
-        {probe.allow_other ? <div className="probeOther">
+        {probe.allow_other ? <div className="probeOther" lang={interfaceLang}>
           <input
             aria-label={labels.other}
             placeholder={labels.other}
@@ -185,7 +190,7 @@ export function ProbePanel(props: {
             onClick={() => onAnswer(probe.id, { choice: "other", text: drafts[probe.id] })}
           >{labels.save}</button>
         </div> : null}
-        {chosen ? <div className="probeAnswered">
+        {chosen ? <div className="probeAnswered" lang={interfaceLang}>
           {labels.recorded}: {chosen === "other" ? probe.answer_text : chosen === "none" ? labels.nothing : chosen}
           <button
             className="probeClear"

@@ -182,6 +182,8 @@ function source(key, itemId, index, insights = []) {
   const evidence = { documentId: "release-doc", eventId: itemId };
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key,
     phase: { id: `phase-${index}`, label: `Phase ${index}` },
     kind: "validation",
@@ -496,7 +498,10 @@ async function setup({ anonymization = false, preference = false } = {}) {
   const probe = preference ? { id:"preference-question", ...preferenceScope[0], documentId:"release-doc",
     documentKind:"trajectory", eventIds:["release-doc:event-1"], timestamp:null, signal:"explicit_rule",
     score:90, turns:2, recap:"The reviewed event records a release boundary.", question:"Keep this release boundary?",
-    options:[{id:"yes",text:"Keep it."},{id:"no",text:"Do not keep it."}], presentations:{},
+    options:[{id:"yes",text:"Keep it."},{id:"no",text:"Do not keep it."}],
+    presentations:{ en:{ recap:"The reviewed event records a release boundary.",
+      question:"Keep this release boundary?",
+      options:[{id:"yes",text:"Keep it."},{id:"no",text:"Do not keep it."}] } },
     allowOther:true, allowSkip:true } : null;
   const preferenceInputDigest = await storyPreparationDigest(reusableLessons);
   const preferenceDigest = await storyPreparationDigest(canonicalPreferenceQuestionBatch(probe ? [probe] : [], []));
@@ -1021,6 +1026,9 @@ test("production Preference regeneration preserves history and rolls back atomic
     assert.equal(result.status, 0, result.stderr);
     const context = JSON.parse(await readFile(contextPath,"utf8"));
     assert.equal(context.targets.length, 1);
+    assert.equal(context.reusableLessons[0].language, story.language);
+    assert.deepEqual(Object.keys(context.insightScope[0]).sort(),
+      ["insightAuthorityDigest","insightId","storyKey"]);
     const candidate = { ...probe, ...context.insightScope[0] };
     await writeFile(candidatesPath, JSON.stringify({ probes:[candidate], bulkDecisions:[], setAside:0 }));
     result = await runPython([validateProbes,"--regeneration","--context",contextPath,
@@ -1029,12 +1037,30 @@ test("production Preference regeneration preserves history and rolls back atomic
     assert.match(result.stderr, /regeneration is foreign or unchanged/u);
     candidate.question = "Keep the revised release boundary?";
     candidate.options = [{id:"yes",text:"Keep the revised boundary."},{id:"no",text:"Do not keep it."}];
-    candidate.presentations = { zh:{ recap:"审阅事件记录了修订后的发布边界。", question:"保留修订后的发布边界吗？",
-      options:[{id:"yes",text:"保留修订后的边界。"},{id:"no",text:"不保留。"}] } };
+    candidate.presentations = {
+      en:{ recap:"The reviewed event records a revised release boundary.",
+        question:"Keep the revised release boundary?",
+        options:[{id:"yes",text:"Keep the revised boundary."},{id:"no",text:"Do not keep it."}] },
+      zh:{ recap:"审阅事件记录了修订后的发布边界。", question:"保留修订后的发布边界吗？",
+        options:[{id:"yes",text:"保留修订后的边界。"},{id:"no",text:"不保留。"}] },
+    };
     await writeFile(candidatesPath, JSON.stringify({ probes:[candidate], bulkDecisions:[], setAside:0 }));
     result = await runPython([validateProbes,"--regeneration","--context",contextPath,
       "--candidates",candidatesPath,"--output",importPath]);
     assert.equal(result.status, 0, result.stderr);
+
+    const missingPresentation = JSON.parse(await readFile(importPath,"utf8"));
+    delete missingPresentation.probes[0].presentations[story.language];
+    missingPresentation.receipt.outputDigest = await storyPreparationDigest(missingPresentation.probes);
+    const unsignedMissing = { schema:missingPresentation.schema, binding:missingPresentation.binding,
+      targets:missingPresentation.targets, probes:missingPresentation.probes, receipt:missingPresentation.receipt };
+    missingPresentation.importDigest = await storyPreparationDigest(unsignedMissing);
+    const beforeMissingPresentation = await authorityBytes(db);
+    const rejectedMissingPresentation = await regenerationRoute.POST(new Request(
+      "http://localhost/api/probes/regeneration", { method:"POST", body:JSON.stringify(missingPresentation) }));
+    assert.equal(rejectedMissingPresentation.status, 409);
+    assert.deepEqual(await authorityBytes(db), beforeMissingPresentation,
+      "missing linked-language presentation must fail before persistence");
 
     const before = await authorityBytes(db), originalPrepare = db.prepare;
     db.prepare = function failConfirmationDelete(sql) {

@@ -126,9 +126,13 @@ def parse_story(summary: Any) -> dict[str, Any]:
         story = json.loads(summary[len("oxygen.story:"):])
     except json.JSONDecodeError as exc:
         raise ValueError("Story JSON is malformed") from exc
-    required = {"schema", "key", "phase", "title", "overview", "people", "story", "insights", "evidence", "coverage"}
+    required = {"schema", "key", "language", "languagePolicyDigest", "phase", "title", "overview", "people", "story", "insights", "evidence", "coverage"}
     optional = {"kind", "transition", "chips"}
-    if not exact_object(story, required, optional) or story["schema"] != "oxygen.story" or not stable_id(story["key"]):
+    if (not exact_object(story, required, optional) or story["schema"] != "oxygen.story"
+            or not stable_id(story["key"]) or story["language"] not in {"en", "zh"}
+            or not isinstance(story["languagePolicyDigest"], str)
+            or len(story["languagePolicyDigest"]) != 64
+            or any(character not in "0123456789abcdef" for character in story["languagePolicyDigest"])):
         raise ValueError("Story is malformed")
     insights = story["insights"]
     if not isinstance(insights, list):
@@ -195,6 +199,7 @@ def parse_story(summary: Any) -> dict[str, Any]:
         )}
         lesson = {
             "storyKey": story["key"], "insightId": insight["id"],
+            "language": story["language"],
             "insightAuthorityDigest": sha256(insight_authority(story["key"], content)),
             "background": insight["background"],
             "directlyAcquiredExperience": insight["directlyAcquiredExperience"],

@@ -42,6 +42,8 @@ function currentStorySource() {
   const evidence = { documentId: DOCUMENT_ID, eventId: STORY_ITEM_ID };
   return `oxygen.story:${JSON.stringify({
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key: "story-authority",
     phase: { id: "activation", label: "Activation" },
     kind: "decision",
@@ -600,6 +602,18 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       representedUnitIds: ["unit-route"],
       excludedUnits: [{ unitId: "unit-private", reason: "privacy_withheld" }],
     };
+    const languagePolicy = {
+      schema: "oxygen.story-language-policy",
+      workflowRunId: RUN_ID,
+      sourceRevision: INITIAL_SOURCE_REVISION,
+      sourceDigest: semantic.sourceDigest,
+      sourcePrivacyDigest: "8".repeat(64),
+      sourceInputDigest: "9".repeat(64),
+      detectedLanguage: "en",
+      selection: "all-english",
+      stories: [{ storyKey: storySource.key, language: "en" }],
+    };
+    storySource.languagePolicyDigest = await storyPreparationDigest(languagePolicy);
     const storySummary = `oxygen.story:${JSON.stringify(storySource)}`;
     const storyCandidates = [{ id: STORY_ITEM_ID, summary: storySummary }];
     const stories = [storySource];
@@ -660,6 +674,7 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       schema: "oxygen.story-preparation",
       workflowRunId: RUN_ID,
       sourceRevision: INITIAL_SOURCE_REVISION,
+      languagePolicy,
       receipts: [{
         lane: "story", status: "complete", inputDigest: semantic.manifestDigest,
         scopeDigest: await storyPreparationDigest(["unit-private", "unit-route"]), scopeCount: 2,

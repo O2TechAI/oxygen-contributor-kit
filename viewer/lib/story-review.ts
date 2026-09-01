@@ -871,11 +871,11 @@ function humanQuoteTextForValidation(
 ) {
   if (!validHumanInsightContent(content) || content.quote.baseRevision > state.revision) return null;
   const snapshots = reviewSnapshots(state, storyBlocks(source));
-  const base = snapshots?.get(content.quote.baseRevision)?.en?.[content.quote.storyBlockId];
+  const base = snapshots?.get(content.quote.baseRevision)?.[source.language]?.[content.quote.storyBlockId];
   const selection = content.quote.selection;
   if (typeof base !== "string" || selection.end > base.length
     || base.slice(selection.start, selection.end) !== selection.text) return null;
-  const current = snapshots?.get(state.revision)?.en?.[content.quote.storyBlockId];
+  const current = snapshots?.get(state.revision)?.[source.language]?.[content.quote.storyBlockId];
   if (typeof current !== "string") return null;
   return allowStaleCurrent || (selection.end <= current.length
     && current.slice(selection.start, selection.end) === selection.text)
@@ -910,8 +910,10 @@ function humanContentBelongsToSource(
 
 export function storyBlocks(source: StorySource): StoryBlockCollection {
   return {
-    en: Object.fromEntries(source.story.blocks.map((block) => [block.id, block.text])),
-    zh: {},
+    en: source.language === "en"
+      ? Object.fromEntries(source.story.blocks.map((block) => [block.id, block.text])) : {},
+    zh: source.language === "zh"
+      ? Object.fromEntries(source.story.blocks.map((block) => [block.id, block.text])) : {},
   };
 }
 

@@ -104,12 +104,13 @@ function storyReviewContext(
   chapterReview?: ChapterReviewState,
 ): ChapterReviewContext {
   const blocks = storyBlocks(source);
-  const reviewedBlocks = chapterReview ? {
-    en: Object.fromEntries(source.story.blocks.map((block) => [
-      block.id,
-      applyStoryReviewToBlock(block.text, block.id, "en", chapterReview),
-    ])),
-    zh: {},
+  const reviewed = chapterReview ? Object.fromEntries(source.story.blocks.map((block) => [
+    block.id,
+    applyStoryReviewToBlock(block.text, block.id, source.language, chapterReview),
+  ])) : null;
+  const reviewedBlocks = reviewed ? {
+    en: source.language === "en" ? reviewed : {},
+    zh: source.language === "zh" ? reviewed : {},
   } : blocks;
   return {
     source,
@@ -440,7 +441,7 @@ export function StoryChapterEditor({
     const current = readStorySelection(root, window.getSelection());
     const sourceBlock = current && source.story.blocks.find((block) => block.id === current.blockId);
     const reviewed = sourceBlock
-      ? applyStoryReviewToBlock(sourceBlock.text, sourceBlock.id, "en", chapterReview)
+      ? applyStoryReviewToBlock(sourceBlock.text, sourceBlock.id, source.language, chapterReview)
       : null;
     if (!current || typeof reviewed !== "string"
       || reviewed.slice(current.selection.start, current.selection.end) !== current.selection.text) {
@@ -517,11 +518,11 @@ export function StoryChapterEditor({
   ) => {
     const sourceBlock = source.story.blocks.find((block) => block.id === blockId);
     if (!sourceBlock) return;
-    const baseText = applyStoryReviewToBlock(sourceBlock.text, blockId, "en", chapterReview);
+    const baseText = applyStoryReviewToBlock(sourceBlock.text, blockId, source.language, chapterReview);
     const result = recordStoryEdit(chapterReview, {
       storyKey: source.key,
       blockId,
-      sourceLanguage: "en",
+      sourceLanguage: source.language,
       baseText,
       nextText,
       workingRange: { start, end },
@@ -577,7 +578,7 @@ export function StoryChapterEditor({
     }
     const sourceBlock = source.story.blocks.find((block) => block.id === blockId);
     if (!sourceBlock) return;
-    const current = storyWorkingBlock(sourceBlock.text, source.key, blockId, "en", chapterReview);
+    const current = storyWorkingBlock(sourceBlock.text, source.key, blockId, source.language, chapterReview);
     const activeComposition = activeCompositionRef.current?.blockId === blockId ? activeCompositionRef.current : null;
     if (isComposing || activeComposition) {
       if (!activeComposition) activeCompositionRef.current = { blockId, previousText: current };
@@ -618,7 +619,7 @@ export function StoryChapterEditor({
     }
     activeCompositionRef.current = {
       blockId,
-      previousText: storyWorkingBlock(sourceBlock.text, source.key, blockId, "en", chapterReview),
+      previousText: storyWorkingBlock(sourceBlock.text, source.key, blockId, source.language, chapterReview),
     };
     const nextText = editor.value;
     setCompositionDrafts((drafts) => ({ ...drafts, [blockId]: nextText }));
@@ -662,11 +663,11 @@ export function StoryChapterEditor({
     if (key === "z") {
       event.preventDefault();
       onChapterReview((event.shiftKey
-        ? redoStoryEdit(chapterReview, "en")
-        : undoStoryEdit(chapterReview, "en")) as ChapterReviewState);
+        ? redoStoryEdit(chapterReview, source.language)
+        : undoStoryEdit(chapterReview, source.language)) as ChapterReviewState);
     } else if (key === "y") {
       event.preventDefault();
-      onChapterReview(redoStoryEdit(chapterReview, "en") as ChapterReviewState);
+      onChapterReview(redoStoryEdit(chapterReview, source.language) as ChapterReviewState);
     }
   };
 
@@ -722,6 +723,7 @@ export function StoryChapterEditor({
     try {
       const directAdditions = chapterReview.editTransactions
         .filter((transaction) => transaction.storyKey === source.key
+          && transaction.sourceLanguage === source.language
           && transaction.requiresEvidence
           && (transaction.resolution === "pending" || transaction.resolution === "needs_evidence"))
         .map((transaction) => ({
@@ -785,8 +787,8 @@ export function StoryChapterEditor({
           {editMode && <div className="storyEditingBar" role="toolbar" aria-label="Story Edit Mode">
             <div><b>Editing Story</b><span>Edit one Story passage at a time. Every change remains in the common review ledger until Apply Review.</span></div>
             <div className="storyEditingActions">
-              <button disabled={!canUndoStoryEdit(chapterReview, "en")} title={canUndoStoryEdit(chapterReview, "en") ? "Undo" : "Nothing to undo"} aria-label="Undo" onClick={() => onChapterReview(undoStoryEdit(chapterReview, "en") as ChapterReviewState)}>↶ Undo</button>
-              <button disabled={!canRedoStoryEdit(chapterReview, "en")} title={canRedoStoryEdit(chapterReview, "en") ? "Redo" : "Nothing to redo"} aria-label="Redo" onClick={() => onChapterReview(redoStoryEdit(chapterReview, "en") as ChapterReviewState)}>↷ Redo</button>
+              <button disabled={!canUndoStoryEdit(chapterReview, source.language)} title={canUndoStoryEdit(chapterReview, source.language) ? "Undo" : "Nothing to undo"} aria-label="Undo" onClick={() => onChapterReview(undoStoryEdit(chapterReview, source.language) as ChapterReviewState)}>↶ Undo</button>
+              <button disabled={!canRedoStoryEdit(chapterReview, source.language)} title={canRedoStoryEdit(chapterReview, source.language) ? "Redo" : "Nothing to redo"} aria-label="Redo" onClick={() => onChapterReview(redoStoryEdit(chapterReview, source.language) as ChapterReviewState)}>↷ Redo</button>
               <button className="finishEditing" onClick={leaveEditMode}>Finish editing</button>
             </div>
           </div>}
@@ -794,7 +796,7 @@ export function StoryChapterEditor({
             {source.story.blocks.map((block) => {
               const aiInsights = aiInsightsByBlock[block.id] || [];
               const humanInsightIds = humanInsightIdsByBlock[block.id] || [];
-              const copy = storyWorkingBlock(block.text, source.key, block.id, "en", chapterReview);
+              const copy = storyWorkingBlock(block.text, source.key, block.id, source.language, chapterReview);
               return <div className="storyNarrativeRow" data-insight-owner-block={block.id} key={block.id}>
                 <div className="storyBlock" data-story-block={block.id} tabIndex={editMode ? -1 : 0}>
                   {editMode ? <textarea

@@ -51,6 +51,8 @@ function insight(id, blockId = "block-a") {
 function source(insightIds = [], key = "chapter-alpha") {
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key,
     phase: { id: "phase-foundation", label: "Foundation" },
     title: "A supported synthetic Chapter",

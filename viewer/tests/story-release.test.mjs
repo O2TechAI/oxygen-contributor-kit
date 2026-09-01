@@ -11,6 +11,7 @@ import {
   editAiInsight,
   emptyChapterReview,
   markChapterReady,
+  recordStoryEdit,
   saveHumanInsight,
   storyBlocks,
   updateAiInsightDecision,
@@ -103,6 +104,8 @@ function insight(id, blockId = "story-block-safe", overrides = {}) {
 function source(insights = [], overrides = {}, privateValue = PRIVATE) {
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key: "chapter-release",
     phase: { id: "phase-discovery", label: "Discovery" },
     kind: "decision",
@@ -211,6 +214,40 @@ test("the canonical release permits a complete zero-Insight Story", () => {
   assert.doesNotMatch(JSON.stringify(release), /localIdentityState|documentId|eventId/);
 });
 
+test("Chinese canonical Story blocks and edits survive the single review and release authority", () => {
+  const currentSource = source([], {
+    language: "zh",
+    title: "经过审阅的中文章节",
+    overview: "这是一段完整的中文章节概述。",
+    people: [{
+      id: "person-owner", releaseLabel: "贡献者", role: "负责人",
+      description: "负责人定义并检查了发布边界。", localIdentityState: "not_identified",
+      evidence: [evidence],
+    }],
+    story: { blocks: [
+      { id: "story-block-private", text: "敏感内容已经移除。", evidence: [evidence] },
+      { id: "story-block-safe", text: "经过审阅的故事说明了安全边界。", evidence: [evidence] },
+    ], uncertainty: "剩余的不确定性已经明确记录。" },
+  });
+  assert.deepEqual(Object.keys(storyBlocks(currentSource).en), []);
+  assert.deepEqual(Object.keys(storyBlocks(currentSource).zh), ["story-block-private", "story-block-safe"]);
+  let state = recordStoryEdit(emptyChapterReview(currentSource), {
+    storyKey: currentSource.key,
+    blockId: "story-block-safe",
+    sourceLanguage: "zh",
+    baseText: "经过审阅的故事说明了安全边界。",
+    nextText: "经过审阅的故事明确说明了安全边界。",
+    now: 100,
+  }).state;
+  state = applyChapterReview(state, context(currentSource)).state;
+  state = markChapterReady(state, context(currentSource));
+  const release = buildReviewedStoryRelease([currentSource], { [currentSource.key]: state });
+  assert.equal(release.chapters[0].phase, "Discovery");
+  assert.deepEqual(release.chapters[0].en.story.blocks.map((block) => block.text), [
+    "敏感内容已经移除。", "经过审阅的故事明确说明了安全边界。",
+  ]);
+});
+
 test("multiple accepted AI Insights, rejection, optional title, and four-part Quote projection are canonical", () => {
   const currentSource = source([
     insight("insight-z", "story-block-safe", { title: undefined }),
@@ -313,15 +350,17 @@ test("Preference lifecycle projects accepted, rejected, and accepted-edited Insi
   const currentSource = source([insight("insight-preference")]);
   const scope = await preferenceInsightScope([currentSource]);
   const probe = { id: "preference-question", ...scope[0], question: "Keep this rule?",
-    options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }], presentations: {} };
+    options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }],
+    presentations: { en: { recap: "Reviewed recap.", question: "Keep this rule?",
+      options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }] } } };
   const state = await createPreferenceLifecycleState(scope, [probe]);
   const project = (review) => projectPreferenceLifecycle(
     [currentSource], { [currentSource.key]: review }, state, [probe],
   );
   assert.equal((await project(reviewedState(currentSource)))[0].lifecycle_status, "active");
-  assert.equal((await projectPreferenceLifecycle(
+  assert.equal(await projectPreferenceLifecycle(
     [currentSource], { [currentSource.key]: reviewedState(currentSource) }, state, [],
-  ))[0].lifecycle_status, "needs_update");
+  ), null);
   assert.equal((await projectPreferenceLifecycle(
     [currentSource], { [currentSource.key]: reviewedState(currentSource) }, state,
     [{ ...probe, question: "Tampered question" }],
@@ -352,7 +391,9 @@ test("Preference lifecycle stores and reads only canonical identity-digest scope
   const scope = await preferenceInsightScope(stories);
   assert.deepEqual(scope.map((item) => item.storyKey), ["alpha", "zeta", "故事"]);
   const probe = { id: "preference-alpha", ...scope[0], question: "Keep this rule?",
-    options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }], presentations: {} };
+    options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }],
+    presentations: { en: { recap: "Reviewed recap.", question: "Keep this rule?",
+      options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }] } } };
   const state = await createPreferenceLifecycleState(scope, [probe]);
   assert.ok(parsePreferenceLifecycleState(state));
 

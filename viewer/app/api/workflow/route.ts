@@ -122,6 +122,10 @@ async function readPreferenceBatchAuthority(
       allowOther: Boolean(row.allow_other),
       allowSkip: Boolean(row.allow_skip),
     }));
+    const boundProbes = probes.filter((probe): probe is typeof probe & { storyKey: string } => (
+      typeof probe.storyKey === "string"
+    ));
+    if (boundProbes.length !== probes.length) return null;
     const bulk = (bulkRows.results || []).map((row) => ({
       id: String(row.id),
       kind: String(row.kind),
@@ -130,8 +134,8 @@ async function readPreferenceBatchAuthority(
       evidenceSample: JSON.parse(String(row.evidence_sample_json)),
       presentations: JSON.parse(String(row.presentations_json)),
     }));
-    const outputCount = probes.length + bulk.length;
-    const outputDigest = await storyPreparationDigest(canonicalPreferenceQuestionBatch(probes, bulk));
+    const outputCount = boundProbes.length + bulk.length;
+    const outputDigest = await storyPreparationDigest(canonicalPreferenceQuestionBatch(boundProbes, bulk));
     if (Number(run.output_count) !== outputCount || run.output_digest !== outputDigest) return null;
     return {
       workflowRunId,
@@ -140,6 +144,7 @@ async function readPreferenceBatchAuthority(
       outputDigest,
       outputCount,
       insightScope: lifecycle.generationScope,
+      probes: boundProbes,
       lifecycleDigest: lifecycleRow!.state_digest,
     };
   } catch {

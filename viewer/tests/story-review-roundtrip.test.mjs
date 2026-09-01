@@ -31,9 +31,11 @@ const workflowRunId = "story-review-roundtrip";
 const primaryEvidence = { documentId: "roundtrip-document", eventId: "roundtrip-document:event-primary" };
 const detailEvidence = { documentId: "roundtrip-document", eventId: "roundtrip-document:event-detail" };
 
-function sourceFixture({ insights = true } = {}) {
+function sourceFixture({ insights = true, language = "en" } = {}) {
   return {
     schema: "oxygen.story",
+    language,
+    languagePolicyDigest: "f".repeat(64),
     key: "final-roundtrip-chapter",
     phase: { id: "proof", label: "Final Proof" },
     kind: "validation",
@@ -76,6 +78,10 @@ function sourceFixture({ insights = true } = {}) {
 
 function context(source, state = null) {
   const sourceCollection = storyBlocks(source);
+  const reviewed = state ? Object.fromEntries(source.story.blocks.map((block) => [
+    block.id,
+    applyStoryReviewToBlock(block.text, block.id, source.language, state),
+  ])) : null;
   return {
     source,
     privacyCandidates: [],
@@ -85,12 +91,9 @@ function context(source, state = null) {
     supportedAddIds: [],
     supportedEditIds: [],
     sourceBlocks: sourceCollection,
-    reviewedBlocks: state ? {
-      en: Object.fromEntries(source.story.blocks.map((block) => [
-        block.id,
-        applyStoryReviewToBlock(block.text, block.id, "en", state),
-      ])),
-      zh: {},
+    reviewedBlocks: reviewed ? {
+      en: source.language === "en" ? reviewed : {},
+      zh: source.language === "zh" ? reviewed : {},
     } : sourceCollection,
   };
 }
@@ -109,7 +112,7 @@ function editBlock(state, source, blockId, nextText, now) {
   const result = recordStoryEdit(state, {
     storyKey: source.key,
     blockId,
-    sourceLanguage: "en",
+    sourceLanguage: source.language,
     baseText: block.text,
     nextText,
     workingRange: { start, end: oldEnd },
@@ -212,6 +215,64 @@ test("the same canonical path preserves a sparse zero-Insight Chapter", () => {
   const hydrated = hydrateStoryReviewSession(JSON.parse(JSON.stringify(session)), workflowRunId, [source]);
   assert.deepEqual(buildReviewedStoryRelease([source], hydrated.chapterReviews).chapters[0].en.story.blocks
     .flatMap((block) => block.insights), []);
+});
+
+test("one review authority preserves English and Chinese Chapter edit identities and bytes", () => {
+  const english = parseStorySource(`${STORY_PREFIX}${JSON.stringify(sourceFixture({ insights: false }))}`);
+  const chineseFixture = sourceFixture({ insights: false, language: "zh" });
+  chineseFixture.key = "final-roundtrip-chapter-zh";
+  chineseFixture.title = "中文故事审阅";
+  chineseFixture.overview = "同一项目中的中文章节使用自己的规范语言。";
+  chineseFixture.people = [{
+    id: "reviewer-zh",
+    releaseLabel: "审阅者",
+    role: "人工审阅者",
+    description: "审阅并确认了该章节的准确证据。",
+    localIdentityState: "not_identified",
+    evidence: [primaryEvidence],
+  }];
+  chineseFixture.story = {
+    blocks: [{ id: "scene", text: "团队审阅了准确证据。", evidence: [primaryEvidence] }],
+    uncertainty: "这并不代表发布批准。",
+  };
+  const chinese = parseStorySource(`${STORY_PREFIX}${JSON.stringify(chineseFixture)}`);
+  assert.ok(english);
+  assert.ok(chinese);
+
+  const editedEnglish = editBlock(
+    emptyChapterReview(english),
+    english,
+    "scene",
+    "The team established and reviewed a safe baseline.",
+    400,
+  );
+  const editedChinese = editBlock(
+    emptyChapterReview(chinese),
+    chinese,
+    "scene",
+    "团队审阅并确认了准确证据。",
+    500,
+  );
+  assert.equal(editedEnglish.editTransactions[0].sourceLanguage, "en");
+  assert.equal(editedChinese.editTransactions[0].sourceLanguage, "zh");
+
+  const appliedEnglish = applyChapterReview(editedEnglish, context(english, editedEnglish));
+  const appliedChinese = applyChapterReview(editedChinese, context(chinese, editedChinese));
+  assert.equal(appliedEnglish.blockedReason, undefined);
+  assert.equal(appliedChinese.blockedReason, undefined);
+  const confirmedEnglish = markChapterReady(appliedEnglish.state, context(english, appliedEnglish.state));
+  const confirmedChinese = markChapterReady(appliedChinese.state, context(chinese, appliedChinese.state));
+  const session = createStoryReviewSession(workflowRunId, {
+    [english.key]: confirmedEnglish,
+    [chinese.key]: confirmedChinese,
+  }, {}, "2038-08-27T00:00:00.000Z");
+  const hydrated = hydrateStoryReviewSession(JSON.parse(JSON.stringify(session)), workflowRunId, [english, chinese]);
+  assert.deepEqual(Object.keys(hydrated.chapterReviews).sort(), [english.key, chinese.key].sort());
+
+  const release = buildReviewedStoryRelease([english, chinese], hydrated.chapterReviews);
+  assert.equal(release.chapters.length, 2);
+  assert.equal(release.chapters[0].en.story.blocks[0].text, "The team established and reviewed a safe baseline.");
+  assert.equal(release.chapters[1].en.story.blocks[0].text, "团队审阅并确认了准确证据。");
 });
 
 test("invalid and foreign Story targets fail closed before or during hydration", () => {

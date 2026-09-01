@@ -3,6 +3,7 @@ import {
   STORY_PREFIX,
   STORY_SEMANTIC_EXCLUSION_REASONS,
   MAX_STORY_SEMANTIC_UNIT_REFERENCES,
+  classifyStoryLanguageText,
   compareStorySourceIdentity,
   parseStorySource,
   resolveEvidenceTarget,
@@ -1035,6 +1036,7 @@ export type StorySourceFailureCode =
   | "STORY_KEY_DUPLICATED"
   | "STORY_PHASE_INVALID"
   | "STORY_PHASE_ORDER_INVALID"
+  | "STORY_LANGUAGE_INVALID"
   | "STORY_EVIDENCE_INVALID"
   | "STORY_PEOPLE_INVALID"
   | "STORY_SEMANTIC_AUTHORITY_STALE"
@@ -1091,7 +1093,25 @@ const genericStoryPhases = new Set([
   "other",
   "later stage",
 ]);
-const storyPhaseLabelPattern = /^[\p{L}\p{N}]+(?:[-'][\p{L}\p{N}]+)*(?:\s+[\p{L}\p{N}]+(?:[-'][\p{L}\p{N}]+)*)?$/u;
+const storyPhaseLabelPattern = /^[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*(?:\s+[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*)?$/u;
+
+function storyAuthorableText(story: StorySource) {
+  return [
+    story.title,
+    story.overview,
+    ...(story.transition ? [story.transition.before, story.transition.after] : []),
+    ...(story.chips || []),
+    ...story.people.flatMap((person) => [person.releaseLabel, person.role, person.description]),
+    ...story.story.blocks.map((block) => block.text),
+    ...(story.story.uncertainty === undefined ? [] : [story.story.uncertainty]),
+    ...story.insights.flatMap((insight) => [
+      ...(insight.title === undefined ? [] : [insight.title]),
+      insight.background,
+      insight.directlyAcquiredExperience,
+      insight.principle,
+    ]),
+  ];
+}
 
 /** Validate the complete canonical Story package against exact source authority. */
 export function validateStorySourcePackage(
@@ -1130,6 +1150,7 @@ export function validateStorySourcePackage(
   }
   let semanticReference = "";
   let coverageReference = "";
+  let languagePolicyReference = "";
   let activePhase = "";
 
   for (const row of orderedCandidateRows) {
@@ -1146,6 +1167,11 @@ export function validateStorySourcePackage(
     }
     if (keys.has(parsed.key)) return storySourceFailure("STORY_KEY_DUPLICATED");
     keys.add(parsed.key);
+    if (classifyStoryLanguageText(storyAuthorableText(parsed)) !== parsed.language
+      || (languagePolicyReference && languagePolicyReference !== parsed.languagePolicyDigest)) {
+      return storySourceFailure("STORY_LANGUAGE_INVALID");
+    }
+    languagePolicyReference = parsed.languagePolicyDigest;
 
     const chapterSemanticReference = `${parsed.coverage.semanticManifest.revision}:`
       + parsed.coverage.semanticManifest.digest;

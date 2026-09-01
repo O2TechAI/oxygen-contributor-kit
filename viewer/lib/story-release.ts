@@ -65,11 +65,14 @@ function reviewContext(source: StorySource, state: ChapterReviewState) {
     supportedEditIds: [],
     sourceBlocks: sourceCollection,
     reviewedBlocks: {
-      en: Object.fromEntries(source.story.blocks.map((block) => [
+      en: source.language === "en" ? Object.fromEntries(source.story.blocks.map((block) => [
         block.id,
-        applyStoryReviewToBlock(block.text, block.id, "en", state),
-      ])),
-      zh: {},
+        applyStoryReviewToBlock(block.text, block.id, source.language, state),
+      ])) : {},
+      zh: source.language === "zh" ? Object.fromEntries(source.story.blocks.map((block) => [
+        block.id,
+        applyStoryReviewToBlock(block.text, block.id, source.language, state),
+      ])) : {},
     },
   };
 }
@@ -129,7 +132,7 @@ export function buildReviewedStoryRelease(
     const releaseBlocks: ReleaseStoryBlock[] = [];
     const releaseBlockIndex = new Map<string, number>();
     for (const block of source.story.blocks) {
-      const reviewed = applyStoryReviewToBlock(block.text, block.id, "en", state);
+      const reviewed = applyStoryReviewToBlock(block.text, block.id, source.language, state);
       const projected = privacy.project(storyReleaseTargetId(source.key, `story:${block.id}`), reviewed);
       releaseBlockIndex.set(block.id, releaseBlocks.length);
       releaseBlocks.push({ text: projected, insights: [] });

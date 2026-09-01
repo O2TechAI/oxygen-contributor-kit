@@ -12,6 +12,7 @@ import {
   validPreferenceDocumentKind,
 } from "../../../viewer/lib/story-preparation.ts";
 import {
+  hasRequiredProbePresentation,
   normalizeBulkPreferencePresentations,
   normalizeProbePresentations,
 } from "../../../viewer/lib/preference-presentation.ts";
@@ -51,6 +52,7 @@ import {
   storyCompletenessAuthority,
   storyEvidenceRows,
   storyValidationScope,
+  validateStoryLanguageProjection,
 } from "./story_preparation_validation_authority.mjs";
 
 const metadataKeys = new Set([
@@ -106,7 +108,7 @@ function parseStory(value) {
 const storyChapterRequiredKeys = ["title", "overview", "people", "story", "insights", "evidence"];
 const storyChapterOptionalKeys = ["kind", "transition", "chips"];
 const storyParentKeys = new Set([
-  "schema", "key", "phase", "coverage", "exclusions", "receipt", "authority",
+  "schema", "key", "language", "languagePolicyDigest", "phase", "coverage", "exclusions", "receipt", "authority",
 ]);
 const storyEditorialCriteriaKeys = [
   "beginningIsUnderstandable",
@@ -184,7 +186,7 @@ function validateStoryOwnerBundles(prepared, authority) {
   for (const shard of prepared.shards) {
     const input = prepared.inputs.find((candidate) => candidate.shardId === shard.id);
     if (!input || !exactKeys(input.payload, [
-      "validationAuthorityPath", "validationAuthorityDigest", "ownerBundles",
+      "validationAuthorityPath", "validationAuthorityDigest", "languagePolicy", "ownerBundles",
     ]) || !Array.isArray(input.payload.ownerBundles) || input.payload.ownerBundles.length === 0) {
       fail("WORKER_INPUT_TAMPERED");
     }
@@ -367,9 +369,15 @@ async function storyBatchProposal(rootInput, proposalDirectory, editorialReviewP
   const output = candidates.map((candidate, index) => {
     const bundle = bundles.get(candidate.ownerId);
     const chapter = candidate.proposal.chapter;
+    const languageBinding = authority.languagePolicy.stories.find((story) => (
+      story.storyKey === candidate.ownerId
+    ));
+    if (!languageBinding) fail("STORY_LANGUAGE_POLICY_STALE");
     const story = parseStory({
       schema: "oxygen.story",
       key: candidate.ownerId,
+      language: languageBinding.language,
+      languagePolicyDigest: canonicalDigest(authority.languagePolicy),
       phase: phases.get(candidate.ownerId),
       ...(chapter.kind === undefined ? {} : { kind: chapter.kind }),
       title: chapter.title,
@@ -522,13 +530,15 @@ function preferenceProbe(value, evidence, scope) {
     || !Array.isArray(value.options) || ![2, 3].includes(value.options.length)
     || value.options.some((option) => !preferenceOption(option))
     || new Set(value.options.map((option) => option.id)).size !== value.options.length
-    || scope.get(canonicalAuthorityJson([value.storyKey, value.insightId])) !== value.insightAuthorityDigest
+    || scope.get(canonicalAuthorityJson([value.storyKey, value.insightId]))?.insightAuthorityDigest !== value.insightAuthorityDigest
     || value.allowOther !== true || value.allowSkip !== true) fail("PREFERENCE_BUNDLE_INVALID");
   const normalizedOptions = value.options.map((option) => normalizeOptionText(option.text));
   if (new Set(normalizedOptions).size !== normalizedOptions.length
     || normalizedOptions.some((option) => genericOptions.has(option))) fail("PREFERENCE_BUNDLE_INVALID");
   const presentations = normalizeProbePresentations(value.presentations, value.options);
-  if (presentations === null || canonicalAuthorityJson(presentations) !== canonicalAuthorityJson(value.presentations)) {
+  if (presentations === null || canonicalAuthorityJson(presentations) !== canonicalAuthorityJson(value.presentations)
+    || !hasRequiredProbePresentation(presentations,
+      scope.get(canonicalAuthorityJson([value.storyKey, value.insightId]))?.language)) {
     fail("PREFERENCE_BUNDLE_INVALID");
   }
   return value;
@@ -561,11 +571,20 @@ function validatePreference(value, input) {
   }
   rejectMetadata({ probes: value.probes, bulkDecisions: value.bulkDecisions });
   const evidenceIds = new Set(context.reviewedEvidence.map((record) => record?.eventId));
+  const lessonLanguages = new Map(context.reusableLessons?.map((item) => [
+    canonicalAuthorityJson([item?.storyKey, item?.insightId]), item?.language,
+  ]));
   const scope = new Map(context.insightScope?.map((item) => [
-    canonicalAuthorityJson([item?.storyKey, item?.insightId]), item?.insightAuthorityDigest,
+    canonicalAuthorityJson([item?.storyKey, item?.insightId]), {
+      insightAuthorityDigest: item?.insightAuthorityDigest,
+      language: lessonLanguages.get(canonicalAuthorityJson([item?.storyKey, item?.insightId])),
+    },
   ]));
   if (!Array.isArray(value.insightScope) || canonicalAuthorityJson(value.insightScope) !== canonicalAuthorityJson(context.insightScope)
-    || scope.size !== context.insightScope?.length) fail("PREFERENCE_BUNDLE_INVALID");
+    || scope.size !== context.insightScope?.length
+    || [...scope.values()].some((item) => item.language !== "en" && item.language !== "zh")) {
+    fail("PREFERENCE_BUNDLE_INVALID");
+  }
   const probes = value.probes.map((probe) => preferenceProbe(probe, evidence, scope));
   const decisions = value.bulkDecisions.map((decision) => preferenceBulk(decision, evidenceIds));
   const ids = [...probes, ...decisions].map((item) => item.id);
@@ -592,6 +611,17 @@ function validatePreference(value, input) {
 
 async function validateProposal(lane, value, input, prepared) {
   if (lane === "insight") return validateInsight(value, input, prepared);
+  if (lane === "story_privacy" || lane === "preference") {
+    const storyAuthority = await readLaneAuthority(prepared.root, "story");
+    const authority = await readStoryValidationAuthority(storyAuthority);
+    const storyKeys = lane === "story_privacy"
+      ? [...new Set(input.payload?.storyCandidates?.map((candidate) => (
+        parseStorySource(candidate?.summary)?.key
+      )) || [])]
+      : authority.languagePolicy.stories.map((story) => story.storyKey);
+    if (storyKeys.some((key) => !key)) fail("STORY_LANGUAGE_POLICY_STALE");
+    validateStoryLanguageProjection(input.payload?.languagePolicy, authority.languagePolicy, storyKeys);
+  }
   if (lane === "story_privacy") return validatePrivacy(value, input);
   if (lane === "preference") return validatePreference(value, input);
   fail("LANE_INVALID");

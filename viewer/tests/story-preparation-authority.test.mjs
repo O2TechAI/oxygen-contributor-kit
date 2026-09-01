@@ -20,6 +20,8 @@ import { finalizeCoverageManifestAuthority } from "../lib/story-readiness.ts";
 import {
   buildStoryValidationAuthority,
   insightReviewedNarrative,
+  storyLanguageProjection,
+  validateStoryLanguageProjection,
 } from "../../skills/oxygen-storytelling-review/scripts/story_preparation_validation_authority.mjs";
 
 registerHooks({
@@ -56,6 +58,8 @@ function story(key, { insight = true, eventId = `doc:${key}` } = {}) {
   const evidence = { documentId: "doc", eventId };
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key,
     phase: { id: `phase-${key}`, label: "Build" },
     title: `Chapter ${key}`,
@@ -105,6 +109,22 @@ async function authorityFixture({
   privacyCandidates,
   preferenceCount = 1,
 } = {}) {
+  const languagePolicy = {
+    schema: "oxygen.story-language-policy",
+    workflowRunId: RUN_ID,
+    sourceRevision: SOURCE_REVISION,
+    sourceDigest: SEMANTIC_DIGEST,
+    sourcePrivacyDigest: "c".repeat(64),
+    sourceInputDigest: "d".repeat(64),
+    detectedLanguage: "en",
+    selection: "all-english",
+    stories: stories.map((source) => ({ storyKey: source.key, language: "en" }))
+      .sort((left, right) => utf8Sort(left.storyKey, right.storyKey)),
+  };
+  const policyDigest = independentDigest(languagePolicy);
+  stories = stories.map((source) => ({
+    ...source, language: "en", languagePolicyDigest: policyDigest,
+  }));
   const storyCandidates = rowsFor(stories);
   const semanticUnitIds = ["unit-a", "unit-b"];
   const targetContents = deriveStoryReleaseTargetContents(stories);
@@ -150,6 +170,7 @@ async function authorityFixture({
   const lessonOutput = stories.flatMap((source) => source.insights.map((insight) => ({
     storyKey: source.key,
     insightId: insight.id,
+    language: source.language,
     insightAuthorityDigest: independentDigest(insightAuthorityValue(source.key, insight)),
     ...(insight.title === undefined ? {} : { title: insight.title }),
     background: insight.background,
@@ -162,6 +183,11 @@ async function authorityFixture({
     inputDigest: independentDigest(lessonOutput),
     outputDigest: independentDigest(preferenceOutput),
     outputCount: preferenceCount,
+    probes: preferenceCount === 0 ? [] : [{
+      storyKey: lessonOutput[0].storyKey,
+      options: [],
+      presentations: { en: { recap: "Reviewed recap", question: "Reviewed question?", options: [] } },
+    }],
     insightScope: lessonOutput.map(({ storyKey, insightId, insightAuthorityDigest }) => ({
       storyKey, insightId, insightAuthorityDigest,
     })).sort((left, right) => utf8Sort(left.storyKey, right.storyKey)
@@ -229,6 +255,7 @@ async function authorityFixture({
       schema: "oxygen.story-preparation",
       workflowRunId: RUN_ID,
       sourceRevision: SOURCE_REVISION,
+      languagePolicy,
       receipts,
       storyPrivacy: privacy,
     },
@@ -237,6 +264,28 @@ async function authorityFixture({
 }
 
 const clone = (value) => structuredClone(value);
+
+test("language policy projection rejects tampered, stale, and foreign assignment authority", () => {
+  const policy = {
+    schema: "oxygen.story-language-policy", workflowRunId: RUN_ID, sourceRevision: SOURCE_REVISION,
+    sourceDigest: "a".repeat(64), sourcePrivacyDigest: "b".repeat(64),
+    sourceInputDigest: "c".repeat(64), detectedLanguage: "mixed", selection: "preserve-per-story",
+    stories: [{ storyKey: "a", language: "en" }, { storyKey: "b", language: "zh" }],
+  };
+  const projection = storyLanguageProjection(policy, ["a"]);
+  assert.equal(validateStoryLanguageProjection(projection, policy, ["a"]), undefined);
+  for (const mutate of [
+    (value) => { value.policyDigest = "0".repeat(64); },
+    (value) => { value.workflowRunId = "foreign-run"; },
+    (value) => { value.sourceRevision += 1; },
+    (value) => { value.stories[0].language = "zh"; },
+  ]) {
+    const invalid = clone(projection);
+    mutate(invalid);
+    assert.throws(() => validateStoryLanguageProjection(invalid, policy, ["a"]),
+      /STORY_LANGUAGE_POLICY_STALE/u);
+  }
+});
 
 test("canonical Story Privacy output is total, exact, and Unicode code-point based", async () => {
   const target = {
@@ -313,6 +362,23 @@ test("Preference lessons preserve narrative order while scope is independently U
     ok: false,
     code: "STORY_PREPARATION_PREFERENCE_AUTHORITY_INVALID",
   });
+});
+
+test("activation requires the linked Story presentation and preserves extra reviewed copy", async () => {
+  const current = await authorityFixture({ stories: [story("a")], privacyCandidates: [] });
+  assert.equal((await validateStoryPreparationManifest(current.manifest, current.context)).ok, true);
+  current.context.preference.probes[0].presentations.zh = {
+    recap: "经过审阅的说明。", question: "应该保留什么？", options: [],
+  };
+  assert.equal((await validateStoryPreparationManifest(current.manifest, current.context)).ok, true);
+  delete current.context.preference.probes[0].presentations.en;
+  assert.deepEqual(await validateStoryPreparationManifest(current.manifest, current.context), {
+    ok: false,
+    code: "STORY_PREPARATION_PREFERENCE_PRESENTATION_INVALID",
+  });
+  assert.deepEqual(current.context.preference.insightScope.map(Object.keys), [[
+    "storyKey", "insightId", "insightAuthorityDigest",
+  ]]);
 });
 
 test("reviewed meeting narrative preserves exact bound text outside validation metadata", async () => {
@@ -424,12 +490,14 @@ test("exact four terminal digest-bound receipts succeed and one candidate spans 
 
 test("fixed zero-Insight final Story structure independently binds Story Privacy input", async () => {
   const source = story("a", { insight: false });
-  const expectedFinalStoryCandidates = [{ id: "doc:a", story: source }];
-  const fixedDigest = "aed4c537c334b83d4de87a16446f4aa3a58b44708e8528a549d74c4f29afcf90";
-  assert.equal(independentDigest(expectedFinalStoryCandidates), fixedDigest);
   const fixture = await authorityFixture({
     stories: [source], privacyCandidates: [], preferenceCount: 0,
   });
+  const expectedFinalStoryCandidates = fixture.context.storyCandidates.map((row) => ({
+    id: row.id,
+    story: JSON.parse(row.summary.slice("oxygen.story:".length)),
+  }));
+  const fixedDigest = independentDigest(expectedFinalStoryCandidates);
   assert.equal(
     fixture.manifest.receipts.find((receipt) => receipt.lane === "story_privacy").inputDigest,
     fixedDigest,

@@ -12,6 +12,8 @@ const reviewedB = "Another reviewer challenged the assumption and requested dire
 function source(insights = [insight()]) {
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key: "chapter-quote-grounding",
     phase: { id: "phase-quote-grounding", label: "Quote Grounding" },
     title: "The evidence changed the repair",

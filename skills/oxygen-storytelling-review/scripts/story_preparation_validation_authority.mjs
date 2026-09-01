@@ -38,6 +38,30 @@ const interactionDirections = new Set([
 ]);
 const relationTypes = new Set(["reply_to", "produced", "result_of", "observed"]);
 
+export function storyLanguageProjection(policy, storyKeys) {
+  if (!isObject(policy) || policy.schema !== "oxygen.story-language-policy"
+    || !Array.isArray(policy.stories) || !stableId(policy.workflowRunId)
+    || !Number.isSafeInteger(policy.sourceRevision) || policy.sourceRevision < 1) {
+    fail("STORY_LANGUAGE_POLICY_INVALID");
+  }
+  const wanted = new Set(storyKeys);
+  const stories = policy.stories.filter((story) => wanted.has(story.storyKey));
+  if (stories.length !== wanted.size) fail("STORY_LANGUAGE_POLICY_STALE");
+  return {
+    workflowRunId: policy.workflowRunId,
+    sourceRevision: policy.sourceRevision,
+    selection: policy.selection,
+    policyDigest: canonicalDigest(policy),
+    stories,
+  };
+}
+
+export function validateStoryLanguageProjection(value, policy, storyKeys) {
+  if (!canonicalJsonEqual(value, storyLanguageProjection(policy, storyKeys))) {
+    fail("STORY_LANGUAGE_POLICY_STALE");
+  }
+}
+
 async function directDirectory(parent, name, optional = false) {
   const candidate = resolve(parent, name);
   let entry;
@@ -340,7 +364,7 @@ export function insightStoryEvidenceRows(authority, insightInputs, storyInputs, 
   for (const input of insightInputs) {
     const payload = input?.payload;
     if (!isObject(payload) || !exactKeys(payload, [
-      "validationAuthorityPath", "validationAuthorityDigest", "storyCandidates", "reviewedNarrative",
+      "validationAuthorityPath", "validationAuthorityDigest", "languagePolicy", "storyCandidates", "reviewedNarrative",
     ]) || payload.validationAuthorityPath !== "story/validation-authority.json"
       || payload.validationAuthorityDigest !== canonicalDigest(authority)
       || !Array.isArray(payload.storyCandidates) || !Array.isArray(payload.reviewedNarrative)) {
@@ -357,6 +381,7 @@ export function insightStoryEvidenceRows(authority, insightInputs, storyInputs, 
     if (!canonicalJsonEqual([...assignedStoryKeys].sort(compareUtf8), input.unitIds)) {
       fail("INSIGHT_INPUT_STALE");
     }
+    validateStoryLanguageProjection(payload.languagePolicy, authority.languagePolicy, assignedStoryKeys);
     const expectedNarrative = insightReviewedNarrative(storyInputs, payload.storyCandidates);
     if (!canonicalJsonEqual(payload.reviewedNarrative, expectedNarrative)) fail("INSIGHT_INPUT_STALE");
     for (const row of payload.reviewedNarrative) {
@@ -471,5 +496,15 @@ export async function readStoryValidationAuthority(prepared) {
   if (canonicalDigest(authority) !== digest) fail("STORY_VALIDATION_AUTHORITY_TAMPERED");
   storyEvidenceRows(authority);
   storyCompletenessAuthority(authority);
+  if (!isObject(authority.languagePolicy)) fail("STORY_LANGUAGE_POLICY_INVALID");
+  if (Array.isArray(prepared.inputs)) {
+    for (const input of prepared.inputs) {
+      validateStoryLanguageProjection(
+        input.payload?.languagePolicy,
+        authority.languagePolicy,
+        input.unitIds,
+      );
+    }
+  }
   return authority;
 }

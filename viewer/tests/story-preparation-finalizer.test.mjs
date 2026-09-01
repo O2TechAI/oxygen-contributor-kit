@@ -29,7 +29,7 @@ function source(key, insightId = "shared", semanticDigest = "a".repeat(64),
   coverageDigest = "b".repeat(64), eventId = `event:${key}`) {
   const evidence = { documentId: "doc", eventId };
   return {
-    schema: "oxygen.story", key,
+    schema: "oxygen.story", key, language: "en", languagePolicyDigest: "f".repeat(64),
     phase: { id: `phase-${key}`, label: "Build" }, title: `Chapter ${key}`,
     overview: `Overview ${key}`, people: [{
       id: `person-${key}`, releaseLabel: `Person ${key}`, role: "reviewed participant",
@@ -60,7 +60,7 @@ function rowsFor(stories) {
 
 function lessons(stories) {
   return stories.flatMap((story) => story.insights.map((insight) => ({
-    storyKey: story.key, insightId: insight.id,
+    storyKey: story.key, insightId: insight.id, language: story.language,
     insightAuthorityDigest: digest(insightAuthorityValue(story.key, insight)), background: insight.background,
     directlyAcquiredExperience: insight.directlyAcquiredExperience, principle: insight.principle,
   })));
@@ -76,7 +76,12 @@ function probe(documentKind = "trajectory", binding = {}) {
     timestamp: "2026-08-27T12:00:00Z", signal: "explicit_rule", score: 80, turns: 2,
     recap: "The reviewed event records a deployment boundary.",
     question: "What should the agent remember?", options,
-    presentations: { zh: {
+    presentations: { en: {
+      recap: "The reviewed event records a deployment boundary.",
+      question: "What should the agent remember?",
+      options: [{ id: "one", text: "Ask before editing deployment files." },
+        { id: "two", text: "Put deployment work on a separate branch." }],
+    }, zh: {
       recap: "已审阅事件记录了部署边界。", question: "代理应该记住什么？",
       options: [{ id: "one", text: "修改部署文件前先询问。" }, { id: "two", text: "把部署工作放在单独分支。" }],
     } },
@@ -151,9 +156,17 @@ async function fixture({
     })).sort((left, right) => utf8(left.unitId, right.unitId)),
   };
   const coverage = { ...coverageCore, coverageDigest: digest(coverageCore), serializedBytes: 1 };
-  const stories = storyKeys.map((key, index) => source(
+  const languagePolicy = {
+    schema: "oxygen.story-language-policy", workflowRunId: "run-11", sourceRevision: 4,
+    sourceDigest: "e".repeat(64), sourcePrivacyDigest: "f".repeat(64),
+    sourceInputDigest: "9".repeat(64), detectedLanguage: "en", selection: "all-english",
+    stories: storyKeys.map((storyKey) => ({ storyKey, language: "en" }))
+      .sort((left, right) => utf8(left.storyKey, right.storyKey)),
+  };
+  const languagePolicyDigest = digest(languagePolicy);
+  const stories = storyKeys.map((key, index) => ({ ...source(
     key, insightIds[index], semantic.manifestDigest, coverage.coverageDigest, eventIds.get(key),
-  ));
+  ), languagePolicyDigest }));
   const rows = rowsFor(stories);
   const rowByStoryKey = new Map(stories.map((story, index) => [story.key, rows[index]]));
   const storyByKey = new Map(stories.map((story) => [story.key, story]));
@@ -215,6 +228,7 @@ async function fixture({
     schema: "oxygen.story-validation-authority",
     sourceDigest: "e".repeat(64), sourcePrivacyDigest: "f".repeat(64),
     semanticManifest: semantic, coverageManifest: coverage,
+    languagePolicy,
     evidence: orderedStoryKeys.map((key, index) => ({
       id: eventIds.get(key), documentId: "doc", eventType: "message", actorType: "human",
       actorEquivalence: `actor-${key}`, sequence: index + 1,
@@ -245,6 +259,11 @@ async function fixture({
       canonical([left.documentId, left.id]),
       canonical([right.documentId, right.id]),
     ));
+  const languageProjection = (keys) => ({
+    workflowRunId: "run-11", sourceRevision: 4, selection: languagePolicy.selection,
+    policyDigest: languagePolicyDigest,
+    stories: languagePolicy.stories.filter((row) => keys.includes(row.storyKey)),
+  });
   for (const lane of ["story", "insight", "story_privacy", "preference"]) {
     const laneUnits = [...units[lane]].sort(utf8);
     const directoryName = lane === "story_privacy" ? "story-privacy" : lane;
@@ -258,13 +277,16 @@ async function fixture({
       inputDigest: inputs[lane], unitIds: laneUnits, payload: lane === "story" ? {
         validationAuthorityPath: "story/validation-authority.json",
         validationAuthorityDigest: digest(validationAuthority),
+        languagePolicy: languageProjection(storyKeys),
         ownerBundles,
       } : lane === "insight" ? {
         validationAuthorityPath: "story/validation-authority.json",
         validationAuthorityDigest: digest(validationAuthority),
+        languagePolicy: languageProjection(storyKeys),
         storyCandidates: baseStoryCandidates,
         reviewedNarrative: insightReviewedNarrative,
       } : lane === "preference" ? {
+        languagePolicy: languageProjection(storyKeys),
         preferenceContext: {
           schema: "oxygen.preference-context", reusableLessons: lessonRows,
           insightScope: preference.insightScope,
@@ -275,7 +297,10 @@ async function fixture({
           })),
           autoRemoved: preference.autoRemoved,
         },
-      } : {},
+      } : {
+        languagePolicy: languageProjection(storyKeys),
+        storyCandidates: rows,
+      },
     };
     const workerInputDigest = digest(workerInput);
     await json(join(laneRoot, "inputs", `${shardId}.json`), workerInput);

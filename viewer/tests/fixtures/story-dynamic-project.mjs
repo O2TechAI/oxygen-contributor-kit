@@ -87,6 +87,8 @@ export const dynamicStorySources = definitions.map((definition, chapterIndex) =>
   }));
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key: definition.key,
     phase: definition.phase,
     kind: definition.kind,

@@ -68,7 +68,9 @@ function buildStoryFixture(caseId) {
       block.evidence.map((reference) => reference.eventId)
     )))];
     const source = {
-      schema: "oxygen.story",
+    schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
       key: chapterItem.id,
       phase: { id: phase.id, label: phase.label },
       title: fixture.title,

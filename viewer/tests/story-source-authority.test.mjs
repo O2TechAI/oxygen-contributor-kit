@@ -58,6 +58,8 @@ function sourceFor(identity) {
   const evidence = { documentId: identity.document_id, eventId: identity.id };
   return {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key: identity.key,
     phase: { id: "phase-discovery", label: "Discovery" },
     kind: "decision",

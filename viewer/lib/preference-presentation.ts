@@ -83,6 +83,16 @@ export function resolveProbePresentation<T extends { presentations?: ProbePresen
   return presentation ? { ...probe, ...presentation } : null;
 }
 
+/** Require the linked Story language without falling back. Additional reviewed
+ * presentation copy may coexist under the same Preference identity. */
+export function hasRequiredProbePresentation(
+  presentations: unknown,
+  language: PreferenceLanguage,
+) {
+  return Boolean(presentations && typeof presentations === "object" && !Array.isArray(presentations)
+    && (presentations as ProbePresentations)[language]);
+}
+
 export function resolveBulkPreferencePresentation<T extends { presentations?: BulkPreferencePresentations }>(
   decision: T,
   language: PreferenceLanguage,
