@@ -53,6 +53,7 @@ type WorkflowRunRow = {
 };
 
 type SessionBindingRow = { server_version?: number; state_json?: string };
+type ConfirmationPresenceRow = { present?: number };
 type FinalizedCorpusRow = {
   workflow_run_id?: string;
   corpus_revision?: number;
@@ -115,10 +116,12 @@ async function normalizedSourcePrivacyComplete(
     && receipt.finalizedCorpus.itemCount === Number(row.corpus_item_count));
 }
 
-/** Read the one sanitized persisted workflow projection used by both the
- * initial server render and the polling API. No Story or Evidence payload is
- * selected or serialized across the Server/Client boundary. */
-export async function loadWorkflowProgress(workflowRunId?: string) {
+type WorkflowProgressReadMode = "authoritative" | "polling_projection";
+
+async function loadWorkflowProgressWithMode(
+  workflowRunId: string | undefined,
+  mode: WorkflowProgressReadMode,
+) {
   const db = await getLocalDatabase();
   const authority = workflowRunId
     ? await requireExactWorkflowRun(db, workflowRunId)
@@ -140,7 +143,7 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
       FROM workflow_runs WHERE id=?`).bind(authority.workflowRunId).first<WorkflowRunRow>();
   const [
     items, documents, finalizedCorpus, organization, redaction,
-    sourcePrivacyCompletion, run, sessionBinding,
+    sourcePrivacyCompletion, run, sessionBinding, projectionConfirmation,
   ] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN organization_category IS NOT NULL THEN 1 ELSE 0 END) AS completed
@@ -151,29 +154,50 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
       .bind(authority.workflowRunId).first<FinalizedCorpusRow>(),
     db.prepare("SELECT id,status,updated_at FROM organization_jobs ORDER BY updated_at DESC LIMIT 1").first<JobRow>(),
     db.prepare("SELECT id,status,updated_at FROM redaction_jobs ORDER BY started_at DESC LIMIT 1").first<JobRow>(),
-    db.prepare(`SELECT j.id AS job_id,j.status AS job_status,j.completed AS job_completed,
-        j.total AS job_total,j.rejected AS job_rejected,j.source_digest AS job_source_digest,
-        p.job_id AS receipt_job_id,
-        p.workflow_run_id AS receipt_workflow_run_id,p.source_revision AS receipt_source_revision,
-        p.source_digest AS receipt_source_digest,p.receipt_digest AS stored_receipt_digest,
-        p.receipt_json,f.corpus_revision,f.corpus_digest,
-        f.document_count AS corpus_document_count,f.item_count AS corpus_item_count,
-        (SELECT COUNT(*) FROM redactions) AS current_redaction_count
-      FROM redaction_jobs j LEFT JOIN source_privacy_receipts p ON p.job_id=j.id
-      LEFT JOIN finalized_corpus_manifests f ON f.workflow_run_id=?
-      ORDER BY j.started_at DESC,j.id DESC LIMIT 1`).bind(authority.workflowRunId)
-      .first<SourcePrivacyCompletionRow>(),
+    mode === "authoritative"
+      ? db.prepare(`SELECT j.id AS job_id,j.status AS job_status,j.completed AS job_completed,
+          j.total AS job_total,j.rejected AS job_rejected,j.source_digest AS job_source_digest,
+          p.job_id AS receipt_job_id,
+          p.workflow_run_id AS receipt_workflow_run_id,p.source_revision AS receipt_source_revision,
+          p.source_digest AS receipt_source_digest,p.receipt_digest AS stored_receipt_digest,
+          p.receipt_json,f.corpus_revision,f.corpus_digest,
+          f.document_count AS corpus_document_count,f.item_count AS corpus_item_count,
+          (SELECT COUNT(*) FROM redactions) AS current_redaction_count
+        FROM redaction_jobs j LEFT JOIN source_privacy_receipts p ON p.job_id=j.id
+        LEFT JOIN finalized_corpus_manifests f ON f.workflow_run_id=?
+        ORDER BY j.started_at DESC,j.id DESC LIMIT 1`).bind(authority.workflowRunId)
+        .first<SourcePrivacyCompletionRow>()
+      : Promise.resolve(null),
     runQuery,
-    db.prepare(`SELECT server_version,state_json FROM story_review_sessions WHERE workflow_run_id=?`)
-      .bind(authority.workflowRunId).first<SessionBindingRow>(),
+    mode === "authoritative"
+      ? db.prepare(`SELECT server_version,state_json FROM story_review_sessions
+          WHERE workflow_run_id=?`)
+        .bind(authority.workflowRunId).first<SessionBindingRow>()
+      : Promise.resolve(null),
+    mode === "polling_projection"
+      ? db.prepare(`SELECT 1 AS present FROM project_release_confirmations
+          WHERE workflow_run_id=? LIMIT 1`)
+        .bind(authority.workflowRunId).first<ConfirmationPresenceRow>()
+      : Promise.resolve(null),
   ]);
   const updatedAt = [run?.updated_at, organization?.updated_at, redaction?.updated_at]
     .filter((value): value is string => Boolean(value))
     .sort()
     .at(-1) || null;
-  const activeContract = run?.story_generation_status === "ready_for_human_review"
-    ? await readPassiveActiveStoryReviewContract(db, authority.workflowRunId)
-    : null;
+  const readyProjection = run?.story_generation_status === "ready_for_human_review"
+    && validActivatedSourceRevision(Number(run.story_source_revision))
+    && /^[0-9a-f]{64}$/.test(String(run.active_story_digest || ""));
+  // Polling exposes only non-authoritative UI hints from durable operational
+  // metadata. Story/session/Privacy/release authority is still revalidated by
+  // the deep bootstrap and mutation readers before any Story bytes are used.
+  const activeContract = mode === "polling_projection"
+    ? readyProjection ? {
+        storySourceSchema: "oxygen.story" as const,
+        storySessionSchema: STORY_REVIEW_SESSION_SCHEMA,
+      } : null
+    : run?.story_generation_status === "ready_for_human_review"
+      ? await readPassiveActiveStoryReviewContract(db, authority.workflowRunId)
+      : null;
   let storedSourceRevision: number | null = null;
   try {
     const stored = JSON.parse(String(sessionBinding?.state_json || ""));
@@ -195,21 +219,25 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     && Number(finalizedCorpus?.document_count) === documentCount
     && Number(finalizedCorpus?.item_count) === itemCount
   );
-  const privacyComplete = redaction?.status === "complete"
-    && await normalizedSourcePrivacyComplete(
-      sourcePrivacyCompletion,
-      authority.workflowRunId,
-      currentSourceRevision,
-    );
-  const releaseConfirmed = Boolean(run?.active_story_digest
-    && validNonnegativeAuthorityCounter(currentServerVersion)
-    && validActivatedSourceRevision(currentSourceRevision)
-    && storedSourceRevision === currentSourceRevision
-    && await readProjectReleaseConfirmation(db, {
-      workflowRunId: authority.workflowRunId,
-      serverVersion: currentServerVersion,
-      sourceRevision: currentSourceRevision,
-    }));
+  const privacyComplete = mode === "polling_projection"
+    ? redaction?.status === "complete"
+    : redaction?.status === "complete"
+      && await normalizedSourcePrivacyComplete(
+        sourcePrivacyCompletion,
+        authority.workflowRunId,
+        currentSourceRevision,
+      );
+  const releaseConfirmed = mode === "polling_projection"
+    ? Boolean(readyProjection && projectionConfirmation?.present === 1)
+    : Boolean(run?.active_story_digest
+      && validNonnegativeAuthorityCounter(currentServerVersion)
+      && validActivatedSourceRevision(currentSourceRevision)
+      && storedSourceRevision === currentSourceRevision
+      && await readProjectReleaseConfirmation(db, {
+        workflowRunId: authority.workflowRunId,
+        serverVersion: currentServerVersion,
+        sourceRevision: currentSourceRevision,
+      }));
   return deriveWorkflowProgress({
     workflowRunId: run?.id || authority.workflowRunId,
     targetConfirmed: Boolean(run?.target_confirmed),
@@ -234,6 +262,16 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
   });
 }
 
+/** Deep authority read retained for bootstrap and mutation responses. */
+export function loadWorkflowProgress(workflowRunId?: string) {
+  return loadWorkflowProgressWithMode(workflowRunId, "authoritative");
+}
+
+/** Sanitized, explicitly non-authoritative browser polling projection. */
+export function loadWorkflowPollingProjection(workflowRunId?: string) {
+  return loadWorkflowProgressWithMode(workflowRunId, "polling_projection");
+}
+
 type OrganizationStatusRow = {
   status?: string;
   stage?: string;
@@ -252,9 +290,9 @@ function parseStoredJson<T>(value: string | undefined, fallback: T): T {
   }
 }
 
-/** Hydrate the Review-ready page from the same persisted workflow boundary as
- * client polling. Story-bearing documents and the bounded review session are
- * loaded only after the authoritative readiness invariant succeeds. */
+/** Hydrate the Review-ready page from the authoritative workflow boundary.
+ * Story-bearing documents and the bounded review session are loaded only
+ * after the deep readiness invariant succeeds. */
 export async function loadWorkspaceBootstrap() {
   const workflow = await loadWorkflowProgress();
   if (!isStoryReviewReady(workflow)) {
