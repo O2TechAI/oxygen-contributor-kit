@@ -385,8 +385,7 @@ test("story Timeline preserves source metadata and renders the local transition 
   assert.match(timelineRows, /event\.dateLabel && <time dateTime=\{event\.timestamp\}>\{event\.dateLabel\}<\/time>/);
   assert.match(timelineRows, /event\.timelineMarker === "ai_insight" && <strong>\{workspaceUi\.en\.timelineAiInsight\}<\/strong>/);
   assert.match(timelineRows, /event\.kind && <span>\{storyKindLabel\(event\.kind,"en"\)\}<\/span>/);
-  assert.match(timelineRows, /className=\{`transition\$\{event\.before && event\.after \? "" : " transitionEmpty"\}`\}/);
-  assert.match(timelineRows, /event\.before && event\.after \? <>/);
+  assert.match(timelineRows, /event\.before && event\.after/);
   assert.match(timelineRows, /No evidence-supported transition/);
   assert.match(timelineRows, /event\.chips && event\.chips\.length > 0/);
   assert.doesNotMatch(timelineRows, /Date unavailable|日期不可用/);

@@ -1242,6 +1242,9 @@ test("new Story chips fail structurally or at the exact claims editorial gate be
     assert.match(obsoleteKey.stderr, /^STORY_EDITORIAL_REVIEW_INVALID\r?\n$/u);
     assertNoAuthority();
 
+    const unsupportedProposal = structuredClone(validProposal);
+    unsupportedProposal[0].chapter.chips = ["Unsupported speculative success"];
+    await json(proposalPath, unsupportedProposal);
     await refreshStoryEditorialReview(batch, {
       "story-a": { claimsAreEvidenceSupported: false },
     });
@@ -1250,6 +1253,7 @@ test("new Story chips fail structurally or at the exact claims editorial gate be
     assert.match(unsupported.stderr, /^STORY_EDITORIAL_REVIEW_REJECTED\r?\n$/u);
     assertNoAuthority();
 
+    await json(proposalPath, validProposal);
     await refreshStoryEditorialReview(batch);
     runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
       batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "1"]);

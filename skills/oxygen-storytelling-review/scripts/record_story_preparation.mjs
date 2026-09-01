@@ -105,8 +105,8 @@ function parseStory(value) {
   return story;
 }
 
-const storyChapterRequiredKeys = ["title", "overview", "people", "story", "insights", "evidence"];
-const storyChapterOptionalKeys = ["kind", "transition", "chips"];
+const storyChapterRequiredKeys = ["title", "overview", "chips", "people", "story", "insights", "evidence"];
+const storyChapterOptionalKeys = ["kind", "transition"];
 const storyParentKeys = new Set([
   "schema", "key", "language", "languagePolicyDigest", "phase", "coverage", "exclusions", "receipt", "authority",
 ]);
