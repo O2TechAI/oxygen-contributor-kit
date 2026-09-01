@@ -188,12 +188,12 @@ package, publish, or change `publication_approved`.
 ## Continue the same progress-first Viewer
 
 Every owned E2E/local-review launch that reaches a usable Viewer must select a fresh, external,
-private `.old` session directory and pass `--save-state`. The directory must not already exist.
+private `private-state` session directory and pass `--save-state`. The directory must not already exist.
 For example, the progress-first launch before collection is:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
-  --target /path/to/repo --save-state /external/private/.old/oxygen-session-<fresh-id>
+  --target /path/to/repo --save-state /external/private-state/oxygen-session-<fresh-id>
 ```
 
 Keep the exact selected session path. The launcher saves blocked, pending, partially reviewed, or
@@ -241,7 +241,7 @@ launch and therefore requires a new external session destination:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run> \
-  --save-state /external/private/.old/oxygen-session-<fresh-id>
+  --save-state /external/private-state/oxygen-session-<fresh-id>
 ```
 
 This direct reviewed-artifact launch starts after collection and therefore must not be claimed as
@@ -261,7 +261,7 @@ When Bruce later says `resume`, use only the exact previously reported path:
 
 ```bash
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
-  --resume-state /external/private/.old/oxygen-session-<exact-id>
+  --resume-state /external/private-state/oxygen-session-<exact-id>
 ```
 
 Resume uses that same local state directly, so later human Review, Privacy, Preference, `All set`, or

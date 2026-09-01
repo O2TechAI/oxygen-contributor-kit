@@ -203,7 +203,7 @@ audits) and [`tools/ingest/`](tools/ingest/) (collection and import).
 # 1. Terminal 1: resolve the target, reserve a free port, and show progress before collection.
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
   --target /path/to/repo \
-  --save-state /external/private/.old/oxygen-session-<fresh-id>
+  --save-state /external/private-state/oxygen-session-<fresh-id>
 
 # Record the exact URL and workflow run ID printed above, then use Terminal 2.
 VIEWER_URL=http://127.0.0.1:<port>
@@ -255,66 +255,7 @@ python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
   --source-privacy-export "$SOURCE_PRIVACY_EXPORT"
 ```
 
-Native Windows PowerShell uses the same workflow without `python -X utf8`, `chcp`, WSL, or a
-localhost fallback:
-
-```powershell
-$Repo = "D:\Coding Projects\my-project"
-$Run = "work\my-project"
-$Review = "work\my-review"
-$Dialogue = "work\my-dialogue"
-$Findings = "work\my-findings"
-$Redaction = "work\my-redaction"
-$Receipt = "work\my-source-privacy-receipt.json"
-$SourcePrivacy = "$Review\current-public-source-privacy.json"
-$SavedSession = "D:\private\.old\oxygen-session-<fresh-id>"
-
-# Terminal 1: show Workflow Progress before collection; keep this running.
-python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  --target "$Repo" --save-state "$SavedSession"
-
-# In Terminal 2, copy the exact values printed by Terminal 1.
-$Viewer = "http://127.0.0.1:<port>"
-$WorkflowRun = "<run-id>"
-
-# 1. Collect from C:\Users\<user>\.codex\sessions by default.
-python .\tools\ingest\collect_repo_trajectories.py "$Repo" `
-  --out "$Run" --progress-url "$Viewer" --workflow-run-id "$WorkflowRun"
-
-# Finalize the collected corpus in the same Viewer before Organization.
-python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  "$Run" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --collection-only
-
-# After project-map.json exists, attach ordinarily to complete Organization.
-python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  "$Run" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
-
-# 2. After the agent creates project-map.json, prepare the safe review boundary.
-python .\tools\llm_redact\prepare_ai_review_run.py `
-  --run "$Run" --out "$Review"
-python .\tools\llm_redact\audit_coverage.py "$Review"
-
-# Attach the reviewed boundary before creating dialogue assignments or a receipt.
-python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
-
-python .\tools\llm_redact\extract_dialogue.py "$Review" `
-  --out "$Dialogue" --base-url "$Viewer" --workflow-run-id "$WorkflowRun"
-
-# 3. After the configured AI model writes one findings file per bundle.
-python .\tools\llm_redact\verify_coverage.py `
-  --dialogue "$Dialogue" --findings "$Findings" --receipt "$Receipt"
-python .\tools\llm_redact\merge_and_apply.py `
-  --dialogue "$Dialogue" --findings "$Findings" --out "$Redaction" --receipt "$Receipt"
-
-# 4. In another PowerShell terminal, push only validated findings.
-python .\tools\llm_redact\push_redactions.py `
-  --redacted "$Redaction\redacted" `
-  --base-url "$Viewer" --receipt "$Receipt"
-python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" `
-  --source-privacy-export "$SourcePrivacy"
-```
+For the native Windows sequence, follow the [canonical Windows sequence in SOP](SOP.md#native-windows-powershell-sequence).
 
 Do not make a source-bearing attach between dialogue extraction and the corresponding push. It
 changes the current source authority, so the existing assignments, findings, receipt, and

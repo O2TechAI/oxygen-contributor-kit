@@ -60,7 +60,16 @@ test("root routing is progressive and preserves the canonical stage owners", asy
   assert.match(readme, /## The one-line version[\s\S]*Use the Oxygen Contributor Kit/);
   assert.match(readme, /Do not upload or publish anything/);
   assert.match(readme, /\[SOP\.md\]\(SOP\.md\)[\s\S]*complete human and maintainer reference/);
+  assert.match(readme, /\(SOP\.md#native-windows-powershell-sequence\)/);
+  assert.doesNotMatch(readme, /\$SavedSession\s*=/);
   assert.doesNotMatch(readme, /agent reads[^\n]+SOP\.md[^\n]+before it touches anything/i);
+
+  const storyViewerSection = storySkill.slice(
+    storySkill.indexOf("## Viewer And Workflow Identity"),
+    storySkill.indexOf("## Build Project Story"),
+  );
+  assert.match(storyViewerSection, /\.\.\/oxygen-organize-review-export\/SKILL\.md#continue-the-same-progress-first-viewer/);
+  assert.doesNotMatch(storyViewerSection, /run_local_review\.py/);
 
   for (const heading of [
     /Stage 1: Collect project history/i,
@@ -120,11 +129,14 @@ test("Source Privacy docs attach the reviewed generation before the receipt wind
     read("skills/oxygen-storytelling-review/SKILL.md"),
   ]);
 
-  for (const document of [readme, sop]) {
-    for (const startMarker of [
+  for (const [document, startMarkers] of [
+    [readme, ["python3 tools/llm_redact/prepare_ai_review_run.py"]],
+    [sop, [
       "python3 tools/llm_redact/prepare_ai_review_run.py",
       "python .\\tools\\llm_redact\\prepare_ai_review_run.py",
-    ]) {
+    ]],
+  ]) {
+    for (const startMarker of startMarkers) {
       const start = document.indexOf(startMarker);
       assert.ok(start >= 0, `${startMarker} must exist`);
       const sequence = document.slice(start);

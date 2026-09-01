@@ -324,7 +324,7 @@ class LauncherUnitTest(unittest.TestCase):
             runtime = root / "runtime"
             write_viewer_state(runtime, rows, workflow_run_id="run-synthetic")
             before = state_file_bytes(runtime / "state")
-            destination = root / ".old" / "viewer-session"
+            destination = root / "private-state" / "viewer-session"
 
             with (
                 mock.patch.object(MODULE, "_current_head", return_value="a" * 40),
@@ -359,7 +359,7 @@ class LauncherUnitTest(unittest.TestCase):
             root = Path(temporary)
             runtime = root / "runtime"
             write_viewer_state(runtime, rows)
-            destination = root / ".old" / "progress-session"
+            destination = root / "private-state" / "progress-session"
             with (
                 mock.patch.object(MODULE, "_current_head", return_value="b" * 40),
                 mock.patch("builtins.print"),
@@ -399,7 +399,7 @@ class LauncherUnitTest(unittest.TestCase):
             write_viewer_state(
                 runtime, [("partial-review", b"before")], workflow_run_id="run-durable",
             )
-            destination = root / ".old" / "durable-session"
+            destination = root / "private-state" / "durable-session"
             with (
                 mock.patch.object(MODULE, "_current_head", return_value="c" * 40),
                 mock.patch("builtins.print"),
@@ -491,7 +491,7 @@ class LauncherUnitTest(unittest.TestCase):
             write_viewer_state(
                 runtime, [("workflow", b"complete")], workflow_run_id="run-existing",
             )
-            destination = root / ".old" / "existing"
+            destination = root / "private-state" / "existing"
             destination.mkdir(parents=True)
             sentinel = destination / "owner.txt"
             sentinel.write_bytes(b"owner bytes")
@@ -746,7 +746,7 @@ class LauncherUnitTest(unittest.TestCase):
                 [("workflow", b"private database bytes")],
                 workflow_run_id="private-run",
             )
-            destination = root / ".old" / "private-destination"
+            destination = root / "private-state" / "private-destination"
             with mock.patch.object(
                 MODULE.shutil,
                 "copytree",
@@ -926,7 +926,7 @@ class LauncherUnitTest(unittest.TestCase):
             root = Path(temporary)
             target = root / "target"
             target.mkdir()
-            destination = root / ".old" / "saved-session"
+            destination = root / "private-state" / "saved-session"
             with (
                 mock.patch.object(sys, "argv", [
                     "run_local_review.py", "--target", str(target),

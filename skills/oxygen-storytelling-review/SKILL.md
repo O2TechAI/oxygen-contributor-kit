@@ -97,37 +97,10 @@ Do not fabricate a target choice, infer an answer from silence, click through re
 
 ## Viewer And Workflow Identity
 
-The canonical Viewer is local only. It must be the same origin and workflow run throughout the run.
-
-Start PowerShell in the contributor-kit root, then start the progress-first Viewer before collection if it is not already running. This command uses a fixed local port and workflow run ID so later commands are executable without hidden state:
-
-```powershell
-$Kit = (Get-Location).Path
-$Target = "D:\Coding Projects\my-project"
-$Viewer = "http://127.0.0.1:3210"
-$WorkflowRun = "oxygen-local-review-001"
-$SavedSession = "D:\private\.old\oxygen-session-<fresh-id>"
-Set-Location -LiteralPath $Kit
-
-python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  --target "$Target" --workflow-run-id "$WorkflowRun" --port 3210 `
-  --save-state "$SavedSession" --no-browser
-```
-
-Keep that PowerShell window running. Start the second PowerShell window in the same contributor-kit root, then attach the organized reviewed run to that same Viewer/run:
-
-```powershell
-$Kit = (Get-Location).Path
-$Review = "work\repo-run-review"
-$Viewer = "http://127.0.0.1:3210"
-$WorkflowRun = "oxygen-local-review-001"
-Set-Location -LiteralPath $Kit
-
-python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  "$Review" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
-```
-
-Do not start a second Viewer for Story work.
+The Organizer-owned existing Viewer/run is canonical. Carry the exact `$Viewer`, `$WorkflowRun`,
+and `$Review` values from Organizer through Story work. Follow the [Organizer-owned launch and
+resume sequence](../oxygen-organize-review-export/SKILL.md#continue-the-same-progress-first-viewer)
+for launch or resume, and never start a second Viewer.
 
 ## Build Project Story
 
@@ -395,18 +368,4 @@ implemented Chapter Privacy review, Chapter All set decisions, Preference answer
 confirmation are satisfied for the current authority. The final package remains local, provider-free
 after approved generation steps, and carries `publication_approved=false`.
 
-Run final verification from the repository root:
-
-```powershell
-python .\skills\oxygen-organize-review-export\tests\test_run_local_review.py
-python -m py_compile .\skills\oxygen-organize-review-export\tests\test_run_local_review.py
-Push-Location -LiteralPath ".\viewer"
-node --test .\tests\workflow-contracts.test.mjs
-npm test
-npm run lint
-npx tsc --noEmit --strict
-npm run build
-Pop-Location
-git diff --check
-git status --short
-```
+Repository-development verification belongs to CI and maintainers; it is not part of contributor runtime.
