@@ -2,8 +2,10 @@ import type { WorkflowProgressState } from "./workflow-progress";
 import type { WorkspaceStatus } from "./workspace-types";
 
 const RETRY_DELAYS_MS = [500, 1000, 2000];
+const POLL_INTERVAL_MS = 2000;
 
 type OrganizationPollingOptions = {
+  currentStageId: WorkflowProgressState["currentStageId"];
   loadWorkflow(signal: AbortSignal): Promise<WorkflowProgressState | null>;
   requestOrganization(init: RequestInit): Promise<WorkspaceStatus>;
   loadDocuments(signal: AbortSignal): Promise<unknown>;
@@ -31,12 +33,12 @@ export function startOrganizationPolling(options: OrganizationPollingOptions) {
   let cancelled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let retries = 0;
-  let passes = 0;
   let terminalRefresh = false;
   const active = () => !cancelled && !controller.signal.aborted;
   const stop = () => {
     cancelled = true;
-    if (timer) clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
     controller.abort();
   };
   const finish = async () => {
@@ -52,10 +54,10 @@ export function startOrganizationPolling(options: OrganizationPollingOptions) {
       stop();
     }
   };
-  const request = async (method: "GET" | "POST"): Promise<void> => {
+  const request = async (): Promise<void> => {
     if (!active()) return;
     try {
-      const status = await options.requestOrganization({ method, signal: controller.signal });
+      const status = await options.requestOrganization({ method: "GET", signal: controller.signal });
       if (!active()) return;
       retries = 0;
       options.onStatus(status);
@@ -64,11 +66,10 @@ export function startOrganizationPolling(options: OrganizationPollingOptions) {
         await finish();
         return;
       }
-      if (method === "POST" && ++passes % 4 === 0) {
-        await options.loadWorkflow(controller.signal);
-        if (!active()) return;
-      }
-      void request("POST");
+      timer = setTimeout(() => {
+        timer = undefined;
+        void request();
+      }, POLL_INTERVAL_MS);
     } catch (value) {
       if (!active()) return;
       options.onError(message(value));
@@ -79,28 +80,14 @@ export function startOrganizationPolling(options: OrganizationPollingOptions) {
       }
       timer = setTimeout(() => {
         timer = undefined;
-        void request(method);
+        void request();
       }, delay);
     }
   };
-  void (async () => {
-    try {
-      const workflow = await options.loadWorkflow(controller.signal);
-      if (!active()) return;
-      if (!workflow) {
-        options.onError("Workflow status could not be confirmed");
-        stop();
-        return;
-      }
-      if (workflow.currentStageId === "collect" || workflow.currentStageId === "review") {
-        stop();
-        return;
-      }
-      await request("GET");
-    } catch (value) {
-      if (active()) options.onError(message(value));
-      stop();
-    }
-  })();
+  if (options.currentStageId !== "organize") {
+    stop();
+    return stop;
+  }
+  void request();
   return stop;
 }

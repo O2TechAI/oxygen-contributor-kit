@@ -132,7 +132,7 @@ function organizationRequestError(message: string, details: { status?: number; r
 async function fetchOrganizationStatus(init?: RequestInit): Promise<Status> {
   const response = await fetch("/api/organization", { cache:"no-store", ...init });
   if (!response.ok) {
-    throw organizationRequestError("Organization could not be prepared", { status: response.status });
+    throw organizationRequestError("Organization status could not be observed", { status: response.status });
   }
   let body: unknown;
   try {
@@ -408,8 +408,7 @@ export function InlineWorkspace({
     const payload = await response.json() as { redactions: Redaction[]; job: RedactionJob };
     setRedactions(payload.redactions || []);
     setRedactionJob(payload.job);
-    void loadWorkflow();
-  }, [loadWorkflow]);
+  }, []);
 
   // Poll only while a pass is in flight, so the tab can say "还在跑" instead of
   // showing an empty comparison that looks like "nothing was found".
@@ -511,6 +510,7 @@ export function InlineWorkspace({
 
   useEffect(() => {
     return startOrganizationPolling({
+      currentStageId: workflow.currentStageId,
       loadWorkflow,
       requestOrganization: fetchOrganizationStatus,
       loadDocuments: loadDocs,
