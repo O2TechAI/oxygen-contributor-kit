@@ -182,11 +182,13 @@ test("activated Story review rehydrates Preferences once without widening idle p
 
   assert.match(lifecycle, /useRef\(storyReviewReady \? scopedWorkflowRunId : ""\)/);
   assert.match(rehydration, /const readyRunId = storyReviewReady \? scopedWorkflowRunId : "";/);
-  assert.match(rehydration, /if \(preferenceReadyRunRef\.current === readyRunId\) return;/);
+  assert.match(rehydration, /if \(!readyRunId \|\| preferenceReadyRunRef\.current === readyRunId\) return;/);
+  assert.match(rehydration, /const refresh = setTimeout\(\(\) => \{/);
   assert.match(rehydration, /preferenceReadyRunRef\.current = readyRunId;/);
-  assert.match(rehydration, /if \(readyRunId\) void loadProbes\(\);/);
+  assert.match(rehydration, /void loadProbes\(\);/);
+  assert.match(rehydration, /return \(\) => clearTimeout\(refresh\);/);
   assert.equal((rehydration.match(/loadProbes\(\)/g) || []).length, 1);
-  assert.doesNotMatch(rehydration, /setInterval|setTimeout/);
+  assert.doesNotMatch(rehydration, /setInterval/);
   assert.equal((initialFetch.match(/loadProbes\(\)/g) || []).length, 1);
   assert.doesNotMatch(initialFetch, /probeRunStatus|setInterval/);
   assert.match(polling, /if \(probeRunStatus !== "running"\) return;[\s\S]*setInterval\(\(\) => \{ void loadProbes\(\); \}, 4000\)/);

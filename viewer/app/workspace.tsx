@@ -462,9 +462,13 @@ export function InlineWorkspace({
 
   useEffect(() => {
     const readyRunId = storyReviewReady ? scopedWorkflowRunId : "";
-    if (preferenceReadyRunRef.current === readyRunId) return;
-    preferenceReadyRunRef.current = readyRunId;
-    if (readyRunId) void loadProbes();
+    if (!readyRunId || preferenceReadyRunRef.current === readyRunId) return;
+    const refresh = setTimeout(() => {
+      if (preferenceReadyRunRef.current === readyRunId) return;
+      preferenceReadyRunRef.current = readyRunId;
+      void loadProbes();
+    }, 0);
+    return () => clearTimeout(refresh);
   }, [loadProbes, scopedWorkflowRunId, storyReviewReady]);
 
   useEffect(() => {
