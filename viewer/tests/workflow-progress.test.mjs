@@ -164,6 +164,35 @@ test("workflow progress is a strict sanitized operational projection", () => {
   assert.ok(state.stages.every((stage) => Object.keys(stage).every((key) => ["id", "status", "progress"].includes(key))));
 });
 
+test("activated Story review rehydrates Preferences once without widening idle polling", async () => {
+  const workspace = await read("../app/workspace.tsx");
+  const lifecycle = workspace.slice(
+    workspace.indexOf("const [probes"),
+    workspace.indexOf("async function answerProbe"),
+  );
+  const rehydration = lifecycle.slice(
+    lifecycle.indexOf("const readyRunId"),
+    lifecycle.indexOf("useEffect(() => {", lifecycle.indexOf("const readyRunId") + 1),
+  );
+  const initialFetch = lifecycle.slice(
+    lifecycle.indexOf("const initial ="),
+    lifecycle.indexOf("useEffect(() => {", lifecycle.indexOf("const initial =") + 1),
+  );
+  const polling = lifecycle.slice(lifecycle.indexOf("if (probeRunStatus"));
+
+  assert.match(lifecycle, /useRef\(storyReviewReady \? scopedWorkflowRunId : ""\)/);
+  assert.match(rehydration, /const readyRunId = storyReviewReady \? scopedWorkflowRunId : "";/);
+  assert.match(rehydration, /if \(preferenceReadyRunRef\.current === readyRunId\) return;/);
+  assert.match(rehydration, /preferenceReadyRunRef\.current = readyRunId;/);
+  assert.match(rehydration, /if \(readyRunId\) void loadProbes\(\);/);
+  assert.equal((rehydration.match(/loadProbes\(\)/g) || []).length, 1);
+  assert.doesNotMatch(rehydration, /setInterval|setTimeout/);
+  assert.equal((initialFetch.match(/loadProbes\(\)/g) || []).length, 1);
+  assert.doesNotMatch(initialFetch, /probeRunStatus|setInterval/);
+  assert.match(polling, /if \(probeRunStatus !== "running"\) return;[\s\S]*setInterval\(\(\) => \{ void loadProbes\(\); \}, 4000\)/);
+  assert.doesNotMatch(polling, /setTimeout/);
+});
+
 test("workflow route hydrates count-only persistent state and the shell can reopen it", async () => {
   const [route, loader, page, workspace, component, css, db] = await Promise.all([
     read("../app/api/workflow/route.ts"),
