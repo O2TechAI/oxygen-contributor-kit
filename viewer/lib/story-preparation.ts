@@ -147,6 +147,11 @@ export const compareUtf8 = (left: string, right: string) => {
   }
   return a.length - b.length;
 };
+export const canonicalPreferenceInsightScope = (values: PreferenceInsightBinding[]) => (
+  [...values].sort((left, right) => (
+    compareUtf8(left.storyKey, right.storyKey) || compareUtf8(left.insightId, right.insightId)
+  ))
+);
 const sortedUniqueIds = (values: string[]) => (
   new Set(values).size === values.length ? [...values].sort(compareUtf8) : null
 );
@@ -447,11 +452,11 @@ export async function validateStoryPreparationManifest(
   const storyKeys = sortedUniqueIds(stories.map((story) => story.key));
   if (!storyKeys) return mismatch("STORY_PREPARATION_SCOPE_INVALID");
   const lessonOutput = await reusableLessonOutput(stories);
-  const insightScope = lessonOutput.map(({ storyKey, insightId, insightAuthorityDigest }) => ({
+  const insightScope = canonicalPreferenceInsightScope(lessonOutput.map(({
     storyKey, insightId, insightAuthorityDigest,
-  })).sort((left, right) => (
-    compareUtf8(left.storyKey, right.storyKey) || compareUtf8(left.insightId, right.insightId)
-  ));
+  }) => ({
+    storyKey, insightId, insightAuthorityDigest,
+  })));
   const targetContents = deriveStoryReleaseTargetContents(stories);
   if (!targetContents) return mismatch("STORY_PREPARATION_TARGET_CATALOG_INVALID");
   const targetCatalog = targetContents.map(({ id, storyKey, target }) => ({ id, storyKey, target }));

@@ -366,8 +366,7 @@ def prepare(
                 or candidate["id"] in seen_candidate_ids):
             raise ValueError("story candidate is malformed")
         seen_candidate_ids.add(candidate["id"])
-    ordered_candidates = sorted(candidates, key=lambda item: item["id"].encode("utf-8"))
-    for candidate in ordered_candidates:
+    for candidate in candidates:
         story = parse_story(candidate["summary"])
         if story["key"] in seen_story_keys:
             raise ValueError("Story key is duplicated")
@@ -390,6 +389,7 @@ def prepare(
                 if event_identity not in seen_evidence:
                     seen_evidence.add(event_identity)
                     evidence.append(reviewed[event_identity].copy())
+    scope.sort(key=lambda item: (item["storyKey"].encode("utf-8"), item["insightId"].encode("utf-8")))
     evidence.sort(key=lambda record: (
         record["documentId"].encode("utf-8"), record["sequence"], record["eventId"].encode("utf-8"),
     ))

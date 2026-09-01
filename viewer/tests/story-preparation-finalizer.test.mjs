@@ -121,17 +121,22 @@ function privacyOutput(stories, candidates) {
 }
 
 async function fixture({
-  insightIds = ["same", "same"], privacy = true, questions = true, reverse = false,
-  candidateIds = null, documentKind = "trajectory",
+  storyKeys = ["é", "z"], insightIds = storyKeys.map(() => "same"),
+  privacy = true, questions = true, reverse = false,
+  candidateIds = null, chronologyKeys = null, documentKind = "trajectory",
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "story-finalizer-"));
   const shards = join(directory, "shards");
   await mkdir(shards);
-  const eventIds = new Map([
-    ["é", candidateIds?.[0] ?? "event:é"],
-    ["z", candidateIds?.[1] ?? "event:z"],
-  ]);
-  const semanticUnits = ["z", "é"].map((key) => ({
+  const eventIds = new Map(storyKeys.map((key, index) => [
+    key, candidateIds?.[index] ?? `event:${key}`,
+  ]));
+  const orderedStoryKeys = chronologyKeys ?? [...storyKeys].sort((left, right) => {
+    const a = eventIds.get(left);
+    const b = eventIds.get(right);
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  const semanticUnits = storyKeys.map((key) => ({
     id: `unit-${key}`, revision: 1, projectId: "project", kind: "decision_episode",
     members: [eventIds.get(key)], memberCount: 1,
     membershipDigest: digest([{ id: eventIds.get(key), sourceDigest: digest(key) }]),
@@ -141,21 +146,19 @@ async function fixture({
   const semantic = { ...semanticCore, manifestDigest: digest(semanticCore) };
   const coverageCore = {
     revision: 1, semanticManifestRevision: 1, semanticManifestDigest: semantic.manifestDigest,
-    rows: ["z", "é"].map((key) => ({
+    rows: storyKeys.map((key) => ({
       unitId: `unit-${key}`, disposition: "represented", ownerId: key,
     })).sort((left, right) => utf8(left.unitId, right.unitId)),
   };
   const coverage = { ...coverageCore, coverageDigest: digest(coverageCore), serializedBytes: 1 };
-  const stories = [
-    source("é", insightIds[0], semantic.manifestDigest, coverage.coverageDigest, eventIds.get("é")),
-    source("z", insightIds[1], semantic.manifestDigest, coverage.coverageDigest, eventIds.get("z")),
-  ];
-  const rows = rowsFor(stories);
-  const storyByRowId = new Map(rows.map((row, index) => [row.id, stories[index]]));
-  const canonicalRows = [...rows].sort((left, right) => (
-    left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+  const stories = storyKeys.map((key, index) => source(
+    key, insightIds[index], semantic.manifestDigest, coverage.coverageDigest, eventIds.get(key),
   ));
-  const canonicalStories = canonicalRows.map((row) => storyByRowId.get(row.id));
+  const rows = rowsFor(stories);
+  const rowByStoryKey = new Map(stories.map((story, index) => [story.key, rows[index]]));
+  const storyByKey = new Map(stories.map((story) => [story.key, story]));
+  const canonicalRows = orderedStoryKeys.map((key) => rowByStoryKey.get(key));
+  const canonicalStories = orderedStoryKeys.map((key) => storyByKey.get(key));
   const base = canonicalRows.map((row, index) => ({ id: row.id, story: { ...canonicalStories[index], insights: [] } }));
   const complete = canonicalRows.map((row, index) => ({ id: row.id, story: canonicalStories[index] }));
   const inputDigest = digest(lessons(canonicalStories));
@@ -168,7 +171,9 @@ async function fixture({
   const batch = canonicalPreferenceQuestionBatch(probes, bulkDecisions);
   const preference = {
     workflowRunId: "run-11", sourceRevision: 4, inputDigest, outputDigest: digest(batch),
-    insightScope: lessonRows.map(({ storyKey, insightId, insightAuthorityDigest }) => ({ storyKey, insightId, insightAuthorityDigest })),
+    insightScope: lessonRows.map(({ storyKey, insightId, insightAuthorityDigest }) => (
+      { storyKey, insightId, insightAuthorityDigest }
+    )).sort((left, right) => utf8(left.storyKey, right.storyKey) || utf8(left.insightId, right.insightId)),
     outputCount: batch.length, setAside: 0, probes, bulkDecisions,
     autoRemoved: { total: 6, reversible: true, categories: [
       { kind: "credential", count: 1 },
@@ -194,7 +199,7 @@ async function fixture({
     preference: inputDigest,
   };
   const units = {
-    story: ["é", "z"], insight: ["é", "z"],
+    story: storyKeys, insight: storyKeys,
     story_privacy: deriveStoryReleaseTargetCatalog(stories).map((target) => target.id),
     preference: lessonRows.map(({ storyKey, insightId, insightAuthorityDigest }) => canonical({ storyKey, insightId, insightAuthorityDigest })),
   };
@@ -210,9 +215,9 @@ async function fixture({
     schema: "oxygen.story-validation-authority",
     sourceDigest: "e".repeat(64), sourcePrivacyDigest: "f".repeat(64),
     semanticManifest: semantic, coverageManifest: coverage,
-    evidence: ["z", "é"].map((key) => ({
+    evidence: orderedStoryKeys.map((key, index) => ({
       id: eventIds.get(key), documentId: "doc", eventType: "message", actorType: "human",
-      actorEquivalence: `actor-${key}`,
+      actorEquivalence: `actor-${key}`, sequence: index + 1,
     })).sort((left, right) => utf8(left.id, right.id)),
   };
   await mkdir(join(shards, "story"), { recursive: true });
@@ -263,9 +268,9 @@ async function fixture({
         preferenceContext: {
           schema: "oxygen.preference-context", reusableLessons: lessonRows,
           insightScope: preference.insightScope,
-          reviewedEvidence: [...eventIds.values()].map((eventId) => ({
+          reviewedEvidence: [...eventIds.values()].map((eventId, index) => ({
             documentId: "doc", eventId, documentKind,
-            sequence: eventId === eventIds.get("z") ? 2 : 1, role: "user", timestamp: null,
+            sequence: index + 1, role: "user", timestamp: null,
             redactedText: `Reviewed ${eventId}.`,
           })),
           autoRemoved: preference.autoRemoved,
@@ -292,7 +297,14 @@ async function fixture({
           : lane === "story_privacy" ? output.targetProposals.length : output.length,
     });
   }
-  return { directory, shards, output: join(directory, "output.json"), rows, cleanup: () => rm(directory, { recursive: true, force: true }) };
+  return {
+    directory, shards, output: join(directory, "output.json"), rows,
+    chronologyStoryKeys: canonicalStories.map((story) => story.key),
+    candidateIdStoryKeys: [...rows].sort((left, right) => utf8(left.id, right.id))
+      .map((row) => stories.find((story) => story.evidence.primary.eventId === row.id).key),
+    scopeStoryKeys: preference.insightScope.map((binding) => binding.storyKey),
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  };
 }
 
 function runWithRevision(fixtureValue, sourceRevision, trailing = []) {
@@ -344,11 +356,18 @@ test("four lanes finalize exact public Story rows with reordered shards and cros
   } finally { await first.cleanup(); await second.cleanup(); }
 });
 
-test("Story candidate order uses the production comparator for producer-identical lessons and digests", async () => {
-  const candidateIds = ["\u{1f600}", "\ue000"];
-  const first = await fixture({ candidateIds, questions: false });
-  const second = await fixture({ candidateIds, reverse: true, questions: false });
+test("Story chronology and canonical Preference scope remain independent of candidate ID order", async () => {
+  const storyKeys = ["zeta", "故事", "alpha"];
+  const insightIds = ["insight-c", "insight-a", "insight-b"];
+  const candidateIds = ["event:2", "event:1", "event:3"];
+  const chronologyKeys = ["zeta", "故事", "alpha"];
+  const options = { storyKeys, insightIds, candidateIds, chronologyKeys, privacy: false, questions: false };
+  const first = await fixture(options);
+  const second = await fixture({ ...options, reverse: true });
   try {
+    assert.deepEqual(first.chronologyStoryKeys, ["zeta", "故事", "alpha"]);
+    assert.deepEqual(first.candidateIdStoryKeys, ["故事", "zeta", "alpha"]);
+    assert.deepEqual(first.scopeStoryKeys, ["alpha", "zeta", "故事"]);
     const firstRun = run(first);
     const secondRun = run(second);
     assert.equal(firstRun.status, 0, firstRun.stderr);
@@ -357,8 +376,9 @@ test("Story candidate order uses the production comparator for producer-identica
     const result = await readJson(first.output);
     const receipt = result.receipts.find((item) => item.lane === "preference");
     assert.equal(receipt.inputDigest, digest(lessons([
-      source("é", "same", "a".repeat(64), "b".repeat(64), candidateIds[0]),
-      source("z", "same", "a".repeat(64), "b".repeat(64), candidateIds[1]),
+      source("zeta", "insight-c", "a".repeat(64), "b".repeat(64), candidateIds[0]),
+      source("故事", "insight-a", "a".repeat(64), "b".repeat(64), candidateIds[1]),
+      source("alpha", "insight-b", "a".repeat(64), "b".repeat(64), candidateIds[2]),
     ])));
   } finally { await first.cleanup(); await second.cleanup(); }
 });

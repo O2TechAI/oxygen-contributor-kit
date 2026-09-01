@@ -79,7 +79,10 @@ def context_evidence(context: Any) -> tuple[dict[tuple[str, str], Any], dict[tup
         if identity in seen:
             raise ValueError("preference context has duplicate Insight identity")
         seen.add(identity); expected.append({"storyKey": identity[0], "insightId": identity[1], "insightAuthorityDigest": lesson["insightAuthorityDigest"]})
-    if scope != expected or not isinstance(context["reviewedEvidence"], list):
+    canonical_scope = sorted(expected, key=lambda item: (
+        item["storyKey"].encode("utf-8"), item["insightId"].encode("utf-8"),
+    ))
+    if scope != canonical_scope or not isinstance(context["reviewedEvidence"], list):
         raise ValueError("preference context identities or evidence are stale")
     evidence: dict[tuple[str, str], Any] = {}
     evidence_keys = {"documentId", "eventId", "documentKind"} if regeneration else PREPARE.PREFERENCE_EVIDENCE_KEYS

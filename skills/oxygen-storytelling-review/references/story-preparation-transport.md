@@ -166,10 +166,27 @@ invalid proposals create neither output nor receipt.
 Final composition injects those arrays into the recorded base Stories and writes the canonical
 two-field `story-candidates.json`; the caller never duplicates full Story JSON to add Insights.
 
-Each Story Privacy worker reads its manifest `inputPath` and returns an array
-of candidates with exactly `id`, `reviewState`, `title`, `whyFlagged`, `uncertaintyReason`, and
-`releaseTargets`. Targets must belong to the generated release-target catalog. An empty array is an
-explicit completed-zero result.
+Each Story Privacy worker reads its manifest `inputPath` and returns exactly one object:
+
+```json
+{"candidates":[],"targetProposals":[{"targetId":"story-key::title","targetContentDigest":"sha256-of-current-target-content","proposedText":"unchanged or meaning-preserving text","occurrences":[]}]}
+```
+
+`candidates` contains zero or more rows with exactly `id`, `reviewState`, `title`, `whyFlagged`,
+`uncertaintyReason`, and `releaseTargets`. `targetProposals` contains exactly one proposal for every
+target assigned by the generated shard input, including unchanged proposals with empty
+`occurrences`; it contains no omitted, duplicated, or foreign target. Each proposal has exactly
+`targetId`, `targetContentDigest`, `proposedText`, and `occurrences`. The digest binds the exact
+current target content. Occurrence offsets are Unicode code-point offsets and must describe an
+exact, complete transformation from current content to `proposedText`.
+
+The generated `releaseTargetCatalog` is the assignment boundary, while the shard's generated
+`storyCandidates` supply the bound target content. The recorder derives that content from the
+immutable input and passes the complete object to the shared `normalizeStoryPrivacyOutput` owner;
+the finalizer reuses the same owner after composing all shards. An array-only output is invalid,
+and neither boundary synthesizes an omitted unchanged proposal. Completed-zero means
+`candidates: []` plus the complete set of unchanged target proposals; it never means an omitted or
+empty `targetProposals` array when targets were assigned.
 
 The one global Preference worker reads its one manifest `inputPath` and writes only the candidate
 shape owned by the Preference Skill. It produces one deduplicated questionnaire authority and is
@@ -180,7 +197,10 @@ accepts that exact final bundle as its proposal and binds it unchanged. An empty
 batch is an explicit completed-zero result.
 
 Identity sets, exclusions, and non-Story lane arrays use stable UTF-8 identity ordering; Story
-Chapters use the production comparator. The finalizer independently
+Chapters use the production comparator. Preference `reusableLessons` preserves activated
+Story/Insight narrative order, while `insightScope` is independently canonicalized by UTF-8
+`storyKey` and then UTF-8 `insightId`. Their binding is an exact one-to-one
+`storyKey`/`insightId`/`insightAuthorityDigest` membership match, never positional equality. The finalizer independently
 reopens the frozen inputs, receipts, and outputs through physical containment, checks every content
 digest and exact identity union, reconstructs the final Story/Insight result, calls the same
 `validateStorySourcePackage` again on the composed package using the reopened immutable minimum

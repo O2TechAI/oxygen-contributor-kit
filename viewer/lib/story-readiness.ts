@@ -1236,9 +1236,20 @@ export function validateStorySourcePackage(
       chapterEvidence.has(JSON.stringify([reference.documentId, reference.eventId]))
     );
     const narrativeEvidence = new Set<string>();
+    const storyBlocks = new Map(parsed.story.blocks.map((block) => [block.id, block]));
+    const requiredActors = new Set<string>();
+    for (const block of parsed.story.blocks) {
+      if (!block.evidence.every(belongsToChapter)) {
+        return storySourceFailure("STORY_EVIDENCE_INVALID");
+      }
+      for (const reference of block.evidence) {
+        narrativeEvidence.add(reference.eventId);
+        const actor = chapterEvidence.get(JSON.stringify([reference.documentId, reference.eventId]))?.actor;
+        if (actor) requiredActors.add(actor);
+      }
+    }
 
     if (parsed.people.length === 0) return storySourceFailure("STORY_PEOPLE_INVALID");
-    const requiredActors = new Set([...chapterEvidence.values()].map((entry) => entry.actor).filter(Boolean));
     if (requiredActors.size === 0) return storySourceFailure("STORY_PEOPLE_INVALID");
     const coveredActors = new Set<string>();
     for (const person of parsed.people) {
@@ -1250,6 +1261,7 @@ export function validateStorySourcePackage(
         chapterEvidence.get(JSON.stringify([reference.documentId, reference.eventId]))?.actor || ""
       )));
       if (personActors.size !== 1 || personActors.has("")
+        || [...personActors].some((actor) => !requiredActors.has(actor))
         || [...personActors].some((actor) => coveredActors.has(actor))) {
         return storySourceFailure("STORY_PEOPLE_INVALID");
       }
@@ -1259,13 +1271,6 @@ export function validateStorySourcePackage(
       return storySourceFailure("STORY_PEOPLE_INVALID");
     }
 
-    const storyBlocks = new Map(parsed.story.blocks.map((block) => [block.id, block]));
-    for (const block of parsed.story.blocks) {
-      if (!block.evidence.every(belongsToChapter)) {
-        return storySourceFailure("STORY_EVIDENCE_INVALID");
-      }
-      block.evidence.forEach((reference) => narrativeEvidence.add(reference.eventId));
-    }
     for (const insight of parsed.insights) {
       const anchoredBlock = storyBlocks.get(insight.anchorStoryBlockId);
       const quoteEvidenceKey = JSON.stringify([

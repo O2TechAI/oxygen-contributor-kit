@@ -28,10 +28,22 @@ const INSIGHT_DIGEST = "a".repeat(64);
 
 const context = {
   schema: "oxygen.preference-context",
-  reusableLessons: [{ storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: INSIGHT_DIGEST,
-    background: "Reviewed background.", directlyAcquiredExperience: "Reviewed experience.",
-    principle: "Reviewed principle." }],
-  insightScope: [{ storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: INSIGHT_DIGEST }],
+  reusableLessons: [
+    { storyKey: "zeta", insightId: "insight-c", insightAuthorityDigest: "c".repeat(64),
+      background: "Reviewed background Z.", directlyAcquiredExperience: "Reviewed experience Z.",
+      principle: "Reviewed principle Z." },
+    { storyKey: "故事", insightId: "insight-a", insightAuthorityDigest: "b".repeat(64),
+      background: "Reviewed background U.", directlyAcquiredExperience: "Reviewed experience U.",
+      principle: "Reviewed principle U." },
+    { storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: INSIGHT_DIGEST,
+      background: "Reviewed background.", directlyAcquiredExperience: "Reviewed experience.",
+      principle: "Reviewed principle." },
+  ],
+  insightScope: [
+    { storyKey: "chapter-a", insightId: "insight-a", insightAuthorityDigest: INSIGHT_DIGEST },
+    { storyKey: "zeta", insightId: "insight-c", insightAuthorityDigest: "c".repeat(64) },
+    { storyKey: "故事", insightId: "insight-a", insightAuthorityDigest: "b".repeat(64) },
+  ],
   reviewedEvidence: [{ documentId: "doc-a", eventId: "event-a", documentKind: "trajectory",
     sequence: 1, role: "user", timestamp: null, redactedText: "A reviewed source set a boundary." }],
   autoRemoved: { total: 0, reversible: true, categories: [] },
@@ -66,7 +78,13 @@ test("Python preference producer emits the exact Core digest batch accepted by P
       import("../db/index.ts"), import("../app/api/probes/route.ts"), import("../lib/story-preparation.ts"),
     ]);
     assert.equal(bundle.outputDigest, await preparation.storyPreparationDigest(preparation.canonicalPreferenceQuestionBatch(bundle.probes, bundle.bulkDecisions)));
+    const noncanonical = structuredClone(bundle);
+    noncanonical.insightScope.reverse();
+    assert.equal((await route.POST(new Request("http://localhost/api/probes", {
+      method: "POST", body: JSON.stringify(noncanonical),
+    }))).status, 400);
     const db = await getLocalDatabase();
+    assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM probe_runs").first()).count, 0);
     await db.prepare("INSERT INTO workflow_runs (id,story_generation_status,story_source_revision,created_at,updated_at) VALUES (?,'running',?,?,?)").bind(RUN_ID, 3, "2041-01-01", "2041-01-01").run();
     await db.prepare("INSERT INTO documents (id,kind,title,item_count,imported_at,updated_at) VALUES (?,'trajectory','Synthetic',1,?,?)").bind("doc-a", "2041-01-01", "2041-01-01").run();
     await db.prepare("INSERT INTO items (id,document_id,sequence,content,original_json) VALUES (?,?,1,'Synthetic','{}')").bind("event-a", "doc-a").run();

@@ -7,6 +7,7 @@ import {
   type ProbePresentations,
 } from "../../../lib/preference-presentation";
 import {
+  canonicalPreferenceInsightScope,
   canonicalPreferenceQuestionBatch,
   MAX_PREFERENCE_EVIDENCE_IDS,
   MAX_PREFERENCE_QUESTIONS,
@@ -238,6 +239,7 @@ export async function POST(request: Request) {
   const scope = new Map(insightScope.map((item) => [`${item.storyKey}\0${item.insightId}`, item.insightAuthorityDigest]));
   const bindings = acceptedProbes.map((item) => `${item.storyKey}\0${item.insightId}`);
   if (new Set(ids).size !== ids.length || scope.size !== insightScope.length
+    || canonicalAuthorityJson(insightScope) !== canonicalAuthorityJson(canonicalPreferenceInsightScope(insightScope))
     || new Set(bindings).size !== bindings.length
     || acceptedProbes.some((item) => scope.get(`${item.storyKey}\0${item.insightId}`) !== item.insightAuthorityDigest)
     || body.outputCount !== ids.length) {

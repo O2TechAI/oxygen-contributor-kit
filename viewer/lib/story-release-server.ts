@@ -38,6 +38,7 @@ import {
   validNonnegativeAuthorityCounter,
 } from "./authority-validation.mjs";
 import {
+  canonicalPreferenceInsightScope,
   insightAuthorityValue,
   storyPreparationDigest,
   type PreferenceInsightBinding,
@@ -60,8 +61,8 @@ const preferenceBinding=(value:unknown):value is PreferenceInsightBinding=>prefe
 export const preferenceQuestionValue=(probe:Record<string,unknown>)=>({question:probe.question,
   options:probe.options??JSON.parse(String(probe.options_json||"[]")),presentations:probe.presentations??JSON.parse(String(probe.presentations_json||"{}"))});
 export const preferenceQuestionDigest=(probe:Record<string,unknown>)=>storyPreparationDigest(preferenceQuestionValue(probe));
-export async function preferenceInsightScope(stories:StorySource[]){return Promise.all(stories.flatMap((story)=>story.insights.map(async(insight)=>({
-  storyKey:story.key,insightId:insight.id,insightAuthorityDigest:await storyPreparationDigest(insightAuthorityValue(story.key,insight))}))));}
+export async function preferenceInsightScope(stories:StorySource[]){return canonicalPreferenceInsightScope(await Promise.all(stories.flatMap((story)=>story.insights.map(async(insight)=>({
+  storyKey:story.key,insightId:insight.id,insightAuthorityDigest:await storyPreparationDigest(insightAuthorityValue(story.key,insight))})))));}
 export async function createPreferenceLifecycleState(generationScope:PreferenceInsightBinding[],
   probes:Array<PreferenceInsightBinding&{id:string;question:unknown;options?:unknown;presentations?:unknown}>,
   history:Record<string,unknown>[]=[]) {
@@ -81,11 +82,13 @@ export function parsePreferenceLifecycleState(value:unknown):PreferenceLifecycle
       ||typeof question.questionDigest!=="string"||!preferenceDigest.test(question.questionDigest))return null;
     questions.push(question as PreferenceQuestionBinding);
   }
-  const scopeKeys=value.generationScope.map((item)=>`${item.storyKey}\0${item.insightId}`),questionKeys=questions.map(
+  const scopeKeys=value.generationScope.map((item)=>`${item.storyKey}\0${item.insightId}`),scope=new Map(value.generationScope.map(
+    (item)=>[`${item.storyKey}\0${item.insightId}`,item.insightAuthorityDigest])),questionKeys=questions.map(
     (item)=>`${item.storyKey}\0${item.insightId}`);
   if(new Set(scopeKeys).size!==scopeKeys.length||new Set(questionKeys).size!==questionKeys.length
     ||new Set(questions.map((item)=>item.id)).size!==questions.length
-    ||questionKeys.some((key)=>!scopeKeys.includes(key)))return null;
+    ||canonicalAuthorityJson(value.generationScope)!==canonicalAuthorityJson(canonicalPreferenceInsightScope(value.generationScope))
+    ||questions.some((item)=>scope.get(`${item.storyKey}\0${item.insightId}`)!==item.insightAuthorityDigest))return null;
   return {generationScope:value.generationScope,questions,history:value.history};
 }
 export async function validatePreferenceLifecycleRow(row:PreferenceLifecycleRow|null,workflowRunId:string,sourceRevision:number,
@@ -99,9 +102,9 @@ export async function validatePreferenceLifecycleRow(row:PreferenceLifecycleRow|
 export async function projectPreferenceLifecycle(stories:StorySource[],
   reviews:ReturnType<typeof hydrateStoryReviewSession>["chapterReviews"]|null,
   state:PreferenceLifecycleState,probes:Record<string,unknown>[]){
-  const ids=(values:PreferenceInsightBinding[])=>values.map(({storyKey,insightId})=>({storyKey,insightId}));
-  if(canonicalAuthorityJson(ids(await preferenceInsightScope(stories)))
-    !==canonicalAuthorityJson(ids(state.generationScope)))return null;
+  const identities=(values:PreferenceInsightBinding[])=>values.map(({storyKey,insightId})=>({storyKey,insightId}));
+  if(canonicalAuthorityJson(identities(await preferenceInsightScope(stories)))
+    !==canonicalAuthorityJson(identities(state.generationScope)))return null;
   const byId=new Map(probes.map((probe)=>[String(probe.id),probe])),projected=[];
   for(const question of state.questions){
     const probe=byId.get(question.id),story=stories.find((item)=>item.key===question.storyKey),insight=story?.insights.find(

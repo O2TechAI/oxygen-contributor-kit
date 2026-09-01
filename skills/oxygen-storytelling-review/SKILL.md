@@ -353,8 +353,9 @@ Chapter Privacy/Release Preview is implemented in the canonical Viewer as one ch
 After any reviewed Story edit, treat `preparation_required` as a resumable authority refresh and
 follow the parent-owned procedure in [`SOP.md`](../../SOP.md#refresh-story-privacy-after-a-story-edit).
 Keep the same localhost Viewer and workflow run, use a new private directory, and never repair SQLite
-or author an import bundle by hand. Each worker writes the total
-`{ "candidates": [...], "targetProposals": [...] }` object for its assigned targets. Credential
+or author an import bundle by hand. Each worker writes the canonical total Story Privacy output
+defined only in [story-preparation-transport.md](references/story-preparation-transport.md) for its
+generated assigned targets. Credential
 occurrences are never publishable, and HTML and ZIP consume the exact same contributor-selected bytes.
 
 All set confirms the current reviewed Story locally. It does not publish, upload, merge, push, or set `publication_approved=true`.

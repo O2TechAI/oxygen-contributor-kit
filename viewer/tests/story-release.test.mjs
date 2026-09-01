@@ -37,6 +37,7 @@ import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { captureStoryReleasePrivacySnapshot } from "../lib/release-privacy-snapshot.ts";
 import {
   createPreferenceLifecycleState,
+  parsePreferenceLifecycleState,
   preferenceInsightScope,
   projectPreferenceLifecycle,
 } from "../lib/story-release-server.ts";
@@ -340,6 +341,28 @@ test("Preference lifecycle projects accepted, rejected, and accepted-edited Insi
   const regenerated = await createPreferenceLifecycleState(regeneratedScope, [regeneratedProbe]);
   assert.equal((await projectPreferenceLifecycle([currentSource], { [currentSource.key]:edited }, regenerated,
     [regeneratedProbe]))[0].lifecycle_status, "active");
+});
+
+test("Preference lifecycle stores and reads only canonical identity-digest scope", async () => {
+  const stories = [
+    source([insight("insight-c")], { key: "zeta" }),
+    source([insight("insight-a")], { key: "故事" }),
+    source([insight("insight-b")], { key: "alpha" }),
+  ];
+  const scope = await preferenceInsightScope(stories);
+  assert.deepEqual(scope.map((item) => item.storyKey), ["alpha", "zeta", "故事"]);
+  const probe = { id: "preference-alpha", ...scope[0], question: "Keep this rule?",
+    options: [{ id: "yes", text: "Yes" }, { id: "no", text: "No" }], presentations: {} };
+  const state = await createPreferenceLifecycleState(scope, [probe]);
+  assert.ok(parsePreferenceLifecycleState(state));
+
+  const noncanonical = structuredClone(state);
+  noncanonical.generationScope.reverse();
+  assert.equal(parsePreferenceLifecycleState(noncanonical), null);
+
+  const staleQuestion = structuredClone(state);
+  staleQuestion.questions[0].insightAuthorityDigest = "0".repeat(64);
+  assert.equal(parsePreferenceLifecycleState(staleQuestion), null);
 });
 
 test("story sanitizer strips every non-product field and canonicalizes Insight order", () => {
