@@ -119,7 +119,9 @@ Do not expose a new Delete/Revise/Add creation window. Exact Evidence is never e
 
 ## Apply Review
 
-Apply review may run only when every required Story Privacy target has a current selected value in the server-owned authority and Evidence can be verified.
+Apply review may run only when the loaded server-owned Story Privacy authority is bound to the
+current workflow, source revision, and reviewed Story, and Evidence can be verified at Apply time.
+Unresolved current target selections do not block Apply review.
 
 It must:
 
@@ -153,6 +155,11 @@ All set is available only when:
 - no Insight blocker remains;
 - actual Evidence references were verified by the latest successful Apply.
 
+Unlike Apply review, All set and final release require every current Story Privacy target to have
+selected release bytes. Missing, stale, foreign, invalid, or `preparation_required` Story Privacy
+authority blocks both Apply review and later completion gates; a current authority with unresolved
+target selections blocks All set and final release only.
+
 Clicking All set changes only:
 
 ```text
@@ -177,7 +184,8 @@ Test at minimum:
 
 1. initial revision 1 and false publication state;
 2. direct edit returns stage to reviewing;
-3. Privacy blocks Apply and All set when required current targets lack a selected value;
+3. unresolved targets in current Story Privacy authority permit Apply but block All set, while
+   missing, stale, foreign, invalid, or `preparation_required` authority blocks both;
 4. first Apply creates revision 2;
 5. revision 2 can be edited again;
 6. second Apply creates revision 3;

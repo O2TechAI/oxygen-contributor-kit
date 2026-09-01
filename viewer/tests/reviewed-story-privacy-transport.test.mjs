@@ -15,6 +15,7 @@ import {
   emptyChapterReview,
   markChapterReady,
   recordStoryEdit,
+  returnChapterToReview,
   saveHumanInsight,
   storyBlocks,
   updateAiInsightDecision,
@@ -321,6 +322,38 @@ async function insertInitial(db) {
   return seeded;
 }
 
+function stagedSource(index) {
+  const reference = { documentId:"staged-doc", eventId:`staged-event-${index}` };
+  return {
+    schema:"oxygen.story",
+    key:`staged-chapter-${index}`,
+    phase:{ id:"review", label:"Review" },
+    title:`Safe staged title ${index}`,
+    overview:`Safe staged overview ${index}`,
+    people:[{
+      id:`person-${index}`,releaseLabel:`Contributor ${index}`,role:"Owner",
+      description:`Safe staged contributor ${index}.`,localIdentityState:"not_identified",
+      evidence:[reference],
+    }],
+    story:{ blocks:[{ id:`block-${index}`, text:`Safe staged Story ${index}.`, evidence:[reference] }] },
+    insights:[],
+    evidence:{ primary:reference, supporting:[] },
+    coverage:source.coverage,
+  };
+}
+
+function stagedReview(staged, stage) {
+  const blocks=storyBlocks(staged);
+  const stagedContext={
+    source:staged, privacyCandidates:[], privacyDecisions:{}, targetCatalog:new Map(),
+    evidenceResolved:true, supportedAddIds:[], supportedEditIds:[],
+    sourceBlocks:blocks, reviewedBlocks:blocks,
+  };
+  if (stage === "reviewing") return emptyChapterReview(staged);
+  const ready=applyChapterReview(emptyChapterReview(staged),stagedContext).state;
+  return stage === "revision_ready" ? ready : markChapterReady(ready,stagedContext);
+}
+
 async function bundle(snapshot, candidates, completedAt = "2044-01-02T00:00:00.000Z") {
   const privacy = await privacyForTargets(snapshot.changedTargets, candidates);
   const terminalReceipt = {
@@ -354,6 +387,100 @@ const authorityRows = async (db) => ({
     FROM story_privacy_targets ORDER BY target_id`).all()).results,
   authorities: (await db.prepare("SELECT * FROM story_privacy_authorities ORDER BY workflow_run_id").all())
     .results,
+});
+
+test("intermediate Story Privacy reconstruction accepts canonical mixed stages and fails closed", async () => {
+  const stateDir=await mkdtemp(join(tmpdir(),"reviewed-story-partial-authority-"));
+  const previous=process.env.OXYGEN_VIEWER_STATE_DIR;
+  process.env.OXYGEN_VIEWER_STATE_DIR=stateDir;
+  try {
+    const { getLocalDatabase }=await import("../db/index.ts");
+    const db=await getLocalDatabase();
+    const stories=[stagedSource(1),stagedSource(2),stagedSource(3)];
+    await db.prepare(`INSERT INTO workflow_runs
+      (id,story_generation_status,story_source_revision,active_story_digest,created_at,updated_at)
+      VALUES (?,'ready_for_human_review',?,?,?,?)`)
+      .bind(RUN_ID,SOURCE_REVISION,"0".repeat(64),NOW,NOW).run();
+    await db.prepare(`INSERT INTO documents
+      (id,kind,title,source_system,item_count,imported_at,updated_at)
+      VALUES ('staged-doc','trajectory','Synthetic staged source','test',3,?,?)`).bind(NOW,NOW).run();
+    for (const [index,staged] of stories.entries()) {
+      await db.prepare(`INSERT INTO items
+        (id,document_id,sequence,content,original_json,organization_reason,event_type,actor_id,actor_type)
+        VALUES (?,'staged-doc',?,'Safe staged evidence','{}',?,'message','person','human')`)
+        .bind(staged.evidence.primary.eventId,index+1,`oxygen.story:${JSON.stringify(staged)}`).run();
+    }
+    await seedCoveragePrivacyAuthority(db,{
+      workflowRunId:RUN_ID,sourceRevision:SOURCE_REVISION,stories,now:NOW,
+    });
+
+    const {readReservedStoryCandidateRows,validateCurrentStorySourcePackage}=await import(
+      "../lib/story-readiness.ts"
+    );
+    const stagedRows=await readReservedStoryCandidateRows(db);
+    const stagedEvidence=(await db.prepare(`SELECT id,document_id AS documentId,event_type AS eventType,
+      actor_id AS actorId,actor_type AS actorType FROM items ORDER BY document_id,sequence`).all()).results;
+    const stagedValidation=await validateCurrentStorySourcePackage(db,RUN_ID,stagedRows,stagedEvidence);
+    assert.equal(stagedValidation.ok,true,JSON.stringify(stagedValidation));
+
+    const absent=await reconstructReviewedStoryPrivacyRevision(db,RUN_ID);
+    assert.equal(absent.ok,true,JSON.stringify(absent));
+    assert.equal(absent.revision.serverVersion,0);
+
+    const mixedReviews={
+      [stories[0].key]:stagedReview(stories[0],"reviewing"),
+      [stories[1].key]:stagedReview(stories[1],"revision_ready"),
+      [stories[2].key]:stagedReview(stories[2],"human_confirmed"),
+    };
+    const mixed=createStoryReviewSession(RUN_ID,mixedReviews,{},NOW);
+    await db.prepare(`INSERT INTO story_review_sessions
+      (workflow_run_id,state_json,updated_at,server_version) VALUES (?,?,?,1)`)
+      .bind(RUN_ID,JSON.stringify({sourceRevision:SOURCE_REVISION,session:mixed}),NOW).run();
+    const partial=await reconstructReviewedStoryPrivacyRevision(db,RUN_ID);
+    assert.equal(partial.ok,true,JSON.stringify(partial));
+    assert.deepEqual(Object.values(mixedReviews).map((review)=>review.stage),[
+      "reviewing","revision_ready","human_confirmed",
+    ]);
+
+    const confirmedReviews=Object.fromEntries(stories.map((staged)=>[
+      staged.key,stagedReview(staged,"human_confirmed"),
+    ]));
+    const confirmed=createStoryReviewSession(RUN_ID,confirmedReviews,{},NOW);
+    const setStored=async (value,sourceRevision=SOURCE_REVISION) => db.prepare(
+      "UPDATE story_review_sessions SET state_json=?,server_version=server_version+1 WHERE workflow_run_id=?",
+    ).bind(JSON.stringify({sourceRevision,session:value}),RUN_ID).run();
+    await setStored(confirmed);
+    assert.equal((await reconstructReviewedStoryPrivacyRevision(db,RUN_ID)).ok,true);
+
+    const foreign=createStoryReviewSession("foreign-run",confirmedReviews,{},NOW);
+    await setStored(foreign);
+    assert.equal((await reconstructReviewedStoryPrivacyRevision(db,RUN_ID)).ok,false);
+    const missing=createStoryReviewSession(RUN_ID,{
+      [stories[0].key]:confirmedReviews[stories[0].key],
+      [stories[1].key]:confirmedReviews[stories[1].key],
+    },{},NOW);
+    await setStored(missing);
+    assert.equal((await reconstructReviewedStoryPrivacyRevision(db,RUN_ID)).ok,false);
+    await setStored(confirmed,SOURCE_REVISION+1);
+    assert.equal((await reconstructReviewedStoryPrivacyRevision(db,RUN_ID)).ok,false);
+    await db.prepare("UPDATE story_review_sessions SET state_json='{' WHERE workflow_run_id=?")
+      .bind(RUN_ID).run();
+    assert.equal((await reconstructReviewedStoryPrivacyRevision(db,RUN_ID)).ok,false);
+    const invalidLedger=structuredClone(confirmed);
+    invalidLedger.chapterReviews[stories[0].key].revision=-1;
+    await setStored(invalidLedger);
+    assert.equal((await reconstructReviewedStoryPrivacyRevision(db,RUN_ID)).ok,false);
+    await setStored(confirmed);
+    await db.prepare("UPDATE workflow_runs SET active_story_digest=? WHERE id=?")
+      .bind("f".repeat(64),RUN_ID).run();
+    assert.equal((await reconstructReviewedStoryPrivacyRevision(db,RUN_ID)).ok,false);
+  } finally {
+    if (globalThis.__oxygenLocalSqlite?.database) globalThis.__oxygenLocalSqlite.database.close();
+    delete globalThis.__oxygenLocalSqlite;
+    if (previous === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
+    else process.env.OXYGEN_VIEWER_STATE_DIR=previous;
+    await rm(stateDir,{recursive:true,force:true});
+  }
 });
 
 test("Story Privacy import rejects source revision zero before database initialization", async () => {
@@ -580,12 +707,32 @@ test("reviewed Story changes replace one atomic target authority", async () => {
     assert.notEqual(current.authority.authorityDigest, validBundle.importDigest);
     assert.notEqual(current.authority.authorityDigest, initialAuthorityDigest);
 
+    const metadataOnlySession=createStoryReviewSession(RUN_ID,{
+      [source.key]:returnChapterToReview(editedAgainSession.chapterReviews[source.key]),
+    },{},NOW);
+    await db.prepare(`UPDATE story_review_sessions SET state_json=?,server_version=4
+      WHERE workflow_run_id=?`)
+      .bind(JSON.stringify({sourceRevision:SOURCE_REVISION,session:metadataOnlySession}),RUN_ID).run();
+    const metadataCurrent=await readStoryPrivacyAuthority(db,RUN_ID);
+    assert.equal(metadataCurrent.ok,true,JSON.stringify(metadataCurrent));
+    assert.equal(metadataCurrent.authority.status,"completed_with_candidates");
+    assert.equal((await buildReviewedStoryPrivacyPreparationSnapshot(db,RUN_ID)).ok,false,
+      "metadata-only CAS movement creates no target transition or refresh work");
+    await db.prepare("UPDATE story_review_sessions SET server_version=2 WHERE workflow_run_id=?")
+      .bind(RUN_ID).run();
+    const regressedSession=await readStoryPrivacyAuthority(db,RUN_ID);
+    assert.equal(regressedSession.ok,true,JSON.stringify(regressedSession));
+    assert.equal(regressedSession.authority.status,"preparation_required",
+      "an imported authority from a later session CAS fails closed after rollback");
+    await db.prepare("UPDATE story_review_sessions SET server_version=4 WHERE workflow_run_id=?")
+      .bind(RUN_ID).run();
+
     const removalSession = createStoryReviewSession(
       RUN_ID,
       { [source.key]: blockOnlyReviewedState("The first block is reviewed again.") },
       {},
     );
-    await db.prepare(`UPDATE story_review_sessions SET state_json=?,server_version=4
+    await db.prepare(`UPDATE story_review_sessions SET state_json=?,server_version=5
       WHERE workflow_run_id=?`)
       .bind(JSON.stringify({ sourceRevision: SOURCE_REVISION, session: removalSession }), RUN_ID).run();
     const removal = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN_ID);
@@ -609,7 +756,7 @@ test("reviewed Story changes replace one atomic target authority", async () => {
       { [source.key]: unchangedReviewedState() },
       {},
     );
-    await db.prepare(`UPDATE story_review_sessions SET state_json=?,server_version=5
+    await db.prepare(`UPDATE story_review_sessions SET state_json=?,server_version=6
       WHERE workflow_run_id=?`)
       .bind(JSON.stringify({ sourceRevision: SOURCE_REVISION, session: revertedSession }), RUN_ID).run();
     const reverted = await readStoryPrivacyAuthority(db, RUN_ID);

@@ -520,7 +520,7 @@ async function captureAuthority(
     }
     storedMatchesCurrent = Number(stored.source_revision) === revision.sourceRevision
       && stored.active_story_digest === revision.activeStoryDigest
-      && Number(stored.server_version) === revision.serverVersion
+      && Number(stored.server_version) <= revision.serverVersion
       && stored.reviewed_story_digest === revision.reviewedStoryDigest
       && stored.target_catalog_digest === revision.targetCatalogDigest
       && JSON.stringify(catalog) === JSON.stringify(revision.targetCatalog);

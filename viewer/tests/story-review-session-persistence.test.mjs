@@ -366,6 +366,6 @@ test("Workspace routes both HTML and ZIP through the durable-save barrier", asyn
   assert.match(handoff, /serverVersion/);
   assert.match(handoff, /sourceRevision/);
   assert.doesNotMatch(handoff, /reviewedStory/);
-  assert.match(workspace, /downloadReviewed\("\/api\/organization\/export"/);
-  assert.match(workspace, /downloadReviewed\("\/api\/package"/);
+  assert.match(workspace, /downloadReviewed\("download_html","\/api\/organization\/export"/);
+  assert.match(workspace, /downloadReviewed\("download_zip","\/api\/package"/);
 });

@@ -233,6 +233,27 @@ export function parseStoryPrivacyAuthority(value: unknown): StoryPrivacyAuthorit
 
 export const storyPrivacyCandidateResolved = (candidate: StoryPrivacyCandidate) => candidate.resolved;
 
+export function storyPrivacyAuthorityCurrent(
+  state: StoryPrivacyState,
+  workflowRunId: string,
+) {
+  return state.status === "ready"
+    && state.authority.workflowRunId === workflowRunId
+    && state.authority.status !== "preparation_required";
+}
+
+export function storyPrivacyApplyBlockerCopy(
+  status: StoryPrivacyState["status"] | "preparation_required",
+) {
+  if (status === "loading") {
+    return "Story Privacy is still loading. Apply review is blocked until the current authority is available.";
+  }
+  if (status === "preparation_required") {
+    return "Story Privacy must be refreshed after applied release content changed. Apply review is blocked until refreshed authority is available.";
+  }
+  return "Current Story Privacy authority is unavailable. Apply review is blocked until it can be loaded safely.";
+}
+
 export function storyPrivacyAuthorityComplete(authority: StoryPrivacyAuthority | null) {
   return Boolean(authority && authority.status !== "preparation_required"
     && authority.targets.every((target) => target.selectedText !== null));
