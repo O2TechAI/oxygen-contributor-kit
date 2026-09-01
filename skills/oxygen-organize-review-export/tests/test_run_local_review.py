@@ -131,6 +131,13 @@ def ready_authority(workflow_run_id="run-1", *, probes=None, bulk_decisions=None
     preparation = {
         "schema": "oxygen.story-preparation", "workflowRunId": workflow_run_id,
         "sourceRevision": 7,
+        "languagePolicy": {
+            "schema": "oxygen.story-language-policy", "workflowRunId": workflow_run_id,
+            "sourceRevision": 7, "sourceDigest": "1" * 64,
+            "sourcePrivacyDigest": "2" * 64, "sourceInputDigest": "3" * 64,
+            "detectedLanguage": "en", "selection": "all-english",
+            "stories": [{"storyKey": "chapter-a", "language": "en"}],
+        },
         "storyPrivacy": {"candidates": [], "targetProposals": []},
         "receipts": [
             receipt("story"), receipt("insight"), receipt("story_privacy"),
@@ -1742,6 +1749,28 @@ class LauncherUnitTest(unittest.TestCase):
         serialized = printed.call_args.args[0]
         self.assertNotIn("story_payload", serialized)
         self.assertNotIn("evidence_payload", serialized)
+
+    def test_story_ready_rejects_invalid_preparation_envelope_before_http(self):
+        cases = (
+            lambda manifest: manifest.pop("languagePolicy"),
+            lambda manifest: manifest.__setitem__("languagePolicy", []),
+            lambda manifest: manifest.__setitem__("unexpected", True),
+        )
+        for mutate in cases:
+            with self.subTest(mutate=mutate):
+                preference_bundle, preparation_manifest = ready_authority()
+                mutate(preparation_manifest)
+                with mock.patch.object(MODULE, "request_json") as request:
+                    with self.assertRaisesRegex(
+                        SystemExit, "Story preparation authority is invalid"
+                    ):
+                        MODULE.update_story_workflow(
+                            "http://127.0.0.1:3298", "run-1", "ready",
+                            coverage_manifest={}, story_candidates=[{"id": "doc:item-1"}],
+                            preference_bundle=preference_bundle,
+                            preparation_manifest=preparation_manifest,
+                        )
+                request.assert_not_called()
 
     def test_story_ready_requires_the_exact_persisted_human_boundary(self):
         preference_bundle, preparation_manifest = ready_authority()
