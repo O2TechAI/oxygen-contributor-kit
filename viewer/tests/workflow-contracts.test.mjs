@@ -300,8 +300,8 @@ test("routed Story contracts distinguish exact-bound provider input from final r
     assert.match(document, /not applied[\s\S]{0,80}before[\s\S]{0,80}Story authoring|does not apply Source Privacy redactions before authoring/iu);
   }
   assert.match(product, /local\s+Quote may contain exact bound raw source text/iu);
-  assert.match(bilingual,
-    /localized final release uses the\s+same contributor-reviewed Story Privacy bytes[\s\S]{0,160}release gate/iu);
+  assert.match(bilingual, /one shared review\/release authority/iu);
+  assert.match(bilingual, /Privacy targets[\s\S]{0,100}release gate survive[\s\S]{0,40}either language/iu);
   assert.match(privacy,
     /generated Story is non-release working state[\s\S]{0,160}every current release target[\s\S]{0,160}exact reviewed release bytes/iu);
 });

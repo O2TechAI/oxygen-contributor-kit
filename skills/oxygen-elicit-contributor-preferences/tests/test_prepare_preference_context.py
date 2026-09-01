@@ -30,6 +30,7 @@ def story(key="chapter-a", event="event-a", document="trajectory-a", insight="le
     evidence = {"documentId": document, "eventId": event}
     return {
         "schema": "oxygen.story", "key": key,
+        "language": "en", "languagePolicyDigest": "f" * 64,
         "phase": {"id": "build", "label": "Build"}, "title": "Title", "overview": "Overview",
         "people": [], "story": {"blocks": [{
             "id": "block", "text": "A safe reviewed contribution established the boundary.",
