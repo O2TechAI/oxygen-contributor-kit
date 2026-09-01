@@ -447,6 +447,7 @@ export function InlineWorkspace({
   const [preferenceLifecycleCurrent,setPreferenceLifecycleCurrent] = useState(false);
   const [probeBusy,setProbeBusy] = useState("");
   const probeRunStatus = probeRun?.status;
+  const preferenceReadyRunRef = useRef(storyReviewReady ? scopedWorkflowRunId : "");
 
   const loadProbes = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch("/api/probes", { cache:"no-store", ...(signal ? { signal } : {}) });
@@ -460,14 +461,25 @@ export function InlineWorkspace({
   }, []);
 
   useEffect(() => {
+    const readyRunId = storyReviewReady ? scopedWorkflowRunId : "";
+    if (!readyRunId || preferenceReadyRunRef.current === readyRunId) return;
+    const refresh = setTimeout(() => {
+      if (preferenceReadyRunRef.current === readyRunId) return;
+      preferenceReadyRunRef.current = readyRunId;
+      void loadProbes();
+    }, 0);
+    return () => clearTimeout(refresh);
+  }, [loadProbes, scopedWorkflowRunId, storyReviewReady]);
+
+  useEffect(() => {
     const initial = setTimeout(() => { void loadProbes(); }, 0);
-    const polling = probeRunStatus === "running"
-      ? setInterval(() => { void loadProbes(); }, 4000)
-      : undefined;
-    return () => {
-      clearTimeout(initial);
-      if (polling) clearInterval(polling);
-    };
+    return () => clearTimeout(initial);
+  }, [loadProbes]);
+
+  useEffect(() => {
+    if (probeRunStatus !== "running") return;
+    const polling = setInterval(() => { void loadProbes(); }, 4000);
+    return () => clearInterval(polling);
   }, [loadProbes, probeRunStatus]);
 
   async function answerProbe(id: string, patch: { choice?: string; text?: string; clear?: boolean; bulk?: boolean }) {
