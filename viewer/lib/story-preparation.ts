@@ -231,18 +231,6 @@ function storyTargetValues(story: StorySource): Array<{ target: StoryReleaseTarg
   if (story.story.uncertainty !== undefined) {
     targets.push({ target:"uncertainty", content:story.story.uncertainty });
   }
-  for (const insight of story.insights) {
-    if (insight.title !== undefined) {
-      targets.push({ target:`insight:${insight.id}:title`, content:insight.title });
-    }
-    targets.push(
-      { target:`insight:${insight.id}:background`, content:insight.background },
-      { target:`insight:${insight.id}:quote`, content:insight.quote.text },
-      { target:`insight:${insight.id}:directlyAcquiredExperience`,
-        content:insight.directlyAcquiredExperience },
-      { target:`insight:${insight.id}:principle`, content:insight.principle },
-    );
-  }
   return targets;
 }
 
