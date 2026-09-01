@@ -874,12 +874,12 @@ export function InlineWorkspace({
     || storySessionReadyRunId !== workflowRunId) {
     return <WorkflowProgress workflow={workflow} status={status} error={effectiveError} language={language} />;
   }
-  const storyLanguage: StoryLanguage = language;
-  const labels = workspaceUi[storyLanguage];
+  const interfaceLanguage: StoryLanguage = language;
+  const labels = workspaceUi[interfaceLanguage];
   const projectStorySummary = summary.project_summary;
   const viewerChapters:TimelineChapter[] = projectChapters.map((chapter) => {
     const timeline = timelinePresentation(chapter.source);
-    const dateLabel = chapter.timestamp ? fmtTimelineDate(chapter.timestamp,storyLanguage) : undefined;
+    const dateLabel = chapter.timestamp ? fmtTimelineDate(chapter.timestamp,interfaceLanguage) : undefined;
     return {
       key:chapter.source.key,
       project:chapter.project,
@@ -1233,10 +1233,10 @@ export function InlineWorkspace({
       <span className="topTitle">{labels.title}</span>
       <span className="localState"><i /> {labels.local}</span>
       <button className="workflowButton" onClick={() => { void loadWorkflow(); setWorkflowOpen(true); }}>{labels.workflow}</button>
-      <div className="languageToggle" aria-label="Story language">
-        <button className={storyLanguage==="en"?"active":""} onClick={() => setLanguage("en")} aria-pressed={storyLanguage==="en"}>EN</button>
+      <div className="languageToggle" aria-label="Interface language" title="Interface language">
+        <button className={interfaceLanguage==="en"?"active":""} onClick={() => setLanguage("en")} aria-pressed={interfaceLanguage==="en"}>EN</button>
         <span>|</span>
-        <button className={storyLanguage==="zh"?"active":""} onClick={() => setLanguage("zh")} aria-pressed={storyLanguage==="zh"}>中文</button>
+        <button className={interfaceLanguage==="zh"?"active":""} onClick={() => setLanguage("zh")} aria-pressed={interfaceLanguage==="zh"}>中文</button>
       </div>
       <button id="confirm-project-release" className="download" disabled={releaseActionsBusy || releaseConfirmed} aria-disabled={!releaseConfirmed && !releaseConfirmationEligible} onClick={() => { void confirmProjectRelease(); }}>
         {releaseConfirmationBusy?labels.confirmingRelease:releaseConfirmed?labels.releaseConfirmed:labels.confirmRelease}
@@ -1248,10 +1248,10 @@ export function InlineWorkspace({
       <aside className="rail storyRail">
         <div className="railHead"><b>{labels.projects}</b><span>{selectedProject?viewerChapters.length:projectNames.length}</span></div>
         <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selectedProject===project?"active":""}`} key={project} onClick={() => { releasePreviewReturnSelectionRef.current=null; setStoryNavigation({ project, storyKey:"" }); setSourceFocus(""); setView("timeline"); }}>
-          <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${labels.phases}`:`${projectCount(project).toLocaleString()} ${labels.events}`}</small>
-        </button>)}{activeChapter && <div className="chapterRailContext" aria-label={storyLanguage==="zh"?"章节选择器":"Chapter selector"}>
-          <span>{storyLanguage==="zh"?`章节 ${activeStoryIndex+1} / ${viewerChapters.length}`:`Chapters ${activeStoryIndex+1} / ${viewerChapters.length}`}</span>
-          <nav className="chapterRailList" aria-label={storyLanguage==="zh"?"章节":"Chapters"}>
+          <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${workspaceUi.en.phases}`:`${projectCount(project).toLocaleString()} ${labels.events}`}</small>
+        </button>)}{activeChapter && <div className="chapterRailContext" aria-label={`${workspaceUi.en.chapter} selector`}>
+          <span>{workspaceUi.en.chapters} {activeStoryIndex+1} / {viewerChapters.length}</span>
+          <nav className="chapterRailList" aria-label={workspaceUi.en.chapters}>
             {viewerChapters.map((event) => { const active=event.key===navigation.storyKey; return <button className={active?"active":""} aria-current={active?"page":undefined} ref={active?activeChapterButtonRef:undefined} key={event.key} onClick={() => navigateStory(event.key)}>
               <i>{chapterNumber.get(event.key)}</i><b>{event.title}</b>
             </button>})}
@@ -1265,7 +1265,7 @@ export function InlineWorkspace({
         {!ready ? <div className="empty">No organized records found.</div> : <>
           {effectiveError && <div className="workspaceError" role="alert">{effectiveError}</div>}
           <nav className="toolbar storyToolbar" aria-label="Record view" aria-hidden={activeChapter?true:undefined} inert={activeChapter?true:undefined}>
-            <div className="toolbarInner"><button className={view==="timeline"?"active":""} onClick={() => { restoreReleasePreviewSelection(); setActiveStoryKey(""); setView("timeline"); }}>{labels.timeline}</button>
+            <div className="toolbarInner"><button className={view==="timeline"?"active":""} onClick={() => { restoreReleasePreviewSelection(); setActiveStoryKey(""); setView("timeline"); }}>{workspaceUi.en.timeline}</button>
             <button className={view==="redaction"?"active":""} onClick={openReleasePreview}>
               {labels.release}{isProject
                 ? presentedStoryPrivacy.status === "loading" ? " · loading"
@@ -1287,25 +1287,25 @@ export function InlineWorkspace({
           <div className={`stream ${view==="timeline" ? "storyStream" : view==="redaction" ? "reviewStream releasePreviewStream" : "reviewStream preferencesStream"}`} ref={timelineScrollRef} onScroll={updateActivePhase} aria-hidden={activeChapter?true:undefined} inert={activeChapter?true:undefined}>
             {view === "timeline" ? <>
               <div className="storyCanvasGrid"><div className="storyTimelineColumn">
-                <header className="storyOrientation"><p className="eyebrow">{labels.projectStory}</p><h1>{summary.primary_project || detail?.document.title}</h1>
+                <header className="storyOrientation"><p className="eyebrow">{workspaceUi.en.projectStory}</p><h1>{summary.primary_project || detail?.document.title}</h1>
                   <p>{projectStorySummary}</p>
-                  <div className="storyStats"><span><b>{viewerChapters.length}</b> {labels.chapters}</span><span><b>{phaseGroups.length}</b> {labels.phases}</span>{reviewedInsightTotal===0?<span><b>{storyLanguage==="zh"?"无需 AI 洞察":"No AI Insights required"}</b></span>:<span><b>{reviewedInsights}/{reviewedInsightTotal}</b> {labels.insightReviewed}</span>}<span><b>{docs.length}</b> {labels.retained}</span></div>
-                  <small>{docs.length} {storyLanguage==="zh"?"条已审阅来源记录": "reviewed source records"} · {projectCount(selectedProject || primaryProject).toLocaleString()} {labels.events} · {storyLanguage==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
+                  <div className="storyStats"><span><b>{viewerChapters.length}</b> {labels.chapters}</span><span><b>{phaseGroups.length}</b> {workspaceUi.en.phases}</span>{reviewedInsightTotal===0?<span><b>No AI Insights required</b></span>:<span><b>{reviewedInsights}/{reviewedInsightTotal}</b> {labels.insightReviewed}</span>}<span><b>{docs.length}</b> {labels.retained}</span></div>
+                  <small>{docs.length} {interfaceLanguage==="zh"?"条已审阅来源记录": "reviewed source records"} · {projectCount(selectedProject || primaryProject).toLocaleString()} {labels.events} · {interfaceLanguage==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
                 </header>
                 <p className="storyNextStep" data-story-stream-instruction>↘ {labels.nextStep}</p>
                 {phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
-                  <header className="phaseHeading"><span>{String(phaseIndex+1).padStart(2,"0")}</span><div><h2>{group.name}</h2><p>{group.events.length} {storyLanguage==="zh"?"个章节":`chapter${group.events.length===1?"":"s"}`}</p></div></header>
+                  <header className="phaseHeading"><span>{String(phaseIndex+1).padStart(2,"0")}</span><div><h2>{group.name}</h2><p>{group.events.length} {(group.events.length===1?workspaceUi.en.chapter:workspaceUi.en.chapters).toLowerCase()}</p></div></header>
                   <div className="storyChapterList">{group.events.map((event) => <article className="storyChapter" data-kind={event.kind} data-story-key={event.key} key={event.key} aria-labelledby={`story-chapter-${event.key}`}>
-                    <div className="storyChapterMeta">{event.dateLabel && <time dateTime={event.timestamp}>{event.dateLabel}</time>}{event.kind && <span>{storyKindLabel(event.kind,storyLanguage)}</span>}{event.timelineMarker === "ai_insight" && <strong>{labels.timelineAiInsight}</strong>}</div>
+                    <div className="storyChapterMeta">{event.dateLabel && <time dateTime={event.timestamp}>{event.dateLabel}</time>}{event.kind && <span>{storyKindLabel(event.kind,"en")}</span>}{event.timelineMarker === "ai_insight" && <strong>{workspaceUi.en.timelineAiInsight}</strong>}</div>
                     <h3 id={`story-chapter-${event.key}`}>{event.title}</h3>
-                    {event.before && event.after && <div className="transition" aria-label={`${labels.before} to ${labels.after}`}>
-                      <div><small>{labels.before}</small><p>{event.before}</p></div><b aria-hidden="true">→</b><div><small>{labels.after}</small><p>{event.after}</p></div>
+                    {event.before && event.after && <div className="transition" aria-label={`${workspaceUi.en.before} to ${workspaceUi.en.after}`}>
+                      <div><small>{workspaceUi.en.before}</small><p>{event.before}</p></div><b aria-hidden="true">→</b><div><small>{workspaceUi.en.after}</small><p>{event.after}</p></div>
                     </div>}
-                    {event.chips && event.chips.length > 0 && <div className="storyChapterChips" aria-label={storyLanguage==="zh"?"关键事实":"Key facts"}>{event.chips.map((chip) => <span key={chip}>{chip}</span>)}</div>}
-                    <footer><span>{event.evidenceCount} {labels.evidence}{storyLanguage==="en" && event.evidenceCount!==1?"s":""}</span><button id={`story-open-${event.key}`} onClick={() => openStory(event.key)}>{labels.read} · ≈ {event.readingMinutes} {storyLanguage==="zh"?"分钟":"min"} →</button></footer>
+                    {event.chips && event.chips.length > 0 && <div className="storyChapterChips" aria-label="Key facts">{event.chips.map((chip) => <span key={chip}>{chip}</span>)}</div>}
+                    <footer><span>{event.evidenceCount} {workspaceUi.en.evidence}{event.evidenceCount!==1?"s":""}</span><button id={`story-open-${event.key}`} onClick={() => openStory(event.key)}>{workspaceUi.en.read} · ≈ {event.readingMinutes} min →</button></footer>
                   </article>)}</div>
                 </section>)}
-              </div><nav className="phaseDirectory" aria-label={storyLanguage==="zh"?"叙事阶段目录":"Narrative phase directory"}><b>{storyLanguage==="zh"?"故事阶段":"STORY PHASES"}</b>{phaseGroups.map((group,index) => <button className={activePhaseIndex===index?"active":""} aria-current={activePhaseIndex===index?"location":undefined} onClick={() => scrollToPhase(index)} key={phaseGroupIdentity(group.name,index)}>{group.name}</button>)}</nav></div>
+              </div><nav className="phaseDirectory" aria-label="Narrative phase directory"><b>STORY PHASES</b>{phaseGroups.map((group,index) => <button className={activePhaseIndex===index?"active":""} aria-current={activePhaseIndex===index?"location":undefined} onClick={() => scrollToPhase(index)} key={phaseGroupIdentity(group.name,index)}>{group.name}</button>)}</nav></div>
             </> : view === "redaction" ? (isProject ? <StoryPrivacyReview
               state={presentedStoryPrivacy}
               busyId={storyPrivacyBusy}
@@ -1322,7 +1322,7 @@ export function InlineWorkspace({
               busyId={redactionBusy}
               onDecision={(id,decision) => { void decideRedaction(id,decision); }}
             />) : view === "probes" ? <ProbePanel
-              language={storyLanguage}
+              language={interfaceLanguage}
               run={probeRun}
               lifecycleCurrent={preferenceLifecycleCurrent}
               probes={probes}
@@ -1353,7 +1353,7 @@ export function InlineWorkspace({
             source={activeSourceChapter.source}
             position={activeStoryIndex+1}
             total={viewerChapters.length}
-            language={storyLanguage}
+            language={interfaceLanguage}
             chapterReview={chapterReviews[activeSourceChapter.source.key] || emptyChapterReview(activeSourceChapter.source)}
             reviewFocus={downloadReviewFocus?.chapterKey===activeSourceChapter.source.key ? downloadReviewFocus : undefined}
             onReviewFocusHandled={clearDownloadReviewFocus}
@@ -1397,6 +1397,6 @@ export function InlineWorkspace({
         </section>}
       </section>
     </div>}
-    {workflowOpen && <WorkflowProgress workflow={displayedWorkflow} status={status} error={effectiveError} language={storyLanguage} onClose={() => setWorkflowOpen(false)} />}
+    {workflowOpen && <WorkflowProgress workflow={displayedWorkflow} status={status} error={effectiveError} language={interfaceLanguage} onClose={() => setWorkflowOpen(false)} />}
   </main>;
 }

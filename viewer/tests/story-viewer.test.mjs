@@ -50,6 +50,7 @@ registerHooks({
 });
 
 const { StoryChapterEditor } = await import("../app/story-chapter-editor.tsx");
+const { ProbePanel } = await import("../app/probe-panel.tsx");
 
 const [editor, workspace, navigation, route] = await Promise.all([
   readFile(new URL("../app/story-chapter-editor.tsx", import.meta.url), "utf8"),
@@ -97,6 +98,8 @@ test("the rendered editor keeps paragraph-owned Insight cards in a separate resp
   const evidence = { documentId: "render-document", eventId: "render-document:event" };
   const source = {
     schema: "oxygen.story",
+    language: "en",
+    languagePolicyDigest: "f".repeat(64),
     key: "rendered-paragraph-ownership",
     phase: { id: "proof", label: "Proof" },
     title: "Paragraph-owned Insight cards",
@@ -165,6 +168,13 @@ test("the rendered editor keeps paragraph-owned Insight cards in a separate resp
     onPrevious() {},
     onNext() {},
     language: "en",
+    storyPrivacyStatus: "ready",
+    storyPrivacyCandidates: [],
+    storyPrivacyCurrent: true,
+    storyPrivacyComplete: true,
+    storyPrivacyResolved: 0,
+    storyPrivacyTotal: 0,
+    onOpenStoryPrivacy() {},
   }));
   const firstRowStart = html.indexOf('data-insight-owner-block="paragraph-one"');
   const secondRowStart = html.indexOf('data-insight-owner-block="paragraph-two"');
@@ -198,12 +208,75 @@ test("story Story exposes explicit and double-click edit entry through the commo
   assert.match(storyEditor, />Edit Story<\/button>/);
   assert.match(storyEditor, /onDoubleClick=\{handleStoryDoubleClick\}/);
   assert.match(storyEditor, /recordStoryEdit\(chapterReview/);
-  assert.match(storyEditor, /storyWorkingBlock\(sourceBlock\.text, source\.key, blockId, "en", chapterReview\)/);
-  assert.match(storyEditor, /undoStoryEdit\(chapterReview, "en"\)/);
-  assert.match(storyEditor, /redoStoryEdit\(chapterReview, "en"\)/);
+  assert.match(storyEditor, /storyWorkingBlock\(sourceBlock\.text, source\.key, blockId, source\.language, chapterReview\)/);
+  assert.match(storyEditor, /undoStoryEdit\(chapterReview, source\.language\)/);
+  assert.match(storyEditor, /redoStoryEdit\(chapterReview, source\.language\)/);
   assert.match(storyEditor, /applyChapterReview\(chapterReview/);
   assert.match(storyEditor, /onMouseUp=\{editMode \? undefined : captureSelection\}/);
   assert.match(storyEditor, /!editMode && selection\?\.blockId === block\.id/);
+});
+
+test("linked Preference presentation follows canonical Story language while chrome follows the interface", () => {
+  const probe = {
+    id: "stable-linked-probe",
+    document_id: "reviewed-document",
+    storyKey: "chinese-chapter",
+    insightId: "ai:linked-insight",
+    language: "zh",
+    lifecycle_status: "active",
+    lifecycle_key: "current:stable-linked-probe",
+    event_ids: ["reviewed-document:event-1"],
+    signal: "explicit_rule",
+    score: 90,
+    turns: 2,
+    recap: "Canonical recap",
+    question: "Canonical question",
+    options: [{ id: "A", text: "Canonical A" }, { id: "B", text: "Canonical B" }],
+    presentations: {
+      en: {
+        recap: "Reviewed English recap",
+        question: "Reviewed English question?",
+        options: [{ id: "A", text: "English A" }, { id: "B", text: "English B" }],
+      },
+      zh: {
+        recap: "经过审阅的中文回顾",
+        question: "经过审阅的中文问题？",
+        options: [{ id: "A", text: "中文 A" }, { id: "B", text: "中文 B" }],
+      },
+    },
+    allow_other: 1,
+    allow_skip: 1,
+    answer_choice: "A",
+    answer_text: null,
+    answered_at: "2038-08-27T00:00:00.000Z",
+  };
+  const render = (language, candidate = probe) => renderToStaticMarkup(createElement(ProbePanel, {
+    language,
+    run: { status: "complete", stage: "preference", generated: 1, set_aside: 0 },
+    lifecycleCurrent: true,
+    probes: [candidate],
+    bulkDecisions: [],
+    busyId: "",
+    onAnswer() {},
+    onReviewInsight() {},
+  }));
+  const englishInterface = render("en");
+  const chineseInterface = render("zh");
+  for (const html of [englishInterface, chineseInterface]) {
+    assert.match(html, /data-preference-id="stable-linked-probe" lang="zh-CN"/);
+    assert.match(html, /经过审阅的中文问题/);
+    assert.match(html, /class="chosen">A\. 中文 A<\/button>/);
+    assert.doesNotMatch(html, /Reviewed English question|English A/);
+  }
+  assert.match(englishInterface, /Preference probes/);
+  assert.match(chineseInterface, /偏好问题/);
+
+  const missingRequiredCopy = render("en", { ...probe, presentations: { en: probe.presentations.en } });
+  assert.match(missingRequiredCopy, /required reviewed Story-language display copy/);
+  assert.doesNotMatch(missingRequiredCopy, /Reviewed English question|经过审阅的中文问题/);
+  const missingLinkedLanguage = render("en", { ...probe, language: undefined });
+  assert.match(missingLinkedLanguage, /required reviewed Story-language display copy/);
+  assert.doesNotMatch(missingLinkedLanguage, /Reviewed English question|经过审阅的中文问题/);
 });
 
 test("source and human Insight cards are keyed and focused only by stable IDs", () => {
@@ -310,8 +383,8 @@ test("story Timeline executes the exact source mapping without manufacturing fie
   assert.match(workspace, /timelineAiInsight:"AI 洞察"/);
   assert.match(timelineRows, /<article className="storyChapter"/);
   assert.match(timelineRows, /event\.dateLabel && <time dateTime=\{event\.timestamp\}>\{event\.dateLabel\}<\/time>/);
-  assert.match(timelineRows, /event\.timelineMarker === "ai_insight" && <strong>\{labels\.timelineAiInsight\}<\/strong>/);
-  assert.match(timelineRows, /event\.kind && <span>\{storyKindLabel\(event\.kind,storyLanguage\)\}<\/span>/);
+  assert.match(timelineRows, /event\.timelineMarker === "ai_insight" && <strong>\{workspaceUi\.en\.timelineAiInsight\}<\/strong>/);
+  assert.match(timelineRows, /event\.kind && <span>\{storyKindLabel\(event\.kind,"en"\)\}<\/span>/);
   assert.match(timelineRows, /event\.before && event\.after/);
   assert.match(timelineRows, /event\.chips && event\.chips\.length > 0/);
   assert.doesNotMatch(timelineRows, /Date unavailable|日期不可用/);
