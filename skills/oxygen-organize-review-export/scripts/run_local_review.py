@@ -1633,7 +1633,7 @@ _AUTO_REMOVED_KINDS = {
     "internal-timeline", "mosaic-reidentification",
 }
 _PREPARATION_FIELDS = {
-    "schema", "workflowRunId", "sourceRevision", "receipts", "storyPrivacy",
+    "schema", "workflowRunId", "sourceRevision", "languagePolicy", "receipts", "storyPrivacy",
 }
 _RECEIPT_FIELDS = {
     "lane", "status", "inputDigest", "scopeDigest", "scopeCount", "outputDigest", "outputCount",
@@ -1715,6 +1715,7 @@ def validate_ready_authority(
         preparation_manifest.get("schema") != "oxygen.story-preparation"
         or preparation_manifest.get("workflowRunId") != workflow_run_id
         or preparation_manifest.get("sourceRevision") != preference_bundle["sourceRevision"]
+        or not isinstance(preparation_manifest.get("languagePolicy"), dict)
         or not isinstance(preparation_manifest.get("storyPrivacy"), dict)
         or not isinstance(preparation_manifest.get("receipts"), list)
         or len(preparation_manifest["receipts"]) != len(_PREPARATION_LANES)
