@@ -9,6 +9,7 @@ import {
 import {
   chapterStoryPrivacyCandidates,
   parseStoryPrivacyAuthority,
+  storyPrivacyAuthorityCurrent,
   storyPrivacyAuthorityComplete,
   storyPrivacyCandidateResolved,
   StoryPrivacyRequestGate,
@@ -18,8 +19,15 @@ import {
 } from "./story-privacy-ui";
 import { ProbePanel, type Probe, type BulkDecision, type ProbeRun } from "./probe-panel";
 import {
+  PROJECT_RELEASE_AGENT_RESUME_INSTRUCTION,
+  ProjectReleaseDownloadRequestGate,
   ProjectReleaseConfirmationRequestGate,
+  projectReleaseActionBlocked,
+  projectReleaseActionBlockers,
   projectReleaseConfirmationPreferencesComplete,
+  type ProjectReleaseAction,
+  type ProjectReleaseActionBlockers,
+  type ProjectReleaseAuthorityBlocker,
 } from "./project-release-confirmation-ui";
 import {
   StoryChapterEditor,
@@ -62,6 +70,7 @@ import {
   StoryReviewSessionPersistenceQueue,
   runDurableStoryReviewHandoff,
   type StoryReviewSessionSaveAcknowledgement,
+  type StoryReviewSessionPersistenceStatus,
 } from "../lib/story-review-session-persistence";
 import {
   isStoryReviewReady,
@@ -148,7 +157,7 @@ const workspaceUi = {
     before:"BEFORE", after:"AFTER", timelineAiInsight:"AI Insight", evidence:"reviewed evidence event", read:"Read chapter", workflow:"Workflow",
     nextStep:"Read a Chapter to review the full story, evidence, direct learning, and reusable rules.",
     confirmRelease:"Confirm ready for release", confirmingRelease:"Confirming release readiness…", releaseConfirmed:"Ready for release confirmed",
-    downloadReviewKicker:"Review required", downloadReviewTitle:"Review before download", downloadReviewIntro:"Complete these Chapter review items, then try the download again.", downloadReviewCount:"unresolved review items", openReview:"Open review", close:"Close", chapter:"Chapter",
+    downloadReviewKicker:"Review required", downloadReviewTitle:"Release action blocked", downloadReviewIntro:"Use these content-free diagnostics to return to the existing review authority.", downloadReviewCount:"unresolved review items", openReview:"Open review", close:"Close", chapter:"Chapter", agentRecovery:"Agent recovery instruction",
     downloadBlockers:{
       review_state_invalid:"Review state needs attention", privacy_incomplete:"Privacy review is incomplete", evidence_unverified:"Evidence review is incomplete",
       annotation_pending:"A Story review change still needs Apply Review", annotation_needs_evidence:"A Story review change needs Evidence",
@@ -158,6 +167,16 @@ const workspaceUi = {
       ai_insight_decision_missing:"An AI Insight decision is missing", ai_insight_decision_pending:"An AI Insight decision still needs Apply Review",
       ai_insight_reaccept_required:"An edited AI Insight requires a new Accept", human_insight_pending:"A human-created Insight still needs Save",
       chapter_not_confirmed:"Chapter is not marked All set",
+    },
+    releaseAuthorityBlockers:{
+      story_privacy_unresolved:"Story Privacy has unresolved target selections",
+      story_privacy_preparation_required:"Story Privacy preparation must be refreshed",
+      story_privacy_unavailable:"Current Story Privacy authority is unavailable",
+      preference_unanswered:"Current Preference questions are unanswered",
+      preference_stale:"Preference authority is stale",
+      preference_missing:"Preference authority is missing",
+      review_authority_mismatch:"Story review persistence does not match current authority",
+      release_confirmation_missing:"Durable release confirmation is missing",
     },
   },
   zh: {
@@ -169,7 +188,7 @@ const workspaceUi = {
     before:"之前", after:"之后", timelineAiInsight:"AI 洞察", evidence:"条已审阅证据", read:"阅读章节", workflow:"工作流",
     nextStep:"阅读任一章节，完整审阅故事、证据、直接经验与可复用规则。",
     confirmRelease:"确认已准备发布", confirmingRelease:"正在确认发布准备状态…", releaseConfirmed:"已确认准备发布",
-    downloadReviewKicker:"需要审阅", downloadReviewTitle:"下载前请完成审阅", downloadReviewIntro:"请完成以下章节审阅项，然后再次尝试下载。", downloadReviewCount:"项待解决审阅", openReview:"打开审阅", close:"关闭", chapter:"章节",
+    downloadReviewKicker:"需要审阅", downloadReviewTitle:"发布操作已阻止", downloadReviewIntro:"请使用以下不含内容的诊断返回现有审阅授权。", downloadReviewCount:"项待解决审阅", openReview:"打开审阅", close:"关闭", chapter:"章节", agentRecovery:"Agent 恢复指令",
     downloadBlockers:{
       review_state_invalid:"审阅状态需要处理", privacy_incomplete:"隐私审阅尚未完成", evidence_unverified:"证据审阅尚未完成",
       annotation_pending:"故事审阅改动仍需应用审阅", annotation_needs_evidence:"故事审阅改动需要证据",
@@ -179,6 +198,16 @@ const workspaceUi = {
       ai_insight_decision_missing:"缺少一项 AI 洞察决定", ai_insight_decision_pending:"一项 AI 洞察决定仍需应用审阅",
       ai_insight_reaccept_required:"编辑后的 AI 洞察需要重新接受", human_insight_pending:"人工创建的洞察仍需保存",
       chapter_not_confirmed:"本章尚未确认完成",
+    },
+    releaseAuthorityBlockers:{
+      story_privacy_unresolved:"Story Privacy 仍有未选择的目标",
+      story_privacy_preparation_required:"需要刷新 Story Privacy 准备",
+      story_privacy_unavailable:"当前 Story Privacy 授权不可用",
+      preference_unanswered:"当前偏好问题尚未回答",
+      preference_stale:"偏好授权已过期",
+      preference_missing:"缺少偏好授权",
+      review_authority_mismatch:"故事审阅持久化与当前授权不匹配",
+      release_confirmation_missing:"缺少持久发布确认",
     },
   },
 } as const;
@@ -240,7 +269,10 @@ export function InlineWorkspace({
   const [storyDataReadyRunId,setStoryDataReadyRunId] = useState(initialStorySessionReadyRunId);
   const [storySessionReadyRunId,setStorySessionReadyRunId] = useState(initialStorySessionReadyRunId);
   const [storyPersistenceReadyRunId,setStoryPersistenceReadyRunId] = useState("");
-  const [downloadBlockerGroups,setDownloadBlockerGroups] = useState<DownloadReviewBlockerGroup[]>([]);
+  const [storyPersistenceStatus,setStoryPersistenceStatus] = useState<StoryReviewSessionPersistenceStatus>("failed");
+  const [releaseBlockers,setReleaseBlockers] = useState<ProjectReleaseActionBlockers|null>(null);
+  const releaseBlockerDialogRef = useRef<HTMLElement|null>(null);
+  const releaseBlockerReturnFocusRef = useRef<HTMLElement|null>(null);
   const [downloadReviewFocus,setDownloadReviewFocus] = useState<StoryReviewFocusTarget|null>(null);
   const timelineScrollRef = useRef<HTMLDivElement|null>(null);
   const phaseSectionRefs = useRef(new Map<number,HTMLElement>());
@@ -276,11 +308,13 @@ export function InlineWorkspace({
   const [storyPrivacyBusy,setStoryPrivacyBusy] = useState("");
   const [storyPrivacyRequests] = useState(() => new StoryPrivacyRequestGate());
   const [releaseConfirmationRequests] = useState(() => new ProjectReleaseConfirmationRequestGate());
+  const [releaseDownloadRequests] = useState(() => new ProjectReleaseDownloadRequestGate());
   const [releaseConfirmationBusyRunId,setReleaseConfirmationBusyRunId] = useState("");
+  const [releaseDownloadBusy,setReleaseDownloadBusy] = useState<ProjectReleaseAction|null>(null);
   const redactionJobStatus = redactionJob?.status;
-  const storyPersistenceRef = useRef<StoryReviewSessionPersistenceQueue|null>(null);
-  if (storyPersistenceRef.current == null) {
-    storyPersistenceRef.current = new StoryReviewSessionPersistenceQueue({
+  const loadStoryPrivacyRef = useRef<null | ((message?: string, replace?: boolean) => Promise<unknown>)>(null);
+  const refreshStoryPrivacyAfterPersistenceRef = useRef(false);
+  const [storyPersistence] = useState(() => new StoryReviewSessionPersistenceQueue({
       save: async (request) => {
         const response = await fetch("/api/story-review-session", {
           method:"POST",
@@ -298,6 +332,7 @@ export function InlineWorkspace({
         return payload as StoryReviewSessionSaveAcknowledgement;
       },
       onStatus: (persistence) => {
+        setStoryPersistenceStatus(persistence.status);
         if (persistence.status === "conflict") {
           setStoryPersistenceReadyRunId("");
           setError("Story review changed or its source was replaced. Reload before continuing.");
@@ -306,8 +341,7 @@ export function InlineWorkspace({
           setError("Story review state could not be safely persisted");
         }
       },
-    });
-  }
+    }));
 
   const loadWorkflow = useCallback(async (signal?: AbortSignal) => {
     const query = scopedWorkflowRunId
@@ -340,7 +374,30 @@ export function InlineWorkspace({
     return () => polling.retire();
   }, [loadWorkflow]);
 
-  useEffect(() => () => releaseConfirmationRequests.retire(), [releaseConfirmationRequests, workflowRunId]);
+  useEffect(() => () => {
+    releaseConfirmationRequests.retire();
+    releaseDownloadRequests.retire();
+  }, [releaseConfirmationRequests, releaseDownloadRequests, workflowRunId]);
+
+  useEffect(() => {
+    if (releaseBlockers) releaseBlockerDialogRef.current?.focus({preventScroll:true});
+  }, [releaseBlockers]);
+
+  useEffect(() => {
+    if (!workflowRunId || !storyReviewReady || storySessionReadyRunId !== workflowRunId) {
+      refreshStoryPrivacyAfterPersistenceRef.current = false;
+    }
+  }, [storyReviewReady, storySessionReadyRunId, workflowRunId]);
+
+  useEffect(() => {
+    if (storyPersistenceStatus !== "durable"
+      || !refreshStoryPrivacyAfterPersistenceRef.current) return;
+    refreshStoryPrivacyAfterPersistenceRef.current = false;
+    void loadStoryPrivacyRef.current?.(
+      "The durable applied review was checked against the current release targets.",
+      true,
+    );
+  }, [storyPersistenceStatus]);
 
   const loadRedactions = useCallback(async () => {
     const response = await fetch("/api/redactions", { cache:"no-store" });
@@ -468,7 +525,7 @@ export function InlineWorkspace({
       storyDataLoadingRunRef.current = "";
       storySessionLoadingRunRef.current = "";
       storySessionHydratedRunRef.current = "";
-      if (storyPersistenceReadyRunRef.current) storyPersistenceRef.current?.invalidate();
+      if (storyPersistenceReadyRunRef.current) storyPersistence.invalidate();
       storyPersistenceReadyRunRef.current = "";
       return;
     }
@@ -496,7 +553,7 @@ export function InlineWorkspace({
     };
     void loadActivatedStory();
     return () => { cancelled = true; };
-  }, [loadDocs, storyDataReadyRunId, storyReviewReady, workflowRunId]);
+  }, [loadDocs, storyDataReadyRunId, storyPersistence, storyReviewReady, workflowRunId]);
 
   useEffect(() => {
     if (!selected || selected.startsWith("project:")) return;
@@ -566,6 +623,12 @@ export function InlineWorkspace({
       storyPrivacyRequests.finish(request);
     }
   }, [scopedWorkflowRunId, storyPrivacyRequests]);
+  useEffect(() => {
+    loadStoryPrivacyRef.current = loadStoryPrivacy;
+    return () => {
+      if (loadStoryPrivacyRef.current === loadStoryPrivacy) loadStoryPrivacyRef.current = null;
+    };
+  }, [loadStoryPrivacy]);
 
   const storyPrivacyEligible = storyReviewReady && storyReady
     && storyDataReadyRunId === workflowRunId && Boolean(scopedWorkflowRunId);
@@ -595,8 +658,16 @@ export function InlineWorkspace({
     && presentedStoryPrivacy.authority.workflowRunId === workflowRunId
     ? presentedStoryPrivacy.authority
     : null;
-  const storyPrivacyReleaseReady = presentedStoryPrivacy.status === "ready"
+  const storyPrivacyAuthorityIsCurrent = storyPrivacyAuthorityCurrent(
+    presentedStoryPrivacy,
+    workflowRunId,
+  );
+  const storyPrivacyReviewApplicable = storyPrivacyAuthorityIsCurrent;
+  const storyPrivacyReleaseComplete = storyPrivacyAuthorityIsCurrent
     && storyPrivacyAuthorityComplete(currentStoryPrivacyAuthority);
+  const storyPrivacyResolved = currentStoryPrivacyAuthority?.candidates
+    .filter(storyPrivacyCandidateResolved).length || 0;
+  const storyPrivacyTotal = currentStoryPrivacyAuthority?.candidates.length || 0;
 
   const decideStoryPrivacyTarget = async (
     target: StoryPrivacyTarget,
@@ -708,7 +779,7 @@ export function InlineWorkspace({
           throw new Error("Story review session does not match the exact current source");
         }
         if (!cancelled) {
-          storyPersistenceRef.current?.initialize({
+          storyPersistence.initialize({
             workflowRunId,
             serverVersion: Number(payload.serverVersion),
             sourceRevision: Number(payload.sourceRevision),
@@ -735,7 +806,7 @@ export function InlineWorkspace({
       cancelled = true;
       if (storySessionLoadingRunRef.current === workflowRunId) storySessionLoadingRunRef.current = "";
     };
-  }, [docs.length, status?.documentCount, status?.status, storyDataReadyRunId, storyReady, storyReviewReady, storySelection, workflow.storySessionSchema, workflow.storySourceSchema, workflowRunId]);
+  }, [docs.length, status?.documentCount, status?.status, storyDataReadyRunId, storyPersistence, storyReady, storyReviewReady, storySelection, workflow.storySessionSchema, workflow.storySourceSchema, workflowRunId]);
 
   useEffect(() => {
     if (!workflowRunId || storySessionReadyRunId !== workflowRunId
@@ -746,8 +817,8 @@ export function InlineWorkspace({
       const errorTimer = setTimeout(() => setError("Story review state could not be safely persisted"), 0);
       return () => clearTimeout(errorTimer);
     }
-    storyPersistenceRef.current?.schedule(session);
-  }, [chapterReviews, storySessionReadyRunId, workflowRunId]);
+    storyPersistence.schedule(session);
+  }, [chapterReviews, storyPersistence, storySessionReadyRunId, workflowRunId]);
 
   const storyWorkspaceReady = isStoryWorkspaceReady(workflow, {
     storyDataReadyRunId,
@@ -913,7 +984,19 @@ export function InlineWorkspace({
       document.getElementById(`story-open-${context.key}`)?.focus({preventScroll:true});
     });
   };
-  const updateChapterReview = (storyKey:string,review:ChapterReviewState) => setChapterReviews((current) => ({...current,[storyKey]:review}));
+  const updateChapterReview = (
+    storyKey:string,
+    review:ChapterReviewState,
+  ) => {
+    const previous=currentStoryStateRef.current.chapterReviews[storyKey];
+    if (previous && review.revision > previous.revision) {
+      refreshStoryPrivacyAfterPersistenceRef.current = true;
+      storyPrivacyRequests.retire();
+      setStoryPrivacyRunId(workflowRunId);
+      setStoryPrivacy({ status:"loading", authority:null, message:"" });
+    }
+    setChapterReviews((current) => ({...current,[storyKey]:review}));
+  };
   const currentDownloadReviewBlockerGroups = () => groupDownloadReviewBlockers(storySelection.chapters.map((chapter) => {
       const state=chapterReviews[chapter.source.key] || emptyChapterReview(chapter.source);
       return {
@@ -923,27 +1006,60 @@ export function InlineWorkspace({
         completionBlockers:chapterReviewCompletionBlockers(state,completionContext(chapter.source)),
       };
     }));
-  const allCurrentChaptersConfirmed = storySelection.chapters.length > 0
-    && currentDownloadReviewBlockerGroups().length === 0;
   const allCurrentPreferencesComplete = preferenceLifecycleCurrent && !probes.some((probe) =>
     probe.lifecycle_status !== "active" && probe.lifecycle_status !== "inactive" && probe.lifecycle_status !== "history")
     && ((probes: Probe[]) => projectReleaseConfirmationPreferencesComplete(probeRun, probes, bulkDecisions))
       (probes.filter((probe) => probe.lifecycle_status === "active"));
   const releaseConfirmed = workflow.releaseConfirmed === true;
   const releaseConfirmationBusy = releaseConfirmationBusyRunId === workflowRunId;
-  const releaseConfirmationEligible = allCurrentChaptersConfirmed
-    && storyPrivacyReleaseReady
-    && allCurrentPreferencesComplete
-    && !probeBusy
-    && !storyPrivacyBusy
-    && storySessionReadyRunId === workflowRunId
-    && storyPersistenceReadyRunId === workflowRunId;
-  const projectReleaseReady = releaseConfirmed && releaseConfirmationEligible && !releaseConfirmationBusy;
+  const reviewAuthorityCurrent = storySessionReadyRunId === workflowRunId
+    && storyPersistenceReadyRunId === workflowRunId
+    && storyPersistenceStatus === "durable";
+  const storyPrivacyReleaseState = storyPrivacyReleaseComplete ? "complete"
+    : storyPrivacyAuthorityIsCurrent ? "unresolved"
+      : currentStoryPrivacyAuthority?.status === "preparation_required"
+        ? "preparation_required" : "unavailable";
+  const preferenceReleaseState = !probeRun ? "missing"
+    : !preferenceLifecycleCurrent ? "stale"
+      : allCurrentPreferencesComplete ? "complete" : "unanswered";
+  const currentProjectReleaseActionBlockers = (action:ProjectReleaseAction) => (
+    projectReleaseActionBlockers({
+      action,
+      chapterGroups:currentDownloadReviewBlockerGroups(),
+      storyPrivacy:storyPrivacyReleaseState,
+      preferences:preferenceReleaseState,
+      reviewAuthorityCurrent,
+      releaseConfirmed,
+    })
+  );
+  const confirmReleaseBlockers = currentProjectReleaseActionBlockers("confirm");
+  const htmlReleaseBlockers = currentProjectReleaseActionBlockers("download_html");
+  const zipReleaseBlockers = currentProjectReleaseActionBlockers("download_zip");
+  const releaseConfirmationEligible = !projectReleaseActionBlocked(confirmReleaseBlockers)
+    && !probeBusy && !storyPrivacyBusy;
+  const releaseActionsBusy = releaseConfirmationBusy || releaseDownloadBusy !== null
+    || Boolean(probeBusy) || Boolean(storyPrivacyBusy) || presentedStoryPrivacy.status === "loading"
+    || storyPersistenceStatus === "dirty" || storyPersistenceStatus === "saving";
   const activePreferences=probes.filter((probe)=>probe.lifecycle_status==="active");
+  const openReleaseBlockerDialog = (blockers:ProjectReleaseActionBlockers) => {
+    const activeElement=document.activeElement;
+    releaseBlockerReturnFocusRef.current=activeElement instanceof HTMLElement ? activeElement : null;
+    setReleaseBlockers(blockers);
+  };
+  const closeReleaseBlockerDialog = (restoreFocus=true) => {
+    const returnFocus=restoreFocus ? releaseBlockerReturnFocusRef.current : null;
+    releaseBlockerReturnFocusRef.current=null;
+    setReleaseBlockers(null);
+    if (returnFocus?.isConnected) {
+      setTimeout(() => returnFocus.focus({preventScroll:true}),0);
+    }
+  };
   const confirmProjectRelease = async () => {
     setError("");
-    if (!releaseConfirmationEligible || releaseConfirmed) {
-      setError("Complete every current Chapter, Story Privacy decision, and Preference answer before confirming ready for release");
+    if (releaseConfirmed) return;
+    const blockers=currentProjectReleaseActionBlockers("confirm");
+    if (projectReleaseActionBlocked(blockers)) {
+      openReleaseBlockerDialog(blockers);
       return;
     }
     const request=releaseConfirmationRequests.begin(workflowRunId);
@@ -951,7 +1067,7 @@ export function InlineWorkspace({
     setReleaseConfirmationBusyRunId(workflowRunId);
     const rehydrateCurrentAuthority = async () => {
       storyPrivacyRequests.retire();
-      storyPersistenceRef.current?.invalidate();
+      storyPersistence.invalidate();
       storyPersistenceReadyRunRef.current="";
       setStoryPersistenceReadyRunId("");
       storySessionHydratedRunRef.current="";
@@ -967,8 +1083,8 @@ export function InlineWorkspace({
       }
     };
     try {
-      const persistence=storyPersistenceRef.current;
-      if (!persistence || storyPersistenceReadyRunRef.current !== workflowRunId) {
+      const persistence=storyPersistence;
+      if (storyPersistenceReadyRunRef.current !== workflowRunId) {
         throw new Error("Story review persistence is not ready for final release confirmation");
       }
       const response=await runDurableStoryReviewHandoff({
@@ -1012,7 +1128,7 @@ export function InlineWorkspace({
     }
   };
   const openDownloadReviewBlocker = (group:DownloadReviewBlockerGroup,blocker:DownloadReviewBlocker) => {
-    setDownloadBlockerGroups([]);
+    closeReleaseBlockerDialog(false);
     if(!navigationCandidates.some((chapter) => chapter.project===group.project && chapter.story.key===group.chapterKey)) return;
     releasePreviewReturnSelectionRef.current=null;
     setSourceFocus("");
@@ -1025,34 +1141,45 @@ export function InlineWorkspace({
     });
     setStoryNavigation({project:group.project,storyKey:group.chapterKey});
   };
-  const downloadReviewed = async (url:string,filename:string) => {
-    setError("");
-    if (!releaseConfirmed) {
-      setError("Confirm ready for release before download");
-      return;
-    }
-    if (!allCurrentPreferencesComplete) {
-      setError("Complete every current Preference answer and confirm ready for release again before download");
-      return;
-    }
-    if (!storyPrivacyReleaseReady) {
-      setError("Resolve the current Story Privacy authority in Release Preview before download");
+  const openReleaseAuthorityBlocker = (blocker:ProjectReleaseAuthorityBlocker) => {
+    closeReleaseBlockerDialog(false);
+    if (blocker.destination === "release_preview") {
       openGlobalStoryPrivacy();
       return;
     }
-    const blockerGroups=currentDownloadReviewBlockerGroups();
-    if(blockerGroups.length) {
-      setDownloadBlockerGroups(blockerGroups);
+    if (blocker.destination === "preferences") {
+      restoreReleasePreviewSelection();
+      setView("probes");
       return;
     }
-    const persistence=storyPersistenceRef.current;
-    if (!persistence || storyPersistenceReadyRunRef.current !== workflowRunId) {
+    if (blocker.destination === "story_review") {
+      const first=storySelection.chapters[0];
+      if (first) {
+        setView("timeline");
+        setStoryNavigation({project:first.project,storyKey:first.source.key});
+      }
+      return;
+    }
+    setTimeout(() => document.getElementById("confirm-project-release")?.focus({preventScroll:true}),0);
+  };
+  const downloadReviewed = async (action:ProjectReleaseAction,url:string,filename:string) => {
+    setError("");
+    const blockers=currentProjectReleaseActionBlockers(action);
+    if(projectReleaseActionBlocked(blockers)) {
+      openReleaseBlockerDialog(blockers);
+      return;
+    }
+    if (!releaseDownloadRequests.begin(action)) return;
+    setReleaseDownloadBusy(action);
+    const persistence=storyPersistence;
+    if (storyPersistenceReadyRunRef.current !== workflowRunId) {
       setError("Story review persistence is not ready for handoff");
+      releaseDownloadRequests.finish(action);
+      setReleaseDownloadBusy(null);
       return;
     }
-    let response:Response;
     try {
-      response=await runDurableStoryReviewHandoff({
+      const response=await runDurableStoryReviewHandoff({
         persistence,
         currentSession: () => {
           const current=currentStoryStateRef.current;
@@ -1064,19 +1191,21 @@ export function InlineWorkspace({
           body:JSON.stringify({workflowRunId,serverVersion,sourceRevision}),
         }),
       });
+      if(!response.ok) {
+        const failure=await response.json().catch(()=>({error:"Download failed"})) as {error?:string};
+        setError(failure.error || "Download failed");
+        return;
+      }
+      const href=URL.createObjectURL(await response.blob());
+      const anchor=document.createElement("a");
+      anchor.href=href;anchor.download=filename;anchor.click();
+      URL.revokeObjectURL(href);
     } catch (value) {
       setError(value instanceof Error ? value.message : "Story review state could not be safely persisted");
-      return;
+    } finally {
+      releaseDownloadRequests.finish(action);
+      setReleaseDownloadBusy(null);
     }
-    if(!response.ok) {
-      const failure=await response.json().catch(()=>({error:"Download failed"})) as {error?:string};
-      setError(failure.error || "Download failed");
-      return;
-    }
-    const href=URL.createObjectURL(await response.blob());
-    const anchor=document.createElement("a");
-    anchor.href=href;anchor.download=filename;anchor.click();
-    URL.revokeObjectURL(href);
   };
   const ready = isProject || Boolean(detail);
   const startResize = (event:ReactPointerEvent<HTMLDivElement>) => {
@@ -1093,7 +1222,10 @@ export function InlineWorkspace({
     window.addEventListener("pointermove",move);window.addEventListener("pointerup",stop);
   };
   const workspaceStyle={"--rail-width":`${railWidth}px`,"--rail-height":`${railHeight}px`} as CSSProperties;
-  const downloadBlockerCount=downloadBlockerGroups.reduce((count,group) => count+group.blockers.length,0);
+  const releaseBlockerCount=(releaseBlockers?.chapterGroups.reduce(
+    (count,group) => count+group.blockers.length,
+    0,
+  ) || 0)+(releaseBlockers?.authority.length || 0);
 
   return <main className="shell storytellingShell">
     <header className="topbar">
@@ -1106,11 +1238,11 @@ export function InlineWorkspace({
         <span>|</span>
         <button className={storyLanguage==="zh"?"active":""} onClick={() => setLanguage("zh")} aria-pressed={storyLanguage==="zh"}>中文</button>
       </div>
-      <button className="download" disabled={releaseConfirmationBusy || releaseConfirmed || !releaseConfirmationEligible} onClick={() => { void confirmProjectRelease(); }}>
+      <button id="confirm-project-release" className="download" disabled={releaseActionsBusy || releaseConfirmed} aria-disabled={!releaseConfirmed && !releaseConfirmationEligible} onClick={() => { void confirmProjectRelease(); }}>
         {releaseConfirmationBusy?labels.confirmingRelease:releaseConfirmed?labels.releaseConfirmed:labels.confirmRelease}
       </button>
-      <button className="download" disabled={!projectReleaseReady} title={!releaseConfirmed?"Confirm ready for release first":undefined} onClick={() => downloadReviewed("/api/organization/export","oxygen-reviewed-story.html")}>Download HTML</button>
-      <button className="download primary" disabled={!projectReleaseReady} title={!releaseConfirmed?"Confirm ready for release first":undefined} onClick={() => downloadReviewed("/api/package","oxygen-contribution.zip")}>Download ZIP</button>
+      <button className="download" disabled={releaseActionsBusy} aria-disabled={projectReleaseActionBlocked(htmlReleaseBlockers)} onClick={() => { void downloadReviewed("download_html","/api/organization/export","oxygen-reviewed-story.html"); }}>Download HTML</button>
+      <button className="download primary" disabled={releaseActionsBusy} aria-disabled={projectReleaseActionBlocked(zipReleaseBlockers)} onClick={() => { void downloadReviewed("download_zip","/api/package","oxygen-contribution.zip"); }}>Download ZIP</button>
     </header>
     <div className={`workspace storytellingWorkspace ${activeChapter?"episodeOpen":""}`} style={workspaceStyle}>
       <aside className="rail storyRail">
@@ -1225,9 +1357,13 @@ export function InlineWorkspace({
             chapterReview={chapterReviews[activeSourceChapter.source.key] || emptyChapterReview(activeSourceChapter.source)}
             reviewFocus={downloadReviewFocus?.chapterKey===activeSourceChapter.source.key ? downloadReviewFocus : undefined}
             onReviewFocusHandled={clearDownloadReviewFocus}
-            storyPrivacyState={presentedStoryPrivacy.status}
+            storyPrivacyStatus={currentStoryPrivacyAuthority?.status === "preparation_required"
+              ? "preparation_required" : presentedStoryPrivacy.status}
             storyPrivacyCandidates={activeChapterPrivacyCandidates}
-            storyPrivacyReady={storyPrivacyReleaseReady}
+            storyPrivacyCurrent={storyPrivacyReviewApplicable}
+            storyPrivacyComplete={storyPrivacyReleaseComplete}
+            storyPrivacyResolved={storyPrivacyResolved}
+            storyPrivacyTotal={storyPrivacyTotal}
             onOpenStoryPrivacy={openGlobalStoryPrivacy}
             onChapterReview={(review) => updateChapterReview(activeSourceChapter.source.key,review)}
             onClose={closeStory}
@@ -1237,22 +1373,28 @@ export function InlineWorkspace({
         </>}
       </section>
     </div>
-    {downloadBlockerGroups.length > 0 && <div className="workflowOverlay" onMouseDown={(event) => {
-      if(event.target===event.currentTarget) setDownloadBlockerGroups([]);
+    {releaseBlockers && <div className="workflowOverlay" onMouseDown={(event) => {
+      if(event.target===event.currentTarget) closeReleaseBlockerDialog();
     }}>
-      <section className="organizationCard workflowCard" role="dialog" aria-modal="true" aria-labelledby="download-review-title">
-        <button className="workflowClose" onClick={() => setDownloadBlockerGroups([])} aria-label={labels.close}>×</button>
+      <section ref={releaseBlockerDialogRef} className="organizationCard workflowCard" role="dialog" aria-modal="true" aria-labelledby="download-review-title" tabIndex={-1}>
+        <button className="workflowClose" onClick={() => closeReleaseBlockerDialog()} aria-label={labels.close}>×</button>
         <div className="organizationBrand"><span className="brandMark">O₂</span> Oxygen</div>
         <div className="organizationKicker">{labels.downloadReviewKicker}</div>
         <h1 id="download-review-title">{labels.downloadReviewTitle}</h1>
         <p className="organizationIntro">{labels.downloadReviewIntro}</p>
-        <p className="workflowStatus">{downloadBlockerCount} {labels.downloadReviewCount}</p>
-        <div>{downloadBlockerGroups.map((group,groupIndex) => <section key={`${group.project}:${group.chapterKey}`}>
+        <p className="workflowStatus">{releaseBlockerCount} {labels.downloadReviewCount}</p>
+        <div>{releaseBlockers.chapterGroups.map((group,groupIndex) => <section key={`${group.project}:${group.chapterKey}`}>
           <h2>{labels.chapter} {groupIndex+1}</h2>
           {group.blockers.map((blocker,index) => <button className="docCard" key={`${blocker.code}:${blocker.targetKind}:${blocker.targetId || ""}:${blocker.itemId || ""}:${index}`} onClick={() => openDownloadReviewBlocker(group,blocker)}>
             <span className="docTitle">{labels.downloadBlockers[blocker.code]}</span><span className="kind">{labels.openReview}</span><small>{labels.openReview} →</small>
           </button>)}
-        </section>)}</div>
+        </section>)}{releaseBlockers.authority.map((blocker) => <button className="docCard releaseAuthorityBlocker" key={blocker.code} onClick={() => openReleaseAuthorityBlocker(blocker)}>
+          <span className="docTitle">{labels.releaseAuthorityBlockers[blocker.code]}</span><span className="kind">{labels.openReview}</span><small>{labels.openReview} →</small>
+        </button>)}</div>
+        {releaseBlockers.requiresAgentRecovery && <section className="releaseAgentRecovery">
+          <h2>{labels.agentRecovery}</h2>
+          <textarea readOnly value={PROJECT_RELEASE_AGENT_RESUME_INSTRUCTION} aria-label={labels.agentRecovery} />
+        </section>}
       </section>
     </div>}
     {workflowOpen && <WorkflowProgress workflow={displayedWorkflow} status={status} error={effectiveError} language={storyLanguage} onClose={() => setWorkflowOpen(false)} />}

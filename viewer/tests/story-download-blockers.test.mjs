@@ -127,23 +127,25 @@ test("HTML and ZIP share one blocker preflight before the durable handoff", asyn
   assert.match(aggregation, /storySelection\.chapters\.map/);
   assert.match(aggregation, /chapterReviewCompletionBlockers\(state,completionContext\(chapter\.source\)\)/);
   assert.match(aggregation, /groupDownloadReviewBlockers/);
-  assert.ok(download.indexOf("currentDownloadReviewBlockerGroups") < download.indexOf("storyPersistenceRef.current"));
-  assert.ok(download.indexOf("if(blockerGroups.length)") < download.indexOf("runDurableStoryReviewHandoff"));
-  assert.match(download, /if\(blockerGroups\.length\) \{[\s\S]*setDownloadBlockerGroups\(blockerGroups\);[\s\S]*return;/);
-  assert.match(workspace, /downloadReviewed\("\/api\/organization\/export","oxygen-reviewed-story\.html"\)/);
-  assert.match(workspace, /downloadReviewed\("\/api\/package","oxygen-contribution\.zip"\)/);
+  assert.ok(download.indexOf("currentProjectReleaseActionBlockers") < download.indexOf("const persistence=storyPersistence"));
+  assert.ok(download.indexOf("projectReleaseActionBlocked") < download.indexOf("runDurableStoryReviewHandoff"));
+  assert.match(download, /projectReleaseActionBlocked\(blockers\)[\s\S]*openReleaseBlockerDialog\(blockers\);[\s\S]*return;/);
+  assert.match(workspace, /downloadReviewed\("download_html","\/api\/organization\/export","oxygen-reviewed-story\.html"\)/);
+  assert.match(workspace, /downloadReviewed\("download_zip","\/api\/package","oxygen-contribution\.zip"\)/);
   assert.match(download, /JSON\.stringify\(\{workflowRunId,serverVersion,sourceRevision\}\)/);
   assert.doesNotMatch(download, /blockerGroups[^\n]*JSON\.stringify|reviewedStory|chapterReviews[^\n]*JSON\.stringify/);
 });
 
 test("blocker surface groups safe ordinal labels and exposes only focused actions", async () => {
   const workspace = await read("../app/workspace.tsx");
-  const surface = workspace.slice(workspace.indexOf("downloadBlockerGroups.length > 0"), workspace.indexOf("workflowOpen &&"));
+  const surface = workspace.slice(workspace.indexOf("releaseBlockers &&"), workspace.indexOf("workflowOpen &&"));
   assert.match(surface, /role="dialog" aria-modal="true" aria-labelledby="download-review-title"/);
-  assert.match(surface, /downloadBlockerGroups\.map\(\(group,groupIndex\) => <section/);
+  assert.match(surface, /releaseBlockers\.chapterGroups\.map\(\(group,groupIndex\) => <section/);
   assert.match(surface, /<h2>\{labels\.chapter\} \{groupIndex\+1\}<\/h2>/);
   assert.match(surface, /group\.blockers\.map[\s\S]*<button className="docCard"/);
   assert.match(surface, /labels\.downloadBlockers\[blocker\.code\]/);
+  assert.match(surface, /releaseBlockers\.authority\.map/);
+  assert.match(surface, /PROJECT_RELEASE_AGENT_RESUME_INSTRUCTION/);
   assert.doesNotMatch(surface, /instruction|beforeText|afterText|original|excerpt|localized|serverVersion|sourceRevision|group\.title/);
   assert.match(workspace, /chapter:"Chapter"/);
   assert.match(workspace, /chapter:"章节"/);

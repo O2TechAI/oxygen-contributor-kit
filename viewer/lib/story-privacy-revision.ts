@@ -197,8 +197,7 @@ export async function reconstructReviewedStoryPrivacyRevision(
     }
     const hydrated = hydrateStoryReviewSession(sessionRecord.session, workflowRunId, exactSources);
     const keys = exactSources.map((source) => source.key).sort(compareUtf8);
-    if (Object.keys(hydrated.chapterReviews).sort(compareUtf8).join("\n") !== keys.join("\n")
-      || keys.some((key) => hydrated.chapterReviews[key]?.stage !== "human_confirmed")) {
+    if (Object.keys(hydrated.chapterReviews).sort(compareUtf8).join("\n") !== keys.join("\n")) {
       return { ok: false, code: STORY_PRIVACY_REVISION_ERROR.reviewIncomplete };
     }
     reviews = hydrated.chapterReviews;

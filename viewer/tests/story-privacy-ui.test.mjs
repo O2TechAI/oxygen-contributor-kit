@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import {
   chapterStoryPrivacyCandidates,
   parseStoryPrivacyAuthority,
+  storyPrivacyApplyBlockerCopy,
+  storyPrivacyAuthorityCurrent,
   storyPrivacyAuthorityComplete,
   storyPrivacyCandidateResolved,
   StoryPrivacyRequestGate,
@@ -64,6 +66,8 @@ const clone = (value) => structuredClone(value);
 
 test("Story Privacy UI accepts exact target authority and total completed-empty state", () => {
   assert.deepEqual(parseStoryPrivacyAuthority(authority), authority);
+  assert.equal(storyPrivacyAuthorityCurrent({status:"ready",authority,message:""},"run-current"),true);
+  assert.equal(storyPrivacyAuthorityCurrent({status:"ready",authority,message:""},"foreign-run"),false);
   assert.equal(storyPrivacyAuthorityComplete(authority), false);
   assert.equal(parseStoryPrivacyAuthority({ ...authority, privateOriginal:"PRIVATE_ORIGINAL" }), null);
   assert.equal(parseStoryPrivacyAuthority({ ...authority, sourceRevision:Number.MAX_SAFE_INTEGER + 1 }), null);
@@ -85,7 +89,17 @@ test("Story Privacy UI accepts exact target authority and total completed-empty 
   assert.equal(storyPrivacyAuthorityComplete(empty), true);
   const preparationRequired = { ...authority, authorityDigest:"d".repeat(64), status:"preparation_required" };
   assert.deepEqual(parseStoryPrivacyAuthority(preparationRequired), preparationRequired);
+  assert.equal(storyPrivacyAuthorityCurrent({
+    status:"ready",authority:preparationRequired,message:"",
+  },"run-current"),false);
   assert.equal(storyPrivacyAuthorityComplete(preparationRequired), false);
+  assert.match(storyPrivacyApplyBlockerCopy("loading"),/still loading.*Apply review is blocked/u);
+  assert.match(storyPrivacyApplyBlockerCopy("error"),/authority is unavailable.*Apply review is blocked/u);
+  assert.match(storyPrivacyApplyBlockerCopy("unavailable"),/authority is unavailable.*Apply review is blocked/u);
+  assert.match(storyPrivacyApplyBlockerCopy("preparation_required"),/must be refreshed.*Apply review is blocked/u);
+  assert.doesNotMatch([
+    "loading","error","unavailable","preparation_required",
+  ].map(storyPrivacyApplyBlockerCopy).join("\n"),/preparation_required|Current Story Privacy authority is error/u);
   const contractRefresh = {
     ...preparationRequired,
     authorityDigest: "e".repeat(64),
@@ -233,8 +247,12 @@ test("Workspace sends one exact target CAS, installs its response, and never ret
   assert.doesNotMatch(choice, /candidateDigest|expectedVersion|editedProjections|\/projection/);
   assert.doesNotMatch(workspace, /setPrivacyDecisions|current\.privacyDecisions/);
   assert.match(workspace, /createStoryReviewSession\(workflowRunId,current\.chapterReviews,\{\}\)/);
-  assert.match(workspace, /if \(!storyPrivacyReleaseReady\)[\s\S]*openGlobalStoryPrivacy\(\);[\s\S]*return;/);
-  assert.match(workspace, /storyPrivacyReady=\{storyPrivacyReleaseReady\}/);
+  assert.match(workspace, /storyPrivacyCurrent=\{storyPrivacyReviewApplicable\}/);
+  assert.match(workspace, /storyPrivacyComplete=\{storyPrivacyReleaseComplete\}/);
+  assert.match(workspace, /review\.revision > previous\.revision[\s\S]*refreshStoryPrivacyAfterPersistenceRef\.current = true[\s\S]*status:"loading"/);
+  assert.match(workspace, /storyPersistenceStatus !== "durable"[\s\S]*loadStoryPrivacyRef\.current/);
+  assert.match(workspace, /storySessionReadyRunId !== workflowRunId[\s\S]*refreshStoryPrivacyAfterPersistenceRef\.current = false/);
+  assert.doesNotMatch(workspace, /refreshStoryPrivacyAfterPersistenceRef\.current = true[\s\S]*review\.revision === previous\.revision/);
 });
 
 test("source Privacy remains decision-only and surfaces API failures", async () => {
@@ -257,8 +275,19 @@ test("Chapter completion consumes global target-choice references and retains pa
   assert.match(editor, /storyPrivacyCandidates\.map/);
   assert.match(editor, /candidate\.resolved/);
   assert.match(editor, /Open global Release Preview/);
-  assert.match(editor, /disabled=\{applying \|\| !storyPrivacyReady\}/);
-  assert.match(editor, /disabled=\{!storyPrivacyReady \|\| !canMarkChapterReady/);
+  assert.match(editor, /disabled=\{applying \|\| !storyPrivacyCurrent\}/);
+  assert.match(editor, /disabled=\{!storyPrivacyComplete \|\| !canMarkChapterReady/);
+  const apply=editor.slice(editor.indexOf("const applyReview"),editor.indexOf("return <section"));
+  assert.equal((apply.match(/fetch\("\/api\/evidence"/gu) || []).length,1);
+  assert.match(apply,/if \(!storyPrivacyCurrent\)[\s\S]*return;/u);
+  assert.doesNotMatch(apply,/if \(!chapterReview\.evidenceVerified\)|if \(!storyPrivacyComplete\)/u);
+  assert.match(editor, /Evidence will be checked when you Apply this review/);
+  assert.match(editor, /storyPrivacyApplyBlockerCopy\(storyPrivacyStatus\)/);
+  assert.doesNotMatch(editor, /authority is \{storyPrivacyStatus\}/);
+  assert.match(editor, /className="releasePreviewCta"/);
+  assert.match(editor, /storyPrivacyResolved\} \/ \$\{storyPrivacyTotal\} resolved/);
+  assert.match(css, /\.releasePreviewCta:hover/);
+  assert.match(css, /\.releasePreviewCta:focus-visible/);
   assert.match(css, /\.storyNarrativeRow\{display:grid;grid-template-columns:minmax\(0,720px\) minmax\(480px,620px\)/);
   assert.match(css, /@media\(max-width:760px\)[^\n]*\.sourcePrivacyComparison,\.storyPrivacyProjectionCompare\{grid-template-columns:minmax\(0,1fr\)\}/);
 });
