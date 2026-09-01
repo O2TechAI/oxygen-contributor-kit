@@ -82,7 +82,7 @@ finally {
 ## 格式对接
 
 - trajectory 输出遵守唯一的 unversioned Oxygen contract;
-- 会议输出的 `timestamped.txt`(`M:SSSpeaker A 文本`)就是 `oxygen/scripts/import_timestamped_meeting.py` 的输入格式,可直接入库 Inline;
+- 会议输出的 `timestamped.txt`(`M:SSSpeaker A 文本`)就是 `tools/ingest/import_meeting.py` 的输入格式,可直接入库 Inline;
 - claude.ai 导出的 schema 无官方保证,解析器是容错的,坏结构会记进 `index.json.warnings` 而不是崩;拿到真实导出后请再验证一轮。
 
 ## 隐私
