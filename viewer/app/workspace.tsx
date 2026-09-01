@@ -389,16 +389,6 @@ export function InlineWorkspace({
     }
   }, [storyReviewReady, storySessionReadyRunId, workflowRunId]);
 
-  useEffect(() => {
-    if (storyPersistenceStatus !== "durable"
-      || !refreshStoryPrivacyAfterPersistenceRef.current) return;
-    refreshStoryPrivacyAfterPersistenceRef.current = false;
-    void loadStoryPrivacyRef.current?.(
-      "The durable applied review was checked against the current release targets.",
-      true,
-    );
-  }, [storyPersistenceStatus]);
-
   const loadRedactions = useCallback(async () => {
     const response = await fetch("/api/redactions", { cache:"no-store" });
     if (!response.ok) {
@@ -459,6 +449,19 @@ export function InlineWorkspace({
     setBulkDecisions(payload.bulkDecisions || []);
     setProbeRun(payload.run);
   }, []);
+
+  useEffect(() => {
+    if (storyPersistenceStatus !== "durable"
+      || !refreshStoryPrivacyAfterPersistenceRef.current) return;
+    refreshStoryPrivacyAfterPersistenceRef.current = false;
+    const controller = new AbortController();
+    void loadStoryPrivacyRef.current?.(
+      "The durable applied review was checked against the current release targets.",
+      true,
+    );
+    void loadProbes(controller.signal);
+    return () => controller.abort();
+  }, [loadProbes, storyPersistenceStatus, workflowRunId]);
 
   useEffect(() => {
     const readyRunId = storyReviewReady ? scopedWorkflowRunId : "";

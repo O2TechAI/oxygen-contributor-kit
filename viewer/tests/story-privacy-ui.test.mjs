@@ -250,9 +250,20 @@ test("Workspace sends one exact target CAS, installs its response, and never ret
   assert.match(workspace, /storyPrivacyCurrent=\{storyPrivacyReviewApplicable\}/);
   assert.match(workspace, /storyPrivacyComplete=\{storyPrivacyReleaseComplete\}/);
   assert.match(workspace, /review\.revision > previous\.revision[\s\S]*refreshStoryPrivacyAfterPersistenceRef\.current = true[\s\S]*status:"loading"/);
-  assert.match(workspace, /storyPersistenceStatus !== "durable"[\s\S]*loadStoryPrivacyRef\.current/);
+  const durableRefresh = workspace.slice(
+    workspace.indexOf('if (storyPersistenceStatus !== "durable"'),
+    workspace.indexOf("const readyRunId"),
+  );
+  assert.match(durableRefresh, /loadStoryPrivacyRef\.current/);
+  assert.match(durableRefresh, /void loadProbes\(controller\.signal\);/);
+  assert.equal((durableRefresh.match(/loadProbes\(/g) || []).length, 1);
   assert.match(workspace, /storySessionReadyRunId !== workflowRunId[\s\S]*refreshStoryPrivacyAfterPersistenceRef\.current = false/);
-  assert.doesNotMatch(workspace, /refreshStoryPrivacyAfterPersistenceRef\.current = true[\s\S]*review\.revision === previous\.revision/);
+  const localReviewChange = workspace.slice(
+    workspace.indexOf("const updateChapterReview"),
+    workspace.indexOf("const currentDownloadReviewBlockerGroups"),
+  );
+  assert.doesNotMatch(localReviewChange, /loadProbes\(/);
+  assert.doesNotMatch(localReviewChange, /refreshStoryPrivacyAfterPersistenceRef\.current = true[\s\S]*review\.revision === previous\.revision/);
 });
 
 test("source Privacy remains decision-only and surfaces API failures", async () => {
