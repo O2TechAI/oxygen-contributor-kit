@@ -34,14 +34,23 @@ const {
   coveragePrivacyAuthorityGuardStatement,
   readCoveragePrivacyAuthority,
 } = await import("../lib/story-coverage-privacy-authority.ts");
+const {
+  loadWorkflowProgress,
+  loadWorkspaceBootstrap,
+} = await import("../lib/workflow-progress-server.ts");
+const workflowRoute = await import("../app/api/workflow/route.ts");
 
 const sha256 = async (value) => {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 };
 const utf8 = (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right));
+const percentile = (values, percent) => {
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.max(0, Math.ceil(sorted.length * percent / 100) - 1)];
+};
 
-test("24,796-item Coverage Privacy authority is indexed, bounded, and passive-poll safe",
+test("24,796-item active-Story polling is shallow while deep authority remains fail-closed",
   { timeout: 120_000 }, async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "oxygen-coverage-privacy-scale-"));
     const previousStateDir = process.env.OXYGEN_VIEWER_STATE_DIR;
@@ -205,6 +214,90 @@ test("24,796-item Coverage Privacy authority is indexed, bounded, and passive-po
       assert.equal(counts.batches, 0);
       const passiveCounts = { ...counts };
 
+      await realPrepare(`UPDATE items SET organization_category='project'`).run();
+      await realPrepare(`UPDATE items SET organization_reason='oxygen.story:{}'
+        WHERE id=?`).bind(records[0].id).run();
+      await realPrepare(`INSERT INTO organization_jobs
+        (id,status,stage,completed,total,warnings_json,started_at,updated_at,completed_at)
+        VALUES ('scale-active','complete','done',?,?,'[]',?,?,?)`).bind(
+        itemCount, itemCount, now, now, now,
+      ).run();
+      await realPrepare(`UPDATE workflow_runs SET target_confirmed=1,
+        collection_status='complete',collection_completed=?,collection_total=?,
+        story_generation_status='ready_for_human_review',story_generation_completed=1,
+        story_generation_total=1,active_story_digest=? WHERE id=?`).bind(
+        itemCount, itemCount, "a".repeat(64), runId,
+      ).run();
+      await realPrepare(`INSERT INTO project_release_confirmations
+        (workflow_run_id,review_gate_digest,confirmed_at) VALUES (?,?,?)`).bind(
+        runId, "b".repeat(64), now,
+      ).run();
+
+      const deepSamples = [];
+      let deepProjection;
+      for (let index = 0; index < 5; index += 1) {
+        const started = performance.now();
+        const deep = await loadWorkflowProgress(runId);
+        deepSamples.push(performance.now() - started);
+        deepProjection = deep;
+        assert.equal(deep.storySourceSchema, null,
+          "malformed persisted Story metadata must fail closed on the deep reader");
+        assert.equal(deep.releaseConfirmed, false,
+          "persisted confirmation presence cannot satisfy deep release authority");
+      }
+      const bootstrap = await loadWorkspaceBootstrap();
+      assert.equal(bootstrap.storySessionReadyRunId, "",
+        "non-authoritative polling hints cannot make Story-bearing bootstrap ready");
+
+      const pollingSql = [];
+      counts.queries = 0;
+      counts.contentQueries = 0;
+      counts.batches = 0;
+      db.prepare = (sql) => {
+        pollingSql.push(sql);
+        counts.queries += 1;
+        if (/\bSELECT\b[\s\S]*\b(?:content|organization_reason)\b/iu.test(sql)) {
+          counts.contentQueries += 1;
+        }
+        return realPrepare(sql);
+      };
+      const pollingSamples = [];
+      let pollingProjection;
+      for (let index = 0; index < 9; index += 1) {
+        const started = performance.now();
+        const response = await workflowRoute.GET(new Request(
+          `http://localhost/api/workflow?workflowRunId=${runId}`,
+        ));
+        pollingSamples.push(performance.now() - started);
+        assert.equal(response.status, 200);
+        pollingProjection = await response.json();
+      }
+      const pollingCounts = { ...counts };
+      db.prepare = realPrepare;
+      assert.equal(pollingProjection.currentStageId, "review");
+      assert.equal(pollingProjection.storySourceSchema, "oxygen.story");
+      assert.equal(pollingProjection.storySessionSchema, "oxygen.story-review-session");
+      assert.equal(pollingProjection.releaseConfirmed, true,
+        "confirmation-row presence is only a polling progress hint");
+      assert.deepEqual(Object.keys(pollingProjection).sort(), Object.keys(deepProjection).sort(),
+        "the shallow projection preserves the established response shape");
+      assert.equal(pollingCounts.contentQueries, 0);
+      assert.equal(pollingCounts.batches, 0);
+      assert.equal(pollingSql.some((sql) => /\b(?:semantic_|story_coverage_|story_privacy_)/u.test(sql)), false);
+      assert.equal(pollingSql.some((sql) => /\bstory_review_sessions\b/u.test(sql)), false);
+      assert.equal(pollingSql.some((sql) => /\b(?:source_privacy_receipts|redactions)\b/u.test(sql)), false);
+      assert.ok(percentile(pollingSamples, 95) < percentile(deepSamples, 50) / 4,
+        "polling p95 must be materially below deep-reader p50");
+
+      await realPrepare("DELETE FROM project_release_confirmations WHERE workflow_run_id=?")
+        .bind(runId).run();
+      await realPrepare("DELETE FROM organization_jobs WHERE id='scale-active'").run();
+      await realPrepare(`UPDATE items SET organization_category=NULL,organization_reason=NULL`).run();
+      await realPrepare(`UPDATE workflow_runs SET target_confirmed=0,
+        collection_status='pending',collection_completed=0,collection_total=0,
+        story_generation_status='source_writing_generation',story_generation_completed=0,
+        story_generation_total=0,active_story_digest=NULL WHERE id=?`).bind(runId).run();
+
       await realPrepare(`INSERT INTO organization_jobs
         (id,status,stage,completed,total,warnings_json,started_at,updated_at,completed_at)
         VALUES ('scale-unrelated','complete','done',0,0,'[]',?,?,?)`)
@@ -250,8 +343,13 @@ test("24,796-item Coverage Privacy authority is indexed, bounded, and passive-po
         unitCount,
         fullRuntimeMs: Number(fullRuntimeMs.toFixed(2)),
         passiveRuntimeMs: Number(passiveRuntimeMs.toFixed(2)),
+        deepWorkflowP50Ms: Number(percentile(deepSamples, 50).toFixed(2)),
+        deepWorkflowP95Ms: Number(percentile(deepSamples, 95).toFixed(2)),
+        pollingProjectionP50Ms: Number(percentile(pollingSamples, 50).toFixed(2)),
+        pollingProjectionP95Ms: Number(percentile(pollingSamples, 95).toFixed(2)),
         full: fullCounts,
         passive: passiveCounts,
+        polling: pollingCounts,
         guardBatches: counts.batches,
         maximumConcurrentWorkflowPolls: maximumInFlight,
         privateContentPrinted: false,

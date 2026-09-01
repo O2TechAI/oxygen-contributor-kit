@@ -1,5 +1,8 @@
 import { getLocalDatabase } from "../../../db";
-import { loadWorkflowProgress } from "../../../lib/workflow-progress-server";
+import {
+  loadWorkflowPollingProjection,
+  loadWorkflowProgress,
+} from "../../../lib/workflow-progress-server";
 import { deriveWorkflowProgress } from "../../../lib/workflow-progress";
 import {
   normalizeStoryCandidateSubmission,
@@ -150,7 +153,7 @@ export async function GET(request: Request) {
     return Response.json({ error: "Invalid workflow run" }, { status: 400 });
   }
   try {
-    return Response.json(await loadWorkflowProgress(requestedRunId || undefined), {
+    return Response.json(await loadWorkflowPollingProjection(requestedRunId || undefined), {
       headers: { "Cache-Control": "no-store, max-age=0" },
     });
   } catch (error) {
