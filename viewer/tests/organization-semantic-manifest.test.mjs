@@ -648,6 +648,12 @@ test("Organization carries same-workflow semantic lineage across full-corpus rep
       at: "2039-01-03T00:00:00.000Z",
     });
     const beforeIdenticalAttach = await completeAttachSnapshot(db);
+    const observedOrganization = await organizationRoute.GET(
+      new Request("http://localhost/api/organization"),
+    );
+    assert.equal(observedOrganization.status, 200);
+    assert.deepEqual(await completeAttachSnapshot(db), beforeIdenticalAttach,
+      "Organization GET must remain read-only");
     const identicalCorpusResponse = await postJson(
       documentsRoute, "/api/documents", reviewCorpus("revision-1"),
     );
