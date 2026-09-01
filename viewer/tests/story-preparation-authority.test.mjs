@@ -12,6 +12,7 @@ import {
   deriveStoryReleaseTargetCatalog,
   deriveStoryReleaseTargetContents,
   insightAuthorityValue,
+  normalizeStoryPrivacyOutput,
   validateStoryPreparationManifest,
 } from "../lib/story-preparation.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
@@ -51,8 +52,7 @@ const independentCanonicalJson = (value) => {
 const independentDigest = (value) => createHash("sha256")
   .update(independentCanonicalJson(value)).digest("hex");
 
-function story(key, { insight = true } = {}) {
-  const eventId = `doc:${key}`;
+function story(key, { insight = true, eventId = `doc:${key}` } = {}) {
   const evidence = { documentId: "doc", eventId };
   return {
     schema: "oxygen.story",
@@ -237,6 +237,83 @@ async function authorityFixture({
 }
 
 const clone = (value) => structuredClone(value);
+
+test("canonical Story Privacy output is total, exact, and Unicode code-point based", async () => {
+  const target = {
+    id: "chapter-a::title",
+    storyKey: "chapter-a",
+    target: "title",
+    content: "Hi 😀 Alice",
+  };
+  const changed = {
+    candidates: [{
+      id: "candidate-a",
+      reviewState: "deterministic",
+      title: "Release-safe identity",
+      whyFlagged: "The represented name is replaced.",
+      uncertaintyReason: null,
+      releaseTargets: [target.id],
+    }],
+    targetProposals: [{
+      targetId: target.id,
+      targetContentDigest: independentDigest(target.content),
+      proposedText: "Hi 😀 Person",
+      occurrences: [{
+        originalStartOffset: 5,
+        originalEndOffset: 10,
+        proposalStartOffset: 5,
+        proposalEndOffset: 11,
+        category: "private-identity",
+      }],
+    }],
+  };
+  assert.deepEqual(await normalizeStoryPrivacyOutput(changed, [target]), changed);
+  assert.equal(await normalizeStoryPrivacyOutput(changed.candidates, [target]), null);
+  assert.equal(await normalizeStoryPrivacyOutput({ candidates: [], targetProposals: [] }, [target]), null);
+
+  const unchanged = {
+    candidates: [],
+    targetProposals: [{
+      targetId: target.id,
+      targetContentDigest: independentDigest(target.content),
+      proposedText: target.content,
+      occurrences: [],
+    }],
+  };
+  assert.deepEqual(await normalizeStoryPrivacyOutput(unchanged, [target]), unchanged);
+
+  for (const mutate of [
+    (value) => { value.targetProposals[0].targetContentDigest = "0".repeat(64); },
+    (value) => { value.targetProposals[0].occurrences[0].originalStartOffset = 6; },
+    (value) => { value.targetProposals[0].occurrences[0].proposalEndOffset = 10; },
+  ]) {
+    const invalid = clone(changed);
+    mutate(invalid);
+    assert.equal(await normalizeStoryPrivacyOutput(invalid, [target]), null);
+  }
+});
+
+test("Preference lessons preserve narrative order while scope is independently UTF-8 canonical", async () => {
+  const stories = [
+    story("zeta", { eventId: "doc:2" }),
+    story("故事", { eventId: "doc:1" }),
+    story("alpha", { eventId: "doc:3" }),
+  ];
+  const current = await authorityFixture({ stories, privacyCandidates: [] });
+  assert.deepEqual(current.context.storyCandidates.map((row) => row.id), ["doc:2", "doc:1", "doc:3"]);
+  assert.deepEqual(current.context.preference.insightScope.map((row) => row.storyKey), [
+    "alpha", "zeta", "故事",
+  ]);
+  const validation = await validateStoryPreparationManifest(current.manifest, current.context);
+  assert.equal(validation.ok, true, JSON.stringify(validation));
+
+  const noncanonical = clone(current);
+  noncanonical.context.preference.insightScope.reverse();
+  assert.deepEqual(await validateStoryPreparationManifest(noncanonical.manifest, noncanonical.context), {
+    ok: false,
+    code: "STORY_PREPARATION_PREFERENCE_AUTHORITY_INVALID",
+  });
+});
 
 test("reviewed meeting narrative preserves exact bound text outside validation metadata", async () => {
   const root = await mkdtemp(join(tmpdir(), "reviewed-meeting-chronology-"));

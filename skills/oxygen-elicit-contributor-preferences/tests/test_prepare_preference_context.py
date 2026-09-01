@@ -139,39 +139,28 @@ class PrepareContextTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "story-candidates"):
                 PREPARE.prepare(candidates, redacted, report)
 
-    def test_reordered_candidates_emit_byte_identical_utf8_ordered_context(self):
+    def test_lessons_preserve_story_order_while_scope_is_utf8_canonical(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             candidates, redacted, report = inputs(root, [
-                story(key="chapter-emoji", insight="lesson-emoji"),
-                story(key="chapter-private-use", insight="lesson-private-use"),
+                story(key="zeta", insight="insight-c"),
+                story(key="故事", insight="insight-a"),
+                story(key="alpha", insight="insight-b"),
             ])
             rows = json.loads(candidates.read_text(encoding="utf-8"))
-            rows[0]["id"] = "\U0001f600"
-            rows[1]["id"] = "\ue000"
+            rows[0]["id"] = "candidate-2"
+            rows[1]["id"] = "candidate-1"
+            rows[2]["id"] = "candidate-3"
             candidates.write_text(json.dumps(rows), encoding="utf-8")
-            first_path = root / "first-context.json"
-            first_run = subprocess.run([
-                sys.executable, str(SCRIPT), "--story-candidates", str(candidates),
-                "--redacted", str(redacted), "--privacy-report", str(report),
-                "--output", str(first_path),
-            ], check=True, capture_output=True, text=True)
-            candidates.write_text(json.dumps(list(reversed(rows))), encoding="utf-8")
-            second_path = root / "second-context.json"
-            second_run = subprocess.run([
-                sys.executable, str(SCRIPT), "--story-candidates", str(candidates),
-                "--redacted", str(redacted), "--privacy-report", str(report),
-                "--output", str(second_path),
-            ], check=True, capture_output=True, text=True)
-            first = json.loads(first_path.read_text(encoding="utf-8"))
-            first_bytes = first_path.read_bytes()
-            second_bytes = second_path.read_bytes()
+            output = PREPARE.prepare(candidates, redacted, report)
 
-        self.assertEqual(first_bytes, second_bytes)
-        self.assertEqual(first_run.stdout, second_run.stdout)
         self.assertEqual(
-            [lesson["storyKey"] for lesson in first["reusableLessons"]],
-            ["chapter-private-use", "chapter-emoji"],
+            [lesson["storyKey"] for lesson in output["reusableLessons"]],
+            ["zeta", "故事", "alpha"],
+        )
+        self.assertEqual(
+            [row["storyKey"] for row in output["insightScope"]],
+            ["alpha", "zeta", "故事"],
         )
 
     def test_cited_evidence_is_sorted_by_document_sequence_and_event(self):

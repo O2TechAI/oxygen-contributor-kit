@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, rename, rm } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import {
+  canonicalPreferenceInsightScope,
   deriveStoryReleaseTargetCatalog,
   insightAuthorityValue,
 } from "../../../viewer/lib/story-preparation.ts";
@@ -399,7 +400,9 @@ async function preparePreference(candidatesPath, contextPath, root) {
     fail("PREFERENCE_CONTEXT_INVALID");
   }
   const lessons = lessonProjection(rows);
-  const identities = lessons.map(({ storyKey, insightId, insightAuthorityDigest }) => ({ storyKey, insightId, insightAuthorityDigest }));
+  const identities = canonicalPreferenceInsightScope(lessons.map(({
+    storyKey, insightId, insightAuthorityDigest,
+  }) => ({ storyKey, insightId, insightAuthorityDigest })));
   if (canonicalAuthorityJson(context.reusableLessons) !== canonicalAuthorityJson(lessons)
     || canonicalAuthorityJson(context.insightScope) !== canonicalAuthorityJson(identities)) {
     fail("PREFERENCE_CONTEXT_STALE");

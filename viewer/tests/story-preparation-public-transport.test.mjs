@@ -384,7 +384,7 @@ async function reviewedBoundary(root, projectMap, semantic, coverageRows = null,
     unitId: unit.id, disposition: "represented", ownerId: `story-${unit.id.slice("unit-".length)}`,
   }));
   const coverageResult = await finalizeCoverageManifestAuthority({ rows: requestedCoverage }, semantic);
-  assert.equal(coverageResult.ok, true);
+  assert.equal(coverageResult.ok, true, JSON.stringify(coverageResult));
   const coverage = join(root, "coverage.json");
   const authority = coverageResult.authority;
   await json(coverage, {
@@ -1752,16 +1752,20 @@ test("Insight source Quote matrix fails before receipt, permits proposal-only co
     await json(projectMapPath, projectMap);
     const boundary = await reviewedBoundary(root, projectMap, semantic, [
       { unitId: "unit-a", disposition: "represented", ownerId: "story-combined" },
-      { unitId: "unit-b", disposition: "represented", ownerId: "story-combined" },
+      { unitId: "unit-b", disposition: "excluded", exclusionReason: "outside_story_scope" },
     ]);
     const transport = join(root, "transport");
     runOk(process.execPath, [prepare, "prepare", "story", projectMapPath,
       boundary.coverage, boundary.sourcePrivacy, boundary.review, transport]);
     const combined = combinedStory(semantic, boundary.coverageAuthority, false);
-    // Event B belongs to this Chapter and supports its second participant, but it is
-    // intentionally absent from every Story block. The Insight input must therefore
-    // exclude B's reviewed narrative, and B cannot ground the anchored paragraph.
+    // Event B belongs to broader Chapter context but is intentionally absent from every
+    // Story block. It therefore is not represented as a Person, its reviewed narrative
+    // must be excluded from the Insight input, and it cannot ground the anchored paragraph.
     combined.story.blocks[0].evidence = [{ documentId: "doc-canary", eventId: "event-a" }];
+    combined.people = [combined.people[0]];
+    combined.evidence.supporting = [];
+    combined.coverage.representedUnitIds = ["unit-a"];
+    combined.coverage.excludedUnits = [{ unitId: "unit-b", reason: "outside_story_scope" }];
     const stories = [{ id: "event-a", story: combined }];
     await recordLane(transport, "story", root, (input) => stories.filter((item) => (
       input.unitIds.includes(item.story.key)

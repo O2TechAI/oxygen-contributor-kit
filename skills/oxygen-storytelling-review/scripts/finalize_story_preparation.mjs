@@ -2,6 +2,7 @@
 import { rename, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import {
+  canonicalPreferenceInsightScope,
   canonicalPreferenceQuestionBatch,
   deriveStoryReleaseTargetContents,
   insightAuthorityValue,
@@ -424,7 +425,10 @@ async function finalize(args) {
   if (!reviewedEvidence) {
     fail("PREFERENCE_INPUT_STALE");
   }
-  const preferenceScope = new Map(lessons.map(({ storyKey, insightId, insightAuthorityDigest }) => [
+  const expectedPreferenceScope = canonicalPreferenceInsightScope(lessons.map(({
+    storyKey, insightId, insightAuthorityDigest,
+  }) => ({ storyKey, insightId, insightAuthorityDigest })));
+  const preferenceScope = new Map(expectedPreferenceScope.map(({ storyKey, insightId, insightAuthorityDigest }) => [
     canonicalAuthorityJson([storyKey, insightId]), { storyKey, insightId, insightAuthorityDigest },
   ]));
   const preference = await preferenceAuthority(
@@ -448,11 +452,9 @@ async function finalize(args) {
   const privacy = await normalizeStoryPrivacyOutput(privacyInput, targetContents);
   if (!privacy) fail("PRIVACY_OUTPUT_INVALID");
   if (privacyAuthority.outputCount !== privacy.targetProposals.length) fail("PRIVACY_RECEIPT_STALE");
-  const preferenceUniverse = [...preferenceScope.values()]
-    .sort((a, b) => utf8(a.storyKey, b.storyKey) || utf8(a.insightId, b.insightId));
   if (preferenceAuthorityRecord.manifest.inputDigest !== preferenceInputDigest) fail("PREFERENCE_INPUT_STALE");
   sameIds(preferenceAuthorityRecord.manifest.unitIds,
-    preferenceUniverse.map((identity) => canonicalAuthorityJson(identity)), "PREFERENCE_SCOPE_STALE");
+    preference.insightScope.map((identity) => canonicalAuthorityJson(identity)), "PREFERENCE_SCOPE_STALE");
   if (canonicalAuthorityJson(preferenceAuthorityRecord.output) !== canonicalAuthorityJson(preference)
     || preferenceAuthorityRecord.receipt.outputCount !== preference.outputCount) fail("PREFERENCE_OUTPUT_STALE");
   const questions = canonicalPreferenceQuestionBatch(preference.probes, preference.bulkDecisions);
@@ -469,7 +471,7 @@ async function finalize(args) {
       scopeDigest: await storyPreparationDigest(catalog.map((target) => target.id)), scopeCount: catalog.length,
       outputDigest: await storyPreparationDigest(privacy), outputCount: privacy.targetProposals.length },
     { lane: "preference", status: "complete", inputDigest: preferenceInputDigest,
-      scopeDigest: await storyPreparationDigest(preferenceUniverse), scopeCount: preferenceUniverse.length,
+      scopeDigest: await storyPreparationDigest(preference.insightScope), scopeCount: preference.insightScope.length,
       outputDigest, outputCount: questions.length },
   ];
   const manifest = { schema: "oxygen.story-preparation", workflowRunId, sourceRevision, receipts, storyPrivacy: privacy };
@@ -480,7 +482,7 @@ async function finalize(args) {
     semanticUnitIds,
     storyCandidates: sourceRows,
     preference: { workflowRunId, sourceRevision, inputDigest: preferenceInputDigest,
-      outputDigest, outputCount: questions.length, insightScope: preferenceUniverse },
+      outputDigest, outputCount: questions.length, insightScope: preference.insightScope },
   });
   if (!core.ok) fail(`CORE_${core.code}`);
   const destination = resolve(outputPath);

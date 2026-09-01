@@ -24,7 +24,10 @@ def context(count=1):
     return {
         "schema": "oxygen.preference-context",
         "reusableLessons": lessons,
-        "insightScope": [{key: item[key] for key in ("storyKey", "insightId", "insightAuthorityDigest")} for item in lessons],
+        "insightScope": sorted([
+            {key: item[key] for key in ("storyKey", "insightId", "insightAuthorityDigest")}
+            for item in lessons
+        ], key=lambda item: (item["storyKey"].encode("utf-8"), item["insightId"].encode("utf-8"))),
         "reviewedEvidence": [{
             "documentId": "trajectory-a", "eventId": "event-a", "documentKind": "trajectory",
             "sequence": 1, "role": "user", "timestamp": None,
@@ -66,6 +69,34 @@ def regeneration_context():
 
 
 class FinalizerTests(unittest.TestCase):
+    def test_scope_is_canonical_and_matches_narrative_lessons_by_identity_and_digest(self):
+        value = context(3)
+        for lesson, story_key, insight_id, digest_value in zip(
+                value["reusableLessons"], ["zeta", "故事", "alpha"],
+                ["insight-c", "insight-a", "insight-b"], ["c" * 64, "a" * 64, "b" * 64]):
+            lesson.update({"storyKey": story_key, "insightId": insight_id,
+                           "insightAuthorityDigest": digest_value})
+        value["insightScope"] = sorted([
+            {key: lesson[key] for key in ("storyKey", "insightId", "insightAuthorityDigest")}
+            for lesson in value["reusableLessons"]
+        ], key=lambda item: (item["storyKey"].encode("utf-8"), item["insightId"].encode("utf-8")))
+        bundle = VALIDATOR.finalize(
+            value, {"probes": [], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
+        )
+        self.assertEqual([row["storyKey"] for row in bundle["insightScope"]], ["alpha", "zeta", "故事"])
+
+        noncanonical = json.loads(json.dumps(value))
+        noncanonical["insightScope"].reverse()
+        with self.assertRaisesRegex(ValueError, "identities"):
+            VALIDATOR.finalize(
+                noncanonical, {"probes": [], "bulkDecisions": [], "setAside": 0}, "run-a", 7,
+            )
+
+        stale = json.loads(json.dumps(value))
+        stale["insightScope"][0]["insightAuthorityDigest"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "identities"):
+            VALIDATOR.finalize(stale, {"probes": [], "bulkDecisions": [], "setAside": 0}, "run-a", 7)
+
     def test_regeneration_is_exact_changed_and_digest_bound(self):
         candidate = probe(); candidate["question"] = "What should the agent remember now?"
         result = VALIDATOR.finalize_regeneration(

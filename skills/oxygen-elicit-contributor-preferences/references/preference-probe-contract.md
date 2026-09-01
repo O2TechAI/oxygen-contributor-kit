@@ -16,8 +16,9 @@ story-candidates.json       [{"id":"existing-imported-item-id","summary":"oxygen
 ```
 
 Each candidate has exactly `id` and `summary`, matching the sole Story activation contract. Context
-preparation sorts that plain array by the UTF-8 bytes of candidate `id` before projecting lessons,
-Insight identities, or evidence, so input reordering cannot change context bytes or digests.
+preparation preserves the activated Story candidate order and each Story's Insight order in
+`reusableLessons`; this is the narrative authority and is not reordered by candidate ID or Insight
+ID.
 `summary` is a valid `oxygen.story:` JSON source. The preparation step projects only Insight-cited
 rows from the reviewed bundles. In the regular context each row has exactly
 `{documentId,eventId,documentKind,sequence,role,timestamp,redactedText}`; `redactedText` is copied
@@ -44,9 +45,13 @@ The output has exactly these fields:
 }
 ```
 
-`reusableLessons` is exactly Core's ordered final Insight lesson projection. Every lesson and
-`insightScope` row carries the exact Chapter-local `{storyKey, insightId, insightAuthorityDigest}`
-triple, where the digest binds the full canonical Insight content. `reviewedEvidence` contains only Insight-cited
+`reusableLessons` is exactly Core's activated Story/Insight narrative-order lesson projection.
+`insightScope` is independently canonicalized by UTF-8 `storyKey` and then UTF-8 `insightId`.
+Every lesson and scope row carries the exact Chapter-local
+`{storyKey, insightId, insightAuthorityDigest}` triple, where the digest binds the full canonical
+Insight content. Scope membership must be a one-to-one identity/digest match with
+`reusableLessons`; positional equality is neither required nor accepted as authority.
+`reviewedEvidence` contains only Insight-cited
 reviewed event identities. `autoRemoved` is derived only from the completed report after its counts
 are recomputed from and matched to the exact reviewed bundles. Rows are ordered by UTF-8
 `documentId`, numeric `sequence`, and UTF-8 `eventId`. Regeneration keeps its separate

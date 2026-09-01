@@ -147,6 +147,13 @@ only after every complete Chapter exists and has been ordered with the productio
 
 Every activated Chapter must have nonempty `people` and nonempty `story.blocks`. Each Person needs exact Evidence and a release-safe label/role/description. Preserve role uncertainty and never infer names, employers, titles, relationships, replies, consensus, or identity merges.
 
+People coverage is derived only from eligible actor signatures on Evidence referenced by
+`story.blocks[].evidence`. Every such represented actor appears exactly once in `people`; each
+Person maps through Chapter Evidence to exactly one of those nonempty eligible signatures.
+Broader primary/supporting or excluded context does not make an actor mandatory, and it cannot
+justify an extra Person. Machine, tool, system, unsupported, duplicated, cross-Chapter, or
+identity-inferred actors fail the shared Viewer validator.
+
 Each Story block is safe release-draft prose with exact Evidence support. Do not copy raw/private Evidence merely because the block cites it.
 
 `story.uncertainty` is optional. Use it only for supported uncertainty. Do not fabricate a cleaner ending.
@@ -260,6 +267,11 @@ identity or source narrative in validation authority. Only explicitly provider-b
 carries that reviewed narrative. The recorder and finalizer call the exported Viewer
 `validateStorySourcePackage` directly; no transport-local People, Evidence, Phase, Coverage, or
 Insight-grounding validator substitutes for it.
+
+Story Privacy proposal shape, total-target completeness, digest, Unicode code-point offset, and
+completed-zero semantics are owned solely by
+[story-preparation-transport.md](story-preparation-transport.md); recorder and finalizer both reuse
+the Viewer `normalizeStoryPrivacyOutput` implementation.
 
 Story inputs contain complete owner-atomic bundles and no excluded narrative. The parent collects
 every expected proposal, injects canonical represented Coverage and the UTF-8-sorted exclusions,

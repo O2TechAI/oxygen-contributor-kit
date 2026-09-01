@@ -309,6 +309,41 @@ test("story Chapter readiness keeps People mandatory and evidence-supported", ()
   ), { ok: false, code: "STORY_PEOPLE_INVALID" });
 });
 
+test("People cover exactly the eligible actors represented by Story blocks", () => {
+  const { candidateRows, evidenceRows } = buildStoryFixture("one-insight");
+  const source = sourceFromRow(candidateRows[0]);
+  const supportOnly = {
+    id: "support-only-actor-b",
+    documentId: source.evidence.primary.documentId,
+    eventType: "message",
+    actorId: "actor-b",
+    actorType: "human",
+    reviewedNarrative: "Actor B supplied broader Chapter context.",
+  };
+  const supportReference = evidenceReference(supportOnly.documentId, supportOnly.id);
+  source.evidence.supporting.push(supportReference);
+  const rows = [...evidenceRows, supportOnly];
+  const candidate = rowWithSource(candidateRows[0], source);
+
+  assert.equal(validateStorySourcePackage([candidate], rows).ok, true);
+
+  const representedWithoutPerson = structuredClone(source);
+  representedWithoutPerson.story.blocks[0].evidence.push(supportReference);
+  assert.deepEqual(validateStorySourcePackage(
+    [rowWithSource(candidateRows[0], representedWithoutPerson)], rows,
+  ), { ok: false, code: "STORY_PEOPLE_INVALID" });
+
+  const unsupportedPerson = structuredClone(source);
+  unsupportedPerson.people.push({
+    ...unsupportedPerson.people[0],
+    id: "person-support-only",
+    evidence: [supportReference],
+  });
+  assert.deepEqual(validateStorySourcePackage(
+    [rowWithSource(candidateRows[0], unsupportedPerson)], rows,
+  ), { ok: false, code: "STORY_PEOPLE_INVALID" });
+});
+
 test("People use exact actor IDs, accept open labels, and exclude machine evidence", () => {
   let selected;
   for (const fixture of storyFirstSemanticCases) {
