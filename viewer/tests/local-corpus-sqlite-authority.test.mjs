@@ -54,7 +54,8 @@ function storedCorpus(db, workflowRunId) {
       original_json FROM items ORDER BY id`).all(),
     db.prepare(`SELECT corpus_revision,corpus_digest,document_count,item_count
       FROM finalized_corpus_manifests WHERE workflow_run_id=?`).bind(workflowRunId).first(),
-    db.prepare(`SELECT story_source_revision,story_generation_status,active_story_digest
+    db.prepare(`SELECT collection_status,collection_completed,collection_total,blocker_code,
+      story_source_revision,story_generation_status,active_story_digest
       FROM workflow_runs WHERE id=?`).bind(workflowRunId).first(),
   ]).then(([documents, items, manifest, workflow]) => ({
     documents: documents.results,
@@ -89,16 +90,25 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
   process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
 
   try {
-    const [{ getLocalDatabase }, { establishWorkflowRun }, route, publication] = await Promise.all([
+    const [
+      { getLocalDatabase }, { establishWorkflowRun }, route, publication, progress,
+    ] = await Promise.all([
       import("../db/index.ts"),
       import("../lib/workflow-run-server.ts"),
       import("../app/api/documents/route.ts"),
       import("../lib/story-source-publication.ts"),
+      import("../lib/workflow-progress-server.ts"),
     ]);
     const db = await getLocalDatabase();
     const workflowRunId = "workflow-local-corpus-sqlite";
     const established = await establishWorkflowRun(db, workflowRunId, now);
     assert.deepEqual(established, { state: "EXACT_RUN_ESTABLISHED", workflowRunId });
+    await db.prepare(`UPDATE workflow_runs SET collection_status='failed',
+      collection_completed=8,collection_total=9,blocker_code='COLLECTION_FAILED'
+      WHERE id=?`).bind(workflowRunId).run();
+    const beforeFinalization = await progress.loadWorkflowProgress(workflowRunId);
+    assert.equal(beforeFinalization.currentStageId, "collect");
+    assert.equal(beforeFinalization.blockedReasonCode, "COLLECTION_FAILED");
 
     const firstPayload = { documents: [
       corpusEntry("trajectory-alpha", "event-alpha", "alpha content"),
@@ -150,10 +160,29 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
       item_count: 2,
     });
     assert.deepEqual(firstStored.workflow, {
+      collection_status: "complete",
+      collection_completed: 2,
+      collection_total: 2,
+      blocker_code: null,
       story_source_revision: 1,
       story_generation_status: "not_started",
       active_story_digest: null,
     });
+    assert.equal(
+      (await progress.loadWorkflowProgress(workflowRunId)).currentStageId,
+      "organize",
+    );
+
+    await db.prepare(`INSERT INTO documents
+      (id,kind,title,item_count,metadata_json,original_envelope_json,imported_at,updated_at,
+       organization_status,formatted_summary_json)
+      VALUES ('trajectory-count-drift','trajectory','Count drift',0,'{}','{}',?,?,'pending','{}')`)
+      .bind(now, now).run();
+    assert.equal(
+      (await progress.loadWorkflowProgress(workflowRunId)).currentStageId,
+      "collect",
+    );
+    await db.prepare("DELETE FROM documents WHERE id='trajectory-count-drift'").run();
 
     const beforeIdentical = await durableCorpusSnapshot(db);
     const identicalResponse = await post(route, firstPayload);
@@ -195,6 +224,10 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
       item_count: 1,
     });
     assert.deepEqual(replacementStored.workflow, {
+      collection_status: "complete",
+      collection_completed: 1,
+      collection_total: 1,
+      blocker_code: null,
       story_source_revision: 2,
       story_generation_status: "not_started",
       active_story_digest: null,
@@ -219,6 +252,51 @@ test("documents corpus replacement preserves real SQLite authority, rollback, an
     const repaired = await storedCorpus(db, workflowRunId);
     assert.equal(repaired.items[0].content, "current content");
     assert.equal(repaired.workflow.story_source_revision, 3);
+
+    await db.prepare(`UPDATE workflow_runs SET collection_status='failed',
+      collection_completed=7,collection_total=9,blocker_code='COLLECTION_FAILED'
+      WHERE id=?`).bind(workflowRunId).run();
+    const emptyPayload = { documents: [] };
+    const emptyResponse = await post(route, emptyPayload);
+    assert.equal(emptyResponse.status, 200);
+    const emptyDigest = await route.finalizedCorpusDigest(
+      route.normalizeFinalizedCorpus(emptyPayload),
+    );
+    const emptyResult = {
+      finalized: true,
+      corpusRevision: 4,
+      corpusDigest: emptyDigest,
+      documentCount: 0,
+      itemCount: 0,
+    };
+    assert.deepEqual(await emptyResponse.json(), emptyResult);
+    const emptyStored = await storedCorpus(db, workflowRunId);
+    assert.deepEqual(emptyStored.documents, []);
+    assert.deepEqual(emptyStored.items, []);
+    assert.deepEqual(emptyStored.manifest, {
+      corpus_revision: 4,
+      corpus_digest: emptyDigest,
+      document_count: 0,
+      item_count: 0,
+    });
+    assert.deepEqual(emptyStored.workflow, {
+      collection_status: "complete",
+      collection_completed: 0,
+      collection_total: 0,
+      blocker_code: null,
+      story_source_revision: 4,
+      story_generation_status: "not_started",
+      active_story_digest: null,
+    });
+    const emptyProgress = await progress.loadWorkflowProgress(workflowRunId);
+    assert.equal(emptyProgress.currentStageId, "collect");
+    assert.equal(emptyProgress.blockedReasonCode, "COLLECTION_EMPTY");
+    const beforeIdenticalEmpty = await durableCorpusSnapshot(db);
+    const identicalEmptyResponse = await post(route, emptyPayload);
+    assert.equal(identicalEmptyResponse.status, 200);
+    assert.deepEqual(await identicalEmptyResponse.json(), emptyResult);
+    assert.deepEqual(await durableCorpusSnapshot(db), beforeIdenticalEmpty,
+      "an exact-current empty corpus attach must not rewrite durable authority");
 
     await db.prepare(`CREATE TRIGGER fail_replacement_item BEFORE INSERT ON items
       WHEN NEW.id='event-failing' BEGIN SELECT RAISE(ABORT, 'forced replacement failure'); END`).run();

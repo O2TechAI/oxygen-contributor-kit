@@ -24,6 +24,7 @@ test("organization polling accepts only complete structured status payloads", ()
 
 const facts = (overrides = {}) => ({
   workflowRunId: "reviewed-run",
+  collectionFinalized: true,
   documentCount: 2,
   itemCount: 10,
   organizedItemCount: 0,
@@ -38,7 +39,8 @@ const facts = (overrides = {}) => ({
 
 test("workflow progress derives completed, current, next, waiting, and blocked states from persistent facts", () => {
   const boundary = deriveWorkflowProgress(facts({
-    targetConfirmed: true, documentCount: 0, itemCount: 0, organizationStatus: null,
+    targetConfirmed: true, collectionFinalized: false,
+    documentCount: 0, itemCount: 0, organizationStatus: null,
   }));
   assert.equal(boundary.currentStageId, "collect");
   assert.equal(boundary.safeStatusCode, "target_working_folder_confirmed");
@@ -46,21 +48,22 @@ test("workflow progress derives completed, current, next, waiting, and blocked s
 
   const collecting = deriveWorkflowProgress(facts({
     targetConfirmed: true, collectionStatus: "running", collectionCompleted: 3,
-    collectionTotal: 8, documentCount: 0, itemCount: 0, organizationStatus: null,
+    collectionTotal: 8, collectionFinalized: false,
+    documentCount: 0, itemCount: 0, organizationStatus: null,
   }));
   assert.equal(collecting.currentStageId, "collect");
   assert.deepEqual(collecting.stages[0].progress, { completed: 3, total: 8 });
 
   const empty = deriveWorkflowProgress(facts({
-    targetConfirmed: true, collectionStatus: "complete", collectionCompleted: 0,
+    targetConfirmed: true, collectionStatus: "pending", collectionCompleted: 0,
     collectionTotal: 0, documentCount: 0, itemCount: 0, organizationStatus: null,
   }));
   assert.equal(empty.status, "blocked");
   assert.equal(empty.blockedReasonCode, "COLLECTION_EMPTY");
 
   const collected = deriveWorkflowProgress(facts({
-    targetConfirmed: true, collectionStatus: "complete", collectionCompleted: 8,
-    collectionTotal: 8, documentCount: 0, itemCount: 0, organizationStatus: null,
+    targetConfirmed: true, collectionStatus: "failed", collectionCompleted: 0,
+    collectionTotal: 0, documentCount: 2, itemCount: 10, organizationStatus: null,
   }));
   assert.equal(collected.currentStageId, "organize");
   assert.equal(collected.completedStages, 1);
@@ -104,6 +107,36 @@ test("workflow progress derives completed, current, next, waiting, and blocked s
   assert.equal(handoff.currentStageId, "handoff");
   assert.equal(handoff.safeStatusCode, "release_handoff_ready");
   assert.equal(handoff.completedStages, 5);
+});
+
+test("Collection advances only from an exact finalized corpus", () => {
+  for (const collectionStatus of ["pending", "complete", "failed"]) {
+    const progress = deriveWorkflowProgress(facts({
+      targetConfirmed: true,
+      collectionStatus,
+      collectionFinalized: false,
+      documentCount: 2,
+      itemCount: 10,
+    }));
+    assert.equal(progress.currentStageId, "collect");
+    assert.equal(progress.completedStages, 0);
+    assert.equal(progress.status, collectionStatus === "failed" ? "blocked" : "running");
+  }
+
+  for (const collectionStatus of ["pending", "running", "complete", "failed"]) {
+    const progress = deriveWorkflowProgress(facts({ collectionStatus }));
+    assert.equal(progress.currentStageId, "organize");
+    assert.equal(progress.completedStages, 1);
+  }
+
+  const empty = deriveWorkflowProgress(facts({
+    collectionStatus: "complete",
+    documentCount: 0,
+    itemCount: 0,
+    organizedItemCount: 0,
+    organizationStatus: null,
+  }));
+  assert.equal(empty.blockedReasonCode, "COLLECTION_EMPTY");
 });
 
 test("workflow progress is a strict sanitized operational projection", () => {
@@ -153,6 +186,7 @@ test("workflow route hydrates count-only persistent state and the shell can reop
   assert.match(route, /readPreferenceBatchAuthority/);
   assert.match(route, /validateStoryPreparationManifest/);
   assert.match(route, /story_source_revision/);
+  assert.match(route, /collectionFinalized: true/);
   assert.match(route, /BODY_KEYS/);
   assert.doesNotMatch(`${route}\n${loader}`, /original_json|SELECT\s+content|safeStatusMessage|reasoning|prompt/i);
   assert.doesNotMatch(route, /target_path|working_folder|session_name|story_payload|evidence_payload|memberIds|sourceBodies|excludedEvents/i);

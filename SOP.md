@@ -184,6 +184,25 @@ exact source, trajectory, meeting-record, warning, and failure counts. A newly c
 correctly have zero matching historical sessions. Confirm that credentials, caches, databases,
 unrelated users, and unrelated repositories were excluded.
 
+Before Organization, finalize that exact collected corpus in the already-running Viewer. Use this
+same boundary for repository, Anthropic, and meeting outputs; do not add progress authority to the
+individual importers:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run> \
+  --attach-url <viewer-url> --workflow-run-id <run-id> --collection-only
+```
+
+```powershell
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  "work\<run>" --attach-url "<viewer-url>" --workflow-run-id "<run-id>" `
+  --collection-only
+```
+
+This command imports and finalizes the corpus only. It neither reads `semantic_manifest` nor posts
+Organization. A finalized zero-document corpus remains explicit `COLLECTION_EMPTY` rather than
+advancing to Organization.
+
 ## 3. Organize by project
 
 Read and follow `skills/oxygen-organize-review-export/SKILL.md`.
@@ -278,6 +297,9 @@ python3 tools/llm_redact/merge_and_apply.py \
 python3 tools/llm_redact/push_redactions.py \
   --redacted work/<run>-redaction/redacted --base-url <viewer-url> \
   --receipt work/<run>-source-privacy-receipt.json
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --attach-url <viewer-url> --workflow-run-id <run-id> \
+  --source-privacy-export work/<run>-review/current-public-source-privacy.json
 ```
 
 There must be no source-bearing attach from dialogue extraction through the corresponding push. If
@@ -493,6 +515,9 @@ python .\tools\llm_redact\merge_and_apply.py `
 python .\tools\llm_redact\push_redactions.py `
   --redacted "$Redaction\redacted" `
   --base-url "$Viewer" --receipt "$Receipt"
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" `
+  --source-privacy-export "$Review\current-public-source-privacy.json"
 
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --story-event started
@@ -518,7 +543,9 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
 Resume starts the Viewer on that same saved state. Do not rerun collection, import, Story
 preparation, or infer completion. Preserve any existing blocker and allow later human Review,
 Privacy, Preference, `All set`, and release progress to remain durable in that session. The saved
-session remains private/local and does not change `publication_approved=false`.
+session remains private/local and does not change `publication_approved=false`. Resume requires
+the exact saved path from the original contributor-kit checkout at the exact saved Git HEAD; a
+different path, checkout, commit, or workflow run fails closed before dependency setup or startup.
 
 ## Composition sequence (implemented transport)
 

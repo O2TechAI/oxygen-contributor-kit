@@ -628,6 +628,7 @@ export async function POST(request: Request) {
         collectionStatus: run.collection_status,
         collectionCompleted: Number(run.collection_completed || 0),
         collectionTotal: Number(run.collection_total || 0),
+        collectionFinalized: true,
         documentCount: documentRows.length,
         itemCount: itemRows.length,
         organizedItemCount: itemRows.length,

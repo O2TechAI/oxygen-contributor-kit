@@ -218,7 +218,11 @@ def file_link_or_skip(test_case: unittest.TestCase, link: Path, target: Path):
         test_case.skipTest(f"file link creation is unavailable: {error.__class__.__name__}")
 
 
-def create_workflow_runs(connection, count: int = 1) -> None:
+def create_workflow_runs(
+    connection,
+    count: int = 1,
+    workflow_run_id: str | None = None,
+) -> None:
     connection.execute("""
         CREATE TABLE workflow_runs (
             id TEXT PRIMARY KEY, target_confirmed INTEGER NOT NULL,
@@ -232,7 +236,12 @@ def create_workflow_runs(connection, count: int = 1) -> None:
     connection.executemany(
         "INSERT INTO workflow_runs VALUES (?, 1, 'pending', 0, 0, 'not_started', 0, 0, 0, NULL, NULL, ?, ?)",
         [
-            (f"workflow-{index}", "2026-08-28T00:00:00Z", "2026-08-28T00:00:00Z")
+            (
+                workflow_run_id if count == 1 and workflow_run_id is not None
+                else f"workflow-{index}",
+                "2026-08-28T00:00:00Z",
+                "2026-08-28T00:00:00Z",
+            )
             for index in range(count)
         ],
     )
@@ -243,12 +252,13 @@ def write_viewer_state(
     rows: list[tuple[str, bytes]],
     *,
     workflow_count: int = 1,
+    workflow_run_id: str | None = None,
 ) -> Path:
     state = runtime_root / "state"
     state.mkdir(parents=True)
     database = state / "oxygen.sqlite"
     with closing(sqlite3.connect(database)) as connection:
-        create_workflow_runs(connection, workflow_count)
+        create_workflow_runs(connection, workflow_count, workflow_run_id)
         connection.execute(
             "CREATE TABLE persisted_state (authority TEXT PRIMARY KEY, value BLOB NOT NULL)"
         )
@@ -256,6 +266,24 @@ def write_viewer_state(
         connection.commit()
     (state / "viewer-owned.bin").write_bytes(b"synthetic-viewer-sidecar\x00\xff")
     return database
+
+
+def write_viewer_locator(
+    session: Path,
+    *,
+    workflow_run_id: str = "workflow-0",
+    head: str = "a" * 40,
+    saved_path: Path | None = None,
+    origin_worktree: Path | None = None,
+) -> None:
+    locator = "\n".join((
+        f"origin_worktree: {origin_worktree or MODULE.KIT_ROOT.resolve()}",
+        f"origin_head: {head}",
+        f"workflow_run_id: {workflow_run_id}",
+        f"saved_path: {saved_path or Path(os.path.abspath(session))}",
+        "",
+    ))
+    (session / "viewer-session.txt").write_text(locator, encoding="utf-8")
 
 
 def state_file_bytes(state: Path) -> dict[str, bytes]:
@@ -294,7 +322,7 @@ class LauncherUnitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             runtime = root / "runtime"
-            write_viewer_state(runtime, rows)
+            write_viewer_state(runtime, rows, workflow_run_id="run-synthetic")
             before = state_file_bytes(runtime / "state")
             destination = root / ".old" / "viewer-session"
 
@@ -346,15 +374,31 @@ class LauncherUnitTest(unittest.TestCase):
                     sorted(rows),
                 )
             self.assertIn(
-                "workflow_run_id: unknown",
+                "workflow_run_id: workflow-0",
                 (destination / "viewer-session.txt").read_text(encoding="utf-8"),
             )
+
+    def test_save_rejects_a_supplied_workflow_id_that_differs_from_sqlite(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            write_viewer_state(
+                runtime, [("workflow", b"complete")], workflow_run_id="run-canonical",
+            )
+            destination = root / "saved"
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_SAVE_FAILED)}$",
+            ):
+                MODULE.save_viewer_state(runtime, destination, "run-foreign")
+            self.assertFalse(destination.exists())
 
     def test_change_after_resume_remains_present_on_next_resume(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             runtime = root / "runtime"
-            write_viewer_state(runtime, [("partial-review", b"before")])
+            write_viewer_state(
+                runtime, [("partial-review", b"before")], workflow_run_id="run-durable",
+            )
             destination = root / ".old" / "durable-session"
             with (
                 mock.patch.object(MODULE, "_current_head", return_value="c" * 40),
@@ -444,7 +488,9 @@ class LauncherUnitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             runtime = root / "runtime"
-            write_viewer_state(runtime, [("workflow", b"complete")])
+            write_viewer_state(
+                runtime, [("workflow", b"complete")], workflow_run_id="run-existing",
+            )
             destination = root / ".old" / "existing"
             destination.mkdir(parents=True)
             sentinel = destination / "owner.txt"
@@ -518,7 +564,9 @@ class LauncherUnitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             runtime = root / "runtime"
-            write_viewer_state(runtime, [("workflow", b"complete")])
+            write_viewer_state(
+                runtime, [("workflow", b"complete")], workflow_run_id="run-safe",
+            )
             external = root / "external"
             external.mkdir()
             sentinel = external / "sentinel.bin"
@@ -537,7 +585,9 @@ class LauncherUnitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             runtime = root / "runtime"
-            write_viewer_state(runtime, [("workflow", b"complete")])
+            write_viewer_state(
+                runtime, [("workflow", b"complete")], workflow_run_id="run-race",
+            )
             destination = root / "sessions" / "saved"
             destination.parent.mkdir()
             real_rename = MODULE.rename_noreplace
@@ -691,7 +741,11 @@ class LauncherUnitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             runtime = root / "runtime-private"
-            write_viewer_state(runtime, [("workflow", b"private database bytes")])
+            write_viewer_state(
+                runtime,
+                [("workflow", b"private database bytes")],
+                workflow_run_id="private-run",
+            )
             destination = root / ".old" / "private-destination"
             with mock.patch.object(
                 MODULE.shutil,
@@ -707,6 +761,99 @@ class LauncherUnitTest(unittest.TestCase):
             self.assertNotIn("secret", message.lower())
             self.assertFalse(destination.exists())
 
+    def test_exact_saved_locator_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary) / "saved-session"
+            database = write_viewer_state(
+                session, [("partial-review", b"preserved")],
+                workflow_run_id="run-preserved",
+            )
+            write_viewer_locator(
+                session, workflow_run_id="run-preserved", head="e" * 40,
+            )
+            with mock.patch.object(MODULE, "_current_head", return_value="e" * 40):
+                self.assertEqual(
+                    MODULE.validate_viewer_session(
+                        Path(os.path.abspath(session)), Path(os.path.abspath(session)),
+                    ),
+                    database,
+                )
+
+    def test_resume_locator_mismatches_fail_before_dependencies_listener_or_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            other_saved = root / "other-saved"
+            other_saved.mkdir()
+            other_worktree = root / "other-worktree"
+            other_worktree.mkdir()
+            cases = [
+                "missing", "malformed", "duplicate", "unknown", "run", "path",
+                "worktree", "head-format", "head-mismatch",
+            ]
+            for name in cases:
+                session = root / f"session-{name}"
+                write_viewer_state(
+                    session, [("partial-review", b"preserved")],
+                    workflow_run_id="run-exact",
+                )
+                if name != "missing":
+                    write_viewer_locator(
+                        session,
+                        workflow_run_id="unknown" if name == "unknown" else (
+                            "run-foreign" if name == "run" else "run-exact"
+                        ),
+                        head="A" * 40 if name == "head-format" else (
+                            "f" * 40 if name == "head-mismatch" else "e" * 40
+                        ),
+                        saved_path=other_saved if name == "path" else None,
+                        origin_worktree=other_worktree if name == "worktree" else None,
+                    )
+                    locator = session / "viewer-session.txt"
+                    if name == "malformed":
+                        locator.write_text("origin_worktree without separator\n", encoding="utf-8")
+                    elif name == "duplicate":
+                        locator.write_text(
+                            locator.read_text(encoding="utf-8")
+                            + f"saved_path: {Path(os.path.abspath(session))}\n",
+                            encoding="utf-8",
+                        )
+                with (
+                    self.subTest(name=name),
+                    mock.patch.object(sys, "argv", [
+                        "run_local_review.py", "--resume-state", str(session), "--no-browser",
+                    ]),
+                    mock.patch.object(MODULE, "_current_head", return_value="e" * 40),
+                    mock.patch.object(MODULE, "ensure_dependencies") as dependencies,
+                    mock.patch.object(MODULE, "reserve_free_port") as reserve,
+                    mock.patch.object(MODULE, "start_owned_process") as start,
+                ):
+                    with self.assertRaisesRegex(
+                        SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$",
+                    ):
+                        MODULE.main()
+                dependencies.assert_not_called()
+                reserve.assert_not_called()
+                start.assert_not_called()
+
+    def test_resume_rejects_a_linked_locator_without_external_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            session = root / "saved-session"
+            write_viewer_state(
+                session, [("partial-review", b"preserved")],
+                workflow_run_id="run-exact",
+            )
+            external = root / "external-locator.txt"
+            external.write_text("private external locator", encoding="utf-8")
+            file_link_or_skip(self, session / "viewer-session.txt", external)
+            with self.assertRaisesRegex(
+                SystemExit, f"^{re.escape(MODULE.VIEWER_STATE_INVALID)}$",
+            ):
+                MODULE.validate_viewer_session(session, session)
+            self.assertEqual(
+                external.read_text(encoding="utf-8"), "private external locator",
+            )
+
     def test_resume_cli_uses_saved_state_without_collection_or_import(self):
         class FakeProcess:
             def poll(self):
@@ -718,13 +865,20 @@ class LauncherUnitTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             session = Path(temporary) / "saved-session"
-            write_viewer_state(session, [("partial-review", b"preserved")])
+            write_viewer_state(
+                session, [("partial-review", b"preserved")],
+                workflow_run_id="run-preserved",
+            )
+            write_viewer_locator(
+                session, workflow_run_id="run-preserved", head="e" * 40,
+            )
             with (
                 mock.patch.object(sys, "argv", [
                     "run_local_review.py", "--resume-state", str(session),
                     "--port", "3210", "--skip-install", "--no-browser", "--smoke-test",
                 ]),
                 mock.patch.object(MODULE, "install_signal_handlers"),
+                mock.patch.object(MODULE, "_current_head", return_value="e" * 40),
                 mock.patch.object(MODULE, "ensure_port_available"),
                 mock.patch.object(MODULE, "ensure_dependencies", return_value="npm"),
                 mock.patch.object(MODULE, "start_owned_process", return_value=FakeProcess()) as start,
@@ -1129,7 +1283,7 @@ class LauncherUnitTest(unittest.TestCase):
 
     def test_story_privacy_direct_helpers_reject_origin_before_any_path_access(self):
         hostile = "http://127.0.0.1:3210@example.com:80"
-        with mock.patch.object(MODULE, "_story_privacy_export_path") as export_path:
+        with mock.patch.object(MODULE, "_json_export_path") as export_path:
             with self.assertRaisesRegex(SystemExit, "VIEWER_ORIGIN_INVALID"):
                 MODULE.export_story_privacy_snapshot(hostile, "run-1", Path("PRIVATE.json"))
         export_path.assert_not_called()
@@ -1198,8 +1352,165 @@ class LauncherUnitTest(unittest.TestCase):
             except OSError as error:
                 self.skipTest(f"directory symlink unavailable: {error}")
             with self.assertRaisesRegex(SystemExit, "STORY_PRIVACY_EXPORT_FAILED"):
-                MODULE._story_privacy_export_path(alias / "nested" / "snapshot.json")
+                MODULE._json_export_path(
+                    alias / "nested" / "snapshot.json",
+                    MODULE.STORY_PRIVACY_EXPORT_EXISTS,
+                    MODULE.STORY_PRIVACY_EXPORT_FAILED,
+                )
             self.assertFalse((physical / "nested" / "snapshot.json").exists())
+
+    def test_source_privacy_export_writes_exact_current_projection_including_completed_zero(self):
+        for redaction_count in (1, 0):
+            with self.subTest(redaction_count=redaction_count), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / "source-privacy.json"
+                projection = {
+                    "redactions": [{"id": "row-a"}] if redaction_count else [],
+                    "job": {
+                        "status": "complete",
+                        "completed": redaction_count,
+                        "total": redaction_count,
+                        "rejected": 0,
+                        "source_revision": 7,
+                        "source_digest": "a" * 64,
+                    },
+                }
+                authority = {"sourceAuthority": {
+                    "workflowRunId": "run-1",
+                    "sourceRevision": 7,
+                    "finalizedCorpus": {
+                        "revision": 3,
+                        "digest": "b" * 64,
+                        "documentCount": 2,
+                        "itemCount": 9,
+                    },
+                    "sourceDigest": "a" * 64,
+                }}
+                with (
+                    mock.patch.object(
+                        MODULE, "request_json", side_effect=[projection, authority],
+                    ) as request,
+                    mock.patch.object(
+                        MODULE, "local_viewer_opener", return_value=mock.sentinel.opener,
+                    ),
+                    mock.patch("builtins.print") as printed,
+                ):
+                    MODULE.export_source_privacy_projection(
+                        "http://127.0.0.1:3210", "run-1", output,
+                    )
+                self.assertEqual(json.loads(output.read_text(encoding="utf-8")), projection)
+                self.assertEqual(request.call_args_list, [
+                    mock.call(mock.sentinel.opener, "http://127.0.0.1:3210/api/redactions"),
+                    mock.call(
+                        mock.sentinel.opener,
+                        "http://127.0.0.1:3210/api/redactions?sourceAuthority=1",
+                    ),
+                ])
+                result = json.loads(printed.call_args.args[0])
+                self.assertEqual(set(result), {"redaction_count", "output"})
+                self.assertEqual(result["redaction_count"], redaction_count)
+
+    def test_source_privacy_export_rejects_foreign_stale_incomplete_and_malformed_authority(self):
+        projection = {
+            "redactions": [{"id": "row-a"}],
+            "job": {
+                "status": "complete", "completed": 1, "total": 1, "rejected": 0,
+                "source_revision": 7, "source_digest": "a" * 64,
+            },
+        }
+        authority = {"sourceAuthority": {
+            "workflowRunId": "run-1", "sourceRevision": 7,
+            "finalizedCorpus": {
+                "revision": 3, "digest": "b" * 64, "documentCount": 2, "itemCount": 9,
+            },
+            "sourceDigest": "a" * 64,
+        }}
+        cases = {
+            "foreign": (projection, {**authority, "sourceAuthority": {
+                **authority["sourceAuthority"], "workflowRunId": "foreign-run",
+            }}),
+            "stale-revision": ({**projection, "job": {
+                **projection["job"], "source_revision": 6,
+            }}, authority),
+            "stale-digest": ({**projection, "job": {
+                **projection["job"], "source_digest": "c" * 64,
+            }}, authority),
+            "incomplete": ({**projection, "job": {
+                **projection["job"], "status": "running",
+            }}, authority),
+            "count-mismatch": ({**projection, "job": {
+                **projection["job"], "completed": 0, "total": 1,
+            }}, authority),
+            "rejected": ({**projection, "job": {
+                **projection["job"], "rejected": 1,
+            }}, authority),
+            "unsafe-authority-count": (projection, {**authority, "sourceAuthority": {
+                **authority["sourceAuthority"], "finalizedCorpus": {
+                    **authority["sourceAuthority"]["finalizedCorpus"],
+                    "itemCount": (1 << 53),
+                },
+            }}),
+            "malformed-projection": ({"redactions": "invalid", "job": None}, authority),
+            "malformed-authority": (projection, {"sourceAuthority": None}),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, responses in cases.items():
+                output = root / f"{name}.json"
+                with (
+                    self.subTest(name=name),
+                    mock.patch.object(MODULE, "request_json", side_effect=responses),
+                    mock.patch.object(
+                        MODULE, "local_viewer_opener", return_value=mock.sentinel.opener,
+                    ),
+                    self.assertRaisesRegex(
+                        SystemExit, f"^{re.escape(MODULE.SOURCE_PRIVACY_EXPORT_INVALID)}$",
+                    ),
+                ):
+                    MODULE.export_source_privacy_projection(
+                        "http://127.0.0.1:3210", "run-1", output,
+                    )
+                self.assertFalse(output.exists())
+
+    def test_source_privacy_export_is_no_clobber_and_validates_loopback_before_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "source-privacy.json"
+            output.write_bytes(b"owner bytes")
+            with (
+                mock.patch.object(MODULE, "request_json") as request,
+                self.assertRaisesRegex(
+                    SystemExit, f"^{re.escape(MODULE.SOURCE_PRIVACY_EXPORT_EXISTS)}$",
+                ),
+            ):
+                MODULE.export_source_privacy_projection(
+                    "http://127.0.0.1:3210", "run-1", output,
+                )
+            request.assert_not_called()
+            self.assertEqual(output.read_bytes(), b"owner bytes")
+
+        with mock.patch.object(MODULE, "_json_export_path") as export_path:
+            with self.assertRaisesRegex(SystemExit, "VIEWER_ORIGIN_INVALID"):
+                MODULE.export_source_privacy_projection(
+                    "http://127.0.0.1:3210@example.com:80",
+                    "run-1",
+                    Path("PRIVATE_SENTINEL.json"),
+                )
+        export_path.assert_not_called()
+
+    def test_source_privacy_export_cli_is_one_attach_only_mode(self):
+        destination = Path("current-public-source-privacy.json")
+        with (
+            mock.patch.object(sys, "argv", [
+                "run_local_review.py",
+                "--attach-url", "http://127.0.0.1:3210",
+                "--workflow-run-id", "run-1",
+                "--source-privacy-export", str(destination),
+            ]),
+            mock.patch.object(MODULE, "export_source_privacy_projection") as exported,
+        ):
+            MODULE.main()
+        exported.assert_called_once_with(
+            "http://127.0.0.1:3210", "run-1", destination,
+        )
 
     def test_story_privacy_opener_has_no_proxy_redirect_or_ambient_cookie_authority(self):
         opener = MODULE.local_viewer_opener()
@@ -1217,15 +1528,70 @@ class LauncherUnitTest(unittest.TestCase):
         self.assertEqual(list(cookie_handlers[0].cookiejar), [])
 
     def test_attach_verifies_stable_workflow_run_before_import(self):
+        order = []
         with (
             mock.patch.object(MODULE, "request_json", return_value={"workflowRunId": "run-1"}),
-            mock.patch.object(MODULE, "finalized_semantic_manifest", return_value={"revision": 1}),
-            mock.patch.object(MODULE, "import_run", return_value=(2, 9)) as imported,
-            mock.patch.object(MODULE, "complete_organization", return_value={"status": "complete"}),
+            mock.patch.object(
+                MODULE,
+                "finalized_semantic_manifest",
+                side_effect=lambda _run: order.append("semantic") or {"revision": 1},
+            ) as semantic,
+            mock.patch.object(
+                MODULE,
+                "import_run",
+                side_effect=lambda *_args: order.append("corpus") or (2, 9),
+            ) as imported,
+            mock.patch.object(
+                MODULE,
+                "complete_organization",
+                side_effect=lambda *_args: order.append("organization") or {"status": "complete"},
+            ) as organization,
             mock.patch("builtins.print"),
         ):
             MODULE.attach_run("http://127.0.0.1:3298", "run-1", Path("reviewed run"))
+        semantic.assert_called_once()
         imported.assert_called_once()
+        organization.assert_called_once()
+        self.assertEqual(order, ["semantic", "corpus", "organization"])
+
+    def test_collection_only_attach_finalizes_corpus_without_semantic_or_organization_access(self):
+        with (
+            mock.patch.object(MODULE, "request_json", return_value={"workflowRunId": "run-1"}),
+            mock.patch.object(MODULE, "finalized_semantic_manifest") as semantic,
+            mock.patch.object(MODULE, "import_run", return_value=(2, 9)) as imported,
+            mock.patch.object(MODULE, "complete_organization") as organization,
+            mock.patch("builtins.print") as printed,
+        ):
+            MODULE.attach_run(
+                "http://127.0.0.1:3298",
+                "run-1",
+                Path("collected run"),
+                collection_only=True,
+            )
+        semantic.assert_not_called()
+        imported.assert_called_once()
+        organization.assert_not_called()
+        self.assertEqual(json.loads(printed.call_args.args[0])["collection"], "finalized")
+
+    def test_collection_only_cli_uses_the_existing_attach_path(self):
+        run = Path("collected-run")
+        with (
+            mock.patch.object(sys, "argv", [
+                "run_local_review.py", str(run),
+                "--attach-url", "http://127.0.0.1:3298",
+                "--workflow-run-id", "run-1",
+                "--collection-only",
+            ]),
+            mock.patch.object(MODULE, "locate_inputs"),
+            mock.patch.object(MODULE, "attach_run") as attached,
+        ):
+            MODULE.main()
+        attached.assert_called_once_with(
+            "http://127.0.0.1:3298",
+            "run-1",
+            run.resolve(),
+            collection_only=True,
+        )
 
     def test_attach_never_organizes_after_failed_corpus_finalization(self):
         with (

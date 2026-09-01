@@ -202,37 +202,43 @@ audits) and [`tools/ingest/`](tools/ingest/) (collection and import).
 ```bash
 # 1. Terminal 1: resolve the target, reserve a free port, and show progress before collection.
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
-  --target /path/to/repo
+  --target /path/to/repo \
+  --save-state /external/private/.old/oxygen-session-<fresh-id>
 
 # Record the exact URL and workflow run ID printed above, then use Terminal 2.
 VIEWER_URL=http://127.0.0.1:<port>
 WORKFLOW_RUN_ID=<run-id>
 SOURCE_PRIVACY_RECEIPT=work/my-source-privacy-receipt.json
+SOURCE_PRIVACY_EXPORT=work/my-review/current-public-source-privacy.json
 
 # 2. Collect with fixed operational progress events only.
 python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/my-project \
   --progress-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
 
-# 3. After the agent creates project-map.json, attach to the same Viewer.
+# 3. Finalize the collected corpus in the same Viewer before Organization.
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-project \
+  --attach-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID" --collection-only
+
+# 4. After the agent creates project-map.json, attach ordinarily to complete Organization.
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-project \
   --attach-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
 
-# 4. Build the AI review boundary.
+# 5. Build the AI review boundary.
 python3 tools/llm_redact/prepare_ai_review_run.py \
   --run work/my-project --out work/my-review
 
-# 5. See what a redaction pass would actually be reviewing.
+# 6. See what a redaction pass would actually be reviewing.
 python3 tools/llm_redact/audit_coverage.py work/my-review
 
-# 6. Attach the reviewed boundary before creating dialogue assignments or a receipt.
+# 7. Attach the reviewed boundary before creating dialogue assignments or a receipt.
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/my-review \
   --attach-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
 
-# 7. Extract only conversational turns from that current reviewed authority.
+# 8. Extract only conversational turns from that current reviewed authority.
 python3 tools/llm_redact/extract_dialogue.py work/my-review --out work/my-dialogue \
   --base-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID"
 
-# 8. After the model writes one findings JSON per bundle, validate and merge.
+# 9. After the model writes one findings JSON per bundle, validate and merge.
 python3 tools/llm_redact/verify_coverage.py \
   --dialogue work/my-dialogue --findings work/my-findings \
   --receipt "$SOURCE_PRIVACY_RECEIPT"
@@ -240,10 +246,13 @@ python3 tools/llm_redact/merge_and_apply.py \
   --dialogue work/my-dialogue --findings work/my-findings --out work/my-redaction \
   --receipt "$SOURCE_PRIVACY_RECEIPT"
 
-# 9. Push validated spans into that exact Viewer.
+# 10. Push validated spans into that exact Viewer, then export its current public authority.
 python3 tools/llm_redact/push_redactions.py \
   --redacted work/my-redaction/redacted --base-url "$VIEWER_URL" \
   --receipt "$SOURCE_PRIVACY_RECEIPT"
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --attach-url "$VIEWER_URL" --workflow-run-id "$WORKFLOW_RUN_ID" \
+  --source-privacy-export "$SOURCE_PRIVACY_EXPORT"
 ```
 
 Native Windows PowerShell uses the same workflow without `python -X utf8`, `chcp`, WSL, or a
@@ -257,10 +266,12 @@ $Dialogue = "work\my-dialogue"
 $Findings = "work\my-findings"
 $Redaction = "work\my-redaction"
 $Receipt = "work\my-source-privacy-receipt.json"
+$SourcePrivacy = "$Review\current-public-source-privacy.json"
+$SavedSession = "D:\private\.old\oxygen-session-<fresh-id>"
 
 # Terminal 1: show Workflow Progress before collection; keep this running.
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
-  --target "$Repo"
+  --target "$Repo" --save-state "$SavedSession"
 
 # In Terminal 2, copy the exact values printed by Terminal 1.
 $Viewer = "http://127.0.0.1:<port>"
@@ -270,7 +281,11 @@ $WorkflowRun = "<run-id>"
 python .\tools\ingest\collect_repo_trajectories.py "$Repo" `
   --out "$Run" --progress-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
-# Attach the organized run to the same Viewer after project-map.json exists.
+# Finalize the collected corpus in the same Viewer before Organization.
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  "$Run" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" --collection-only
+
+# After project-map.json exists, attach ordinarily to complete Organization.
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   "$Run" --attach-url "$Viewer" --workflow-run-id "$WorkflowRun"
 
@@ -296,6 +311,9 @@ python .\tools\llm_redact\merge_and_apply.py `
 python .\tools\llm_redact\push_redactions.py `
   --redacted "$Redaction\redacted" `
   --base-url "$Viewer" --receipt "$Receipt"
+python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
+  --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" `
+  --source-privacy-export "$SourcePrivacy"
 ```
 
 Do not make a source-bearing attach between dialogue extraction and the corresponding push. It
@@ -332,6 +350,9 @@ database state is reused. By default the OS reserves an arbitrary free port and 
 announces it only after that exact port becomes healthy. There is no online deployment path. Use
 `--port <number>` for a specific isolated port; an occupied port fails immediately with a clear
 diagnostic and no unrelated process is stopped.
+
+Resume only with the exact saved path printed by that launch, from the same original contributor-kit
+checkout at the same Git HEAD. A different path, checkout, commit, or workflow run is rejected.
 
 ---
 

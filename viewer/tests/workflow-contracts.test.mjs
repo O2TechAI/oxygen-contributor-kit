@@ -112,10 +112,12 @@ test("root routing is progressive and preserves the canonical stage owners", asy
 });
 
 test("Source Privacy docs attach the reviewed generation before the receipt window", async () => {
-  const [readme, sop, organizerSkill] = await Promise.all([
+  const [readme, sop, ingestSkill, organizerSkill, storySkill] = await Promise.all([
     read("README.md"),
     read("SOP.md"),
+    read("skills/oxygen-ingest-project-history/SKILL.md"),
     read("skills/oxygen-organize-review-export/SKILL.md"),
+    read("skills/oxygen-storytelling-review/SKILL.md"),
   ]);
 
   for (const document of [readme, sop]) {
@@ -134,6 +136,7 @@ test("Source Privacy docs attach the reviewed generation before the receipt wind
         "verify_coverage.py",
         "merge_and_apply.py",
         "push_redactions.py",
+        "--source-privacy-export",
       ]);
       const extraction = sequence.indexOf("extract_dialogue.py");
       const push = sequence.indexOf("push_redactions.py", extraction);
@@ -150,6 +153,28 @@ test("Source Privacy docs attach the reviewed generation before the receipt wind
     /prepare the reviewed run[\s\S]{0,120}audit[\s\S]{0,120}attach[\s\S]{0,160}extract dialogue[\s\S]{0,160}model review[\s\S]{0,100}verify coverage[\s\S]{0,100}merge and apply[\s\S]{0,100}push/i,
   );
   assert.doesNotMatch(organizerSkill, /reattach[^\n]{0,160}idempotent/i);
+
+  for (const document of [readme, sop, organizerSkill]) {
+    assert.match(document, /--collection-only/);
+    assert.match(document, /(?:before|Before) Organization/);
+  }
+  assert.match(ingestSkill, /Repository, Anthropic, and meeting[\s\S]{0,120}same corpus/);
+  assert.match(organizerSkill, /without reading\s+`semantic_manifest` or posting Organization/);
+  const coverage = storySkill.indexOf("## Coverage Finalizer");
+  assert.ok(coverage >= 0);
+  assertOrdered(storySkill.slice(coverage), [
+    "--source-privacy-export",
+    "finalize_story_coverage.mjs",
+  ]);
+
+  for (const document of [readme, sop, ingestSkill, organizerSkill, storySkill]) {
+    for (const match of document.matchAll(/run_local_review\.py[\s\S]{0,180}--target[\s\S]{0,180}/g)) {
+      assert.match(match[0], /--save-state/);
+    }
+  }
+  for (const document of [readme, sop, organizerSkill]) {
+    assert.match(document, /exact saved path[\s\S]{0,160}original[\s\S]{0,100}(?:Git )?HEAD/i);
+  }
 });
 
 test("Organization workers map against one parent-owned run-bound registry", async () => {

@@ -53,6 +53,13 @@ type WorkflowRunRow = {
 };
 
 type SessionBindingRow = { server_version?: number; state_json?: string };
+type FinalizedCorpusRow = {
+  workflow_run_id?: string;
+  corpus_revision?: number;
+  corpus_digest?: string;
+  document_count?: number;
+  item_count?: number;
+};
 
 type SourcePrivacyCompletionRow = {
   job_id?: string;
@@ -131,11 +138,17 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
       collection_total,story_generation_status,story_generation_completed,
       story_generation_total,story_source_revision,active_story_digest,updated_at
       FROM workflow_runs WHERE id=?`).bind(authority.workflowRunId).first<WorkflowRunRow>();
-  const [items, documents, organization, redaction, sourcePrivacyCompletion, run, sessionBinding] = await Promise.all([
+  const [
+    items, documents, finalizedCorpus, organization, redaction,
+    sourcePrivacyCompletion, run, sessionBinding,
+  ] = await Promise.all([
     db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN organization_category IS NOT NULL THEN 1 ELSE 0 END) AS completed
       FROM items`).first<CountRow>(),
     db.prepare("SELECT COUNT(*) AS total FROM documents").first<{ total: number }>(),
+    db.prepare(`SELECT workflow_run_id,corpus_revision,corpus_digest,document_count,item_count
+      FROM finalized_corpus_manifests WHERE workflow_run_id=?`)
+      .bind(authority.workflowRunId).first<FinalizedCorpusRow>(),
     db.prepare("SELECT id,status,updated_at FROM organization_jobs ORDER BY updated_at DESC LIMIT 1").first<JobRow>(),
     db.prepare("SELECT id,status,updated_at FROM redaction_jobs ORDER BY started_at DESC LIMIT 1").first<JobRow>(),
     db.prepare(`SELECT j.id AS job_id,j.status AS job_status,j.completed AS job_completed,
@@ -171,6 +184,17 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
   }
   const currentServerVersion = Number(sessionBinding?.server_version);
   const currentSourceRevision = Number(run?.story_source_revision);
+  const documentCount = Number(documents?.total || 0);
+  const itemCount = Number(items?.total || 0);
+  const collectionFinalized = Boolean(
+    finalizedCorpus?.workflow_run_id === authority.workflowRunId
+    && validActivatedSourceRevision(finalizedCorpus?.corpus_revision)
+    && /^[0-9a-f]{64}$/.test(String(finalizedCorpus?.corpus_digest || ""))
+    && validNonnegativeAuthorityCounter(finalizedCorpus?.document_count)
+    && validNonnegativeAuthorityCounter(finalizedCorpus?.item_count)
+    && Number(finalizedCorpus?.document_count) === documentCount
+    && Number(finalizedCorpus?.item_count) === itemCount
+  );
   const privacyComplete = redaction?.status === "complete"
     && await normalizedSourcePrivacyComplete(
       sourcePrivacyCompletion,
@@ -192,8 +216,9 @@ export async function loadWorkflowProgress(workflowRunId?: string) {
     collectionStatus: run?.collection_status || null,
     collectionCompleted: Number(run?.collection_completed || 0),
     collectionTotal: Number(run?.collection_total || 0),
-    documentCount: Number(documents?.total || 0),
-    itemCount: Number(items?.total || 0),
+    collectionFinalized,
+    documentCount,
+    itemCount,
     organizedItemCount: Number(items?.completed || 0),
     organizationStatus: organization?.status || null,
     redactionStatus: redaction?.status === "complete"

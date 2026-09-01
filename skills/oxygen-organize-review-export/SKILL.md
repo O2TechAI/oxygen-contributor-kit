@@ -7,6 +7,19 @@ description: Continue the progress-first local Viewer after deterministic source
 
 ## Organize projects first
 
+Before Organization semantic mapping, attach the collected ingest run to the existing progress-first Viewer with
+the explicit corpus-only boundary:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py work/<run> \
+  --attach-url http://127.0.0.1:<port> --workflow-run-id <run-id> --collection-only
+```
+
+This imports and finalizes the exact corpus for that Viewer/run without reading
+`semantic_manifest` or posting Organization. Repository, Anthropic, and meeting imports all use
+this same attach; their importers do not author progress authority. Continue below only after it
+succeeds.
+
 Read every projected contribution record in the ingest run. The early deterministic projection
 keeps recorded human dialogue, Agent reasoning/dialogue, agent/subagent coordination and findings,
 meaningful progress, meetings, feedback, and human-supplied sources. Tool envelopes/results, raw
@@ -209,6 +222,15 @@ imports the project map and source records, and atomically publishes Organizatio
 existing Viewer. The supported Source Privacy sequence is: prepare the reviewed run, audit its
 boundary, attach it to the owned current Viewer, extract dialogue from that run and current Viewer
 authority, complete model review, verify coverage, merge and apply, then push the validated spans.
+Immediately after that push, export the unchanged current public Source Privacy projection for
+Coverage with the same launcher, origin, and run ID:
+
+```bash
+python3 skills/oxygen-organize-review-export/scripts/run_local_review.py \
+  --attach-url http://127.0.0.1:<port> --workflow-run-id <run-id> \
+  --source-privacy-export work/<run>-review/current-public-source-privacy.json
+```
+
 Do not make a source-bearing attach between dialogue extraction and that push. If one occurs, the
 old assignments, findings, receipt, and merged output are stale; extract current assignments and
 repeat review and validation instead of re-signing, hand-editing, or reusing the old receipt.
@@ -246,6 +268,8 @@ Resume uses that same local state directly, so later human Review, Privacy, Pref
 release progress remains durable there. Do not rerun collection, import, or Story preparation; do
 not infer completion or bypass an existing blocker. A saved session is a private local convenience,
 not an immutable archive or product authority, and it never changes `publication_approved=false`.
+Resume requires that exact saved path from the original contributor-kit checkout at the exact saved
+Git HEAD; another path, checkout, commit, or workflow run fails closed.
 
 ## Browser handoff is required
 
