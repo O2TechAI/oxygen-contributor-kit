@@ -837,14 +837,20 @@ test("finalized Coverage owner IDs form indivisible self-contained Story bundles
   }
 });
 
-test("Story preparation preserves validated opaque actor topology and rejects raw shapes pre-authority", async () => {
+test("mixed Story sources preserve actor topology and full authority while omitting empty worker relations", async () => {
   const root = await mkdtemp(join(tmpdir(), "story-actor-topology-"));
   try {
-    const semantic = semanticAuthority();
+    const semantic = semanticAuthority({ suffixes: ["a", "b", "meeting"] });
+    semantic.units[2].members = ["meeting-canary:record-a"];
+    semantic.units[2].membershipDigest = digest([{ id: "meeting-canary:record-a", sourceDigest: digest({ suffix: "meeting" }) }]);
+    semantic.sourceDigest = digest(semantic.units.map((unit) => unit.members[0]));
+    semantic.universeDigest = digest(semantic.units.flatMap((unit) => unit.members));
+    const { manifestDigest: _manifestDigest, ...semanticCore } = semantic;
+    semantic.manifestDigest = digest(semanticCore);
     const projectMap = {
       primary_project: semantic.projectId, summary: "Synthetic.",
-      projects: [{ name: semantic.projectId, event_count: 2, reason: "Reviewed boundary." }],
-      source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: 2 },
+      projects: [{ name: semantic.projectId, event_count: 3, reason: "Reviewed boundary." }],
+      source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 2, contributionCount: 3 },
       semantic_units: semantic.units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
       semantic_manifest: semantic,
     };
@@ -853,6 +859,17 @@ test("Story preparation preserves validated opaque actor topology and rejects ra
     const boundary = await reviewedBoundary(root, projectMap, semantic);
     const eventsPath = join(boundary.review, "trajectories", "doc-canary", "events.jsonl");
     const events = (await readFile(eventsPath, "utf8")).trim().split("\n").map(JSON.parse);
+    events.pop();
+    const meeting = {
+      meeting_id: "meeting-canary",
+      records: [{
+        record_id: "record-a", order: 1, speaker: `actor-${digest("meeting-speaker")}`,
+        text: "Reviewed meeting context with Unicode evidence 🧭.",
+      }],
+    };
+    const meetingDirectory = join(boundary.review, "meetings", meeting.meeting_id);
+    await mkdir(meetingDirectory, { recursive: true });
+    await json(join(meetingDirectory, "meeting.json"), meeting);
     const parent = `actor-${digest("parent")}`;
     events[0].actor = { id: `actor-${digest("alice.smith")}`, type: "field researcher", parent_id: parent };
     events[0].event_type = "field_note";
@@ -864,11 +881,14 @@ test("Story preparation preserves validated opaque actor topology and rejects ra
     const writeEvents = () => writeFile(eventsPath, `${events.map(JSON.stringify).join("\n")}\n`, "utf8");
     await writeEvents();
     const privacy = await readJson(boundary.sourcePrivacy);
-    privacy.job.source_digest = await computeSourceDigest(events.map((event) => ({
+    privacy.job.source_digest = await computeSourceDigest([...events.map((event) => ({
       id: event.event_id, document_id: event.trajectory_id, sequence: event.sequence,
       event_type: event.event_type, actor_type: event.actor.type,
       timestamp: event.timestamp, content: event.payload.text,
-    })));
+    })), {
+      id: "meeting-canary:record-a", document_id: meeting.meeting_id, sequence: 1,
+      event_type: "record", actor_type: "human", timestamp: null, content: meeting.records[0].text,
+    }]);
     await json(boundary.sourcePrivacy, privacy);
 
     for (const [name, mutate] of [
@@ -909,15 +929,32 @@ test("Story preparation preserves validated opaque actor topology and rejects ra
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
       boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
     const authority = await readJson(join(transport, "story", "validation-authority.json"));
-    assert.notEqual(authority.evidence[0].actorEquivalence, authority.evidence[1].actorEquivalence);
-    assert.equal(authority.evidence[0].parentActorEquivalence, parent);
-    assert.equal(authority.evidence[1].parentActorEquivalence, parent);
-    assert.equal(authority.evidence[0].interactionDirection, "agent_to_subagent");
-    assert.deepEqual(authority.evidence[0].relations, [{
-      type: "reply_to", target: events[1].relation_id,
+    assert.deepEqual(authority.evidence, [...events.map((event) => ({
+      id: event.event_id, documentId: event.trajectory_id, sequence: event.sequence,
+      timestamp: event.timestamp, eventType: event.event_type, actorType: event.actor.type,
+      actorEquivalence: event.actor.id, parentActorEquivalence: parent,
+      interactionDirection: event.payload.interaction_direction,
+      relationId: event.relation_id, relations: event.relations,
+    })), {
+      id: "meeting-canary:record-a", documentId: meeting.meeting_id, sequence: 1,
+      timestamp: null, eventType: "record", actorType: "human",
+      actorEquivalence: meeting.records[0].speaker, parentActorEquivalence: null,
+      interactionDirection: null, relationId: null, relations: [],
     }]);
     const input = await readFile(join(transport, "story", "inputs", "story-0001.json"), "utf8");
     assert.doesNotMatch(input, /alice\.smith|alice-smith|RAW-/u);
+    const narrative = JSON.parse(input).payload.ownerBundles.flatMap((bundle) => bundle.reviewedNarrative);
+    assert.deepEqual(narrative, [...events.map((event) => ({
+      id: event.event_id, documentId: event.trajectory_id, sequence: event.sequence,
+      eventType: event.event_type, actorType: event.actor.type, actorEquivalence: event.actor.id,
+      parentActorEquivalence: parent, interactionDirection: event.payload.interaction_direction,
+      relationId: event.relation_id, narrative: event.payload.text,
+      ...(event === events[0] ? { relations: [{ type: "reply_to", target: events[1].relation_id }] } : {}),
+    })), {
+      id: "meeting-canary:record-a", documentId: meeting.meeting_id, sequence: 1,
+      eventType: "record", actorType: "human", actorEquivalence: meeting.records[0].speaker,
+      narrative: meeting.records[0].text,
+    }]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -265,10 +265,10 @@ function projectEvidence(rows) {
       eventType: row.eventType,
       actorType: row.actorType,
       actorEquivalence: row.actorId,
-      parentActorEquivalence: row.parentActorId,
-      interactionDirection: row.interactionDirection,
-      relationId: row.relationId,
-      relations: row.relations,
+      ...(row.parentActorId === null ? {} : { parentActorEquivalence: row.parentActorId }),
+      ...(row.interactionDirection === null ? {} : { interactionDirection: row.interactionDirection }),
+      ...(row.relationId === null ? {} : { relationId: row.relationId }),
+      ...(row.relations.length === 0 ? {} : { relations: row.relations }),
       narrative: row.content,
     });
   }
