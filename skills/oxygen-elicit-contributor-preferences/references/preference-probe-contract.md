@@ -68,12 +68,66 @@ The Agent writes exactly:
 {"probes": [], "bulkDecisions": [], "setAside": 0}
 ```
 
-Candidate probes use the `/api/probes` camelCase nested shape: all seventeen probe keys, including
-one exact `storyKey`, `insightId`, and `insightAuthorityDigest` triple from `insightScope`, plus 2–3
-distinct canonical options, the linked Story's required valid presentation, `allowOther: true`, and
-`allowSkip: true`. Copy each `insightAuthorityDigest` exactly from `insightScope`; candidates must
-not invent any other digest. Candidate bulk decisions use the exact six API keys. Candidates cannot
-supply `autoRemoved`, defaults, answers, model/provider information, or publication state.
+The existing [candidate validator](../scripts/validate_probes.py) is the executable owner. The
+following types document its current fields, not a second schema. Each probe has exactly seventeen
+keys; each bulk candidate has exactly six. Workers return these candidates only; the parent runs
+the deterministic finalizer that adds the ten API bundle fields below.
+
+```ts
+type PreferenceOption = { id: string; text: string };
+type ProbeCandidate = {
+  id: string;
+  storyKey: string;
+  insightId: string;
+  insightAuthorityDigest: string;
+  documentId: string;
+  documentKind: string;
+  eventIds: string[];
+  timestamp: string | null;
+  signal: "repeated_correction" | "long_exchange" | "late_rejection"
+    | "decision_reversal" | "explicit_rule" | "sustained_disagreement";
+  score: number;
+  turns: number;
+  recap: string;
+  question: string;
+  options: PreferenceOption[];
+  presentations: Partial<Record<"en" | "zh", {
+    recap: string; question: string; options: PreferenceOption[];
+  }>>;
+  allowOther: true;
+  allowSkip: true;
+};
+type BulkCandidate = {
+  id: string;
+  kind: string;
+  count: number;
+  question: string;
+  evidenceSample: string[];
+  presentations: Partial<Record<"en" | "zh", { question: string }>>;
+};
+```
+
+Copy one exact `storyKey`/`insightId`/`insightAuthorityDigest` triple from `insightScope`; never invent
+another digest. Probe IDs and bulk IDs are unique across the batch, and each Chapter-local Insight
+may have at most one probe. `documentKind` is the cited reviewed document's exact current value,
+matching `^[a-z][a-z0-9_]{0,63}$`; do not coerce an unfamiliar valid kind to `trajectory` or `meeting`.
+A probe cites 1–500 unique `eventIds` from its own document with that same kind. Bulk `kind` is safe,
+nonempty explanatory text, not a Privacy decision or category override; `evidenceSample` has 0–500
+unique reviewed event IDs. Do not generate new Privacy decisions.
+
+`score` is an integer in 0–100; `turns`, `count`, and `setAside` are nonnegative safe integers.
+Use only supplied reviewed evidence, never uncited neighboring turns. A probe has 2–3 options with
+unique IDs and distinct, evidence-grounded text; generic advice is invalid. Each probe presentation
+has exactly recap/question/options; its options have the same IDs, count, and order as canonical
+options. The linked Story language presentation is mandatory. Bulk presentations may be empty;
+otherwise each `en` or `zh` entry has exactly question. Other and Skip remain true flags, never
+option rows. Cap probes at 12 by default and the combined probe/bulk batch at 20 maximum. An empty
+batch has both arrays empty and `setAside: 0`; never manufacture questions to avoid completed-zero.
+
+IDs and safe text are nonempty after trimming, with limits measured as UTF-16 code units: 20,000
+by default, 1,000 for cited event IDs, and 200 for option IDs. `timestamp` is either null or safe
+text. Candidates cannot supply `autoRemoved`, defaults, answers, model/provider information, or
+publication state.
 Both reviewed `en` and `zh` presentations may coexist. The required linked language must exist and
 validate without fallback, synthesis, or translation; extra reviewed presentation does not change
 question, option, Insight-binding, or answer identity.

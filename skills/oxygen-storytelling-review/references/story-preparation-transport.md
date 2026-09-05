@@ -6,6 +6,41 @@ and provider-free. The workflow-owning parent automatically assigns generated in
 host subagents and records their proposals; the
 transport never calls a provider, network service, Viewer API, SQLite database, or release path.
 
+## Worker reading routes
+
+Before dispatch, the parent conveys the worker boundary below, the exact lane reading list, the
+literal generated `inputPath` from that lane's shard manifest, and its assigned proposal path.
+Read each named section completely; a heading means its prose and code through the next heading of
+the same or higher level. Only an explicit whole-file entry requires the whole document. Read the
+listed instructions first, then exactly that one input. A transport link or guessed filename alone
+is not a valid assignment. Basenames in authoring examples denote roles; use the actual assigned
+input and proposal paths, never open another generated context by its example name.
+
+| Worker | Required authoring instructions, in order |
+|---|---|
+| Story | [Narrative writing contract](narrative-writing-contract.md), whole file; data [Source Type](story-data-contract.md#source-type), [Evidence Rules](story-data-contract.md#evidence-rules), [Chapter, Phase, And Ordering](story-data-contract.md#chapter-phase-and-ordering), [People And Story Blocks](story-data-contract.md#people-and-story-blocks); [Story proposals](#story-proposals). |
+| Insight | narrative [Governing Rule](narrative-writing-contract.md#governing-rule), [Insights](narrative-writing-contract.md#insights), [Voice](narrative-writing-contract.md#voice); data [Source Type](story-data-contract.md#source-type), [Evidence Rules](story-data-contract.md#evidence-rules), [Insights](story-data-contract.md#insights); [Insight proposals](#insight-proposals). |
+| Story Privacy | privacy [Two Privacy Boundaries](privacy-evidence-boundary.md#two-privacy-boundaries), [Provider Processing And Final Export Boundary](privacy-evidence-boundary.md#provider-processing-and-final-export-boundary), [Reviewed Boundary Is The Ceiling](privacy-evidence-boundary.md#reviewed-boundary-is-the-ceiling), [Story/Release Target Authority](privacy-evidence-boundary.md#storyrelease-target-authority); [Story Privacy proposals](#story-privacy-proposals). |
+| Preference | Preference Skill [Stage 2](../../oxygen-elicit-contributor-preferences/SKILL.md#stage-2--preserve-reviewed-judgement-call-decisions) and [Stage 4](../../oxygen-elicit-contributor-preferences/SKILL.md#stage-4--reconstruct-the-situation-then-offer-three-options); [signal heuristics](../../oxygen-elicit-contributor-preferences/references/signal-heuristics.md), whole file; [Candidate and final bundle](../../oxygen-elicit-contributor-preferences/references/preference-probe-contract.md#candidate-and-final-bundle); [Preference proposals](#preference-proposals). |
+
+### Worker boundary
+
+Use only the contributor-selected current provider and the assigned immutable input. Write only
+the assigned non-authoritative proposal. Never open parent validation authority, other generated
+data, raw history, excluded/outside-boundary source, or another lane's data. Do not create authority
+digests, receipts, final artifacts, SQLite/Viewer mutations, answers, revision/activation/release
+state, or publication decisions. Copy only binding fields required by the lane's proposal shape.
+Author text in the assigned Story language, preserving customary working terms; never change the
+language policy. Corrections replace only the assigned proposal against byte-identical input.
+The parent owns recording, validation, terminal completion, and all human handoffs.
+
+In worker `reviewedNarrative`, null `parentActorEquivalence`, `interactionDirection`, and `relationId`
+fields and empty `relations` arrays may be omitted. Absence means the source supplied no relation
+information for that field; it is not proof that no interaction occurred and never licenses an
+inference. All nonempty interaction/relationship values remain; parent-only Evidence rows remain
+complete. Fresh input, policy, and validation digests bind the current projection; never reuse old
+receipts after the input shape changes.
+
 ## Authority and storage
 
 `prepare_story_preparation.mjs` accepts either the canonical Organization `project-map.json` or
@@ -28,6 +63,8 @@ actor-equivalence tokens. It contains no source text, raw actor ID, redaction ro
 metadata, private value, or source narrative. The worker input binds its digest and is the only
 artifact here that carries the corresponding exact bound raw reviewed narrative.
 
+## Dispatch and recording
+
 Each lane is prepared once under one transport root. Before Coverage finalization, the parent
 establishes the global Chapter-owner skeleton by coherent narrative arc across the complete
 bound reviewed semantic projection. It does not default or mechanically copy `ownerId` from `unitId`,
@@ -45,22 +82,6 @@ authority are not copied into every non-Story shard. Each Story input is self-co
 complete represented semantic units, their exact bound raw reviewed narrative, canonical semantic/Coverage
 references, and equality-only actor tokens for its owners. It carries no excluded narrative, raw
 actor identity, Source Privacy row, source outside the exact reviewed boundary, or provider metadata.
-A worker uses the contributor-selected current provider to read exactly one provider-bound `inputPath` and
-writes only its proposal; it never writes a digest, receipt, final manifest, SQLite, Viewer API,
-revision, activation state, release state, or publication state.
-
-Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
-
-1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
-2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
-3. Then read exactly the assignment's one generated provider-bound `inputPath`.
-4. Write only that assignment's proposal.
-
-The parent must not dispatch a Story worker unless the assignment names both required contract
-paths, the one actual generated `inputPath` copied from the Story shard manifest, and the
-proposal-only write boundary. The Story worker reads no other data input and never writes a
-receipt, final artifact, or authority file.
-
 Story, Insight, and Story Privacy remain multi-shard lanes: the parent dispatches every nonempty
 shard automatically. Preference intentionally uses exactly one global bounded worker because it
 produces one deduplicated questionnaire authority, capped at 12 probes by default and 20 maximum;
@@ -74,7 +95,9 @@ authority without asking the contributor to create workers.
 
 On a subagent-capable host the parent does not initially author Story prose, People, primary or
 supporting Evidence choices, titles, overviews, or blocks. It reads each complete Chapter proposal
-in full and writes only the transient digest-bound editorial acceptance described below. After the
+in full and records the eight semantic decisions owned by
+[Parent Editorial Acceptance](narrative-writing-contract.md#parent-editorial-acceptance) in the
+transient digest-bound editorial input below. After the
 initial proposal and two subagent corrections remain editorially unacceptable, the Ultra parent may
 complete that same still-unrecorded assignment from the byte-identical input through the same
 phase-free proposal shape, editorial gate, recorder, and validators. It assigns the smallest
@@ -119,6 +142,8 @@ tracebacks, provider metadata, or arbitrary rejected input.
 
 ## Proposal shapes
 
+### Story proposals
+
 Each Story worker reads its manifest `inputPath` and writes a JSON array with exactly one
 phase-free proposal per assigned owner:
 
@@ -134,6 +159,8 @@ overviews, or blocks while assigning Phase.
 New-proposal `chips` and optional `transition` semantics are owned by
 [story-data-contract.md](story-data-contract.md); this transport does not create another metadata
 schema or validator.
+
+### Parent editorial input
 
 After reading all complete proposals, the parent writes one transient editorial-review row per
 owner. This is pre-receipt validation input and is never copied into Story output, receipts,
@@ -155,6 +182,8 @@ re-read and receives a new digest-bound review against the byte-identical worker
 interaction claims. It broadens the prior interaction question within this same eight-criterion
 gate; it is not a ninth criterion or a second semantic authority.
 
+### Insight proposals
+
 Each Insight worker reads its manifest `inputPath` and returns exactly one record for every
 assigned Story key, including an empty array when no Insight is warranted:
 
@@ -174,6 +203,8 @@ Replacing a rejected proposal against byte-identical immutable input is allowed 
 invalid proposals create neither output nor receipt.
 Final composition injects those arrays into the recorded base Stories and writes the canonical
 two-field `story-candidates.json`; the caller never duplicates full Story JSON to add Insights.
+
+### Story Privacy proposals
 
 Each Story Privacy worker reads its manifest `inputPath` and returns exactly one object:
 
@@ -198,6 +229,8 @@ and neither boundary synthesizes an omitted unchanged proposal. Completed-zero m
 empty `targetProposals` array when targets were assigned.
 Initial preparation catalogs only base Story fields; a source Insight enters release targets only after its current accepted version is successfully applied.
 
+### Preference proposals
+
 The one global Preference worker reads its one manifest `inputPath` and writes only the candidate
 shape owned by the Preference Skill. It produces one deduplicated questionnaire authority and is
 capped at 12 probes by default and 20 maximum; Preference never fans out. The existing
@@ -205,6 +238,8 @@ capped at 12 probes by default and 20 maximum; Preference never fans out. The ex
 `validate_probes.py` commands remain the sole context and nine-field bundle authority. The recorder
 accepts that exact final bundle as its proposal and binds it unchanged. An empty generated question
 batch is an explicit completed-zero result.
+
+### Composition validation
 
 Identity sets, exclusions, and non-Story lane arrays use stable UTF-8 identity ordering; Story
 Chapters use the production comparator. Preference `reusableLessons` preserves activated
@@ -270,9 +305,8 @@ trigger at most two parent-orchestrated proposal-only corrections against the by
 parent requires one terminal receipt per assignment before compose/finalize and continues without
 a contributor pause only when the lane has no exhaustion or immediate-stop failure.
 
-For each Story shard, the dispatch message itself must include the four ordered assignment steps
-above with the generated shard's literal `inputPath` and assigned proposal destination. A reference
-to this document alone does not convey the writing contracts to the Story worker.
+For every shard, convey the exact [worker reading route](#worker-reading-routes), actual generated
+`inputPath`, and proposal destination before dispatch.
 
 Prepare, record, and compose the base Story:
 

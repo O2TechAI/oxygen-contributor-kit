@@ -21,6 +21,10 @@ Rows with a different prefix or schema are not current Story candidates. Unknown
 
 ## Source Type
 
+The canonical Story source shape below is assembled by the recorder. A Story worker uses only the
+[phase-free authorable proposal](story-preparation-transport.md#story-proposals), not this complete
+source envelope. Follow the exact [role reading route](story-preparation-transport.md#worker-reading-routes).
+
 The canonical Story source shape is:
 
 ```ts

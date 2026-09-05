@@ -35,86 +35,22 @@ Stage ownership:
   review begins.
 - **Release handoff** — the organizer/export Skill plus canonical release validation.
 
-Repository-development Agents are outside the Toolkit runtime contract. During a normal Toolkit
-request, the workflow-owning parent Agent automatically executes every nonempty immutable semantic
-shard. Before Organization mapping, that parent derives one project-local registry from the
-complete current Privacy-safe projected universe and freezes its stable IDs, kinds, bounded
-definitions/disambiguation, optional Story projections, and duplicate relations. Every immutable
-Organization mapping input embeds that byte-identical run-bound registry and digest; workers map
-only contribution IDs to declared registry IDs and cannot author metadata. Each durable assignment
-names its exact input, proposal, and receipt paths. Story, Insight, and Story Privacy remain multi-shard lanes. Preference intentionally uses
-exactly one global bounded worker because it produces one deduplicated questionnaire authority,
-capped at 12 probes by default and 20 maximum; never fan Preference out across multiple workers.
-When host subagents are available, the parent dispatches with no more than three live at once; each
-subagent reads exactly one generated immutable `inputPath` and writes only its assigned proposal.
-Story and Insight inputs carry only the exact bound raw reviewed narrative needed for their assigned
-scope through the contributor-selected current provider. The parent alone runs recorders and
-finalizers, installs authority, proves exact union and no overlap,
-mutates Viewer state, and waits for all terminal receipts. Story is the global boundary: before
-Coverage finalization, the parent selects Chapter owners by coherent narrative arc across the
-complete exact-bound reviewed semantic projection. It never defaults or mechanically copies
-`ownerId` from `unitId`; Chapter count never follows semantic-unit, source, meeting, or prior-run count, and Phase
-count never follows Chapter count or semantic kind. Related units may share one owner, multiple
-units may form one Chapter, and multiple Chapters may later share one Phase. Finalized Coverage
-`ownerId` is then the sole Chapter-ownership source, complete owner bundles never split across
-workers, every phase-free proposal is collected and read in full by the parent before any Story
-receipt exists, and one batch recorder installs all Story outputs plus exactly one receipt per shard
-only after complete editorial and global validation. Other lanes retain their per-shard
-atomic output/receipt pairs.
+Repository-development Agents are outside the Toolkit runtime contract. Runtime workers read only
+one assigned immutable input and write only its proposal. The parent alone runs recorders and
+finalizers, installs authority, proves exact union/no overlap, mutates Viewer state, and waits for
+terminal receipts. Workers never reopen raw history, expand scope, or repair another lane.
+The common ceiling is three live host subagents and one initial proposal plus at most two
+parent-orchestrated proposal-only corrections against unchanged input. Only a stage's fixed safe
+pre-receipt authoring-validation code permits correction; authority, immutability, containment,
+path, I/O, infrastructure, and corrupt-state failures stop immediately. Exhaustion stops the lane,
+except for the narrow Story editorial takeover defined in its transport. Installed outputs and
+receipts remain immutable. Stage contracts define their execution and terminal gates.
 
-Each shard assignment gets one initial proposal plus at most two parent-orchestrated proposal-only correction
-attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
-initial proposal, and is always `0..2`; never sum it across a multi-shard lane. Every correction
-uses the byte-identical immutable input. Every invalid initial or correction attempt leaves both
-output and receipt absent. Only a fixed safe pre-receipt authoring-validation code is correctable.
-If the second correction fails, stop the lane safely, report correction exhaustion and the last
-safe validation code, and do not continue downstream, except for the narrow Story editorial
-takeover below. Authority, immutability, containment, path, I/O, infrastructure, and corrupt-state
-failures stop immediately and are never correctable.
+Use the existing role-specific dispatch contracts; do not copy them into a second prompt protocol:
 
-Story corrections run as at most two lane-wide waves after the initial complete batch attempt. A
-proposal-only correction or a Phase-only correction consumes the same Story wave; there is no
-separate Phase retry budget. Failed Story waves leave the complete terminal records directory
-absent. After successful batch installation every Story output and receipt is immutable.
-
-`PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal orchestration boundary. If host subagents are
-genuinely unavailable, the parent processes the same assignments serially, reports
-`executionMode=serial_capability_limited`, and continues through the identical recorder/finalizer
-authority without asking the contributor to create workers. Internal host subagents are not
-separate product provider/API calls and require no separate API key. Story workers receive exact
-bound raw reviewed narrative only through the contributor-selected current provider and never
-receive source outside that reviewed boundary.
-
-Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
-
-1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
-2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
-3. Then read exactly the assignment's one generated immutable `inputPath`.
-4. Write only that assignment's proposal.
-
-Do not dispatch a Story worker unless its assignment names both required contract paths, its one
-actual generated `inputPath`, and its proposal-only write boundary. The worker must not read any
-other data input or write a receipt, final artifact, or authority file.
-
-Each Story input is self-contained for writing: it carries complete owner-atomic represented-unit
-bundles, exact bound raw reviewed narrative, canonical semantic/Coverage references, and
-equality-only actor tokens, with no excluded or outside-boundary narrative, raw actor identity,
-Source Privacy rows, or provider metadata. Its validation authority contains no source narrative,
-raw actor identity, or source outside the exact reviewed boundary. Workers return phase-free
-proposals only. On a subagent-capable host the
-parent does not initially write Story prose, People, Evidence choices, titles, overviews, or blocks.
-The parent reads every proposed Chapter in full, records the eight-question narrative acceptance
-bound to the exact current proposal digest, and rejects any dry, fragmented, mechanical,
-incomplete, or record-by-record proposal before Phase or receipt. Each rejected writer proposal
-gets a specific proposal-only correction against the byte-identical input. After the initial
-proposal plus two rejected subagent corrections, the Ultra parent may complete only that same
-still-unrecorded assignment from the byte-identical input through the same canonical phase-free
-proposal shape, editorial gate, recorder, and validators. This narrow takeover is not a second
-authority, compatibility format, or recorded-output repair. After every proposal passes, the
-parent orders Chapters with the production comparator, assigns only the smallest coherent global
-Phase IDs and labels, injects canonical Coverage/exclusions, and invokes the complete Story batch recorder.
-Insight remains a separate later pass. Static tests prove contracts and authority behavior, not
-actual host-subagent spawning; that requires later E2E evidence.
+- Organization mapping: read [Mapping proposal](skills/oxygen-organize-review-export/references/project-map-contract.md#mapping-proposal); registry preparation and orchestration remain parent-owned in the Organize Skill.
+- Story, Insight, Story Privacy, and Preference: [worker reading routes](skills/oxygen-storytelling-review/references/story-preparation-transport.md#worker-reading-routes) and [dispatch and recording](skills/oxygen-storytelling-review/references/story-preparation-transport.md#dispatch-and-recording). The parent must convey the exact lane's reading route, actual generated inputPath, and proposal destination before dispatch.
+- Source Privacy: the canonical REDACTION_PROMPT above; verification, merge, apply, and receipts remain parent-owned.
 
 Pause for the contributor at Project Story human review, Privacy Keep/Redact decisions, Preference
 answers, `All set`, and release handoff. These explicit review and decision boundaries are the only

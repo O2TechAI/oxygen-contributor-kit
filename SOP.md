@@ -360,71 +360,14 @@ It imports the exact bundle before it requests Review Story activation, and fail
 foreign, stale, malformed, or digest/count-mismatched authority. The tracked Story preparer,
 recorder, existing Preference producer, and preparation finalizer create and bind those files.
 
-Parent-owned semantic work starts with the public deterministic preparer. It accepts the canonical
-Organization project map or bare semantic manifest through one bounded parser, freezes the exact
-assigned identities and input digest, and installs immutable bounded worker input before a
-proposal exists. Story, Insight, and Story Privacy remain multi-shard lanes, and the
-workflow-owning parent enumerates every nonempty manifest shard for them. Preference intentionally
-uses exactly one global bounded worker because it produces one deduplicated questionnaire
-authority, capped at 12 probes by default and 20 maximum; never fan Preference out. When host
-subagents are available, assignments run automatically with at most three live at once. Each
-assignment reads exactly one generated immutable `inputPath` and writes only its proposal. Story
-and Insight assignments receive only their exact bound raw reviewed narrative through the
-contributor-selected current provider.
-Workers never write receipts, final manifests, SQLite, Viewer APIs, revisions, activation state,
-release state, or publication state. Internal host subagents are not separate product provider/API
-calls, require no separate API key, and receive no source outside the exact reviewed boundary.
-
-Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
-
-1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
-2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
-3. Then read exactly the assignment's one generated immutable `inputPath`.
-4. Write only that assignment's proposal.
-
-Do not dispatch a Story worker until the assignment names both contract paths, the actual generated
-`inputPath`, and the proposal-only write boundary. No other data input is part of that assignment.
-
-Before Coverage finalization, the parent selects Chapter owners by coherent narrative arc across
-the complete exact-bound reviewed semantic projection; it never defaults or mechanically copies
-`ownerId` from `unitId`, and no source, semantic-unit, Chapter, or Phase count is golden. Finalized Coverage
-`ownerId` is then the sole Story Chapter-ownership source. The Story preparer keeps
-every owner's represented units in one complete, exact-bound, self-contained bundle and balances
-shards only by whole-bundle bytes. Story worker input contains the exact bound raw reviewed
-narrative but no excluded or outside-boundary narrative, raw actor identity, Source Privacy rows,
-or provider metadata. The validation authority contains no source narrative, raw actor identity,
-or source outside the exact reviewed boundary. Story workers return phase-free proposals. On a
-subagent-capable host the parent does not initially write Story prose, People, Evidence choices, titles, overviews,
-or blocks. It waits for every proposal, reads each Chapter in full, binds all eight editorial
-decisions to the exact proposal digest, and rejects negative or stale review before Phase or
-receipt. After the initial proposal and two editorially rejected subagent corrections, the Ultra
-parent may complete that same still-unrecorded assignment from the byte-identical input through the
-same phase-free proposal shape, editorial gate, recorder, and validators. It then orders complete
-accepted Chapters with the production comparator, assigns only the smallest coherent global Phase
-IDs and labels, injects canonical Coverage and exclusions, and invokes one complete Story batch
-recorder. No Story receipt exists before editorial and full-package validation; all outputs and
-exactly one receipt per shard install together. Insight remains a separate later pass.
-
-Each assignment gets one initial proposal plus at most two parent-orchestrated proposal-only correction attempts. `correctionAttemptCount` is
-assignment-local, counts corrections only, excludes the initial proposal, and is always `0..2`;
-never sum it across a multi-shard lane. Every correction uses the byte-identical immutable input,
-and every invalid initial or correction attempt leaves both output and receipt absent. Only a fixed
-safe pre-receipt authoring-validation code is correctable. If the second correction fails, stop the
-lane safely, report correction exhaustion and the last safe validation code, and do not continue
-downstream, except for the narrow Story-editorial parent takeover above. Authority, immutability,
-containment, path, I/O, infrastructure, and corrupt-state failures stop immediately and are never
-correctable. This is not a contributor pause and may never
-rewrite durable output. If host subagents are genuinely unavailable, the parent processes the same
-assignments serially, reports
-`executionMode=serial_capability_limited`, and uses the identical recorder/finalizer authority.
-`PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal orchestration boundary. Revision authority and
-all Viewer mutations remain with the parent/server lane; no worker may silently expand scope or
-repair another lane.
-
-Story uses at most two lane-wide correction waves. Replacing a rejected Story proposal or replacing
-only the transient parent Phase assignment consumes the same wave; there is no separate Phase retry
-budget. Every failed Story wave leaves all Story outputs and receipts absent. Static tests prove the
-contract and batch boundary, while later E2E evidence proves actual host-subagent spawning.
+Use the Story transport's [worker reading routes](skills/oxygen-storytelling-review/references/story-preparation-transport.md#worker-reading-routes)
+and [dispatch and recording](skills/oxygen-storytelling-review/references/story-preparation-transport.md#dispatch-and-recording)
+for every lane. Those sections own immutable assignments, proposal-only worker boundaries,
+parent-only recording, concurrency, correction limits, and the narrow pre-receipt Story takeover.
+The parent selects global Chapter owners by coherent narrative arc, reads all complete proposals,
+and applies the [narrative acceptance](skills/oxygen-storytelling-review/references/narrative-writing-contract.md#parent-editorial-acceptance)
+before assigning Phase and recording the complete Story batch. Convey each worker's explicit
+reading route, actual generated inputPath, and proposal destination; a link alone is not an assignment.
 
 Coverage draft rows use only `{unitId, disposition, ownerId}` for represented units or
 `{unitId, disposition, exclusionReason}` for excluded units. After successful activation, the exact

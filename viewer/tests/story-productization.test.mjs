@@ -104,30 +104,31 @@ test("the Story Skill Routed References table keeps stage-local links and gates"
       return [cells[0], { load: cells[1], gate: cells[2] }];
     }),
   );
-  const build = rows.get("Build Story") ?? { load: "", gate: "" };
+  const build = rows.get("Build parent") ?? { load: "", gate: "" };
   for (const reference of [
-    "product-contract.md",
     "story-data-contract.md",
     "story-preparation-transport.md",
     "privacy-evidence-boundary.md",
     "narrative-writing-contract.md",
   ]) assert.match(build.load, new RegExp(reference.replace(".", "\\.")));
   for (const deferred of [
+    "product-contract.md",
     "validation-checklist.md",
     "ui-interaction-contract.md",
     "chapter-review-lifecycle.md",
     "bilingual-contract.md",
   ]) assert.doesNotMatch(build.load, new RegExp(deferred.replace(".", "\\.")));
-  assert.match(build.gate, /oxygen\.story:/);
-  assert.match(build.gate, /schema: "oxygen\.story"/);
+  assert.match(build.load, /#source-prefix-and-schema[\s\S]*through[\s\S]*#activation-submission/);
+  assert.match(build.gate, /reviewed source[\s\S]*editorial acceptance[\s\S]*recording\/activation authority/);
+  assert.match(skill, /Workers use only their explicit[\s\S]{0,100}worker-reading-routes/);
 
-  const human = rows.get("Human review") ?? { load: "", gate: "" };
+  const human = rows.get("Human review and release") ?? { load: "", gate: "" };
   assert.match(human.load, /chapter-review-lifecycle\.md/);
   assert.match(human.load, /ui-interaction-contract\.md/);
-  assert.match(human.gate, /Apply review, All set, and release are separate human gates/);
-  assert.match(rows.get("Localization present")?.load ?? "", /bilingual-contract\.md/);
-  assert.match(rows.get("Final acceptance")?.load ?? "", /validation-checklist\.md/);
-  assert.match(rows.get("Final acceptance")?.gate ?? "", /deterministic, build, browser, clean-room, and residual-scan gates/);
+  assert.match(human.gate, /separate Apply review, All set, and release decisions/);
+  assert.match(rows.get("Source language selection")?.load ?? "", /bilingual-contract\.md/);
+  assert.match(rows.get("Product/maintenance acceptance")?.load ?? "", /validation-checklist\.md/);
+  assert.match(rows.get("Product/maintenance acceptance")?.gate ?? "", /repository-development verification; not extra contributor-runtime tests/);
 });
 
 test("public AGENTS, SOP, and organizer entrypoints delegate to the repository Story runtime", async () => {

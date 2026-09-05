@@ -14,36 +14,33 @@ Never invent dialogue, people, emotion, motivation, Evidence, causal certainty, 
 
 ## Evidence-Backed Engagement
 
-Write for a technically curious reader. Make the supported arc engaging by quickly establishing the real purpose, constraint, or starting state; using concrete actors and actions; and preserving supported attempts, failures, corrections, decisions, consequences, or unresolved boundaries when present. Let interest come from what actually changed, became understood, or was established. Do not invent stakes, drama, emotion, dialogue, motive, conflict, causality, or closure. When the evidence is ordinary, make it clear and specific rather than theatrical.
+Write for a reader with no project or specialist background. Let the factual narrative progress
+through concrete participants' actions and supported exchanges, revealing what they understood,
+judged, tried, and changed as events unfold. Preserve meaningful numbers, background, attempts,
+failures, corrections, reasons, results, and unresolved boundaries. Important exchanges may unfold
+in detail; connect ordinary progress with readable prose. Length follows explanatory meaning,
+not a summary budget or a dialogue quota. Never invent gestures, expressions, bodily actions,
+thoughts, emotion, motives, stakes, conflict, causality, dialogue, or a cleaner ending.
 
 ## Story Generation Order
 
-Before any Story writer is dispatched, the workflow-owning parent reviews the complete
-bound reviewed semantic projection and establishes the global Coverage/Chapter-owner skeleton by
-coherent narrative arc. `ownerId` is never defaulted or mechanically copied from `unitId`.
-Related semantic units may share one owner, one Chapter may cover multiple semantic units, and
-several Chapters may later share one Phase. Chapter count does not follow semantic-unit, source,
-meeting, or prior-run count; Phase count does not follow Chapter count or semantic kind. There is no
-golden Chapter, Phase, block, Insight, or Evidence count. Once selected, every owner stays atomic
-during sharding.
-
-For a Story worker assignment, return complete phase-free Chapter proposals for the exact Coverage
-owners in the generated input. Do not author schema, Chapter keys, Phase, Coverage, exclusions,
-receipts, or authority. The workflow-owning parent orders the complete accepted Chapter set with
-the production comparator and assigns the smallest coherent global Phase sequence once, after the
-complete proposal set passes editorial review and before global validation.
+The parent selects global Coverage owners by coherent narrative arc before dispatch, as defined in
+[dispatch and recording](story-preparation-transport.md#dispatch-and-recording). The worker writes
+complete phase-free Chapters only for its assigned owners; it does not author schema, Chapter keys,
+Phase, Coverage, exclusions, receipts, or authority. There is no golden Chapter, Phase, block,
+Insight, or Evidence count.
 
 Use these conceptual passes inside Build Project Story:
 
-1. Read the complete bounded semantic-unit projection and progressively inspect exact Evidence.
+1. Read the complete semantic-unit projection within the assigned immutable input and inspect its exact Evidence.
 2. Reconstruct the coherent narrative arc for each assigned, parent-selected Chapter owner.
-3. Write the complete ordered Chapter and Project Story narrative.
+3. Write the complete ordered narrative for the assigned Chapters.
 4. Verify continuity, chronology, attribution, Evidence, causal restraint, Privacy, and uncertainty.
 5. Verify the complete phase-free Chapter proposals for the assigned Coverage owners.
-6. After the complete Story is understood, identify independently warranted learning moments.
-7. Produce zero or more Insights.
 
-These are not public workflow stages. Story inclusion is independent of Insight worthiness.
+These are conceptual writing passes, not additional public stages or workers. The separate Insight
+lane follows the complete Story; Story workers leave `insights` empty. Story inclusion is
+independent of Insight worthiness.
 
 ## Chapter Selection
 
@@ -78,9 +75,26 @@ consequence, handoff, or genuinely unresolved boundary. Do not mechanically crea
 each Evidence row. A one-sentence Chapter is acceptable only when the reviewed source genuinely
 contains no larger supported arc.
 
-Direct quotations in Story prose are permitted only when they exactly reproduce canonical
-bound reviewed source text and retain the supporting Evidence reference. Never create dialogue
-from a paraphrase or from source outside the exact reviewed boundary, foreign source, or stale source.
+Choose original speech by its value in context: first whether it helps explain the situation,
+participants, judgment, interaction, or progress, then whether the speaker's wording deserves
+quotation. Recorded speech alone is not a reason to quote it. Paraphrase useful information when
+that reads better; omit a needless line without replacing it with invented dialogue. Avoid repeating
+the same meaning in both quotation and narration. Do not impose quote counts or phrase lists.
+
+Story dialogue may lightly remove meaningless oral repetition or filler without changing the
+speaker, facts, stance, uncertainty, event order, or meaning. Retain the original supporting Evidence
+and trace edits through existing local evidence/review records; do not add mapping fields to the
+strict proposal. Do not call edited dialogue verbatim source text. Never invent speech, assemble an
+unsupported exchange, or use foreign, stale, or outside-boundary source. This permission applies
+only to Story prose: original source and Insight Quote remain unchanged.
+
+Explain a concept briefly when the whole Project Story Timeline first needs it; reuse established
+terms afterward unless their meaning changes or new events need more context. A standalone sample
+must supply its own necessary background. A worker sees only its assigned input and must not assume
+what another Chapter explains. During existing global owner selection the parent considers where
+concepts first arise, and during full-prose editorial review it checks introductions and repetition
+in Timeline order, requesting assigned proposal-only corrections when needed. Do not pass other
+Chapters or a separate context file around the immutable input boundary.
 
 ## Title, Overview, And Project Summary
 
@@ -142,14 +156,11 @@ or reasoning; collapses distinct safe actors; or repeats the Chapter in its over
 establishing the arc.
 
 For a dry, fragmented, mechanical, incomplete, or record-by-record proposal, do not invoke the
-recorder. Give the assigned writer a specific proposal-only correction that names the missing
-narrative relationship, reuse the byte-identical immutable bound reviewed input, and then re-read the
-complete corrected prose. The initial proposal has at most two subagent correction attempts. If
-both corrected proposals remain editorially unacceptable, the Ultra parent may complete only that
-same still-unrecorded assignment from the byte-identical input and write the same canonical
-phase-free proposal shape. This narrow takeover creates no second authority or fallback format and
-still passes the same editorial review, batch recorder, and downstream validators. No takeover may
-rewrite a recorded proposal, receipt, authority, or Viewer state.
+recorder. Give the assigned writer a specific proposal-only correction naming the missing narrative
+relationship; re-read the complete corrected prose against the byte-identical immutable input.
+[Dispatch and recording](story-preparation-transport.md#dispatch-and-recording) owns the correction
+budget and narrow pre-receipt parent takeover. No editorial action may rewrite a recorded output,
+receipt, authority, or Viewer state.
 
 ## Insights
 
@@ -180,8 +191,13 @@ origin and lifecycle; never silently reinterpret it as an AI trajectory Quote.
 
 ## Voice
 
-Use concrete, specific, technically faithful, neutral prose. Preserve terms, metrics, uncertainty, failures, and corrections when supported. Do not use slogans, metaphors, literary framing, vague AI boilerplate, or unsupported retrospective causality.
+Use natural, plain, specific language with factual precision. Novel-like progression comes from
+supported actions and exchanges, not fictional embellishment. Preserve working terminology,
+including customary English technical terms in Chinese prose; do not force unusual translations or
+a fixed English/Chinese glossary. Preserve metrics, uncertainty, failures, and corrections. Avoid
+slogans, decorative metaphors, vague AI boilerplate, and unsupported retrospective causality.
 
-If Evidence does not determine a cause, state `Cause not determined.`
+When Evidence does not establish a cause, explain that uncertainty naturally in the assigned Story
+language. Do not impose a stock sentence, dialogue count, connector count, or sample-derived phrase list.
 
-Persist only the bounded source/readiness data defined in [story-data-contract.md](story-data-contract.md). Do not place model reasoning in Workflow Progress or release output.
+Persist only the assigned proposal shape from the [worker reading route](story-preparation-transport.md#worker-reading-routes); source/readiness authority remains parent/server-owned. Do not place model reasoning in Workflow Progress or release output.
