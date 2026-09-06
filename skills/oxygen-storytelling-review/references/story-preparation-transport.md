@@ -215,7 +215,11 @@ Each Story Privacy worker reads its manifest `inputPath` and returns exactly one
 
 `candidates` contains zero or more rows with exactly `id`, `reviewState`, `title`, `whyFlagged`,
 `uncertaintyReason`, and `releaseTargets`. `releaseTargets` is a nonempty, duplicate-free array
-of assigned target ID strings. `targetProposals` contains exactly one proposal for every
+of assigned target ID strings. `reviewState` is either `deterministic` or `needs_confirmation`.
+For `deterministic`, `uncertaintyReason` is `null`; for `needs_confirmation`, it is a nonempty reason.
+The union of all candidate `releaseTargets` must equal exactly the set of targets whose
+`occurrences` are nonempty. A candidate may cover multiple targets; no one-to-one mapping is required.
+`targetProposals` contains exactly one proposal for every
 target assigned by the generated shard input, including unchanged proposals with empty
 `occurrences`; it contains no omitted, duplicated, or foreign target. Each proposal requires
 `targetId`, `targetContentDigest`, `proposedText`, and `occurrences`; the optional source and edited-text
