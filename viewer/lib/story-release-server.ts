@@ -491,7 +491,7 @@ export async function reconstructReviewedStoryReleaseFromDatabase(
     || expectedKeys.some((key) => hydrated.chapterReviews[key]?.stage !== "human_confirmed")) {
     return failure(RELEASE_ERROR.reviewIncomplete, boundedMetadata);
   }
-  const storyPrivacy = await readStoryPrivacyAuthority(db, request.workflowRunId);
+  const storyPrivacy = await readStoryPrivacyAuthority(db, request.workflowRunId, { appliedOnly: true });
   if (!storyPrivacy.ok || storyPrivacy.authority.sourceRevision !== activeSourceRevision
     || storyPrivacy.authority.activeStoryDigest !== run.active_story_digest
     || storyPrivacy.authority.status === "preparation_required") {

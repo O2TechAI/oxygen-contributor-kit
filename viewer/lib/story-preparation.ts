@@ -1,5 +1,7 @@
 import { canonicalAuthorityJson, type StoryCandidateRow } from "./story-readiness.ts";
 import { validActivatedSourceRevision } from "./authority-validation.mjs";
+import { validStoryPrivacySourceMatches, storyPrivacyTextAllowed,
+  type StoryPrivacySourceMatch, type StoryPrivacySourceRedaction } from "./story-privacy-projection.ts";
 import {
   parseStorySource,
   type StoryLanguage,
@@ -52,6 +54,9 @@ export type StoryPreparationPrivacyTargetProposal = {
   targetId: StoryReleaseTarget;
   targetContentDigest: string;
   proposedText: string;
+  sourceMatches?: StoryPrivacySourceMatch[];
+  proposalSourceMatches?: StoryPrivacySourceMatch[];
+  editedProposal?: { inputDigest: string; text: string; sourceMatches?: StoryPrivacySourceMatch[] };
   occurrences: Array<{
     originalStartOffset: number;
     originalEndOffset: number;
@@ -66,7 +71,7 @@ export type StoryPreparationPrivacyOutput = {
   targetProposals: StoryPreparationPrivacyTargetProposal[];
 };
 
-export type StoryReleaseTargetContent = StoryReleaseTargetDescriptor & { content: string };
+export type StoryReleaseTargetContent = StoryReleaseTargetDescriptor & { content: string; editedText?: string };
 
 export type StoryPreparationManifest = {
   schema: typeof STORY_PREPARATION_SCHEMA;
@@ -113,6 +118,7 @@ export type StoryPreparationContext = {
   semanticUnitIds: string[];
   storyCandidates: StoryCandidateRow[];
   preference: PreferenceBatchAuthority | null;
+  sourceRedactions?: StoryPrivacySourceRedaction[];
 };
 
 export type StoryPreparationAuthority = {
@@ -312,6 +318,7 @@ function parseReceipt(value: unknown): StoryPreparationReceipt | null {
 export async function normalizeStoryPrivacyOutput(
   value: unknown,
   targetCatalog: StoryReleaseTargetContent[],
+  sourceRedactions?: StoryPrivacySourceRedaction[],
 ): Promise<StoryPreparationPrivacyOutput | null> {
   if (!isObject(value) || !onlyKeys(value, ["candidates", "targetProposals"])
     || !Array.isArray(value.candidates) || !Array.isArray(value.targetProposals)) return null;
@@ -357,6 +364,8 @@ export async function normalizeStoryPrivacyOutput(
   for (const proposal of value.targetProposals) {
     if (!isObject(proposal) || !onlyKeys(proposal, [
       "targetId", "targetContentDigest", "proposedText", "occurrences",
+      ...(isObject(proposal) && Object.hasOwn(proposal, "sourceMatches") ? ["sourceMatches"] : []),
+      ...["proposalSourceMatches", "editedProposal"].filter((key) => isObject(proposal) && Object.hasOwn(proposal, key)),
     ]) || typeof proposal.targetId !== "string"
       || !validTargets.has(proposal.targetId as StoryReleaseTarget)
       || seenTargets.has(proposal.targetId as StoryReleaseTarget)
@@ -413,12 +422,33 @@ export async function normalizeStoryPrivacyOutput(
       || (occurrences.length === 0
         && validTargets.get(proposal.targetId as StoryReleaseTarget) !== proposal.proposedText)) return null;
     const targetId = proposal.targetId as StoryReleaseTarget;
+    if (!storyPrivacyTextAllowed(proposal.proposedText)
+      || !validStoryPrivacySourceMatches(validTargets.get(targetId)!, proposal.proposedText,
+        occurrences, proposal.sourceMatches as StoryPrivacySourceMatch[] | undefined,
+        sourceRedactions)
+      || !validStoryPrivacySourceMatches(proposal.proposedText, proposal.proposedText, [],
+        proposal.proposalSourceMatches as StoryPrivacySourceMatch[] | undefined, sourceRedactions)) return null;
+    const target = targetCatalog.find((target) => target.id === targetId)!;
+    if (target.editedText !== undefined && !proposal.editedProposal) return null;
+    if (proposal.editedProposal !== undefined) {
+      const edited = proposal.editedProposal;
+      if (!isObject(edited) || !onlyKeys(edited, ["inputDigest", "text",
+        ...(Object.hasOwn(edited, "sourceMatches") ? ["sourceMatches"] : [])])
+        || typeof edited.inputDigest !== "string" || !digestPattern.test(edited.inputDigest)
+        || typeof edited.text !== "string" || !storyPrivacyTextAllowed(edited.text)
+        || (target.editedText !== undefined && edited.inputDigest !== await storyPreparationDigest(target.editedText))
+        || !validStoryPrivacySourceMatches(edited.text, edited.text, [],
+          edited.sourceMatches as StoryPrivacySourceMatch[] | undefined, sourceRedactions)) return null;
+    }
     seenTargets.add(targetId);
     proposals.push({
       targetId,
       targetContentDigest: proposal.targetContentDigest as string,
       proposedText: proposal.proposedText,
       occurrences,
+      ...(proposal.sourceMatches ? { sourceMatches: proposal.sourceMatches as StoryPrivacySourceMatch[] } : {}),
+      ...(proposal.proposalSourceMatches ? { proposalSourceMatches: proposal.proposalSourceMatches as StoryPrivacySourceMatch[] } : {}),
+      ...(proposal.editedProposal ? { editedProposal: proposal.editedProposal as StoryPreparationPrivacyTargetProposal["editedProposal"] } : {}),
     });
   }
   if (seenTargets.size !== targetCatalog.length) return null;
@@ -525,6 +555,7 @@ export async function validateStoryPreparationManifest(
   const privacy = await normalizeStoryPrivacyOutput(
     input.storyPrivacy,
     targetContents,
+    context.sourceRedactions,
   );
   if (!privacy) return mismatch("STORY_PREPARATION_PRIVACY_INVALID");
   if (!context.preference

@@ -2,9 +2,9 @@
 
 ## Application Shell
 
-Reuse the existing local Viewer shell. The required final shell keeps top navigation, one left project/source rail, main canvas, Project Story Timeline, final target-choice Release Preview, Preferences, Evidence review, and download actions.
+Reuse the existing local Viewer shell. The required final shell keeps top navigation, one left project/source rail, main canvas, Project Story Timeline, read-only Release Preview, Preferences, Evidence review, and download actions.
 
-Chapter Privacy/Release Preview is implemented in the canonical Viewer. Candidate rows explain why
+Privacy controls belong to each Chapter in the canonical Viewer; Release Preview is read-only. Candidate rows explain why
 targets were flagged; only the contributor chooses the exact release bytes for each target.
 
 Do not create a parallel page, second shell, project-bound renderer, replacement Privacy implementation, or standalone release tool.
@@ -40,15 +40,16 @@ When a Chapter opens, keep the application rail. Add only one compact Chapter se
 - Source records below;
 - independent vertical scrolling when the list overflows.
 
-The Chapter document keeps these unnumbered primary sections:
+The Chapter keeps compact People context, then this review order without numbered steps:
 
 ```text
-People
-Story
-Privacy
+Story and its separate AI Insight companion cards
+Privacy drafts
+Review summary
+Apply review
 ```
 
-Local Evidence disclosure and Review completion follow as supporting areas. Do not add numbered section markers, tabs, steppers, standalone Insights dashboards, or Release/Original comparison cards.
+Local Evidence remains a supporting disclosure. Review each Insight before staging Privacy choices. Do not add numbered section markers, tabs, steppers, standalone Insights dashboards, or Release/Original comparison cards.
 
 ## People
 
@@ -94,21 +95,20 @@ Zero source Insights create no placeholder, empty approval card, or hidden oblig
 
 ## Privacy Surface
 
-The canonical Viewer renders one active Story/Release Privacy candidate and its release targets at a time:
+The current Chapter shows changed or pending Privacy targets with local original, Agent proposal,
+reason, and the actual staged choice. Use content labels such as Chapter title, Story passage, or
+Insight field; target IDs and digests stay internal. Unchanged targets are optional inspection in
+one native disclosure, not a catalog of required decisions.
 
-```text
-progress
-title
-Local original
-Agent-proposed anonymized text
-Current HTML / ZIP text
-Why AI flagged it
-Use Agent proposal
-Edit anonymized text
-Save exact-public choices for noncredential occurrences
-```
+Accept proposal and exact-public toggles stage choices through the existing session persistence;
+a visible toggle must not require a second staging action. Finishing a custom edit stages its exact text for
+parent-owned semantic recheck. The checked suggestion returns here for acceptance. Apply review
+commits the Chapter's Story, Insight and Privacy changes together; no per-target PATCH writes.
+While Apply is pending, disable all current-Chapter review controls without losing drafts.
 
-The contributor is the sole target-choice authority. Credentials are always removed, and only exact selected bytes enter Release Preview, HTML, and ZIP.
+Credentials are always removed. Release Preview shows only already-selected bytes and an
+incomplete notice when review remains. It contains no editing or decision controls; HTML and ZIP
+independently require all Chapters applied and human-confirmed.
 
 ## Evidence Navigation
 
@@ -148,7 +148,7 @@ An implementation is materially equivalent only when it preserves:
 - Story table-of-contents hierarchy;
 - readable centered Chapter article;
 - controlled direct editing and provenance;
-- one-at-a-time Privacy target choices from the current server-owned authority;
+- Chapter-local Privacy choices staged with the current review session;
 - evidence navigation and original-language Evidence;
 - Preferences as their own authority;
 - Release Preview safe projection;

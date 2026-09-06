@@ -56,6 +56,7 @@ const bindingKeys = [
   "workflowRunId", "sourceRevision", "activeStoryDigest", "serverVersion",
   "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest",
   "changedTargetCount", "previousAuthorityDigest",
+  "sourcePrivacyDigest", "sourceRedactionsDigest",
 ];
 if (!exact(manifest, ["schema", "binding", "targetTransitions", "changedTargetIds", "shardLimits",
   "shards", "manifestDigest"])
@@ -66,7 +67,7 @@ if (!exact(manifest, ["schema", "binding", "targetTransitions", "changedTargetId
   || !validNonnegativeAuthorityCounter(manifest.binding.changedTargetCount)
   || ![manifest.binding.activeStoryDigest, manifest.binding.reviewedStoryDigest,
     manifest.binding.targetCatalogDigest, manifest.binding.changedTargetDigest,
-    manifest.binding.previousAuthorityDigest].every((value) => typeof value === "string" && hex.test(value))
+    manifest.binding.previousAuthorityDigest, manifest.binding.sourcePrivacyDigest, manifest.binding.sourceRedactionsDigest].every((value) => typeof value === "string" && hex.test(value))
   || !Array.isArray(manifest.targetTransitions) || !Array.isArray(manifest.changedTargetIds)
   || !Array.isArray(manifest.shards) || !exact(manifest.shardLimits, ["maxContentBytes", "maxTargets"])
   || manifest.shardLimits.maxContentBytes !== 1_000_000 || manifest.shardLimits.maxTargets !== 64
@@ -82,7 +83,7 @@ if (await storyPreparationDigest(manifestCore) !== manifestDigest
     ["id", "previousContentDigest", "contentDigest"]) || !safeId(target.id)
     || (target.previousContentDigest !== null && !hex.test(target.previousContentDigest))
     || (target.contentDigest !== null && !hex.test(target.contentDigest))
-    || target.previousContentDigest === target.contentDigest
+    || (target.previousContentDigest === null && target.contentDigest === null)
     || (index > 0 && compareUtf8(manifest.targetTransitions[index - 1].id, target.id) >= 0))) {
   fail("MANIFEST_STALE");
 }
@@ -101,6 +102,7 @@ const targetOrder = new Map(manifest.changedTargetIds.map((id, index) => [id, in
 const assigned = [];
 const validatedInputs = new Map();
 const targetById = new Map();
+const sourceById = new Map();
 for (const shard of manifest.shards) {
   if (!exact(shard, ["id", "targetIds", "inputPath", "inputDigest"])
     || !safeId(shard.id) || !Array.isArray(shard.targetIds) || shard.targetIds.length === 0
@@ -111,23 +113,30 @@ for (const shard of manifest.shards) {
       && targetOrder.get(shard.targetIds[index - 1]) >= targetOrder.get(id))) fail("SHARD_INVALID");
   assigned.push(...shard.targetIds);
   const input = await json(await contained(root, shard.inputPath));
-  if (!exact(input, ["schema", "shardId", "binding", "targets", "inputDigest"])
+  if (!exact(input, ["schema", "shardId", "binding", "targets", "sourceRedactions", "inputDigest"])
     || input.schema !== "oxygen.reviewed-story-privacy-shard-input" || input.shardId !== shard.id
     || JSON.stringify(input.binding) !== JSON.stringify(manifest.binding)
     || !Array.isArray(input.targets)
+    || !Array.isArray(input.sourceRedactions)
     || JSON.stringify(input.targets.map((target) => target.id)) !== JSON.stringify(shard.targetIds)
     || input.inputDigest !== shard.inputDigest) fail("SHARD_INPUT_INVALID");
+  for (const source of input.sourceRedactions) {
+    if (!source || typeof source.id !== "string"
+      || (sourceById.has(source.id) && JSON.stringify(sourceById.get(source.id)) !== JSON.stringify(source))) fail("SHARD_INPUT_INVALID");
+    sourceById.set(source.id, source);
+  }
   const { inputDigest, ...inputCore } = input;
   if (await storyPreparationDigest(inputCore) !== inputDigest) fail("SHARD_INPUT_STALE");
   let contentBytes = 0;
   for (const target of input.targets) {
     const transition = transitionById.get(target.id);
-    if (!exact(target, ["id", "storyKey", "target", "content", "contentDigest"])
+    if (!exact(target, ["id", "storyKey", "target", "content", "contentDigest", ...(Object.hasOwn(target, "editedText") ? ["editedText"] : [])])
       || ![target.id, target.storyKey, target.target].every(safeId)
       || typeof target.content !== "string" || target.content.length === 0
+    || (target.editedText !== undefined && (typeof target.editedText !== "string" || !target.editedText.trim() || target.editedText.length > 1_000_000))
       || !hex.test(target.contentDigest) || transition?.contentDigest !== target.contentDigest
       || await storyPreparationDigest(target.content) !== target.contentDigest) fail("SHARD_TARGET_INVALID");
-    contentBytes += Buffer.byteLength(target.content, "utf8");
+    contentBytes += Buffer.byteLength(target.content, "utf8") + Buffer.byteLength(target.editedText || "", "utf8");
     targetById.set(target.id, target);
   }
   if (contentBytes > manifest.shardLimits.maxContentBytes) fail("SHARD_BOUND_EXCEEDED");
@@ -136,6 +145,8 @@ for (const shard of manifest.shards) {
 if (assigned.length !== new Set(assigned).size
   || JSON.stringify([...assigned].sort(compareUtf8))
     !== JSON.stringify([...changed].sort(compareUtf8))) fail("SHARD_UNION_INVALID");
+if (await storyPreparationDigest([...sourceById.values()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  !== manifest.binding.sourceRedactionsDigest) fail("SHARD_INPUT_STALE");
 const targetCatalog = manifest.changedTargetIds.map((id) => targetById.get(id));
 if (targetCatalog.some((target) => !target)) fail("SHARD_UNION_INVALID");
 
@@ -152,6 +163,7 @@ for (const shard of manifest.shards) {
   const normalized = await normalizeStoryPrivacyOutput(
     await json(await contained(proposalRoot, `${shard.id}.proposals.json`)),
     input.targets,
+    input.sourceRedactions,
   );
   if (!normalized) fail("PROPOSAL_INVALID");
   proposalOutputs.set(shard.id, normalized);
@@ -159,7 +171,7 @@ for (const shard of manifest.shards) {
 const privacy = await normalizeStoryPrivacyOutput({
   candidates: [...proposalOutputs.values()].flatMap((output) => output.candidates),
   targetProposals: [...proposalOutputs.values()].flatMap((output) => output.targetProposals),
-}, targetCatalog);
+}, targetCatalog, [...sourceById.values()]);
 if (!privacy) fail("PROPOSAL_INVALID");
 
 const records = resolve(root, "records");
@@ -217,7 +229,7 @@ for (const shard of manifest.shards) {
     || !hex.test(receipt.outputDigest) || !Number.isSafeInteger(receipt.outputCount)
     || receipt.outputCount !== shard.targetIds.length) fail("SHARD_RECEIPT_INVALID");
   const output = await json(await contained(root, `records/${shard.id}.output.json`));
-  const normalized = await normalizeStoryPrivacyOutput(output, input.targets);
+  const normalized = await normalizeStoryPrivacyOutput(output, input.targets, input.sourceRedactions);
   if (!normalized || normalized.targetProposals.length !== receipt.outputCount
     || await storyPreparationDigest(normalized) !== receipt.outputDigest) fail("SHARD_OUTPUT_INVALID");
   recordedParts.push(normalized);
@@ -225,7 +237,7 @@ for (const shard of manifest.shards) {
 const recordedPrivacy = await normalizeStoryPrivacyOutput({
   candidates: recordedParts.flatMap((output) => output.candidates),
   targetProposals: recordedParts.flatMap((output) => output.targetProposals),
-}, targetCatalog);
+}, targetCatalog, [...sourceById.values()]);
 if (!recordedPrivacy || JSON.stringify(recordedPrivacy) !== JSON.stringify(privacy)) {
   fail("PROPOSAL_RECORD_CONFLICT");
 }
@@ -236,6 +248,7 @@ const terminalKeys = [
   "schema", "status", "workflowRunId", "sourceRevision", "activeStoryDigest", "serverVersion",
   "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest", "changedTargetCount",
   "outputDigest", "outputCount", "completedAt",
+  "sourcePrivacyDigest", "sourceRedactionsDigest",
 ];
 const expectedTerminal = {
   schema: "oxygen.reviewed-story-privacy-terminal-receipt",
@@ -248,6 +261,8 @@ const expectedTerminal = {
   targetCatalogDigest: manifest.binding.targetCatalogDigest,
   changedTargetDigest: manifest.binding.changedTargetDigest,
   changedTargetCount: manifest.binding.changedTargetCount,
+  sourcePrivacyDigest: manifest.binding.sourcePrivacyDigest,
+  sourceRedactionsDigest: manifest.binding.sourceRedactionsDigest,
   outputDigest,
   outputCount: recordedPrivacy.targetProposals.length,
   completedAt: terminal.completedAt,

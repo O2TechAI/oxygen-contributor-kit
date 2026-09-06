@@ -38,8 +38,8 @@ build Project Story using bounded semantic workers
 independent global sparse Insight pass
 Story/Release Privacy total proposal preparation
 Preference-question generation
-Project Story human review
-Privacy target choices
+Chapter human review: Story -> Insight -> Privacy drafts -> Review summary -> Apply review
+source Privacy Keep/Redact decisions
 Preference answers
 All set
 local reviewed release
@@ -239,8 +239,8 @@ Use the contributor's configured AI model for redaction. The mandatory notice is
 > required before release.
 
 This is the upstream source Privacy boundary. Its output is the reviewed input boundary used by
-Story generation. It is distinct from later Story/Release Privacy targets shown beside Chapter
-or Release Preview content.
+Story generation. It is distinct from later Story/Release Privacy choices inside each Chapter;
+Release Preview shows only applied selected content.
 
 Use the canonical worker contract at `tools/llm_redact/REDACTION_PROMPT.md`; do not search for a
 prompt by basename.
@@ -659,7 +659,15 @@ handoff. Resume release/package work only after the contributor says the review 
 
 ### Refresh Story Privacy after a Story edit
 
-A reviewed Story edit can make the current Story Privacy authority stale. The Viewer then reports
+During human review, the workflow parent watches the existing `storyReviewVersion` and reads
+`GET /api/story-privacy?workflowRunId=<run>` when the durable session changes. Story edits, pending
+accepted/edited Insights, and custom Privacy edit drafts can require preparation before Apply.
+The status reports `pendingChapterKeys` and per-Chapter draft errors; a bad sibling draft is left
+for that Chapter's contributor review. The Viewer reports waiting for recheck, not an invented
+background job. The parent continues this existing transport only on actual `preparation_required`;
+there is no new queue, automatic LLM job, or provider call in Viewer.
+
+A durable draft change can make the current Story Privacy authority stale. The Viewer then reports
 `preparation_required`; this is resumable and is not a release failure. Keep the same Viewer and
 workflow run alive, and use this one canonical refresh sequence from the repository root. Choose a
 new private work directory: export, prepare, finalize, and import are no-clobber operations.
@@ -685,9 +693,11 @@ New-Item -ItemType Directory -Path $Proposals | Out-Null
 The parent reads `$Prepared\manifest.json`, enumerates every `shards` entry, and dispatches every
 nonempty shard. A worker reads only `$Prepared\<inputPath>` and writes exactly one
 `{ "candidates": [...], "targetProposals": [...] }` JSON object to
-`$Proposals\<shard-id>.proposals.json`; it does not write receipts, manifests, Viewer state, or the
-final bundle. An empty shard set requires an empty `$Proposals` directory. After every expected
-proposal exists and no extra file exists, continue:
+`$Proposals\<shard-id>.proposals.json`, following the
+[canonical source/edited Privacy proposal contract](skills/oxygen-storytelling-review/references/story-preparation-transport.md#source-inheritance-and-edited-privacy-text).
+The parent reviews semantic source-match explanations before finalization. Workers do not write
+receipts, manifests, Viewer state, or the final bundle. An empty shard set requires an empty
+`$Proposals` directory. After every expected proposal exists and no extra file exists, continue:
 
 ```powershell
 node .\skills\oxygen-storytelling-review\scripts\finalize_reviewed_story_privacy.mjs `
@@ -697,12 +707,14 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --story-privacy-import $Bundle
 ```
 
-Return to the same Viewer. It shows the local original beside the proposed meaning-preserving
-anonymized text. The contributor may accept that text, edit the anonymized text, or publish an
-explicit exact occurrence of a non-credential fragment for this exact target revision. Credentials
-are always removed. Resolve all current target choices, then continue Preferences, All set,
-and local release. If another Story edit returns the run to `preparation_required`, repeat with a
-new work directory; never patch JSON or reuse an old snapshot, proposal set, or import bundle.
+The contributor stays in the same Chapter. It shows the local original beside the proposed
+meaning-preserving anonymization; preparation/import installs no human selection. The contributor
+may accept that text, edit it, or stage an exact-public choice for a noncredential occurrence bound
+to this target revision. Credentials are always removed. The contributor stages choices and
+accepts any checked custom edit, then uses one Apply review to commit this Chapter’s Story, Insight
+and Privacy selections. Preferences, All set, and local release remain separate human actions.
+If another Story, Insight, or custom Privacy draft returns the run to `preparation_required`, repeat
+with a new work directory; never patch JSON or reuse an old snapshot, proposal set, or import bundle.
 
 The Viewer must show organization progress, project groups, the primary project, one combined
 timeline per project, evidence-derived primary-project Chapters, source-event evidence, and visible
@@ -710,14 +722,11 @@ HTML/ZIP download actions. Do not describe unsupported annotation controls as av
 
 Required final surfaces, with current runtime status:
 
-- Chapter Privacy/Release Preview is implemented in the canonical Viewer as one choice authority per
-  target. The contributor accepts the Agent proposal, edits anonymized text, or explicitly makes an
-  exact noncredential occurrence public for the current target digest; credential occurrences are
-  never publishable.
-- Required Privacy review and Release Preview show the local original beside the proposed text, then
-  release only the exact selected bytes. Unavailable originals are never reconstructed. A missing,
-  stale, invalid, or incomplete target choice blocks the whole Story/package release. Do not expose
-  Raw Evidence or suppressed content through Insight review.
+- Chapter Privacy holds original/proposal/reason and durable pending choices. Single Chapter Apply
+  commits Story, Insight and Privacy selections atomically, with current source/target/session binding.
+- Release Preview is read-only and shows applied selected content, with an incomplete notice while review
+  remains. Final release requires all Chapters applied and human-confirmed and checks actual text.
+  Unavailable originals are never reconstructed; Raw Evidence and suppressed content do not enter Insight review.
 - `Preferences` presents generated probes and records explicit answers (§7). Generated questions
   are not confirmed preferences.
 

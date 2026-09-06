@@ -11,6 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type SyntheticEvent,
+  type ReactNode,
 } from "react";
 import {
   type StoryInsight,
@@ -19,12 +20,6 @@ import {
 } from "../lib/timeline";
 import { type StoryReviewFocusTarget } from "../lib/story-navigation";
 import {
-  storyPrivacyApplyBlockerCopy,
-  type StoryPrivacyCandidate,
-  type StoryPrivacyState,
-} from "./story-privacy-ui";
-import {
-  applyChapterReview,
   applyStoryReviewToBlock,
   canMarkChapterReady,
   canRedoStoryEdit,
@@ -360,13 +355,11 @@ export function StoryChapterEditor({
   onPrevious,
   onNext,
   language,
-  storyPrivacyStatus,
-  storyPrivacyCandidates,
   storyPrivacyCurrent,
   storyPrivacyComplete,
-  storyPrivacyResolved,
-  storyPrivacyTotal,
-  onOpenStoryPrivacy,
+  privacyControls,
+  onApplyReview,
+  applyPending = false,
 }: {
   source: StorySource;
   position: number;
@@ -379,13 +372,11 @@ export function StoryChapterEditor({
   onPrevious: () => void;
   onNext: () => void;
   language: StoryLanguage;
-  storyPrivacyStatus: StoryPrivacyState["status"] | "preparation_required";
-  storyPrivacyCandidates: StoryPrivacyCandidate[];
   storyPrivacyCurrent: boolean;
   storyPrivacyComplete: boolean;
-  storyPrivacyResolved: number;
-  storyPrivacyTotal: number;
-  onOpenStoryPrivacy: () => void;
+  privacyControls: ReactNode;
+  onApplyReview: () => Promise<void>;
+  applyPending?: boolean;
 }) {
   const storyRef = useRef<HTMLElement | null>(null);
   const completionRef = useRef<HTMLElement | null>(null);
@@ -404,7 +395,8 @@ export function StoryChapterEditor({
     draft: InsightDraft;
   } | null>(null);
   const [applyError, setApplyError] = useState("");
-  const [applying, setApplying] = useState(false);
+  const [localApplying, setApplying] = useState(false);
+  const applying = localApplying || applyPending;
   const context = useMemo(() => storyReviewContext(source, chapterReview), [chapterReview, source]);
   const blockers = useMemo(
     () => chapterReviewCompletionBlockers(chapterReview, context),
@@ -714,53 +706,14 @@ export function StoryChapterEditor({
   };
 
   const applyReview = async () => {
-    if (!storyPrivacyCurrent) {
-      setApplyError("Load the current Story Privacy authority before applying this review.");
-      return;
-    }
     setApplying(true);
     setApplyError("");
-    try {
-      const directAdditions = chapterReview.editTransactions
-        .filter((transaction) => transaction.storyKey === source.key
-          && transaction.sourceLanguage === source.language
-          && transaction.requiresEvidence
-          && (transaction.resolution === "pending" || transaction.resolution === "needs_evidence"))
-        .map((transaction) => ({
-          annotationId: transaction.id,
-          instruction: transaction.afterText,
-          supportingEvidence: transaction.supportingEvidence || [],
-        }));
-      const response = await fetch("/api/evidence", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          chapterEvidence: [source.evidence.primary, ...source.evidence.supporting],
-          additions: directAdditions,
-        }),
-      });
-      if (!response.ok) throw new Error("The reviewed Evidence could not be verified.");
-      const verification = await response.json() as { evidenceResolved: boolean; supportedAddIds: string[] };
-      const result = applyChapterReview(chapterReview, {
-        ...context,
-        evidenceResolved: verification.evidenceResolved,
-        supportedEditIds: verification.supportedAddIds.filter((id) => directAdditions.some((addition) => addition.annotationId === id)),
-      });
-      if (result.blockedReason) {
-        if (result.blockedReason === "direct_evidence") onChapterReview(result.state);
-        setApplyError("The current review could not be applied safely. Recheck the bounded review items below.");
-        return;
-      }
-      leaveEditMode();
-      onChapterReview(result.state);
-    } catch (error) {
-      setApplyError(error instanceof Error ? error.message : "The current review could not be applied safely.");
-    } finally {
-      setApplying(false);
-    }
+    try { await onApplyReview(); leaveEditMode(); }
+    catch (error) { setApplyError(error instanceof Error ? error.message : "Review was not applied; drafts retained."); }
+    finally { setApplying(false); }
   };
 
-  return <section className="simpleEpisode chapterEditor storyChapterEditor" role="region" aria-labelledby="story-chapter-title">
+  return <section className="simpleEpisode chapterEditor storyChapterEditor" role="region" aria-labelledby="story-chapter-title" aria-busy={applying}><fieldset disabled={applying} style={{ display: "contents" }}>
     <div className="simpleEpisodeChrome"><div className="chapterCanvas chapterChromeCanvas">
       <button className="episodeBackLink" onClick={onClose}>← Project story</button>
       <div className="simpleEpisodePosition">Chapter {position} / {total}</div>
@@ -846,25 +799,9 @@ export function StoryChapterEditor({
           </section>}
         </section>
         <section className="episodePrimarySection privacySection" aria-labelledby="story-privacy-heading">
-          <div className="simpleSectionHead"><div><h3 id="story-privacy-heading">Privacy</h3><p>Read-only references to the one global Story Privacy authority.</p></div></div>
-          <div className="privacySummary chapterPrivacySummary">
-            {!storyPrivacyCurrent ? <p role="status">{storyPrivacyApplyBlockerCopy(storyPrivacyStatus)} All set also remains blocked.</p>
-              : storyPrivacyCandidates.length === 0 ? <p><b>0 / 0 for this Chapter.</b> No release Privacy candidate targets this Chapter.</p>
-                : <ul>{storyPrivacyCandidates.map((candidate) => <li key={candidate.id}>
-                  <b>{candidate.title}</b>
-                  <span>{candidate.resolved
-                    ? candidate.reviewState === "deterministic" ? "Automatically anonymized"
-                      : "Contributor choice recorded"
-                    : "Needs confirmation"}</span>
-                </li>)}</ul>}
-            <p>Raw Evidence and unavailable originals are never reconstructed here. Cross-Chapter findings keep one global identity and target choice.</p>
-            <button className="releasePreviewCta" onClick={onOpenStoryPrivacy}>
-              <span>Open global Release Preview</span>
-              <small>{storyPrivacyCurrent
-                ? `${storyPrivacyResolved} / ${storyPrivacyTotal} resolved`
-                : "Blocked · recovery required"}</small>
-            </button>
-          </div>
+          <h3 id="story-privacy-heading">Privacy</h3>
+          <p>Review this Chapter’s original, proposal and reasons. Choices remain drafts until Apply review.</p>
+          {privacyControls}
         </section>
         <section className="chapterCompletion" data-chapter-completion ref={completionRef} tabIndex={-1} aria-labelledby="story-review-summary-heading">
           <div><span>{chapterReview.stage.replaceAll("_", " ")} · Revision {chapterReview.revision}</span><h3 id="story-review-summary-heading">Review summary</h3></div>
@@ -872,7 +809,7 @@ export function StoryChapterEditor({
           {blockers.length > 0 && <ul className="storyBlockerList">{blockers.map((blocker, index) => <li key={`${blocker.code}:${blocker.targetKind}:${blocker.targetId || ""}:${index}`}>{chapterReview.stage === "reviewing" && blocker.code === "evidence_unverified"
             ? "Evidence will be checked when you Apply this review."
             : storyBlockerCopy[blocker.code]}</li>)}</ul>}
-          {!storyPrivacyComplete && <p className="completionBlocker" role="status">Current Story Privacy selections are not complete. Apply review remains available when the authority is current; All set remains blocked.</p>}
+          {!storyPrivacyComplete && <p className="completionBlocker" role="status">This Chapter has Privacy choices pending Apply review.</p>}
           {applyError && <p className="completionBlocker" role="alert">{applyError}</p>}
           {chapterReview.stage === "reviewing" ? <button className="completionPrimary" disabled={applying || !storyPrivacyCurrent} onClick={applyReview}>{applying ? "Applying review…" : "Apply current review"}</button>
             : chapterReview.stage === "revision_ready" ? <div className="completionActions"><span>{blockers.length || !storyPrivacyComplete ? "Resolve the bounded review items before All set." : "Inspect the latest revision, then choose All set."}</span><button className="completionPrimary" disabled={!storyPrivacyComplete || !canMarkChapterReady(chapterReview, context)} onClick={() => { leaveEditMode(); onChapterReview(markChapterReady(chapterReview, context)); }}>All set</button></div>
@@ -880,5 +817,5 @@ export function StoryChapterEditor({
         </section>
       </div>
     </div>
-  </section>;
+  </fieldset></section>;
 }

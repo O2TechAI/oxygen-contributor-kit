@@ -2,9 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
-  chapterStoryPrivacyCandidates,
+  appliedStoryPrivacyTargets,
   parseStoryPrivacyAuthority,
-  storyPrivacyApplyBlockerCopy,
   storyPrivacyAuthorityCurrent,
   storyPrivacyAuthorityComplete,
   storyPrivacyCandidateResolved,
@@ -93,13 +92,6 @@ test("Story Privacy UI accepts exact target authority and total completed-empty 
     status:"ready",authority:preparationRequired,message:"",
   },"run-current"),false);
   assert.equal(storyPrivacyAuthorityComplete(preparationRequired), false);
-  assert.match(storyPrivacyApplyBlockerCopy("loading"),/still loading.*Apply review is blocked/u);
-  assert.match(storyPrivacyApplyBlockerCopy("error"),/authority is unavailable.*Apply review is blocked/u);
-  assert.match(storyPrivacyApplyBlockerCopy("unavailable"),/authority is unavailable.*Apply review is blocked/u);
-  assert.match(storyPrivacyApplyBlockerCopy("preparation_required"),/must be refreshed.*Apply review is blocked/u);
-  assert.doesNotMatch([
-    "loading","error","unavailable","preparation_required",
-  ].map(storyPrivacyApplyBlockerCopy).join("\n"),/preparation_required|Current Story Privacy authority is error/u);
   const contractRefresh = {
     ...preparationRequired,
     authorityDigest: "e".repeat(64),
@@ -151,32 +143,6 @@ test("parser rejects inconsistent choices, mappings, candidate union, and creden
   for (const value of cases) assert.equal(parseStoryPrivacyAuthority(value), null);
 });
 
-test("cross-Chapter metadata stays global while an unrelated pending target blocks release", () => {
-  assert.deepEqual(chapterStoryPrivacyCandidates(authority, "chapter-a").map(({ id }) => id), [
-    "automatic", "cross-chapter",
-  ]);
-  assert.deepEqual(chapterStoryPrivacyCandidates(authority, "chapter-b").map(({ id }) => id), ["cross-chapter"]);
-  assert.deepEqual(chapterStoryPrivacyCandidates(authority, "chapter"), []);
-
-  const globallyPending = {
-    ...authority,
-    candidates: [authority.candidates[0], {
-      id: "unrelated-pending", reviewState: "needs_confirmation", title: "Other Chapter",
-      whyFlagged: "A separate target needs a choice.", uncertaintyReason: "Confirm it.",
-      releaseTargets: ["chapter-b::overview"], resolved: false,
-    }],
-    targets: [authority.targets[0], {
-      ...authority.targets[1], proposedText:authority.targets[1].originalText,
-      selectedText:authority.targets[1].originalText, occurrences:[], decidedAt,
-    }, target("chapter-b::overview", "Alice outcome", { pending:true })],
-  };
-  assert.ok(parseStoryPrivacyAuthority(globallyPending));
-  const chapterA = chapterStoryPrivacyCandidates(globallyPending, "chapter-a");
-  assert.deepEqual(chapterA.map(({ id }) => id), ["automatic"]);
-  assert.equal(chapterA.every(storyPrivacyCandidateResolved), true);
-  assert.equal(storyPrivacyAuthorityComplete(globallyPending), false);
-});
-
 test("Story Privacy request epochs are single-flight and suppress replaced responses", async () => {
   const gate = new StoryPrivacyRequestGate();
   const accepted = [];
@@ -212,58 +178,41 @@ test("Story Privacy request epochs are single-flight and suppress replaced respo
   assert.equal(gate.isCurrent(retired), false);
 });
 
-test("Release Preview uses one Agent target-choice card and no candidate decision path", async () => {
+test("Release Preview is read-only; Chapter target cards stage visible choices", async () => {
   const component = await read("../app/story-privacy-review.tsx");
-  assert.match(component, /Candidate \{resolved \+ 1\} of \{total\}/);
+  const preview = component.slice(component.indexOf("export function StoryPrivacyReview"));
+  assert.match(preview, /target.selectedText/);
+  assert.doesNotMatch(preview, /<button|<textarea|TargetChoiceCard|target.originalText/);
   assert.match(component, /Local original/);
   assert.match(component, /Agent-proposed anonymized text/);
-  assert.match(component, /Use Agent proposal/);
-  assert.match(component, /Edit anonymized text/);
-  assert.match(component, /Save edited anonymization/);
-  assert.match(component, /Publish exact original span/);
+  assert.match(component, /stagedText \?\? target.selectedText/);
+  assert.match(component, /onSave\(\{ editedText: null, publicOverrides:/);
+  assert.doesNotMatch(component, /setPublicSelections/);
+  assert.doesNotMatch(component, /Stage exact-public choices|Export the current snapshot|target.targetId}.*<\/p>/);
   assert.match(component, /Credential always removed/);
-  assert.match(component, /Why flagged/);
-  assert.match(component, /Privacy preparation required/);
-  assert.match(component, /The reviewed Story content changed or the Story Privacy contract was refreshed\./);
-  assert.match(component, /Export the current snapshot/);
-  assert.match(component, /Prepare and finalize the reviewed target proposals/);
-  assert.match(component, /Import the bundle into this same localhost Viewer and workflow run/);
-  assert.match(component, /busy=\{Boolean\(busyId\)\}/);
-  assert.doesNotMatch(component, /onDecision|decisionOptions|otherCandidateForcesTarget|No extra candidate anonymization/);
-  assert.doesNotMatch(component, /provider|model|confidence|recommendation|rewrite|creator|>Delete<|v\d/i);
 });
 
-test("Workspace sends one exact target CAS, installs its response, and never retries a mutation", async () => {
+test("Workspace stages durable Privacy and sends one Chapter Apply CAS without retry", async () => {
   const workspace = await read("../app/workspace.tsx");
-  assert.match(workspace, /fetch\(`\/api\/story-privacy\?workflowRunId=\$\{encodeURIComponent\(scopedWorkflowRunId\)\}`/);
-  const choice = workspace.slice(workspace.indexOf("const decideStoryPrivacyTarget"),
-    workspace.indexOf("const effectiveError"));
-  assert.match(choice, /fetch\(`\/api\/story-privacy\/\$\{encodeURIComponent\(target\.targetId\)\}`/);
-  assert.match(choice, /workflowRunId:authority\.workflowRunId,[\s\S]*sourceRevision:authority\.sourceRevision,[\s\S]*activeStoryDigest:authority\.activeStoryDigest,[\s\S]*authorityDigest:authority\.authorityDigest,[\s\S]*targetContentDigest:target\.targetContentDigest,[\s\S]*editedText:choice\.editedText,[\s\S]*publicOverrides:choice\.publicOverrides/);
-  assert.match(choice, /response\.status === 409[\s\S]*loadStoryPrivacy\("The target authority changed while saving[\s\S]*, true\)/);
-  assert.match(choice, /authority:next,[\s\S]*Target choice saved to the exact current release authority/);
-  assert.equal((choice.match(/method:"PATCH"/g) || []).length, 1);
-  assert.match(workspace, /onTargetChoice=\{\(target,choice\) => \{[\s\S]*decideStoryPrivacyTarget\(target,choice\)/);
-  assert.doesNotMatch(choice, /candidateDigest|expectedVersion|editedProjections|\/projection/);
-  assert.doesNotMatch(workspace, /setPrivacyDecisions|current\.privacyDecisions/);
-  assert.match(workspace, /createStoryReviewSession\(workflowRunId,current\.chapterReviews,\{\}\)/);
-  assert.match(workspace, /storyPrivacyCurrent=\{storyPrivacyReviewApplicable\}/);
-  assert.match(workspace, /storyPrivacyComplete=\{storyPrivacyReleaseComplete\}/);
-  assert.match(workspace, /review\.revision > previous\.revision[\s\S]*refreshStoryPrivacyAfterPersistenceRef\.current = true[\s\S]*status:"loading"/);
-  const durableRefresh = workspace.slice(
-    workspace.indexOf('if (storyPersistenceStatus !== "durable"'),
-    workspace.indexOf("const readyRunId"),
-  );
-  assert.match(durableRefresh, /loadStoryPrivacyRef\.current/);
-  assert.match(durableRefresh, /void loadProbes\(controller\.signal\);/);
-  assert.equal((durableRefresh.match(/loadProbes\(/g) || []).length, 1);
-  assert.match(workspace, /storySessionReadyRunId !== workflowRunId[\s\S]*refreshStoryPrivacyAfterPersistenceRef\.current = false/);
-  const localReviewChange = workspace.slice(
-    workspace.indexOf("const updateChapterReview"),
-    workspace.indexOf("const currentDownloadReviewBlockerGroups"),
-  );
-  assert.doesNotMatch(localReviewChange, /loadProbes\(/);
-  assert.doesNotMatch(localReviewChange, /refreshStoryPrivacyAfterPersistenceRef\.current = true[\s\S]*review\.revision === previous\.revision/);
+  const stage = workspace.slice(workspace.indexOf("const decideStoryPrivacyTarget"), workspace.indexOf("const applyChapter"));
+  assert.match(stage, /setPrivacyDrafts/);
+  assert.doesNotMatch(stage, /fetch\(/);
+  const apply = workspace.slice(workspace.indexOf("const applyChapter"), workspace.indexOf("const renderPrivacyTarget"));
+  assert.match(apply, /await storyPersistence.flush\(snapshot\)/);
+  assert.match(apply, /fetch\("\/api\/story-review-session\/apply"/);
+  assert.match(apply, /expectedVersion: requestedVersion/);
+  assert.match(apply, /next.workflowRunId !== workflowRunId/);
+  assert.match(apply, /next.sourceRevision !== current.sourceRevision/);
+  assert.match(apply, /storyPersistence.getState\(\).sourceRevision !== current.sourceRevision/);
+  assert.match(apply, /storyPersistence.getState\(\).serverVersion !== requestedVersion/);
+  assert.match(apply, /\[chapterKey\]: session.chapterReviews\[chapterKey\]/);
+  assert.equal((apply.match(/fetch\(/g) || []).length, 1);
+  assert.doesNotMatch(workspace, /fetch\(`\/api\/story-privacy\/|onTargetChoice=/);
+  assert.match(workspace, /applyPending=\{storyPrivacyBusy === activeSourceChapter.source.key\}/);
+  assert.match(workspace, /<details><summary>Other text in this Chapter/);
+  assert.match(workspace, /privacyDrafts\[target.targetId\] \|\| target.editedProposal/);
+  assert.match(workspace, /const sameContent = draft\?\.targetContentDigest === target.targetContentDigest/);
+  assert.match(workspace, /staged=\{sameContent && \(currentDraft \|\| draft.editedText !== null\) \? draft : undefined\}/);
 });
 
 test("source Privacy remains decision-only and surfaces API failures", async () => {
@@ -279,26 +228,24 @@ test("source Privacy remains decision-only and surfaces API failures", async () 
   assert.match(compare, /review_state === "needs_confirmation"/);
 });
 
-test("Chapter completion consumes global target-choice references and retains paragraph-owned Insights", async () => {
-  const [editor, css] = await Promise.all([
-    read("../app/story-chapter-editor.tsx"), read("../app/globals.css"),
-  ]);
-  assert.match(editor, /storyPrivacyCandidates\.map/);
-  assert.match(editor, /candidate\.resolved/);
-  assert.match(editor, /Open global Release Preview/);
-  assert.match(editor, /disabled=\{applying \|\| !storyPrivacyCurrent\}/);
+test("Chapter completion owns Privacy controls and retains paragraph-owned Insights", async () => {
+  const editor = await read("../app/story-chapter-editor.tsx");
+  assert.match(editor, /\{privacyControls\}/);
+  assert.match(editor, /<fieldset disabled=\{applying\}/);
+  assert.match(editor, /const applying = localApplying \|\| applyPending/);
   assert.match(editor, /disabled=\{!storyPrivacyComplete \|\| !canMarkChapterReady/);
-  const apply=editor.slice(editor.indexOf("const applyReview"),editor.indexOf("return <section"));
-  assert.equal((apply.match(/fetch\("\/api\/evidence"/gu) || []).length,1);
-  assert.match(apply,/if \(!storyPrivacyCurrent\)[\s\S]*return;/u);
-  assert.doesNotMatch(apply,/if \(!chapterReview\.evidenceVerified\)|if \(!storyPrivacyComplete\)/u);
+  const apply = editor.slice(editor.indexOf("const applyReview"), editor.indexOf('return <section className="simpleEpisode'));
+  assert.match(apply, /await onApplyReview\(\)/);
+  assert.doesNotMatch(apply, /fetch\(|privacyComplete/);
+  assert.doesNotMatch(editor, /Open global Release Preview|storyPrivacyCandidates\.map/);
   assert.match(editor, /Evidence will be checked when you Apply this review/);
-  assert.match(editor, /storyPrivacyApplyBlockerCopy\(storyPrivacyStatus\)/);
-  assert.doesNotMatch(editor, /authority is \{storyPrivacyStatus\}/);
-  assert.match(editor, /className="releasePreviewCta"/);
-  assert.match(editor, /storyPrivacyResolved\} \/ \$\{storyPrivacyTotal\} resolved/);
-  assert.match(css, /\.releasePreviewCta:hover/);
-  assert.match(css, /\.releasePreviewCta:focus-visible/);
-  assert.match(css, /\.storyNarrativeRow\{display:grid;grid-template-columns:minmax\(0,720px\) minmax\(480px,620px\)/);
-  assert.match(css, /@media\(max-width:760px\)[^\n]*\.sourcePrivacyComparison,\.storyPrivacyProjectionCompare\{grid-template-columns:minmax\(0,1fr\)\}/);
+});
+
+test("Release Preview excludes legacy preparation selections without Chapter Apply history", () => {
+  const legacy = target("chapter-a::title", "Alice planned a demo");
+  assert.deepEqual(appliedStoryPrivacyTargets([legacy], {}), []);
+  assert.deepEqual(appliedStoryPrivacyTargets([legacy], { "chapter-a": { stage: "reviewing", evidenceVerified: false } }), []);
+  const humanSaveOnly = { stage: "reviewing", evidenceVerified: false, revision: 2, revisionHistory: [{ revision: 2 }] };
+  assert.deepEqual(appliedStoryPrivacyTargets([legacy], { "chapter-a": humanSaveOnly }), []);
+  assert.deepEqual(appliedStoryPrivacyTargets([legacy], { "chapter-a": { stage: "revision_ready", evidenceVerified: true } }), [legacy]);
 });

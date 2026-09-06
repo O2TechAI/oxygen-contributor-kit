@@ -6,7 +6,7 @@ Do not collapse these steps into one ambiguous Privacy phase.
 
 Upstream source Privacy runs before Story generation. It binds validated redaction spans and their current receipt to the reviewed source as mandatory release authority, and it blocks release while source-level review states remain unresolved. Those spans do not replace the exact bound raw reviewed narrative used by the contributor-selected current provider during Organize and Story authoring.
 
-Story/Release Privacy runs after the Story candidate exists. The generated Story is non-release working state and cannot release until one meaning-preserving proposal exists for every current release target and the contributor chooses the exact reviewed release bytes through the server-owned target authority. An exact noncredential public occurrence may remain public only through that explicit reviewed choice. Candidates remain explanatory metadata outside `oxygen.story`; the hydrated Story session does not own those choices.
+Story/Release Privacy runs after the Story candidate exists. The generated Story is non-release working state and cannot release until one meaning-preserving proposal exists for every current release target and the contributor chooses the exact reviewed release bytes through the server-owned target authority. An exact noncredential public occurrence may remain public only through that explicit reviewed choice. Candidates remain explanatory metadata outside `oxygen.story`; pending choices live in the Story session until Chapter Apply commits them to the existing target authority.
 
 ## Provider Processing And Final Export Boundary
 
@@ -60,25 +60,17 @@ Evidence content stays in its original source language. Do not translate it and 
 
 ## Release Preview Contract
 
-Chapter Privacy/Release Preview is implemented in the canonical Viewer. It shows what would be
-released, not a raw-source browser:
+Release Preview is read-only and shows applied selected release text, with an incomplete notice while
+Chapters remain pending. Chapter Privacy shows the exact permitted local original, proposed
+anonymization and reason; contributor choices remain drafts until Chapter Apply. Source-record
+Privacy retains its separate Keep/Redact path and is not moved into Release Preview. Only source
+`needs_confirmation` rows expose Keep/Redact, with the minimum permitted original and safe
+uncertainty context; pending source decisions continue to block release.
 
-- Deterministic or contributor-confirmed safe content shows only the current release-safe projection.
-- A `needs_confirmation` source Privacy item shows the minimum permitted local original beside the current safe projection, a safe uncertainty reason, and Keep/Redact.
-- If the original is unavailable, state that it is unavailable and use only surviving safe metadata/context to explain the information class, uncertainty, and human decision needed.
-- Unavailable originals are never inferred, approximated, reconstructed, searched for, or displayed.
-- Review metadata, source originals, offsets, anchors, Evidence IDs, Story JSON, prompts, and private ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
-
-Only `needs_confirmation` rows are decision-editable. The final contributor actions are exactly:
-
-```text
-Keep
-Redact
-```
-
-Keep preserves existing safe release context. Redact suppresses the bound release targets. Neither decision deletes source evidence, changes category/status/reason metadata, soft-deletes a row, or authorizes publication. Pending confirmation blocks Story/package release.
-
-Raw Evidence and suppressed content are not exposed through Insight review.
+Unavailable originals are never inferred, reconstructed, searched for, or displayed. Review
+metadata, offsets, anchors, Evidence IDs, Story JSON, prompts and private ledgers never enter
+`oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`. Raw Evidence
+and suppressed content are not exposed through Insight review.
 
 ## Story/Release Target Authority
 
@@ -92,7 +84,12 @@ Agent-proposed anonymized text
 Use Agent proposal | Edit anonymized text | Make an exact noncredential occurrence public
 ```
 
-Credentials are always removed. HTML and ZIP consume the exact same contributor-selected bytes.
+Source matches carry source identity, exact ranges and a semantic inheritance explanation;
+ordinary same-text unrelated uses require parent-reviewed evidence from the bounded source
+context. This relation is never public permission. Both proposed and custom edited final text are
+checked for newly introduced matches; credentials have no unrelated or public bypass. The shared
+[worker contract](story-preparation-transport.md#source-inheritance-and-edited-privacy-text) owns
+these fields. Credentials are always removed. HTML and ZIP consume the same applied selected bytes.
 
 ## AI And Human Revision Safety
 

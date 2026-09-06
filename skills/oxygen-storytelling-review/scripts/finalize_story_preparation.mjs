@@ -466,7 +466,9 @@ async function finalize(args) {
     targetProposals: privacyParts.flatMap((part) => part.targetProposals),
   };
   rejectMetadata(privacyInput);
-  const privacy = await normalizeStoryPrivacyOutput(privacyInput, targetContents);
+  if (!Array.isArray(validationAuthority.sourceRedactions)) fail("PRIVACY_SOURCE_PREPARATION_REQUIRED");
+  const privacy = await normalizeStoryPrivacyOutput(privacyInput, targetContents,
+    validationAuthority.sourceRedactions);
   if (!privacy) fail("PRIVACY_OUTPUT_INVALID");
   if (privacyAuthority.outputCount !== privacy.targetProposals.length) fail("PRIVACY_RECEIPT_STALE");
   if (preferenceAuthorityRecord.manifest.inputDigest !== preferenceInputDigest) fail("PREFERENCE_INPUT_STALE");

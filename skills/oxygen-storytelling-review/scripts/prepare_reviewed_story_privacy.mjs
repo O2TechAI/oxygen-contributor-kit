@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { matchingStoryPrivacySources } from "../../../viewer/lib/story-privacy-projection.ts";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { storyPreparationDigest } from "../../../viewer/lib/story-preparation.ts";
@@ -31,7 +32,7 @@ async function regular(path) {
 function shardTargets(targets) {
   const bins = [];
   const ranked = targets.map((target, order) => ({
-    target, order, bytes: Buffer.byteLength(target.content, "utf8"),
+    target, order, bytes: Buffer.byteLength(target.content, "utf8") + Buffer.byteLength(target.editedText || "", "utf8"),
   })).sort((left, right) => right.bytes - left.bytes
     || compareUtf8(left.target.id, right.target.id));
   for (const entry of ranked) {
@@ -58,11 +59,14 @@ const bindingKeys = [
   "workflowRunId", "sourceRevision", "activeStoryDigest", "serverVersion",
   "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest",
   "changedTargetCount", "previousAuthorityDigest",
+  "sourcePrivacyDigest", "sourceRedactionsDigest",
 ];
-if (!exact(snapshot, ["schema", "binding", "targetTransitions", "changedTargets"])
+if (!exact(snapshot, ["schema", "binding", "targetTransitions", "changedTargets", "sourceRedactions"])
   || snapshot.schema !== "oxygen.reviewed-story-privacy-snapshot"
   || !exact(snapshot.binding, bindingKeys) || !Array.isArray(snapshot.targetTransitions)
   || !Array.isArray(snapshot.changedTargets)
+  || !Array.isArray(snapshot.sourceRedactions)
+  || await storyPreparationDigest(snapshot.sourceRedactions) !== snapshot.binding.sourceRedactionsDigest
   || !safeId(snapshot.binding.workflowRunId)
   || !validActivatedSourceRevision(snapshot.binding.sourceRevision)
   || !validNonnegativeAuthorityCounter(snapshot.binding.serverVersion)
@@ -71,7 +75,7 @@ if (!exact(snapshot, ["schema", "binding", "targetTransitions", "changedTargets"
   || snapshot.targetTransitions.length === 0 || snapshot.targetTransitions.length > 4_000
   || ![snapshot.binding.activeStoryDigest, snapshot.binding.reviewedStoryDigest,
     snapshot.binding.targetCatalogDigest, snapshot.binding.changedTargetDigest,
-    snapshot.binding.previousAuthorityDigest].every((value) => typeof value === "string" && hex.test(value))) {
+    snapshot.binding.previousAuthorityDigest, snapshot.binding.sourcePrivacyDigest, snapshot.binding.sourceRedactionsDigest].every((value) => typeof value === "string" && hex.test(value))) {
   fail("SNAPSHOT_INVALID");
 }
 const transitions = [];
@@ -80,7 +84,7 @@ for (const transition of snapshot.targetTransitions) {
     || !safeId(transition.id)
     || (transition.previousContentDigest !== null && !hex.test(transition.previousContentDigest))
     || (transition.contentDigest !== null && !hex.test(transition.contentDigest))
-    || transition.previousContentDigest === transition.contentDigest) fail("TRANSITION_INVALID");
+    || (transition.previousContentDigest === null && transition.contentDigest === null)) fail("TRANSITION_INVALID");
   transitions.push(transition);
 }
 if (new Set(transitions.map((target) => target.id)).size !== transitions.length
@@ -93,10 +97,11 @@ const currentTransition = new Map(transitions.filter((target) => target.contentD
   .map((target) => [target.id, target.contentDigest]));
 const targets = [];
 for (const target of snapshot.changedTargets) {
-  if (!exact(target, ["id", "storyKey", "target", "content", "contentDigest"])
+  if (!exact(target, ["id", "storyKey", "target", "content", "contentDigest", ...(Object.hasOwn(target, "editedText") ? ["editedText"] : [])])
     || ![target.id, target.storyKey, target.target].every(safeId)
     || typeof target.content !== "string" || target.content.length === 0
-    || Buffer.byteLength(target.content, "utf8") > MAX_SHARD_CONTENT_BYTES
+    || (target.editedText !== undefined && (typeof target.editedText !== "string" || !target.editedText.trim() || target.editedText.length > 1_000_000))
+    || Buffer.byteLength(target.content, "utf8") + Buffer.byteLength(target.editedText || "", "utf8") > MAX_SHARD_CONTENT_BYTES
     || !hex.test(target.contentDigest)
     || currentTransition.get(target.id) !== target.contentDigest
     || await storyPreparationDigest(target.content) !== target.contentDigest) fail("TARGET_INVALID");
@@ -127,6 +132,7 @@ try {
       shardId: id,
       binding: snapshot.binding,
       targets: shardTargetsValue,
+      sourceRedactions: matchingStoryPrivacySources(shardTargetsValue, snapshot.sourceRedactions),
     };
     const inputDigest = await storyPreparationDigest(core);
     const inputPath = `${id}.input.json`;

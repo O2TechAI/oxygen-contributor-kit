@@ -21,6 +21,7 @@ export type StoryPrivacyOccurrence = {
 };
 
 export type StoryPrivacyTarget = {
+  editedProposal?: { inputDigest: string; text: string };
   targetId: string;
   targetContentDigest: string;
   originalText: string;
@@ -41,6 +42,9 @@ export type StoryPrivacyTargetChoice = {
 };
 
 export type StoryPrivacyAuthority = {
+  serverVersion?: number;
+  chapterErrors?: Record<string, string>;
+  pendingChapterKeys?: string[];
   workflowRunId: string;
   sourceRevision: number;
   activeStoryDigest: string;
@@ -123,24 +127,35 @@ export function parseStoryPrivacyAuthority(value: unknown): StoryPrivacyAuthorit
   if (!record(value) || !exactKeys(value, [
     "workflowRunId", "sourceRevision", "activeStoryDigest", "authorityDigest", "status",
     "candidates", "targets",
+    ...["serverVersion", "chapterErrors", "pendingChapterKeys"].filter((key) => record(value) && Object.hasOwn(value, key)),
   ]) || !stableId(value.workflowRunId)
     || !Number.isSafeInteger(value.sourceRevision) || Number(value.sourceRevision) <= 0
     || typeof value.activeStoryDigest !== "string" || !digest.test(value.activeStoryDigest)
     || typeof value.authorityDigest !== "string" || !digest.test(value.authorityDigest)
     || !["preparation_required", "completed_empty", "completed_with_candidates"]
       .includes(String(value.status))
-    || !Array.isArray(value.candidates) || !Array.isArray(value.targets)) return null;
+    || !Array.isArray(value.candidates) || !Array.isArray(value.targets)
+    || (value.serverVersion !== undefined && (!Number.isSafeInteger(value.serverVersion) || Number(value.serverVersion) < 0))
+    || (value.chapterErrors !== undefined && (!record(value.chapterErrors)
+      || Object.values(value.chapterErrors).some((error) => typeof error !== "string")))
+    || (value.pendingChapterKeys !== undefined && (!Array.isArray(value.pendingChapterKeys)
+      || value.pendingChapterKeys.some((key) => !stableId(key))))) return null;
 
   const targets: StoryPrivacyTarget[] = [];
   for (const raw of value.targets) {
     if (!record(raw) || !exactKeys(raw, [
       "targetId", "targetContentDigest", "originalText", "proposedText", "selectedText", "edited",
       "occurrences", "decidedAt",
+      ...(record(raw) && Object.hasOwn(raw, "editedProposal") ? ["editedProposal"] : []),
     ]) || !stableId(raw.targetId) || typeof raw.targetContentDigest !== "string"
       || !digest.test(raw.targetContentDigest) || !safeText(raw.originalText)
       || !safeText(raw.proposedText) || (raw.selectedText !== null && !safeText(raw.selectedText))
       || typeof raw.edited !== "boolean" || !Array.isArray(raw.occurrences)
-      || (raw.selectedText === null ? raw.decidedAt !== null : !exactTimestamp(raw.decidedAt))) return null;
+      || (raw.selectedText === null ? raw.decidedAt !== null : !exactTimestamp(raw.decidedAt))
+      || (raw.editedProposal !== undefined && (!record(raw.editedProposal)
+        || !exactKeys(raw.editedProposal, ["inputDigest", "text"])
+        || typeof raw.editedProposal.inputDigest !== "string" || !digest.test(raw.editedProposal.inputDigest)
+        || !safeText(raw.editedProposal.text)))) return null;
     const occurrences: StoryPrivacyOccurrence[] = [];
     for (const occurrence of raw.occurrences) {
       if (!record(occurrence) || !exactKeys(occurrence, [
@@ -242,26 +257,18 @@ export function storyPrivacyAuthorityCurrent(
     && state.authority.status !== "preparation_required";
 }
 
-export function storyPrivacyApplyBlockerCopy(
-  status: StoryPrivacyState["status"] | "preparation_required",
-) {
-  if (status === "loading") {
-    return "Story Privacy is still loading. Apply review is blocked until the current authority is available.";
-  }
-  if (status === "preparation_required") {
-    return "Story Privacy must be refreshed after applied release content changed. Apply review is blocked until refreshed authority is available.";
-  }
-  return "Current Story Privacy authority is unavailable. Apply review is blocked until it can be loaded safely.";
-}
-
 export function storyPrivacyAuthorityComplete(authority: StoryPrivacyAuthority | null) {
   return Boolean(authority && authority.status !== "preparation_required"
     && authority.targets.every((target) => target.selectedText !== null));
 }
 
-export function chapterStoryPrivacyCandidates(authority: StoryPrivacyAuthority | null, storyKey: string) {
-  const prefix = `${storyKey}::`;
-  return authority?.candidates.filter((candidate) => (
-    candidate.releaseTargets.some((target) => target.startsWith(prefix))
-  )) || [];
+export function appliedStoryPrivacyTargets(
+  targets: StoryPrivacyTarget[],
+  chapters: Record<string, { stage: string; evidenceVerified: boolean }>,
+): StoryPrivacyTarget[] {
+  return targets.filter((target) => {
+    const chapter = chapters[target.targetId.split("::")[0]];
+    return target.selectedText !== null && chapter?.evidenceVerified === true
+      && (chapter.stage === "revision_ready" || chapter.stage === "human_confirmed");
+  });
 }

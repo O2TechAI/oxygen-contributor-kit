@@ -225,6 +225,7 @@ async function fixture({
     preference,
   };
   const validationAuthority = {
+    sourceRedactions: [],
     schema: "oxygen.story-validation-authority",
     sourceDigest: "e".repeat(64), sourcePrivacyDigest: "f".repeat(64),
     semanticManifest: semantic, coverageManifest: coverage,

@@ -1,3 +1,5 @@
+import { syntheticPrivacyOutput, syntheticInheritedMatches } from "./fixtures/chapter-privacy.mjs";
+import { storyPrivacyProposalRanges } from "../lib/story-privacy-projection.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { testStoryCoverage } from "./fixtures/story-coverage.mjs";
@@ -636,9 +638,9 @@ class FakeStoryReleaseDb {
 }
 
 async function refreshReviewedStoryPrivacy(db, importedAt) {
-  const revision = await reconstructReviewedStoryPrivacyRevision(db, RUN_ID);
-  assert.equal(revision.ok, true, JSON.stringify(revision));
-  if (revision.revision.targetTransitions.length === 0) return;
+  const authority = await import("../lib/story-privacy-authority.ts").then((module) => module.readStoryPrivacyAuthority(db, RUN_ID));
+  assert.equal(authority.ok, true, JSON.stringify(authority));
+  if (authority.authority.status !== "preparation_required") return;
   const prepared = await buildReviewedStoryPrivacyPreparationSnapshot(db, RUN_ID);
   assert.equal(prepared.ok, true, JSON.stringify(prepared));
   const directory = await mkdtemp(join(tmpdir(), "story-release-reviewed-privacy-"));
@@ -654,15 +656,8 @@ async function refreshReviewedStoryPrivacy(db, importedAt) {
     const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8"));
     for (const shard of manifest.shards) {
       const input = JSON.parse(await readFile(join(root, shard.inputPath), "utf8"));
-      await writeFile(join(proposals, `${shard.id}.proposals.json`), JSON.stringify({
-        candidates: [],
-        targetProposals: input.targets.map((target) => ({
-          targetId: target.id,
-          targetContentDigest: target.contentDigest,
-          proposedText: target.content,
-          occurrences: [],
-        })),
-      }));
+      await writeFile(join(proposals, `${shard.id}.proposals.json`),
+        JSON.stringify(await syntheticPrivacyOutput(input.targets, input.sourceRedactions)));
     }
     await execFile(process.execPath, [
       join(scripts, "finalize_reviewed_story_privacy.mjs"), root, proposals, bundlePath,
@@ -671,6 +666,10 @@ async function refreshReviewedStoryPrivacy(db, importedAt) {
       db, JSON.parse(await readFile(bundlePath, "utf8")), importedAt,
     );
     assert.equal(imported.ok, true, JSON.stringify(imported));
+    // This release fixture represents prior explicit human Apply decisions.
+    for (const row of db.storyPrivacyTargets) if (row.selected_text === null) {
+      row.selected_text = row.proposed_text; row.decided_at = importedAt;
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -847,6 +846,11 @@ async function serverFixture({
       }],
     };
   }));
+  for (const proposal of targetProposals) {
+    const target = targetContents.find((target) => target.id === proposal.targetId);
+    const matches = syntheticInheritedMatches(target.content, sourceRedactions.map((row) => ({ id: row.id, text: storyPrivate })));
+    if (matches.length) proposal.sourceMatches = matches;
+  }
   const privacy = { candidates: privacyCandidates, targetProposals };
   const storyPrivacyCandidates = privacyCandidates.map((candidate) => ({
     workflow_run_id: RUN_ID,
@@ -858,7 +862,7 @@ async function serverFixture({
     target_id: proposal.targetId,
     target_content_digest: proposal.targetContentDigest,
     proposed_text: proposal.proposedText,
-    occurrences_json: JSON.stringify(proposal.occurrences),
+    occurrences_json: storyPrivacyProposalRanges(proposal),
     selected_text: proposal.proposedText,
     public_overrides_json: "[]",
     decided_at: completedAt,
@@ -1344,6 +1348,7 @@ test("missing, unknown, or pending Privacy blocks release while confirmed keep a
   }];
   await rebindFakeSourcePrivacyReceipt(redactFixture);
   await rebindFixtureCoveragePrivacy(redactFixture);
+  await refreshReviewedStoryPrivacy(redactFixture.db, "2026-08-25T00:00:10.600Z");
   await refreshFakeGate(redactFixture.db);
   const redacted = await reconstructReviewedStoryReleaseFromDatabase(redactFixture.db, request());
   assert.equal(redacted.ok, true);
@@ -1511,6 +1516,18 @@ test("story HTML and ZIP use the same canonical reviewed release bytes", async (
     row.target_id === "chapter-release::overview"
   ));
   assert.ok(selectedTarget);
+  const stored = JSON.parse(selectedTarget.occurrences_json);
+  selectedTarget.occurrences_json = JSON.stringify({ ...(Array.isArray(stored) ? { occurrences: stored } : stored),
+    editedProposal: { inputDigest: await storyPreparationDigest(exactSelectedBytes), text: exactSelectedBytes } });
+  const catalog = JSON.parse(db.storyPrivacyAuthority.target_catalog_json);
+  db.storyPrivacyAuthority.proposal_digest = await storyPreparationDigest({
+    candidates: db.storyPrivacyCandidates.map((row) => JSON.parse(row.candidate_json)),
+    targetProposals: catalog.map(({ id }) => {
+      const row = db.storyPrivacyTargets.find((row) => row.target_id === id), stored = JSON.parse(row.occurrences_json);
+      return { targetId: id, targetContentDigest: row.target_content_digest, proposedText: row.proposed_text,
+        ...(Array.isArray(stored) ? { occurrences: stored } : stored) };
+    }),
+  });
   selectedTarget.selected_text = exactSelectedBytes;
   selectedTarget.decided_at = "2026-08-25T00:00:20.000Z";
   await refreshFakeGate(db);

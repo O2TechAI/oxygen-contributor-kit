@@ -1,0 +1,73 @@
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+const { chromium } = createRequire(import.meta.url)("playwright");
+const origin = new URL(process.argv[2]);
+assert.ok(["127.0.0.1", "localhost"].includes(origin.hostname));
+const workflow = await fetch(new URL("/api/workflow", origin)).then((response) => response.json());
+assert.equal(workflow.workflowRunId, "synthetic-chapter-privacy", "browser test only operates on its public synthetic fixture");
+const browser = await chromium.launch({ headless: true, channel: process.env.OXYGEN_BROWSER_CHANNEL || "msedge" });
+try {
+  const page = await browser.newPage();
+  const run = workflow.workflowRunId;
+  const session = () => fetch(new URL(`/api/story-review-session?workflowRunId=${run}`, origin)).then((response) => response.json());
+  const until = async (predicate) => { for (let count = 0; count < 100; count++) {
+    if (await predicate()) return; await new Promise((resolve) => setTimeout(resolve, 100));
+  } throw new Error("Expected synthetic review state did not arrive"); };
+  await page.goto(origin.href);
+  await page.locator("#story-open-a").click();
+  const chapter = page.locator(".storyChapterEditor");
+  await chapter.waitFor();
+  const card = chapter.locator(".privacySection .storyPrivacyProjection").first();
+  await card.waitFor();
+  assert.equal(await chapter.locator(".privacySection > div > .storyPrivacyProjection").count(), 1,
+    "unchanged machine targets stay in the optional disclosure");
+  assert.equal(await card.getByRole("button", { name: "Credential always removed", exact: true }).isDisabled(), true);
+  await card.getByRole("button", { name: "Publish exact original span", exact: true }).click();
+  assert.equal(await card.getByRole("button", { name: "Use anonymized span", exact: true }).getAttribute("aria-pressed"), "true");
+  await card.getByRole("button", { name: "Accept proposal", exact: true }).click();
+  assert.equal(await card.getByRole("button", { name: "Publish exact original span", exact: true }).getAttribute("aria-pressed"), "false");
+  await card.getByRole("button", { name: "Publish exact original span", exact: true }).click();
+  await until(async () => (await session()).session?.privacyDrafts?.["a::story:passage"]?.publicOverrides.length === 1);
+  const before = await fetch(new URL(`/api/story-privacy?workflowRunId=${run}`, origin)).then((response) => response.json());
+  assert.equal(before.targets.find((target) => target.targetId === "a::story:passage").selectedText, null);
+  await page.reload();
+  await chapter.waitFor();
+  await card.getByRole("button", { name: "Use anonymized span", exact: true }).waitFor();
+  assert.equal(await card.getByRole("button", { name: "Use anonymized span", exact: true }).getAttribute("aria-pressed"), "true");
+  await chapter.getByRole("button", { name: "× Do not preserve", exact: true }).click();
+  await chapter.getByRole("button", { name: "Edit Story", exact: true }).click();
+  await chapter.locator("textarea").first().waitFor();
+  await until(async () => (await session()).session?.chapterReviews.a.sourceInsightReviews["synthetic-insight"].decision === "rejected");
+  let releaseResponse, responseArrived = false;
+  const held = new Promise((resolve) => { releaseResponse = resolve; });
+  await page.route("**/api/story-review-session/apply", async (route) => {
+    const response = await route.fetch(); responseArrived = true;
+    await held; await route.fulfill({ response });
+  });
+  await chapter.getByRole("button", { name: "Apply current review", exact: true }).click();
+  await until(() => responseArrived);
+  assert.notEqual(await chapter.locator("fieldset").getAttribute("disabled"), null);
+  const editor = chapter.locator("textarea").first(), copy = await editor.inputValue();
+  await assert.rejects(() => editor.fill("Typing during pending acknowledgement", { timeout: 300 }));
+  assert.equal(await editor.inputValue(), copy);
+  assert.equal(await card.getByRole("button", { name: "Accept proposal", exact: true }).isDisabled(), true);
+  await page.locator(".chapterRailList button").filter({ hasText: "Synthetic chapter B" }).click();
+  assert.equal(await chapter.locator("fieldset").getAttribute("disabled"), null);
+  await page.locator(".chapterRailList button").filter({ hasText: "Synthetic chapter A" }).click();
+  assert.notEqual(await chapter.locator("fieldset").getAttribute("disabled"), null,
+    "navigation back cannot unlock the applying Chapter before acknowledgement");
+  releaseResponse();
+  await chapter.getByRole("button", { name: "All set", exact: true }).waitFor();
+  const applied = await session();
+  assert.equal(applied.session.chapterReviews.a.stage, "revision_ready");
+  assert.equal(applied.session.chapterReviews.b.stage, "reviewing");
+  assert.equal(applied.session.privacyDrafts?.["a::story:passage"], undefined);
+  await chapter.getByRole("button", { name: "← Project story", exact: true }).click();
+  await page.getByRole("button", { name: /Release preview/ }).click();
+  const preview = page.locator(".storyPrivacyReview"); await preview.waitFor();
+  assert.equal(await preview.locator("button,textarea,input").count(), 0);
+  assert.match(await preview.innerText(), /Review is incomplete/);
+  assert.match(await preview.innerText(), /Project Delta/);
+  assert.doesNotMatch(await preview.innerText(), /sk-synthetic/);
+  console.log("PASS: native staged toggles, accept reset, durable refresh, delayed-ack input lock, Chapter Apply and read-only partial preview");
+} finally { await browser.close(); }

@@ -1,3 +1,5 @@
+import { syntheticInheritedMatches } from "./fixtures/chapter-privacy.mjs";
+import { readStoryPrivacySourceRedactions, storyPrivacyProposalRanges } from "../lib/story-privacy-projection.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -47,7 +49,7 @@ import {
   buildReviewedStoryPrivacyPreparationSnapshot,
   importReviewedStoryPrivacyAuthority,
   readStoryPrivacyAuthority,
-  saveStoryPrivacyTargetChoice,
+  checkedStoryPrivacyTargetChoice,
   STORY_PRIVACY_ERROR,
 } from "../lib/story-privacy-authority.ts";
 import { loadWorkflowProgress } from "../lib/workflow-progress-server.ts";
@@ -215,6 +217,7 @@ async function refreshReviewedStoryPrivacy(db, tag) {
       "2026-08-27T08:00:01.000Z",
     );
     assert.equal(imported.ok, true, JSON.stringify(imported));
+    await resolveHumanStoryPrivacy(db);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -316,22 +319,14 @@ function observeDatabase(db) {
 async function resolveHumanStoryPrivacy(db, decidedAt = NOW) {
   const current = await readStoryPrivacyAuthority(db, RUN);
   assert.equal(current.ok, true, JSON.stringify(current));
-  const target = current.authority.targets.find((value) => (
-    value.targetId === "chapter-one::overview"
-  ));
-  assert.ok(target);
-  const result = await saveStoryPrivacyTargetChoice(db, {
-    workflowRunId: RUN,
-    sourceRevision: REVISION,
-    activeStoryDigest: current.authority.activeStoryDigest,
-    authorityDigest: current.authority.authorityDigest,
-    targetId: target.targetId,
-    targetContentDigest: target.targetContentDigest,
-    editedText: null,
-    publicOverrides: [],
-  }, decidedAt);
-  assert.equal(result.ok, true, JSON.stringify(result));
-  return result.authority;
+  let authority = current.authority;
+  for (const target of authority.targets.filter((target) => target.selectedText === null)) {
+    const result = await chooseStoryPrivacyTarget(db, authority, target.targetId,
+      { editedText: null, publicOverrides: [] }, decidedAt);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    authority = result.authority;
+  }
+  return authority;
 }
 
 async function chooseStoryPrivacyTarget(
@@ -343,15 +338,14 @@ async function chooseStoryPrivacyTarget(
 ) {
   const target = authority.targets.find((value) => value.targetId === targetId);
   assert.ok(target);
-  return saveStoryPrivacyTargetChoice(db, {
-    workflowRunId: RUN,
-    sourceRevision: REVISION,
-    activeStoryDigest: authority.activeStoryDigest,
-    authorityDigest: authority.authorityDigest,
-    targetId,
-    targetContentDigest: target.targetContentDigest,
-    ...choice,
-  }, decidedAt);
+  const text = checkedStoryPrivacyTargetChoice(target, choice);
+  if (text === null) return { ok: false, code: STORY_PRIVACY_ERROR.notActionable };
+  // Release fixtures install explicitly reviewed selections. Product writes are
+  // covered through the atomic Chapter Apply endpoint in its own tests.
+  await db.prepare(`UPDATE story_privacy_targets SET selected_text=?,public_overrides_json=?,decided_at=?
+    WHERE workflow_run_id=? AND target_id=?`).bind(text, JSON.stringify(choice.publicOverrides), decidedAt, RUN, targetId).run();
+  await db.prepare("DELETE FROM project_release_confirmations WHERE workflow_run_id=?").bind(RUN).run();
+  return readStoryPrivacyAuthority(db, RUN);
 }
 
 async function setup({ anonymization = false, preference = false } = {}) {
@@ -599,6 +593,23 @@ async function setup({ anonymization = false, preference = false } = {}) {
     projectId: "release-confirmation-project",
     redactions: sourceRedactions,
   });
+
+  if (anonymization) {
+    const sources = await readStoryPrivacySourceRedactions(db);
+    for (const proposal of privacy.targetProposals) {
+      const content = targetContents.find((target) => target.id === proposal.targetId).content;
+      const matches = syntheticInheritedMatches(content, sources);
+      if (matches.length) proposal.sourceMatches = matches;
+      if (proposal.targetId === "chapter-two::overview") proposal.editedProposal = {
+        inputDigest: await storyPreparationDigest("Person B reviewed Person A's revised public workflow."),
+        text: "Person B reviewed Person A's revised public workflow.",
+      };
+      await db.prepare("UPDATE story_privacy_targets SET occurrences_json=? WHERE workflow_run_id=? AND target_id=?")
+        .bind(storyPrivacyProposalRanges(proposal), RUN, proposal.targetId).run();
+    }
+    await db.prepare("UPDATE story_preparation_receipts SET output_digest=? WHERE workflow_run_id=? AND lane='story_privacy'")
+      .bind(await storyPreparationDigest(privacy), RUN).run();
+  }
 
   const reviews = {};
   for (const story of stories) {
@@ -990,6 +1001,7 @@ test("Preference, receipt, session, edit, and final snapshot mutations block wit
     "2026-08-27T08:00:02.000Z",
   );
   assert.equal(imported.ok, true);
+  await resolveHumanStoryPrivacy(db);
   const chapterBytesBeforeReconfirm = (await db.prepare(
     "SELECT state_json FROM story_review_sessions WHERE workflow_run_id=?",
   ).bind(RUN).first()).state_json;
@@ -1132,6 +1144,7 @@ test("production Preference regeneration preserves history and rolls back atomic
     assert.equal(privacyPreparation.ok, true);
     assert.equal((await importReviewedStoryPrivacyAuthority(db,
       await completedPrivacyImport(privacyPreparation.snapshot), NOW)).ok, true);
+    await resolveHumanStoryPrivacy(db);
     assert.equal((await patchAnswer("yes")).status, 200);
     const currentRequest = { ...request, serverVersion:3 };
     assert.equal((await confirmProjectReleaseConfirmation(db, currentRequest, NOW)).ok, true);
@@ -1183,7 +1196,7 @@ test("every bound authority invalidates only project release confirmation, never
     db, currentRequest, "2026-08-27T08:00:11.000Z",
   )).ok, true, "restored current Privacy authority can be explicitly reconfirmed");
   await invalidated("Story Privacy mutation", () => db.prepare(`UPDATE story_privacy_targets
-    SET selected_text='Alternate public overview',decided_at=?
+    SET decided_at=?
     WHERE target_id='chapter-one::overview'`)
     .bind("2026-08-27T08:00:05.000Z").run());
   await invalidated("receipt mutation", () => db.prepare(`UPDATE story_preparation_receipts
@@ -1379,6 +1392,7 @@ test("contract refresh blocks release until fresh import, target review, and con
     "2026-08-27T08:00:04.000Z",
   );
   assert.equal(decided.ok, true, JSON.stringify(decided));
+  await resolveHumanStoryPrivacy(db);
   assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, request)).code,
     RELEASE_ERROR.releaseConfirmationRequired);
   assert.equal(await readProjectReleaseConfirmation(db, request), false);

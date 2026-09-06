@@ -211,7 +211,7 @@ test("story Story exposes explicit and double-click edit entry through the commo
   assert.match(storyEditor, /storyWorkingBlock\(sourceBlock\.text, source\.key, blockId, source\.language, chapterReview\)/);
   assert.match(storyEditor, /undoStoryEdit\(chapterReview, source\.language\)/);
   assert.match(storyEditor, /redoStoryEdit\(chapterReview, source\.language\)/);
-  assert.match(storyEditor, /applyChapterReview\(chapterReview/);
+  assert.match(storyEditor, /await onApplyReview\(\)/);
   assert.match(storyEditor, /onMouseUp=\{editMode \? undefined : captureSelection\}/);
   assert.match(storyEditor, /!editMode && selection\?\.blockId === block\.id/);
 });
@@ -340,7 +340,7 @@ test("workspace consumes only the server-owned exact Story contract", () => {
   assert.match(workspace, /payload\.storySourceSchema !== workflow\.storySourceSchema/);
   assert.match(workspace, /hydrateStoryReviewSession/);
   const download = workspace.slice(workspace.indexOf("const downloadReviewed"), workspace.indexOf("const ready ="));
-  assert.match(download, /createStoryReviewSession\(workflowRunId,current\.chapterReviews,\{\}\)/);
+  assert.match(download, /createStoryReviewSession\(workflowRunId,current\.chapterReviews,\{\},undefined,privacyDrafts\)/);
   assert.doesNotMatch(download, /current\.privacyDecisions/);
   assert.match(download, /body:JSON\.stringify\(\{workflowRunId,serverVersion,sourceRevision\}\)/);
 });

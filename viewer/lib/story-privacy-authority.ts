@@ -1,4 +1,7 @@
 import type { getLocalDatabase } from "../db";
+import { readStoryReviewSessionRecord, replayChapterReview, persistStoryReviewSessionCas,
+  readActiveStoryReviewPackage } from "./story-review-session-server.ts";
+import { STORY_REVIEW_SESSION_SCHEMA } from "./story-review-session.ts";
 import {
   compareUtf8,
   deriveStoryReleaseTargetContents,
@@ -18,7 +21,6 @@ import {
   type ReviewedStoryPrivacyRevision,
   type ReviewedStoryPrivacyTarget,
 } from "./story-privacy-revision.ts";
-import { activeRedactionFragments } from "./release.mjs";
 import {
   applyStoryPrivacyPublicOverrides,
   storyPrivacyCredentialCategory,
@@ -26,6 +28,12 @@ import {
   storyPrivacyOccurrenceReviews,
   storyPrivacyOverrideKey,
   storyPrivacyTextAllowed,
+  storyPrivacySourceRedactions,
+  storyPrivacySourceRanges,
+  validStoryPrivacySourceMatches,
+  matchingStoryPrivacySources,
+  storyPrivacyProposalRanges,
+  type StoryPrivacySourceRedaction,
   type StoryPrivacyOccurrence,
   type StoryPrivacyPublicOverride,
   type StoryPrivacyTargetReview,
@@ -47,6 +55,9 @@ export type StoryPrivacyAuthorityResponse = {
   status: "preparation_required" | "completed_empty" | "completed_with_candidates";
   candidates: StoryPrivacyCandidateResponse[];
   targets: StoryPrivacyTargetReview[];
+  chapterErrors?: Record<string, string>;
+  serverVersion?: number;
+  pendingChapterKeys?: string[];
 };
 
 export const STORY_PRIVACY_ERROR = {
@@ -93,8 +104,10 @@ type StoredAuthorityRow = {
   proposal_count: number;
   imported_at: string;
 };
-type KnownFragment = { text: string; category: string };
+type KnownFragment = StoryPrivacySourceRedaction;
 type CapturedAuthority = {
+  sourcePrivacyDigest: string;
+  sourceRedactionsDigest: string;
   response: StoryPrivacyAuthorityResponse;
   revision: ReviewedStoryPrivacyRevision;
   rawCandidates: StoryPreparationPrivacyCandidate[];
@@ -230,7 +243,12 @@ function normalizeTargetRows(raw: Row[], workflowRunId: string) {
     let occurrences: unknown;
     let overrides: unknown;
     try {
-      occurrences = JSON.parse(row.occurrences_json);
+      const stored = JSON.parse(row.occurrences_json);
+      occurrences = Array.isArray(stored) ? stored : stored?.occurrences;
+      if (!Array.isArray(stored) && (!isRecord(stored)
+        || !onlyKeys(stored, ["occurrences", ...["sourceMatches", "proposalSourceMatches", "editedProposal"]
+          .filter((key) => Object.hasOwn(stored, key))])
+        || !validStoryPrivacySourceMatches("", "", [], stored.sourceMatches as never))) return null;
       overrides = JSON.parse(row.public_overrides_json);
     } catch { return null; }
     if (row.workflow_run_id !== workflowRunId || !stableId(row.target_id)
@@ -248,11 +266,12 @@ function normalizeTargetRows(raw: Row[], workflowRunId: string) {
 }
 
 function proposalFromRow(row: TargetRow): StoryPreparationPrivacyTargetProposal {
+  const stored = JSON.parse(row.occurrences_json);
   return {
     targetId: row.target_id as StoryReleaseTarget,
     targetContentDigest: row.target_content_digest,
     proposedText: row.proposed_text,
-    occurrences: JSON.parse(row.occurrences_json) as StoryPrivacyOccurrence[],
+    ...(Array.isArray(stored) ? { occurrences: stored as StoryPrivacyOccurrence[] } : stored),
   };
 }
 
@@ -305,30 +324,10 @@ function residualCandidates(candidates: StoryPreparationPrivacyCandidate[], reta
   return output.sort((left, right) => compareUtf8(left.id, right.id));
 }
 
-function scalarRanges(value: string, fragment: string) {
-  const source = Array.from(value);
-  const needle = Array.from(fragment);
-  const ranges: Array<{ startOffset: number; endOffset: number }> = [];
-  if (needle.length === 0) return ranges;
-  for (let index = 0; index + needle.length <= source.length; index += 1) {
-    if (needle.every((point, offset) => source[index + offset] === point)) {
-      ranges.push({ startOffset:index, endOffset:index + needle.length });
-    }
-  }
-  return ranges;
-}
-
 async function knownFragments(resultRows: Row[], redactionRows: Row[]) {
-  const byItem = new Map<string, Row[]>();
-  for (const row of redactionRows) {
-    const itemId = String(row.item_id || "");
-    byItem.set(itemId, [...(byItem.get(itemId) || []), row]);
-  }
   try {
-    return resultRows.flatMap((item) => activeRedactionFragments(
-      String(item.content || ""),
-      byItem.get(String(item.id || "")) || [],
-    )) as KnownFragment[];
+    return storyPrivacySourceRedactions(resultRows.map((item) => ({ id: String(item.id),
+      documentId: String(item.document_id), content: String(item.content || "") })), redactionRows);
   } catch {
     return null;
   }
@@ -341,12 +340,15 @@ function decorateTarget(
 ): StoryPrivacyTargetReview | null {
   const proposal = proposalFromRow(row);
   const occurrences = proposal.occurrences;
-  const relevant = fragments.flatMap((fragment) => scalarRanges(target.content, fragment.text)
-    .map((range) => ({ ...fragment, ...range })));
-  if (relevant.some((range) => !occurrences.some((occurrence) => (
-    occurrence.originalStartOffset <= range.startOffset
-    && occurrence.originalEndOffset >= range.endOffset
-  ))) || !storyPrivacyTextAllowed(proposal.proposedText, fragments.map((fragment) => fragment.text))) {
+  const relevant = fragments.flatMap((fragment) => storyPrivacySourceRanges(target.content, fragment.text)
+    .map((range) => ({ ...fragment, startOffset: range.originalStartOffset, endOffset: range.originalEndOffset })));
+  if (!validStoryPrivacySourceMatches(target.content, proposal.proposedText, occurrences,
+    proposal.sourceMatches, fragments) || !storyPrivacyTextAllowed(proposal.proposedText)
+    || !validStoryPrivacySourceMatches(proposal.proposedText, proposal.proposedText, [],
+      proposal.proposalSourceMatches, fragments)
+    || (proposal.editedProposal && (!storyPrivacyTextAllowed(proposal.editedProposal.text)
+      || !validStoryPrivacySourceMatches(proposal.editedProposal.text, proposal.editedProposal.text, [],
+        proposal.editedProposal.sourceMatches, fragments)))) {
     return null;
   }
   const credentialRanges = relevant.filter((range) => (
@@ -367,10 +369,8 @@ function decorateTarget(
     if (overrides.length > 0) {
       if (applyStoryPrivacyPublicOverrides(target.content, proposal.proposedText, occurrences, overrides)
         !== row.selected_text) return null;
-    } else if (row.selected_text !== proposal.proposedText && !storyPrivacyTextAllowed(
-      row.selected_text,
-      [...fragments.map((fragment) => fragment.text), ...reviews.map((review) => review.originalText)],
-    )) return null;
+    } else if (row.selected_text !== proposal.proposedText
+      && row.selected_text !== proposal.editedProposal?.text) return null;
   }
   return {
     targetId: target.id,
@@ -382,6 +382,8 @@ function decorateTarget(
       && overrides.length === 0,
     occurrences: reviews,
     decidedAt: row.decided_at,
+    ...(proposal.editedProposal ? { editedProposal: { inputDigest: proposal.editedProposal.inputDigest,
+      text: proposal.editedProposal.text } } : {}),
   };
 }
 
@@ -438,8 +440,9 @@ async function baselineTargets(storyRows: Row[]) {
 async function captureAuthority(
   db: StoryPrivacyDatabase,
   workflowRunId: string,
+  options: { appliedOnly?: boolean } = {},
 ): Promise<CapturedAuthority | AuthorityFailure> {
-  const revisionResult = await reconstructReviewedStoryPrivacyRevision(db, workflowRunId);
+  const revisionResult = await reconstructReviewedStoryPrivacyRevision(db, workflowRunId, options);
   if (!revisionResult.ok) return { ok: false, code: revisionResult.code };
   let revision = revisionResult.revision;
   const results = await db.batch([
@@ -452,8 +455,8 @@ async function captureAuthority(
     db.prepare(`SELECT workflow_run_id,lane,source_revision,input_digest,scope_digest,scope_count,
       output_digest,output_count,completed_at FROM story_preparation_receipts
       WHERE workflow_run_id=? AND lane='story_privacy'`).bind(workflowRunId),
-    db.prepare("SELECT id,content FROM items ORDER BY document_id,sequence,id"),
-    db.prepare(`SELECT item_id,start_offset,end_offset,category,status,review_state FROM redactions
+    db.prepare("SELECT id,document_id,content FROM items ORDER BY document_id,sequence,id"),
+    db.prepare(`SELECT id,document_id,item_id,start_offset,end_offset,category,status,review_state FROM redactions
       WHERE status='active' AND review_state IN ('deterministic','confirmed_redact')
       ORDER BY item_id,start_offset,end_offset,category`),
     db.prepare(`SELECT id,document_id AS documentId,sequence,timestamp,
@@ -543,9 +546,28 @@ async function captureAuthority(
   const fragments = await knownFragments(rows(results, 4), rows(results, 5));
   if (!fragments) return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
   const currentById = new Map(revision.targets.map((target) => [target.id, target]));
-  const retainedTargetRows = targetRows.filter((row) => (
-    currentById.get(row.target_id as StoryReleaseTarget)?.contentDigest === row.target_content_digest
-  ));
+  const matchingEditTargets = new Set<string>();
+  for (const target of revision.targets) {
+    const row = targetRows.find((row) => row.target_id === target.id);
+    if (target.editedText === undefined || (row && proposalFromRow(row).editedProposal?.inputDigest
+      === await storyPreparationDigest(target.editedText))) matchingEditTargets.add(target.id);
+  }
+  const retainedTargetRows = targetRows.filter((row) => {
+    const target = currentById.get(row.target_id as StoryReleaseTarget);
+    return target?.contentDigest === row.target_content_digest && matchingEditTargets.has(target.id)
+      && decorateTarget(target, row, fragments);
+  });
+  const existingTransitions = new Set(revision.targetTransitions.map((target) => target.id));
+  const invalidTargets = revision.targets.filter((target) => !existingTransitions.has(target.id)
+    && !retainedTargetRows.some((row) => row.target_id === target.id));
+  if (invalidTargets.length) {
+    const targetTransitions = [...revision.targetTransitions, ...invalidTargets.map((target) => ({
+      id: target.id, previousContentDigest: target.contentDigest, contentDigest: target.contentDigest,
+    }))].sort((a, b) => compareUtf8(a.id, b.id));
+    revision = { ...revision, targetTransitions,
+      changedTargetDigest: await storyPreparationDigest(targetTransitions),
+      changedTargets: revision.targets.filter((target) => targetTransitions.some((entry) => entry.id === target.id)) };
+  }
   const retainedIds = new Set(retainedTargetRows.map((row) => row.target_id));
   const retainedCandidates = residualCandidates(candidates, retainedIds);
   if (!retainedCandidates) return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
@@ -553,6 +575,7 @@ async function captureAuthority(
   if (!await normalizeStoryPrivacyOutput(
     privacyOutput(retainedCandidates, retainedTargetRows),
     retainedTargets,
+    fragments,
   )) return { ok: false, code: STORY_PRIVACY_ERROR.invalidAuthority };
   const targetReviews: StoryPrivacyTargetReview[] = [];
   for (const target of revision.targets) {
@@ -580,8 +603,11 @@ async function captureAuthority(
     targetCatalogDigest: revision.targetCatalogDigest,
     candidates: candidateRowSnapshot(candidateRows),
     targets: targetRowSnapshot(targetRows),
+    sourcePrivacyDigest: await storyPreparationDigest(fragments),
   });
   return {
+    sourcePrivacyDigest: await storyPreparationDigest(fragments),
+    sourceRedactionsDigest: await storyPreparationDigest(matchingStoryPrivacySources(revision.changedTargets, fragments)),
     response: {
       workflowRunId,
       sourceRevision: revision.sourceRevision,
@@ -591,6 +617,10 @@ async function captureAuthority(
         : candidateResponses.length === 0 ? "completed_empty" : "completed_with_candidates",
       candidates: candidateResponses,
       targets: targetReviews,
+      ...(Object.keys(revision.chapterErrors).length ? { chapterErrors: revision.chapterErrors } : {}),
+      serverVersion: revision.serverVersion,
+      pendingChapterKeys: [...new Set(revision.targets.filter((target) =>
+        !targetReviews.some((review) => review.targetId === target.id)).map((target) => target.storyKey))],
     },
     revision,
     rawCandidates: candidates,
@@ -605,8 +635,9 @@ async function captureAuthority(
 export async function readStoryPrivacyAuthority(
   db: StoryPrivacyDatabase,
   workflowRunId: string,
+  options: { appliedOnly?: boolean } = {},
 ): Promise<{ ok: true; authority: StoryPrivacyAuthorityResponse } | AuthorityFailure> {
-  const current = await captureAuthority(db, workflowRunId);
+  const current = await captureAuthority(db, workflowRunId, options);
   return "response" in current ? { ok: true, authority: current.response } : current;
 }
 
@@ -633,9 +664,12 @@ export async function buildReviewedStoryPrivacyPreparationSnapshot(
         changedTargetDigest: current.revision.changedTargetDigest,
         changedTargetCount: current.revision.targetTransitions.length,
         previousAuthorityDigest: current.response.authorityDigest,
+        sourcePrivacyDigest: current.sourcePrivacyDigest,
+        sourceRedactionsDigest: current.sourceRedactionsDigest,
       },
       targetTransitions: current.revision.targetTransitions,
       changedTargets: current.revision.changedTargets,
+      sourceRedactions: matchingStoryPrivacySources(current.revision.changedTargets, current.knownFragments),
     },
   };
 }
@@ -644,11 +678,13 @@ const importBindingKeys = [
   "workflowRunId", "sourceRevision", "activeStoryDigest", "serverVersion",
   "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest",
   "changedTargetCount", "previousAuthorityDigest",
+  "sourcePrivacyDigest", "sourceRedactionsDigest",
 ];
 const terminalReceiptKeys = [
   "schema", "status", "workflowRunId", "sourceRevision", "activeStoryDigest",
   "serverVersion", "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest",
   "changedTargetCount", "outputDigest", "outputCount", "completedAt",
+  "sourcePrivacyDigest", "sourceRedactionsDigest",
 ];
 
 type ReviewedStoryPrivacyImport = {
@@ -663,6 +699,8 @@ type ReviewedStoryPrivacyImport = {
     changedTargetDigest: string;
     changedTargetCount: number;
     previousAuthorityDigest: string;
+    sourcePrivacyDigest: string;
+  sourceRedactionsDigest: string;
   };
   terminalReceipt: Record<string, unknown>;
   receiptDigest: string;
@@ -684,7 +722,7 @@ export function parseImportBundle(value: unknown): ReviewedStoryPrivacyImport | 
     || !Number.isSafeInteger(binding.serverVersion) || Number(binding.serverVersion) < 0
     || !Number.isSafeInteger(binding.changedTargetCount) || Number(binding.changedTargetCount) < 0
     || ![binding.activeStoryDigest, binding.reviewedStoryDigest, binding.targetCatalogDigest,
-      binding.changedTargetDigest, binding.previousAuthorityDigest].every(isStoryPrivacyDigest)) return null;
+      binding.changedTargetDigest, binding.previousAuthorityDigest, binding.sourcePrivacyDigest, binding.sourceRedactionsDigest].every(isStoryPrivacyDigest)) return null;
   return value as unknown as ReviewedStoryPrivacyImport;
 }
 
@@ -692,6 +730,8 @@ function exactImportBinding(
   binding: ReviewedStoryPrivacyImport["binding"],
   revision: ReviewedStoryPrivacyRevision,
   authorityDigest: string,
+  sourcePrivacyDigest: string,
+  sourceRedactionsDigest: string,
 ) {
   return binding.workflowRunId === revision.workflowRunId
     && binding.sourceRevision === revision.sourceRevision
@@ -701,26 +741,24 @@ function exactImportBinding(
     && binding.targetCatalogDigest === revision.targetCatalogDigest
     && binding.changedTargetDigest === revision.changedTargetDigest
     && binding.changedTargetCount === revision.targetTransitions.length
-    && binding.previousAuthorityDigest === authorityDigest;
+    && binding.previousAuthorityDigest === authorityDigest
+    && binding.sourcePrivacyDigest === sourcePrivacyDigest
+    && binding.sourceRedactionsDigest === sourceRedactionsDigest;
 }
 
 function newTargetRows(
   workflowRunId: string,
   privacy: StoryPreparationPrivacyOutput,
-  now: string,
 ) {
-  const pending = new Set(privacy.candidates
-    .filter((candidate) => candidate.reviewState === "needs_confirmation")
-    .flatMap((candidate) => candidate.releaseTargets));
   return privacy.targetProposals.map((proposal): TargetRow => ({
     workflow_run_id: workflowRunId,
     target_id: proposal.targetId,
     target_content_digest: proposal.targetContentDigest,
     proposed_text: proposal.proposedText,
-    occurrences_json: JSON.stringify(proposal.occurrences),
-    selected_text: pending.has(proposal.targetId) ? null : proposal.proposedText,
+    occurrences_json: storyPrivacyProposalRanges(proposal),
+    selected_text: null,
     public_overrides_json: "[]",
-    decided_at: pending.has(proposal.targetId) ? null : now,
+    decided_at: null,
   }));
 }
 
@@ -737,11 +775,11 @@ export async function importReviewedStoryPrivacyAuthority(
   if (!("response" in before)) return before;
   const workflowRunId = bundle.binding.workflowRunId;
   const revision = before.revision;
-  if (!exactImportBinding(bundle.binding, revision, before.response.authorityDigest)
+  if (!exactImportBinding(bundle.binding, revision, before.response.authorityDigest, before.sourcePrivacyDigest, before.sourceRedactionsDigest)
     || revision.targetTransitions.length === 0) {
     return { ok: false, code: STORY_PRIVACY_ERROR.importStale };
   }
-  const importedPrivacy = await normalizeStoryPrivacyOutput(bundle.privacy, revision.changedTargets);
+  const importedPrivacy = await normalizeStoryPrivacyOutput(bundle.privacy, revision.changedTargets, before.knownFragments);
   if (!importedPrivacy) return { ok: false, code: STORY_PRIVACY_ERROR.importInvalid };
   const outputDigest = await storyPreparationDigest(importedPrivacy);
   const receipt = bundle.terminalReceipt;
@@ -756,6 +794,8 @@ export async function importReviewedStoryPrivacyAuthority(
     targetCatalogDigest: revision.targetCatalogDigest,
     changedTargetDigest: revision.changedTargetDigest,
     changedTargetCount: revision.targetTransitions.length,
+    sourcePrivacyDigest: before.sourcePrivacyDigest,
+    sourceRedactionsDigest: before.sourceRedactionsDigest,
     outputDigest,
     outputCount: importedPrivacy.targetProposals.length,
     completedAt: receipt.completedAt,
@@ -772,7 +812,7 @@ export async function importReviewedStoryPrivacyAuthority(
     }) !== bundle.importDigest) return { ok: false, code: STORY_PRIVACY_ERROR.importInvalid };
 
   const currentById = new Map(revision.targets.map((target) => [target.id, target.contentDigest]));
-  const retainedRows = before.rawTargetRows.filter((row) => (
+  const retainedRows = before.retainedTargetRows.filter((row) => (
     currentById.get(row.target_id as StoryReleaseTarget) === row.target_content_digest
   ));
   const retainedIds = new Set(retainedRows.map((row) => row.target_id));
@@ -788,9 +828,9 @@ export async function importReviewedStoryPrivacyAuthority(
     targetProposals: [...retainedRows.map(proposalFromRow), ...importedPrivacy.targetProposals]
       .sort((left, right) => compareUtf8(left.targetId, right.targetId)),
   };
-  const normalizedMerged = await normalizeStoryPrivacyOutput(mergedPrivacy, revision.targets);
+  const normalizedMerged = await normalizeStoryPrivacyOutput(mergedPrivacy, revision.targets, before.knownFragments);
   if (!normalizedMerged) return { ok: false, code: STORY_PRIVACY_ERROR.importInvalid };
-  const mergedRows = [...retainedRows, ...newTargetRows(workflowRunId, importedPrivacy, importedAt)]
+  const mergedRows = [...retainedRows, ...newTargetRows(workflowRunId, importedPrivacy)]
     .sort((left, right) => compareUtf8(left.target_id, right.target_id));
   if (!validTargetRows(revision.targets, mergedRows, before.knownFragments)) {
     return { ok: false, code: STORY_PRIVACY_ERROR.importInvalid };
@@ -800,7 +840,7 @@ export async function importReviewedStoryPrivacyAuthority(
     await db.transaction(async () => {
       const current = await captureAuthority(db, workflowRunId);
       if (!("response" in current)
-        || !exactImportBinding(bundle.binding, current.revision, current.response.authorityDigest)) {
+        || !exactImportBinding(bundle.binding, current.revision, current.response.authorityDigest, current.sourcePrivacyDigest, current.sourceRedactionsDigest)) {
         throw new Error(STORY_PRIVACY_ERROR.importStale);
       }
       if (!validTargetRows(current.revision.targets, mergedRows, current.knownFragments)) {
@@ -853,48 +893,16 @@ export async function importReviewedStoryPrivacyAuthority(
   return readStoryPrivacyAuthority(db, workflowRunId);
 }
 
-export async function saveStoryPrivacyTargetChoice(
-  db: StoryPrivacyDatabase,
-  input: {
-    workflowRunId: string;
-    sourceRevision: number;
-    activeStoryDigest: string;
-    authorityDigest: string;
-    targetId: StoryReleaseTarget;
-    targetContentDigest: string;
-    editedText: string | null;
-    publicOverrides: StoryPrivacyPublicOverride[];
-  },
-  decidedAt: string,
-): Promise<{ ok: true; authority: StoryPrivacyAuthorityResponse } | AuthorityFailure> {
-  if (!stableId(input.workflowRunId) || !stableId(input.targetId)
-    || !Number.isSafeInteger(input.sourceRevision) || input.sourceRevision <= 0
-    || ![input.activeStoryDigest, input.authorityDigest, input.targetContentDigest]
-      .every(isStoryPrivacyDigest)
-    || !exactTimestamp(decidedAt) || (input.editedText !== null && !safeText(input.editedText))
-    || !Array.isArray(input.publicOverrides)
-    || input.publicOverrides.some((override) => !parseOverride(override))
+export function checkedStoryPrivacyTargetChoice(target: StoryPrivacyTargetReview, input: {
+  editedText: string | null; publicOverrides: StoryPrivacyPublicOverride[];
+}) {
+  if ((input.editedText !== null && !safeText(input.editedText))
+    || !Array.isArray(input.publicOverrides) || input.publicOverrides.some((span) => !parseOverride(span))
     || new Set(input.publicOverrides.map(storyPrivacyOverrideKey)).size !== input.publicOverrides.length
-    || (input.editedText !== null && input.publicOverrides.length > 0)) {
-    return { ok: false, code: STORY_PRIVACY_ERROR.notActionable };
-  }
-  const before = await captureAuthority(db, input.workflowRunId);
-  if (!("response" in before)) return before;
-  if (before.response.status === "preparation_required"
-    || before.response.sourceRevision !== input.sourceRevision
-    || before.response.activeStoryDigest !== input.activeStoryDigest
-    || before.response.authorityDigest !== input.authorityDigest) {
-    return { ok: false, code: STORY_PRIVACY_ERROR.staleAuthority };
-  }
-  const target = before.response.targets.find((value) => value.targetId === input.targetId
-    && value.targetContentDigest === input.targetContentDigest);
-  if (!target) return { ok: false, code: STORY_PRIVACY_ERROR.targetNotFound };
+    || (input.editedText !== null && input.publicOverrides.length > 0)) return null;
   let selectedText: string | null;
   if (input.editedText !== null) {
-    selectedText = storyPrivacyTextAllowed(input.editedText, [
-      ...before.knownFragments.map((fragment) => fragment.text),
-      ...target.occurrences.map((occurrence) => occurrence.originalText),
-    ]) ? input.editedText : null;
+    selectedText = target.editedProposal?.text === input.editedText ? input.editedText : null;
   } else {
     selectedText = applyStoryPrivacyPublicOverrides(
       target.originalText,
@@ -906,28 +914,66 @@ export async function saveStoryPrivacyTargetChoice(
       storyPrivacyOverrideKey(occurrence) === storyPrivacyOverrideKey(override) && occurrence.canPublish
     )))) selectedText = null;
   }
-  if (selectedText === null) return { ok: false, code: STORY_PRIVACY_ERROR.notActionable };
+  return selectedText;
+}
+
+/** One Chapter is committed with its exact prepared target choices. Returning a
+ * checked failure from a transaction would commit earlier writes: always throw. */
+export async function applyStoryChapterReview(db: StoryPrivacyDatabase, input: {
+  workflowRunId: string; sourceRevision: number; expectedVersion: number; chapterKey: string;
+  authorityDigest: string;
+  choices: Array<{ targetId: StoryReleaseTarget; targetContentDigest: string;
+    editedText: string | null; publicOverrides: StoryPrivacyPublicOverride[] }>;
+}, now: string) {
   try {
-    await db.transaction(async () => {
-      const current = await captureAuthority(db, input.workflowRunId);
-      if (!("response" in current) || current.response.authorityDigest !== input.authorityDigest
-        || current.response.status === "preparation_required") {
-        throw new Error(STORY_PRIVACY_ERROR.lostCas);
+    return await db.transaction(async () => {
+      const before = await captureAuthority(db, input.workflowRunId);
+      const record = await readStoryReviewSessionRecord(db, input.workflowRunId);
+      if (!("response" in before) || !record.session || record.serverVersion !== input.expectedVersion
+        || record.sourceRevision !== input.sourceRevision || before.response.authorityDigest !== input.authorityDigest
+        || before.revision.chapterErrors[input.chapterKey]) throw new Error(STORY_PRIVACY_ERROR.staleAuthority);
+      const { candidateRows, validation } = await readActiveStoryReviewPackage(db, input.workflowRunId);
+      const source = candidateRows.map((row) => parseStorySource(row.summary)).find((value) => value?.key === input.chapterKey);
+      const chapter = record.session.chapterReviews[input.chapterKey];
+      if (!validation || !source || !chapter || chapter.stage === "human_confirmed") throw new Error(STORY_PRIVACY_ERROR.reviewIncomplete);
+      const result = await replayChapterReview(db, source, chapter);
+      if (result.blockedReason) throw new Error(STORY_PRIVACY_ERROR.reviewIncomplete);
+      const targets = before.revision.targets.filter((target) => target.storyKey === input.chapterKey);
+      if (!Array.isArray(input.choices) || new Set(input.choices.map((choice) => choice.targetId)).size !== input.choices.length
+        || input.choices.some((choice) => !targets.some((target) => target.id === choice.targetId))) throw new Error(STORY_PRIVACY_ERROR.notActionable);
+      const selected = new Set(before.response.targets.filter((target) => target.selectedText !== null)
+        .map((target) => target.targetId));
+      for (const choice of input.choices) {
+        const target = before.response.targets.find((target) => target.targetId === choice.targetId
+          && target.targetContentDigest === choice.targetContentDigest);
+        const text = target && checkedStoryPrivacyTargetChoice(target, choice);
+        if (!target || text === null || text === undefined) throw new Error(STORY_PRIVACY_ERROR.notActionable);
+        const updated = await db.prepare(`UPDATE story_privacy_targets
+          SET selected_text=?,public_overrides_json=?,decided_at=?
+          WHERE workflow_run_id=? AND target_id=? AND target_content_digest=?`).bind(
+          text, JSON.stringify(choice.publicOverrides), now, input.workflowRunId,
+          choice.targetId, choice.targetContentDigest).run();
+        if (Number(updated.meta.changes) !== 1) throw new Error(STORY_PRIVACY_ERROR.lostCas);
+        selected.add(choice.targetId);
       }
-      const result = await db.prepare(`UPDATE story_privacy_targets
-        SET selected_text=?,public_overrides_json=?,decided_at=?
-        WHERE workflow_run_id=? AND target_id=? AND target_content_digest=?`).bind(
-          selectedText, JSON.stringify(input.publicOverrides), decidedAt,
-          input.workflowRunId, input.targetId, input.targetContentDigest,
-        ).run();
-      if (Number(result.meta.changes) !== 1) throw new Error(STORY_PRIVACY_ERROR.lostCas);
+      if (targets.some((target) => !selected.has(target.id))) throw new Error(STORY_PRIVACY_ERROR.reviewIncomplete);
       await db.prepare("DELETE FROM project_release_confirmations WHERE workflow_run_id=?")
         .bind(input.workflowRunId).run();
+      const session = { ...record.session, updatedAt: now,
+        privacyDrafts: Object.fromEntries(Object.entries(record.session.privacyDrafts || {})
+          .filter(([id]) => !id.startsWith(`${input.chapterKey}::`))),
+        chapterReviews: { ...record.session.chapterReviews, [input.chapterKey]: result.state } };
+      const saved = await persistStoryReviewSessionCas(db, { workflowRunId: input.workflowRunId,
+        expectedVersion: input.expectedVersion, sourceRevision: input.sourceRevision,
+        storySessionSchema: STORY_REVIEW_SESSION_SCHEMA, session }, now);
+      if (!saved.ok) throw new Error(saved.code);
+      const current = await readStoryPrivacyAuthority(db, input.workflowRunId);
+      if (!current.ok) throw new Error(current.code);
+      return { session, ...saved, authority: current.authority };
     });
-  } catch {
-    return { ok: false, code: STORY_PRIVACY_ERROR.lostCas };
+  } catch (error) {
+    return { ok: false as const, code: error instanceof Error ? error.message : STORY_PRIVACY_ERROR.lostCas };
   }
-  return readStoryPrivacyAuthority(db, input.workflowRunId);
 }
 
 export function isStoryPrivacyDigest(value: unknown): value is string {

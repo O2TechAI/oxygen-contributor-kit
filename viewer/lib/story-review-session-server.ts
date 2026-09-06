@@ -12,6 +12,28 @@ import {
   type StoryEvidenceRow,
 } from "./story-readiness.ts";
 import { parseStorySource } from "./timeline.ts";
+import type { StorySource } from "./timeline.ts";
+import { applyChapterReview, applyStoryReviewToBlock, storyBlocks, type ChapterReviewState } from "./story-review.ts";
+import { reviewStoryEvidence } from "./story-evidence.ts";
+
+/** The same pure replay serves preparation and final Apply. Privacy choices are
+ * checked by the target authority after replay, never used as a replay prerequisite. */
+export async function replayChapterReview(db: ReviewSessionDatabase, source: StorySource, review: ChapterReviewState) {
+  const additions = review.editTransactions.filter((edit) => edit.requiresEvidence
+    && ["pending", "needs_evidence"].includes(edit.resolution)).map((edit) => ({
+      annotationId: edit.id, instruction: edit.afterText, supportingEvidence: edit.supportingEvidence || [],
+    }));
+  const chapterEvidence = [source.evidence.primary, ...source.evidence.supporting];
+  const items = (await db.prepare("SELECT id,document_id AS documentId,content FROM items ORDER BY document_id,sequence")
+    .all<{ id: string; documentId: string; content: string }>()).results;
+  const evidence = reviewStoryEvidence(items, chapterEvidence, additions);
+  const reviewed = Object.fromEntries(source.story.blocks.map((block) => [block.id,
+    applyStoryReviewToBlock(block.text, block.id, source.language, review)]));
+  return applyChapterReview(review, { source, privacyCandidates: [], privacyDecisions: {},
+    targetCatalog: new Map(), sourceBlocks: storyBlocks(source),
+    reviewedBlocks: { en: source.language === "en" ? reviewed : {}, zh: source.language === "zh" ? reviewed : {} },
+    evidenceResolved: evidence.evidenceResolved, supportedAddIds: [], supportedEditIds: evidence.supportedAddIds });
+}
 import {
   validActivatedSourceRevision,
   validNonnegativeAuthorityCounter,

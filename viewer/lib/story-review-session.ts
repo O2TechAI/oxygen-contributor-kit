@@ -22,6 +22,7 @@ export const STORY_REVIEW_SESSION_SCHEMA = "oxygen.story-review-session" as cons
 export const MAX_STORY_REVIEW_SESSION_BYTES = 2_000_000;
 
 export type StoryReviewSession = {
+  privacyDrafts?: Record<string, { targetContentDigest: string; proposedText: string; reviewedEditText?: string; editedText: string | null; publicOverrides: Array<{ originalStartOffset: number; originalEndOffset: number; category: string }> }>;
   schema: typeof STORY_REVIEW_SESSION_SCHEMA;
   workflowRunId: string;
   chapterReviews: Record<string, ChapterReviewState>;
@@ -353,7 +354,7 @@ function canonicalChapterReview(value: unknown): ChapterReviewState | null {
  * fail closed before source-bound hydration or persistence. */
 export function canonicalizeStoryReviewSession(value: unknown): StoryReviewSession | null {
   if (!isRecord(value)
-    || !onlyKeys(value, ["schema", "workflowRunId", "chapterReviews", "privacyDecisions", "updatedAt"])
+    || !onlyKeys(value, ["schema", "workflowRunId", "chapterReviews", "privacyDecisions", "updatedAt", "privacyDrafts"])
     || value.schema !== STORY_REVIEW_SESSION_SCHEMA
     || !isWorkflowRunId(value.workflowRunId)
     || !isRecord(value.chapterReviews)
@@ -364,6 +365,19 @@ export function canonicalizeStoryReviewSession(value: unknown): StoryReviewSessi
   if (serializedSize > MAX_STORY_REVIEW_SESSION_BYTES) return null;
   const privacyDecisions = canonicalDecisions(value.privacyDecisions);
   if (!privacyDecisions) return null;
+  if (value.privacyDrafts !== undefined && (!isRecord(value.privacyDrafts)
+    || Object.entries(value.privacyDrafts).some(([id, draft]) => !validStableId(id) || !isRecord(draft)
+      || !onlyKeys(draft, ["editedText", "proposedText", "publicOverrides", "targetContentDigest", "reviewedEditText"])
+      || typeof draft.targetContentDigest !== "string" || !/^[0-9a-f]{64}$/.test(draft.targetContentDigest)
+      || (draft.reviewedEditText !== undefined && (typeof draft.reviewedEditText !== "string" || !draft.reviewedEditText.trim() || draft.reviewedEditText.length > 1_000_000))
+      || typeof draft.proposedText !== "string" || !draft.proposedText.trim() || draft.proposedText.length > 1_000_000
+      || (draft.editedText !== null && (typeof draft.editedText !== "string" || !draft.editedText.trim() || draft.editedText.length > 1_000_000))
+      || !Array.isArray(draft.publicOverrides) || draft.publicOverrides.some((span) => !isRecord(span)
+        || Object.keys(span).sort().join(",") !== "category,originalEndOffset,originalStartOffset"
+        || !Number.isSafeInteger(span.originalStartOffset) || Number(span.originalStartOffset) < 0
+        || !Number.isSafeInteger(span.originalEndOffset) || Number(span.originalEndOffset) <= Number(span.originalStartOffset)
+        || typeof span.category !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(span.category))
+      || (draft.editedText !== null && draft.publicOverrides.length > 0)))) return null;
   const chapterReviews: Record<string, ChapterReviewState> = {};
   for (const [storyKey, rawReview] of Object.entries(value.chapterReviews).sort(([left], [right]) => left.localeCompare(right))) {
     if (!validStableId(storyKey)) return null;
@@ -377,6 +391,9 @@ export function canonicalizeStoryReviewSession(value: unknown): StoryReviewSessi
     chapterReviews,
     privacyDecisions: Object.fromEntries(Object.entries(privacyDecisions).sort(([left], [right]) => left.localeCompare(right))),
     updatedAt: value.updatedAt,
+    ...(value.privacyDrafts && Object.keys(value.privacyDrafts).length ? {
+      privacyDrafts: value.privacyDrafts as StoryReviewSession["privacyDrafts"],
+    } : {}),
   };
 }
 
@@ -389,6 +406,7 @@ export function createStoryReviewSession(
   chapterReviews: Record<string, ChapterReviewState>,
   privacyDecisions: Record<string, PrivacyDecision>,
   updatedAt = new Date().toISOString(),
+  privacyDrafts?: StoryReviewSession["privacyDrafts"],
 ) {
   return canonicalizeStoryReviewSession({
     schema: STORY_REVIEW_SESSION_SCHEMA,
@@ -396,6 +414,7 @@ export function createStoryReviewSession(
     chapterReviews,
     privacyDecisions,
     updatedAt,
+    ...(privacyDrafts && Object.keys(privacyDrafts).length ? { privacyDrafts } : {}),
   });
 }
 

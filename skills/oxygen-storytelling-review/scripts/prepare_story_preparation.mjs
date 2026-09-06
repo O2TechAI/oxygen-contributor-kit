@@ -5,8 +5,10 @@ import { basename, dirname, resolve } from "node:path";
 import {
   canonicalPreferenceInsightScope,
   deriveStoryReleaseTargetCatalog,
+  deriveStoryReleaseTargetContents,
   insightAuthorityValue,
 } from "../../../viewer/lib/story-preparation.ts";
+import { matchingStoryPrivacySources } from "../../../viewer/lib/story-privacy-projection.ts";
 import {
   canonicalAuthorityJson,
   validateStorySourcePackage,
@@ -434,6 +436,7 @@ async function preparePrivacy(candidatesPath, root) {
   if (!catalog) fail("PRIVACY_CATALOG_INVALID");
   const storyAuthority = await readLaneAuthority(root, "story");
   const validationAuthority = await readStoryValidationAuthority(storyAuthority);
+  if (!Array.isArray(validationAuthority.sourceRedactions)) fail("PRIVACY_SOURCE_PREPARATION_REQUIRED");
   const storyByTarget = new Map();
   for (const row of rows) {
     const targets = deriveStoryReleaseTargetCatalog([row.story]);
@@ -459,6 +462,9 @@ async function preparePrivacy(candidatesPath, root) {
         ),
         storyCandidates: shardRows.map(({ id, summary }) => ({ id, summary })),
         releaseTargetCatalog: catalog.filter((target) => targetIds.has(target.id)),
+        sourceRedactions: matchingStoryPrivacySources(
+          deriveStoryReleaseTargetContents(shardRows.map((row) => row.story))
+            .filter((target) => targetIds.has(target.id)), validationAuthority.sourceRedactions),
       },
     };
   }));
