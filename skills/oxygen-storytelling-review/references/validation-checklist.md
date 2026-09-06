@@ -54,7 +54,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] The hard Privacy boundary is limited to exact contributor-reviewed final export bytes; detection and anonymization are best effort, final human review is mandatory, and provider-free package reconstruction is not described as a provider-free workflow.
 - [ ] Chapter Privacy stages choices for one atomic Apply using the current prospective target authority: accept the Agent proposal, edit anonymized text, or make an exact noncredential occurrence public.
 - [ ] Final release uses meaning-preserving anonymization rather than blank deletion; an exact noncredential public occurrence is public only through an explicit reviewed contributor choice.
-- [ ] Release Preview is read-only, shows only applied selected content, and identifies incomplete review.
+- [ ] Release Preview is read-only, compares original and expected wording before and after Apply, and distinguishes suggestions, drafts, missing review, and applied choices.
 - [ ] `needs_confirmation` source Privacy items show only the minimum permitted local original, current safe projection, safe uncertainty reason, and Keep/Redact.
 - [ ] Only source Privacy `needs_confirmation` rows are decision-editable; category/status/reason mutation, deletion, and soft deletion are not final contributor actions.
 - [ ] Unavailable originals are never reconstructed.

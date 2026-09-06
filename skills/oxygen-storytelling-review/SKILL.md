@@ -192,7 +192,7 @@ read-only while the explanatory fields are reviewed. Human-created Insight keeps
 user-selected Story-substring Quote origin and lifecycle. Release uses the accepted source Quote,
 not Story paragraph text, and strips anchor and Evidence identities.
 
-Each Chapter contains its Privacy original/proposal/reason and accept, edit, or exact noncredential-public controls. Choices are durable drafts until the contributor's single Apply review commits this Chapter's Story, Insight, and Privacy choices atomically. Custom edits and pending accepted Insights receive prospective Privacy preparation through the existing workflow parent. Release Preview is read-only and shows only applied selected content; pending Chapters are identified as incomplete. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
+Each Chapter contains its Privacy original/proposal/reason and accept, edit, or exact noncredential-public controls. Choices are durable drafts until the contributor's single Apply review commits this Chapter's Story, Insight, and Privacy choices atomically. Custom edits and pending accepted Insights receive prospective Privacy preparation through the existing workflow parent. Release Preview is read-only and compares local originals with expected release wording; suggestions, drafts, waiting-for-review text, and applied choices are clearly distinguished. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
 
 ### Refresh reviewed Story Privacy
 

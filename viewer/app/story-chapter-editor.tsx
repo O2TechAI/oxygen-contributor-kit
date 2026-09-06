@@ -799,8 +799,8 @@ export function StoryChapterEditor({
           </section>}
         </section>
         <section className="episodePrimarySection privacySection" aria-labelledby="story-privacy-heading">
-          <h3 id="story-privacy-heading">Privacy</h3>
-          <p>Review this Chapter’s original, proposal and reasons. Choices remain drafts until Apply review.</p>
+          <div className="simpleSectionHead"><div><h3 id="story-privacy-heading">Privacy</h3>
+            <p>AI needs your help with these sensitive details. Accept, reject or edit each suggestion, then confirm your choices with Apply review below.</p></div></div>
           {privacyControls}
         </section>
         <section className="chapterCompletion" data-chapter-completion ref={completionRef} tabIndex={-1} aria-labelledby="story-review-summary-heading">

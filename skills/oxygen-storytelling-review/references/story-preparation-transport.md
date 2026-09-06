@@ -217,6 +217,9 @@ Each Story Privacy worker reads its manifest `inputPath` and returns exactly one
 `uncertaintyReason`, and `releaseTargets`. `releaseTargets` is a nonempty, duplicate-free array
 of assigned target ID strings. `reviewState` is either `deterministic` or `needs_confirmation`.
 For `deterministic`, `uncertaintyReason` is `null`; for `needs_confirmation`, it is a nonempty reason.
+Write `whyFlagged` and `uncertaintyReason` in brief, natural language: explain which detail may be
+sensitive, why human judgment is needed, and how the suggested wording preserves its meaning.
+Keep distinct Privacy concerns visible without implementation jargon or repeated metadata.
 The union of all candidate `releaseTargets` must equal exactly the set of targets whose
 `occurrences` are nonempty. A candidate may cover multiple targets; no one-to-one mapping is required.
 `targetProposals` contains exactly one proposal for every

@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { syntheticPrivacyOutput, syntheticInheritedMatches } from "./fixtures/chapter-privacy.mjs";
 import { deriveStoryReleaseTargetContents, normalizeStoryPrivacyOutput, storyPreparationDigest } from "../lib/story-preparation.ts";
+import { storyPrivacyTargetView } from "../app/story-privacy-ui.ts";
 import { updateAiInsightDecision } from "../lib/story-review.ts";
 import { buildReviewedStoryPrivacyPreparationSnapshot, importReviewedStoryPrivacyAuthority } from "../lib/story-privacy-authority.ts";
 import test from "node:test";
@@ -176,6 +177,16 @@ test("legacy same-byte source proof refresh and exact custom draft use the publi
     assert.equal(applied.session.chapterReviews.a.sourceInsightReviews["synthetic-insight"].resolution, "applied");
     assert.equal(applied.authority.targets.find((target) => target.targetId === targetId).selectedText, custom);
     assert.equal(applied.session.privacyDrafts[targetId], undefined);
+    const selected = applied.authority.targets.find((target) => target.targetId === targetId);
+    const revisited = storyPrivacyTargetView(selected, undefined, applied.session.chapterReviews.a);
+    assert.equal(revisited.text, custom);
+    assert.equal(revisited.label, "Reviewed edit");
+    assert.equal(revisited.status, "Applied");
+    const reapplied = await applyStoryChapterReview(db, { workflowRunId: fixture.run, sourceRevision: fixture.sourceRevision,
+      expectedVersion: applied.serverVersion, chapterKey: "a", authorityDigest: applied.authority.authorityDigest, choices: [] }, fixture.now);
+    assert.ok(reapplied.ok, JSON.stringify(reapplied));
+    assert.equal(reapplied.authority.targets.find((target) => target.targetId === targetId).selectedText, custom);
+
     assert.equal((await reconstructReviewedStoryReleaseFromDatabase(db, { workflowRunId: fixture.run,
       sourceRevision: fixture.sourceRevision, serverVersion: applied.serverVersion })).ok, false);
   } finally {

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { WorkflowProgress } from "./organization-progress";
 import { RedactionCompare, segments, type Redaction, type RedactionJob } from "./redaction-compare";
 import {
-  StoryPrivacyReview, TargetChoiceCard,
+  StoryPrivacyReview, ChapterPrivacyReview,
 } from "./story-privacy-review";
 import {
   parseStoryPrivacyAuthority,
@@ -748,23 +748,12 @@ export function InlineWorkspace({
       void loadProbes();
     } finally { setStoryPrivacyBusy(""); }
   };
-  const renderPrivacyTarget = (target: StoryPrivacyTarget) => {
+  const acceptEditedPrivacyTarget = (target: StoryPrivacyTarget) => {
     const draft = privacyDrafts[target.targetId];
-    const sameContent = draft?.targetContentDigest === target.targetContentDigest;
-    const currentDraft = sameContent && draft.proposedText === target.proposedText;
-    return <div key={`${target.targetId}:${target.targetContentDigest}:${target.proposedText}`}>
-      {currentStoryPrivacyAuthority?.candidates.filter((candidate) => candidate.releaseTargets.includes(target.targetId))
-        .map((candidate) => <p key={candidate.id}><b>{candidate.title}</b> — {candidate.whyFlagged}{candidate.uncertaintyReason && ` ${candidate.uncertaintyReason}`}</p>)}
-      {draft && <p role="status">{currentDraft ? "Choice staged for Apply review." : "Earlier choice retained. Review the new suggestion before applying."}</p>}
-      {draft && !currentDraft && <pre>{draft.editedText ?? draft.proposedText}</pre>}
-      <TargetChoiceCard target={target} staged={sameContent && (currentDraft || draft.editedText !== null) ? draft : undefined} busy={Boolean(storyPrivacyBusy)}
-        onSave={(choice) => decideStoryPrivacyTarget(target, choice)}
-        onAcceptEdited={() => { if (draft && target.editedProposal) {
-          refreshStoryPrivacyAfterPersistenceRef.current = true;
-          setPrivacyDrafts((drafts) => ({ ...drafts, [target.targetId]: { ...draft,
-            proposedText: target.proposedText, reviewedEditText: target.editedProposal!.text } }));
-        } }}/>
-    </div>;
+    if (!draft || !target.editedProposal || draft.targetContentDigest !== target.targetContentDigest) return;
+    refreshStoryPrivacyAfterPersistenceRef.current = true;
+    setPrivacyDrafts((drafts) => ({ ...drafts, [target.targetId]: { ...draft,
+      proposedText: target.proposedText, reviewedEditText: target.editedProposal!.text } }));
   };
   const effectiveError = storyReviewReady && !storyReady
     ? "The active Story contract does not match the exact reviewed source package" : error;
@@ -1356,6 +1345,8 @@ export function InlineWorkspace({
             </> : view === "redaction" ? (isProject ? <StoryPrivacyReview
               state={presentedStoryPrivacy}
               chapters={chapterReviews}
+              drafts={privacyDrafts}
+              chapterTitles={Object.fromEntries(storySelection.chapters.map((chapter) => [chapter.source.key, chapter.source.title]))}
               reviewComplete={Object.values(chapterReviews).length > 0 && Object.values(chapterReviews).every((review) => review.stage === "human_confirmed")}
             /> : <RedactionCompare
               job={redactionJob}
@@ -1409,19 +1400,15 @@ export function InlineWorkspace({
             applyPending={storyPrivacyBusy === activeSourceChapter.source.key}
             onApplyReview={() => applyChapter(activeSourceChapter.source.key)}
             privacyControls={<>
-              {currentStoryPrivacyAuthority?.chapterErrors?.[activeSourceChapter.source.key] && <p role="alert">This Chapter’s draft needs Evidence or edit repair before Privacy preparation.</p>}
-              {currentStoryPrivacyAuthority?.pendingChapterKeys?.includes(activeSourceChapter.source.key) && <p role="status">Waiting for Privacy review of this Chapter’s current draft. Your choices are retained.</p>}
-              {!currentStoryPrivacyAuthority && <p role="status">{presentedStoryPrivacy.message || "Loading Chapter Privacy…"}</p>}
-              {currentStoryPrivacyAuthority?.targets.filter((target) => target.targetId.startsWith(`${activeSourceChapter.source.key}::`)
-                && (target.occurrences.length > 0 || privacyDrafts[target.targetId] || target.editedProposal)).map(renderPrivacyTarget)}
-              <details><summary>Other text in this Chapter</summary>
-                {currentStoryPrivacyAuthority?.targets.filter((target) => target.targetId.startsWith(`${activeSourceChapter.source.key}::`)
-                  && !target.occurrences.length && !privacyDrafts[target.targetId] && !target.editedProposal).map(renderPrivacyTarget)}
-              </details>
-              {Object.entries(privacyDrafts).filter(([id]) => id.startsWith(`${activeSourceChapter.source.key}::`)
-                && !currentStoryPrivacyAuthority?.targets.some((target) => target.targetId === id)).map(([id, draft]) =>
-                  <div key={id}><p>Draft retained while this text is checked.</p><pre>{draft.editedText ?? draft.proposedText}</pre></div>)}
-              <button disabled={Boolean(storyPrivacyBusy)} onClick={() => { void loadStoryPrivacy("Checking prepared Chapter text…", true); }}>Check preparation</button>
+              {currentStoryPrivacyAuthority?.chapterErrors?.[activeSourceChapter.source.key] && <p role="alert">Review this Chapter’s edits and supporting evidence before checking Privacy.</p>}
+              {!currentStoryPrivacyAuthority ? <p role="status">{presentedStoryPrivacy.message || "Loading Chapter Privacy…"}</p>
+                : <ChapterPrivacyReview key={activeSourceChapter.source.key}
+                    targets={currentStoryPrivacyAuthority.targets.filter((target) => target.targetId.startsWith(`${activeSourceChapter.source.key}::`))}
+                    candidates={currentStoryPrivacyAuthority.candidates}
+                    chapter={chapterReviews[activeSourceChapter.source.key]}
+                    drafts={Object.fromEntries(Object.entries(privacyDrafts).filter(([id]) => id.startsWith(`${activeSourceChapter.source.key}::`)))}
+                    pending={Boolean(currentStoryPrivacyAuthority.pendingChapterKeys?.includes(activeSourceChapter.source.key))}
+                    busy={Boolean(storyPrivacyBusy)} onSave={decideStoryPrivacyTarget} onAcceptEdited={acceptEditedPrivacyTarget}/>}
             </>}
             onChapterReview={(review) => updateChapterReview(activeSourceChapter.source.key,review)}
             onClose={closeStory}

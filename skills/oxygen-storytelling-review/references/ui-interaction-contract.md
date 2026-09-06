@@ -95,20 +95,24 @@ Zero source Insights create no placeholder, empty approval card, or hidden oblig
 
 ## Privacy Surface
 
-The current Chapter shows changed or pending Privacy targets with local original, Agent proposal,
-reason, and the actual staged choice. Use content labels such as Chapter title, Story passage, or
-Insight field; target IDs and digests stay internal. Unchanged targets are optional inspection in
-one native disclosure, not a catalog of required decisions.
+The Privacy heading uses the same section heading as People and Story, followed by a brief natural introduction.
+Show one compact card at a time for required human confirmation or a custom/stale edit, with 1/N progress
+and previous/next navigation. Within the card, show Original, AI recommendation and reason, suggested
+wording, then visually distinct Accept, Reject, and Edit buttons. Excerpts contain all changed sentences;
+a native disclosure can reveal the full passage. Avoid repeated selected/proposed text and automatic-coverage lists.
 
-Accept proposal and exact-public toggles stage choices through the existing session persistence;
-a visible toggle must not require a second staging action. Finishing a custom edit stages its exact text for
-parent-owned semantic recheck. The checked suggestion returns here for acceptance. Apply review
-commits the Chapter's Story, Insight and Privacy changes together; no per-target PATCH writes.
-While Apply is pending, disable all current-Chapter review controls without losing drafts.
+Accept and Reject immediately stage choices through existing session persistence. Reject retains all
+selectable original spans, with a nearby reminder that credentials stay hidden. Credential-only human
+confirmation retains a safe Accept entry point. Saving an edit stages the full text for parent-owned
+semantic recheck; the checked suggestion returns for acceptance. Choices advance to the next card and
+remain available through previous/next navigation. Apply review commits Story, Insight and Privacy
+together; no per-target PATCH writes. While Apply is pending, disable all current-Chapter review controls.
 
-Credentials are always removed. Release Preview shows only already-selected bytes and an
-incomplete notice when review remains. It contains no editing or decision controls; HTML and ZIP
-independently require all Chapters applied and human-confirmed.
+Release Preview is read-only, grouped by Chapter, with Local original and expected release wording.
+Show initial suggestions before Apply and clearly distinguish staged choices, edits awaiting recheck,
+and applied choices. Label the right-hand text by its actual source, highlight changes in the actual
+expected text, and identify missing/stale passages instead of implying complete coverage. It contains
+no editing or decision controls. HTML and ZIP still require all Chapters applied and human-confirmed.
 
 ## Evidence Navigation
 

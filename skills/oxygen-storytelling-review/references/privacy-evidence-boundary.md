@@ -60,7 +60,7 @@ Evidence content stays in its original source language. Do not translate it and 
 
 ## Release Preview Contract
 
-Release Preview is read-only and shows applied selected release text, with an incomplete notice while
+Release Preview is read-only and compares local originals with expected release wording, identifying draft and applied choices while
 Chapters remain pending. Chapter Privacy shows the exact permitted local original, proposed
 anonymization and reason; contributor choices remain drafts until Chapter Apply. Source-record
 Privacy retains its separate Keep/Redact path and is not moved into Release Preview. Only source
@@ -76,13 +76,17 @@ and suppressed content are not exposed through Insight review.
 
 Candidate rows have stable IDs and safe explanatory metadata only. Every current release target has exactly one Agent-authored meaning-preserving proposal bound to its target-content digest. A missing, stale, invalid, or incomplete target choice blocks the whole Story/package release.
 
-For each target, the visible choice is:
+For each passage requiring a choice, the Chapter card presents:
 
 ```text
-Local original
-Agent-proposed anonymized text
-Use Agent proposal | Edit anonymized text | Make an exact noncredential occurrence public
+Original
+AI recommendation and reason
+Suggested anonymized wording
+Accept | Reject | Edit
 ```
+
+Reject retains all explicitly selectable original spans; credentials stay hidden, including in mixed passages.
+Credential-only confirmation offers safe acceptance, without a public bypass.
 
 Source matches carry source identity, exact ranges and a semantic inheritance explanation;
 ordinary same-text unrelated uses require parent-reviewed evidence from the bounded source

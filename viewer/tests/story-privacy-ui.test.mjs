@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
-  appliedStoryPrivacyTargets,
+  storyPrivacyTargetView,
+  storyPrivacyChanges,
+  storyPrivacyNeedsDecision,
   parseStoryPrivacyAuthority,
   storyPrivacyAuthorityCurrent,
   storyPrivacyAuthorityComplete,
@@ -181,15 +183,22 @@ test("Story Privacy request epochs are single-flight and suppress replaced respo
 test("Release Preview is read-only; Chapter target cards stage visible choices", async () => {
   const component = await read("../app/story-privacy-review.tsx");
   const preview = component.slice(component.indexOf("export function StoryPrivacyReview"));
-  assert.match(preview, /target.selectedText/);
-  assert.doesNotMatch(preview, /<button|<textarea|TargetChoiceCard|target.originalText/);
+  assert.match(preview, /PreviewTarget/);
+  assert.doesNotMatch(preview, /<button|<textarea|TargetChoiceCard/);
   assert.match(component, /Local original/);
-  assert.match(component, /Agent-proposed anonymized text/);
-  assert.match(component, /stagedText \?\? target.selectedText/);
-  assert.match(component, /onSave\(\{ editedText: null, publicOverrides:/);
-  assert.doesNotMatch(component, /setPublicSelections/);
-  assert.doesNotMatch(component, /Stage exact-public choices|Export the current snapshot|target.targetId}.*<\/p>/);
-  assert.match(component, /Credential always removed/);
+  assert.match(component, /AI recommendation/);
+  assert.match(component, /storyPrivacyTargetView/);
+  assert.match(component, /publicSpans.map/);
+  assert.doesNotMatch(component, /setPublicSelections|Choice pending Apply review/);
+  assert.match(component, /Credentials stay hidden/);
+  assert.match(component, /privacyDecisionCard/);
+  assert.match(component, /selectedEdit \? target.selectedText/);
+  assert.match(component, /disabled=\{busy \|\| selectedEdit/);
+  assert.match(component, /\?\? firstPending/);
+  assert.match(component, />Accept<|>Accept<\/button>/);
+  assert.match(component, />Reject</);
+  assert.match(component, />Edit</);
+
 });
 
 test("Workspace stages durable Privacy and sends one Chapter Apply CAS without retry", async () => {
@@ -197,7 +206,7 @@ test("Workspace stages durable Privacy and sends one Chapter Apply CAS without r
   const stage = workspace.slice(workspace.indexOf("const decideStoryPrivacyTarget"), workspace.indexOf("const applyChapter"));
   assert.match(stage, /setPrivacyDrafts/);
   assert.doesNotMatch(stage, /fetch\(/);
-  const apply = workspace.slice(workspace.indexOf("const applyChapter"), workspace.indexOf("const renderPrivacyTarget"));
+  const apply = workspace.slice(workspace.indexOf("const applyChapter"), workspace.indexOf("const acceptEditedPrivacyTarget"));
   assert.match(apply, /await storyPersistence.flush\(snapshot\)/);
   assert.match(apply, /fetch\("\/api\/story-review-session\/apply"/);
   assert.match(apply, /expectedVersion: requestedVersion/);
@@ -209,10 +218,9 @@ test("Workspace stages durable Privacy and sends one Chapter Apply CAS without r
   assert.equal((apply.match(/fetch\(/g) || []).length, 1);
   assert.doesNotMatch(workspace, /fetch\(`\/api\/story-privacy\/|onTargetChoice=/);
   assert.match(workspace, /applyPending=\{storyPrivacyBusy === activeSourceChapter.source.key\}/);
-  assert.match(workspace, /<details><summary>Other text in this Chapter/);
-  assert.match(workspace, /privacyDrafts\[target.targetId\] \|\| target.editedProposal/);
-  assert.match(workspace, /const sameContent = draft\?\.targetContentDigest === target.targetContentDigest/);
-  assert.match(workspace, /staged=\{sameContent && \(currentDraft \|\| draft.editedText !== null\) \? draft : undefined\}/);
+  assert.doesNotMatch(workspace, /Other text in this Chapter|renderPrivacyTarget/);
+  assert.match(workspace, /<ChapterPrivacyReview/);
+
 });
 
 test("source Privacy remains decision-only and surfaces API failures", async () => {
@@ -241,11 +249,59 @@ test("Chapter completion owns Privacy controls and retains paragraph-owned Insig
   assert.match(editor, /Evidence will be checked when you Apply this review/);
 });
 
-test("Release Preview excludes legacy preparation selections without Chapter Apply history", () => {
-  const legacy = target("chapter-a::title", "Alice planned a demo");
-  assert.deepEqual(appliedStoryPrivacyTargets([legacy], {}), []);
-  assert.deepEqual(appliedStoryPrivacyTargets([legacy], { "chapter-a": { stage: "reviewing", evidenceVerified: false } }), []);
-  const humanSaveOnly = { stage: "reviewing", evidenceVerified: false, revision: 2, revisionHistory: [{ revision: 2 }] };
-  assert.deepEqual(appliedStoryPrivacyTargets([legacy], { "chapter-a": humanSaveOnly }), []);
-  assert.deepEqual(appliedStoryPrivacyTargets([legacy], { "chapter-a": { stage: "revision_ready", evidenceVerified: true } }), [legacy]);
+test("Privacy preview keeps pending suggestions and distinguishes exact choices from human Apply", () => {
+  const original = target("chapter-a::title", "Alice planned a demo");
+  const draft = { targetContentDigest: original.targetContentDigest, proposedText: original.proposedText,
+    editedText: null, publicOverrides: [] };
+  const legacy = storyPrivacyTargetView(original);
+  assert.equal(legacy.text, original.proposedText);
+  assert.match(legacy.status, /Suggested/);
+  assert.match(storyPrivacyTargetView(original, undefined, { stage: "reviewing", evidenceVerified: false }).status, /Suggested/);
+  assert.equal(storyPrivacyTargetView(original, undefined, { stage: "revision_ready", evidenceVerified: true }).status, "Applied");
+  assert.match(storyPrivacyTargetView(original, draft).status, /Draft/);
+  const publicDraft = { ...draft, publicOverrides: [{ originalStartOffset: 0, originalEndOffset: 5, category: "person-name" }] };
+  const kept = storyPrivacyTargetView(original, publicDraft);
+  assert.equal(kept.text, original.originalText);
+  assert.match(kept.label, /Original retained/);
+  assert.deepEqual(storyPrivacyChanges(original, kept.text), []);
+  assert.equal(storyPrivacyChanges(original, original.proposedText).length, 1);
+  const stale = storyPrivacyTargetView(original, { ...publicDraft, targetContentDigest: "old" });
+  assert.equal(stale.text, original.proposedText);
+  assert.match(stale.status, /Earlier choice/);
+  const edit = { ...draft, editedText: "A team planned a demo", reviewedEditText: "A team planned a demo" };
+  const checked = { ...original, editedProposal: { inputDigest: "matching-input", text: edit.editedText } };
+  assert.match(storyPrivacyTargetView(checked, edit, undefined, "wrong-input").status, /waiting/);
+  assert.match(storyPrivacyTargetView(checked, edit, undefined, "matching-input").status, /ready for Apply/);
+  assert.equal(storyPrivacyTargetView(checked, edit, undefined, "wrong-input").label, "Your edit");
+});
+
+test("Privacy deck hides automatic coverage but preserves every required confirmation", () => {
+  const item = target("chapter-a::title", "Alice planned a demo", { pending: true });
+  const candidate = { reviewState: "deterministic", releaseTargets: [item.targetId] };
+  assert.equal(storyPrivacyNeedsDecision(item, [candidate]), false);
+  assert.equal(storyPrivacyNeedsDecision(item, [{ ...candidate, reviewState: "needs_confirmation" }]), true);
+  const credential = { ...item, occurrences: item.occurrences.map((span) => ({ ...span, canPublish: false })) };
+  assert.equal(storyPrivacyNeedsDecision(credential, [{ ...candidate, reviewState: "needs_confirmation" }]), true);
+  assert.equal(storyPrivacyNeedsDecision(item, [], { editedText: "Draft" }), true);
+});
+
+test("partial original retention is not a full Reject and highlights only actual replacements", () => {
+  const item = { ...target("a::story:passage", "Alice"), originalText: "🙂 Alice used key42.", proposedText: "🙂 Person A used [hidden].", selectedText: null,
+    occurrences: [{ originalStartOffset: 2, originalEndOffset: 7, proposalStartOffset: 2, proposalEndOffset: 10, category: "person-name", canPublish: true, isPublic: false },
+      { originalStartOffset: 13, originalEndOffset: 18, proposalStartOffset: 16, proposalEndOffset: 24, category: "credential", canPublish: false, isPublic: false }] };
+  const draft = { targetContentDigest: item.targetContentDigest, proposedText: item.proposedText, editedText: null,
+    publicOverrides: [{ originalStartOffset: 2, originalEndOffset: 7, category: "person-name" }] };
+  const kept = storyPrivacyTargetView(item, draft);
+  assert.equal(kept.choice, "reject");
+  assert.equal(kept.text, "🙂 Alice used [hidden].");
+  assert.deepEqual(storyPrivacyChanges(item, kept.text), [{ originalStart: 13, originalEnd: 18, start: 13, end: 21 }]);
+  const twoSelectable = { ...item, occurrences: item.occurrences.map((span) => ({ ...span, canPublish: true })) };
+  assert.equal(storyPrivacyTargetView(twoSelectable, draft).choice, "partial");
+  const saved = { ...item, selectedText: "A team held a public test.", edited: true };
+  const applied = storyPrivacyTargetView(saved, undefined, { stage: "revision_ready", evidenceVerified: true });
+  assert.equal(applied.text, saved.selectedText);
+  assert.equal(applied.label, "Reviewed edit");
+  assert.equal(applied.status, "Applied");
+  const longText = "x".repeat(200_000);
+  assert.deepEqual(storyPrivacyChanges({ ...item, originalText: longText, proposedText: longText, occurrences: [] }, longText), []);
 });

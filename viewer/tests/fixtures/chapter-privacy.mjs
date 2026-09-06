@@ -4,7 +4,7 @@ import { deriveStoryReleaseTargetContents, storyPreparationDigest } from "../../
 import { emptyChapterReview, recordStoryEdit } from "../../lib/story-review.ts";
 import { createStoryReviewSession } from "../../lib/story-review-session.ts";
 
-export async function seedChapterPrivacy(db, { badSecondChapter = true, interactive = false } = {}) {
+export async function seedChapterPrivacy(db, { badSecondChapter = true, interactive = false, multiplePrivacyChoices = false } = {}) {
   const run = "synthetic-chapter-privacy", now = "2042-01-01T00:00:00.000Z", sourceRevision = 2;
   const sources = ["a", "b"].map((key) => {
     const evidence = { documentId: "synthetic-source", eventId: `synthetic-${key}` };
@@ -20,6 +20,10 @@ export async function seedChapterPrivacy(db, { badSecondChapter = true, interact
   });
   if (interactive) {
     sources[0].story.blocks[0].text = "The A draft for Project Delta used sk-synthetic-1234567890 during a public test.";
+    if (multiplePrivacyChoices) {
+      sources[0].overview = "Project Delta was reviewed before a public demonstration.";
+      sources[0].story.uncertainty = "The test credential sk-synthetic-1234567890 must be removed.";
+    }
     const evidence = sources[0].evidence.primary;
     sources[0].insights = [{ id: "synthetic-insight", title: "Keep a separate review step",
       background: "The public test used a separate review step.", anchorStoryBlockId: "passage",

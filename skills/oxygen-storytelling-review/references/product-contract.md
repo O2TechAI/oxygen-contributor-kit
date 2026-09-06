@@ -118,7 +118,7 @@ The required final Viewer must preserve:
 - publication separation.
 
 Chapter Privacy stages choices for the same Apply review that commits Story and Insight edits;
-Release Preview is read-only and shows applied selected content. Missing target choices and stale
+Release Preview is read-only and compares local originals with expected release wording, marking suggestions and drafts before Apply. Missing target choices and stale
 authority fail closed before final release confirmation or export.
 
 Project-specific Story prose, Privacy excerpts, generated candidates, preference answers, screenshots, and runtime database state remain local run artifacts. They must not be hardcoded in reusable Skill, Viewer, or test source.

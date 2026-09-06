@@ -240,7 +240,7 @@ Use the contributor's configured AI model for redaction. The mandatory notice is
 
 This is the upstream source Privacy boundary. Its output is the reviewed input boundary used by
 Story generation. It is distinct from later Story/Release Privacy choices inside each Chapter;
-Release Preview shows only applied selected content.
+Release Preview compares local originals with expected release wording, distinguishing suggestions, drafts, and applied choices.
 
 Use the canonical worker contract at `tools/llm_redact/REDACTION_PROMPT.md`; do not search for a
 prompt by basename.
@@ -724,7 +724,7 @@ Required final surfaces, with current runtime status:
 
 - Chapter Privacy holds original/proposal/reason and durable pending choices. Single Chapter Apply
   commits Story, Insight and Privacy selections atomically, with current source/target/session binding.
-- Release Preview is read-only and shows applied selected content, with an incomplete notice while review
+- Release Preview is read-only and compares local originals with expected release wording, with draft status while review
   remains. Final release requires all Chapters applied and human-confirmed and checks actual text.
   Unavailable originals are never reconstructed; Raw Evidence and suppressed content do not enter Insight review.
 - `Preferences` presents generated probes and records explicit answers (§7). Generated questions
