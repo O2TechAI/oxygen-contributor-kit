@@ -137,7 +137,8 @@ determines all of the following for that exact proposal:
 6. The ending explains what changed or what remains unresolved.
 7. Every factual claim in prose, People, transition, and chips is supported by exact bound reviewed
    Evidence, including every claimed interaction.
-8. The prose is readable enough that a human could voluntarily continue.
+8. The prose uses the assigned Story language, preserving customary working terms, and is readable
+   enough that a human could voluntarily continue (`proseIsReadable`).
 
 The parent records those eight decisions in the transient proposal-digest-bound editorial review
 input. The batch recorder rejects a missing, stale, foreign, incomplete, or negative review before

@@ -31,17 +31,16 @@ digest, workflow run, and source revision. A stale, foreign, malformed, or tampe
 before output or receipt. Existing receipt fields keep their established meanings; policy binding
 is through the immutable lane input, validation authority, output metadata, and final manifest.
 
-Every final `StorySource` carries exactly one `language` and the whole `languagePolicyDigest`.
-Missing or invalid metadata is rejected and regenerated; there is no old-payload fallback. A Story
-worker authors only its assigned language. Phase labels and Timeline navigation labels remain
-English at the data boundary regardless of Story language.
+Every final `StorySource` requires valid `language` and whole `languagePolicyDigest`; no fallback.
+Workers use their assigned language, confirmed by full-prose editorial review (`proseIsReadable`).
+Phase and Timeline navigation labels remain English regardless of Story language.
 
 ## Deterministic classification and mixed continuation
 
 The sole classifier counts Unicode Han and Latin letters in the exact represented
 Privacy-reviewed Story input. Han at or above 80 percent of those letters is `zh`; Latin at or
 above 80 percent is `en`; every other ratio, including no language evidence, is `mixed`. This
-tolerates a bounded minority of technical terms without maintaining a second classifier.
+rule selects input language only; it never rejects finished prose by character ratio.
 
 Strong `en` selects `all-english`; strong `zh` selects `all-chinese`. Mixed input stops before any
 worker assignment, output, or receipt with the fixed code `STORY_LANGUAGE_CHOICE_REQUIRED` until
@@ -72,6 +71,6 @@ preparation/activation; there is no fallback, automatic synthesis, or translatio
 ## Required behavior
 
 Behavior tests cover strong English and Chinese input, every mixed continuation, ambiguous-owner
-mapping failure, policy tamper/stale/foreign rejection before receipt, worker language mismatch,
+mapping failure, policy tamper/stale/foreign rejection before receipt, editorial language rejection,
 English Phase labels, required Preference presentation, stable identities and authorities, and
 current-shape fixture migration without compatibility parsing.

@@ -116,7 +116,7 @@ source sequence. The parent supplies one transient unversioned Phase assignment 
 ordered owner set, and invokes the Story recorder once. The recorder
 injects schema, Chapter keys equal to Coverage owner IDs, Phase, semantic/Coverage references,
 represented units, canonical exclusions, final row identity, and empty base-Story Insights. It then
-calls the unchanged exported `validateStorySourcePackage` on the complete candidate package. Only
+calls the shared exported `validateStorySourcePackage` on the complete candidate package. Only
 after complete validation succeeds does it stage every per-shard output and receipt and rename one
 complete terminal `story/records` directory. Before success there are zero Story outputs and zero
 Story receipts; after success there is exactly one receipt per expected Story shard. Other lanes
@@ -179,8 +179,8 @@ keyword detector, domain enum, or mandatory template. A negative decision trigge
 proposal-only correction naming the missing narrative relationship; the corrected proposal is
 re-read and receives a new digest-bound review against the byte-identical worker input.
 `claimsAreEvidenceSupported` covers factual prose, People, optional transition, chips, and all
-interaction claims. It broadens the prior interaction question within this same eight-criterion
-gate; it is not a ninth criterion or a second semantic authority.
+interaction claims. `proseIsReadable` includes assigned-language acceptance under the
+[narrative contract](narrative-writing-contract.md#parent-editorial-acceptance).
 
 ### Insight proposals
 

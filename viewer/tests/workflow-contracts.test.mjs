@@ -584,7 +584,7 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
   assert.match(storyTransport, /initial proposal and two subagent corrections remain editorially unacceptable, the Ultra parent may\s+complete that same still-unrecorded assignment from the byte-identical input[\s\S]{0,100}editorial gate, recorder, and validators/i);
   assert.match(storyTransport, /proposal file for every current Story shard, reads every Chapter in full/);
   assert.match(storyTransport, /missing, stale, foreign, incomplete, or negative review before it reads Phase and before any output\s+or receipt exists/);
-  assert.match(storyTransport, /calls the unchanged exported `validateStorySourcePackage` on the complete candidate package/);
+  assert.match(storyTransport, /calls the shared exported `validateStorySourcePackage` on the complete candidate package/);
   assert.match(storyTransport, /Before success there are zero Story outputs and zero\s+Story receipts/);
   assert.match(storyTransport, /invokes the Story recorder once/i);
   assert.match(storyTransport, /after success there is exactly one receipt per expected Story shard/i);

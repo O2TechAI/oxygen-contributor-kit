@@ -16,7 +16,7 @@ import {
   validateStorySourcePackage,
 } from "../lib/story-readiness.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
-import { parseStorySource, timelinePresentation } from "../lib/timeline.ts";
+import { classifyStoryLanguageText, parseStorySource, timelinePresentation } from "../lib/timeline.ts";
 import { canonicalPreferenceQuestionBatch, deriveStoryReleaseTargetContents } from "../lib/story-preparation.ts";
 
 const repository = resolve(import.meta.dirname, "../..");
@@ -1076,6 +1076,40 @@ test("preserve-per-Story requires an exact mapping for an ambiguous owner", asyn
   }
 });
 
+test("Story recording accepts reviewed Chinese prose with customary English technical terms", async () => {
+  const prose = "审阅者用 TypeScript 检查 StoryLanguagePolicy，发现 languagePolicyDigest 与输入一致。"
+    + "随后核对 Coverage owner、Source Privacy 和 proposalDigest，确认身份绑定没有变化；"
+    + "最终保留英文技术术语，等待 Project Story 的人工审阅。";
+  const value = await prepareStoryOnly({
+    suffixes: ["a"], narratives: { a: prose }, languageChoice: "all-chinese",
+  });
+  try {
+    assert.equal(value.prepared.status, 0, value.prepared.stderr);
+    const story = storySource("a", value.semantic, value.boundary.coverageAuthority, [], { language: "zh" });
+    story.story.blocks[0].text = prose;
+    assert.equal(classifyStoryLanguageText([
+      story.title, story.overview, ...story.chips,
+      ...story.people.flatMap((person) => [person.releaseLabel, person.role, person.description]),
+      prose,
+    ]), "mixed");
+    const batch = await storyBatchFiles(value.transport, value.root, [{ id: "event-a", story }]);
+    runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "0"]);
+    const composedPath = join(value.root, "base.json");
+    runOk(process.execPath, [prepare, "compose", "story", value.transport, composedPath]);
+    const [candidate] = await readJson(composedPath);
+    const accepted = parseStorySource(candidate.summary);
+    const authority = await readJson(join(value.transport, "story", "validation-authority.json"));
+    assert.equal(accepted.language, "zh");
+    assert.equal(accepted.languagePolicyDigest, digest(authority.languagePolicy));
+    assert.equal(accepted.story.blocks[0].text, prose);
+    assert.equal(existsSync(join(value.transport, "story", "records",
+      batch.manifest.shards[0].id, "receipt.json")), true);
+  } finally {
+    await value.cleanup();
+  }
+});
+
 test("one oversized owner bundle fails before Story lane installation instead of splitting", async () => {
   const root = await mkdtemp(join(tmpdir(), "story-oversized-owner-"));
   try {
@@ -1505,12 +1539,14 @@ test("Story batch recorder permits pre-receipt correction and makes the complete
       ...block, text: "这是一段完整且经过审阅的中文故事内容。",
     }));
     await json(firstProposalPath, languageMismatch);
-    await refreshStoryEditorialReview(batch);
+    await refreshStoryEditorialReview(batch, {
+      [languageMismatch[0].ownerId]: { proseIsReadable: false },
+    });
     const mismatched = run(process.execPath, [record, transport, "story",
       batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
       "--correction-attempt-count", "0"]);
     assert.notEqual(mismatched.status, 0);
-    assert.match(mismatched.stderr, /^STORY_LANGUAGE_INVALID\r?\n$/u);
+    assert.match(mismatched.stderr, /^STORY_EDITORIAL_REVIEW_REJECTED\r?\n$/u);
     assert.equal(existsSync(join(transport, "story", "records")), false);
 
     await json(firstProposalPath, batch.manifest.shards[0].unitIds.map((ownerId) => (
