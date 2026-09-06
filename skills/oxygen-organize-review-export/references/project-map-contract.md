@@ -95,6 +95,8 @@ PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS
 
 ## 3. Bounded worker proposal and terminal receipt
 
+### Mapping proposal
+
 Each external worker reads exactly one manifest-declared `inputPath` and returns one JSON array at
 that assignment's manifest-declared `proposalPath`. The worker uses the user's configured model
 and credentials; semantic mapping is not provider-free. A proposal has only these fields:
@@ -121,6 +123,8 @@ Every shard contribution must occur exactly once across that worker's proposals.
 stable `unitId` in multiple shards when one semantic episode crosses shard boundaries. Do not use
 one unit per record, one unit per session, or future Story Chapters as a quota.
 
+### Parent recording
+
 Record each worker's strict terminal receipt and content-bound output without calculating digests
 or editing the generated project map:
 
@@ -142,8 +146,8 @@ Viewer, or release call and do not store prompts or responses in product output.
 
 If proposal validation fails while the atomic `records/<shard-id>/` output-and-receipt directory is
 absent, the failure is pre-receipt authoring feedback. The external
-worker may explicitly replace only `handoffs/<shard-id>.proposals.json` and run the recorder again
-against the same immutable shard input. Unknown registry IDs, extra worker-authored metadata, and
+worker may explicitly replace only its manifest-declared proposal; the workflow-owning parent
+alone runs the recorder again against the same immutable shard input. Unknown registry IDs, extra worker-authored metadata, and
 invalid mapping syntax fail before any output or receipt and exit nonzero with the fixed safe code
 `SEMANTIC_WORKER_MAPPING_INVALID`;
 malformed JSON, a non-array proposal, overlap, and incomplete shard coverage use the same

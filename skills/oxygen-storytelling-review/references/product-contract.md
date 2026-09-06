@@ -77,77 +77,18 @@ Preference questions must be generated before Project Story human review opens b
 
 ## Bounded Semantic Workers
 
-Semantic work is workflow-parent-owned. The workflow parent runs the public preparer before any
-worker starts; it computes immutable input digests, assigns the exact current identities, and
-installs the bounded worker input and shard manifest together.
+The parent owns global Chapter selection, full-prose editorial acceptance, Phase assignment,
+recording, exact union/no overlap, activation, and human handoff. Workers author only bounded
+lane proposals from their exact immutable inputs. Story owners remain atomic, and Story inclusion
+never depends on Insight worthiness. Story, Insight, and Story Privacy are multi-shard lanes;
+Preference is exactly one global bounded questionnaire worker with 12 probes by default and 20 maximum.
 
-Before Coverage finalization, the parent establishes one global Chapter-owner skeleton by coherent
-narrative arc across the complete exact-bound reviewed semantic projection. It never defaults or
-mechanically copies `ownerId` from `unitId`; no semantic-unit, source-document, meeting, prior-run,
-Chapter, Phase, block, Insight, or Evidence count is golden. Related units may share one owner, one
-Chapter may represent multiple units, and multiple Chapters may later share one Phase. Finalized
-Coverage `ownerId` is then the sole Story Chapter-ownership source. Every represented unit for one
-owner stays in one indivisible byte-balanced owner bundle; one owner never spans workers and a
-shard may contain multiple owners. The public worker contract uses separate dependent passes for Story writing and Insight reasoning,
-then sibling Story Privacy and Preference-question passes. Story, Insight, and Story Privacy remain
-multi-shard. Preference intentionally uses exactly one global bounded worker because it produces
-one deduplicated questionnaire authority, capped at 12 probes by default and 20 maximum. Workers
-write only lane proposals. The recorder validates each proposal against the frozen lane, shard, input digest, and assigned
-identities. Each Story input is self-contained with its complete represented units, exact bound raw
-reviewed narrative, canonical references, and equality-only actor tokens; it has no excluded or
-outside-boundary narrative, raw identity, Source Privacy rows, or provider metadata. Its validation
-authority has no source narrative, raw actor identity, or source outside the exact reviewed
-boundary. Story workers return
-phase-free proposals and never author schema, keys, Phase, Coverage, exclusions, receipts, or
-authority. On a subagent-capable host the parent does not initially write Story prose or choose
-People or Evidence. It reads every proposal in full, records all eight narrative decisions against
-that exact proposal digest, and rejects negative, missing, stale, or foreign editorial review before
-Phase and receipt. After every proposal is accepted, the parent orders Chapters with the production
-comparator, assigns only the smallest coherent global Phase IDs and labels, injects canonical
-Coverage/exclusions, and the one Story batch recorder directly calls the unchanged Viewer
-`validateStorySourcePackage` on the complete package.
-It installs every output and exactly one receipt per shard with one atomic records-directory rename.
-Exact union, no
-overlap, no foreign identities, no stale digest, deterministic deduplication, and deterministic
-composition are executable checks.
-
-Each assignment gets one initial proposal plus at most two parent-orchestrated proposal-only correction
-attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
-initial proposal, and is always `0..2`. Every correction uses the byte-identical immutable input;
-an invalid initial or correction attempt creates neither output nor receipt. Only a fixed safe
-pre-receipt authoring-validation code is correctable. If the second correction fails, the lane
-stops safely, reports correction exhaustion and the last safe validation code, and does not
-continue downstream, except that after two Story corrections are rejected specifically for
-editorial quality, the Ultra parent may complete the same still-unrecorded assignment from the
-byte-identical input through the same canonical phase-free proposal shape, editorial gate,
-recorder, and validators. This is not a fallback format or a second authority. Authority,
-immutability, containment, path, I/O, infrastructure, and corrupt-state failures stop immediately
-and are never correctable.
-
-Story uses the same bound as at most two lane-wide correction waves after the initial complete
-batch. Proposal-only and Phase-only corrections consume that one budget. Every failed wave leaves
-all Story outputs and receipts absent. After success, outputs and receipts are immutable. Insight
-remains a separate later pass. Actual subagent spawning is proved only by later E2E evidence, not by
-static tests.
-
-Each Insight worker receives only its assigned frozen Story candidates, their Story blocks and
-Evidence references, the minimum exact bound raw reviewed narrative rows those blocks reference,
-and the existing validation-authority reference. It receives no narrative outside that exact
-reviewed boundary, Source Privacy rows, unrelated Chapter or trajectory narrative, private actor
-identity, or provider metadata. `anchorStoryBlockId` controls placement only. `quote.text` is one
-exact current substring of the bound raw reviewed narrative, bound to `quote.evidence`, and that
-Evidence must support the anchored block.
-Invalid anchors, quote/anchor mismatch, modified or Story-derived paraphrase, foreign/stale/private
-Evidence, and unavailable current reviewed narrative fail before output or receipt and again in the
-finalizer and server-owned activation path. Completed-zero is valid.
-
-The composed preparation finalizer independently revalidates the frozen inputs, receipts, output
-digests, exact union, lane dependency digests, final Story composition, the same complete shared
-Story validation, Preference bundle, and
-activation binding. Revision authority, coverage
-finalization, activation, human-pause enforcement, and release reconstruction stay outside worker
-scope. No worker may silently expand scope, reopen raw history, repair another lane, or treat
-another lane's failure as success.
+[Story preparation transport](story-preparation-transport.md#dispatch-and-recording) owns dispatch,
+correction limits, the narrow pre-receipt Story takeover, atomic installation, and finalization.
+Its [worker reading routes](story-preparation-transport.md#worker-reading-routes) define the exact
+role-specific authoring contracts. [Narrative acceptance](narrative-writing-contract.md#parent-editorial-acceptance)
+owns the eight parent semantic decisions. No worker may expand scope, reopen raw history, repair
+another lane, or treat missing, foreign, stale, or invalid authority as success.
 
 ## Product Boundaries
 

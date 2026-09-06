@@ -16,7 +16,7 @@ import {
   validateStorySourcePackage,
 } from "../lib/story-readiness.ts";
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
-import { parseStorySource, timelinePresentation } from "../lib/timeline.ts";
+import { classifyStoryLanguageText, parseStorySource, timelinePresentation } from "../lib/timeline.ts";
 import { canonicalPreferenceQuestionBatch, deriveStoryReleaseTargetContents } from "../lib/story-preparation.ts";
 
 const repository = resolve(import.meta.dirname, "../..");
@@ -837,14 +837,20 @@ test("finalized Coverage owner IDs form indivisible self-contained Story bundles
   }
 });
 
-test("Story preparation preserves validated opaque actor topology and rejects raw shapes pre-authority", async () => {
+test("mixed Story sources preserve actor topology and full authority while omitting empty worker relations", async () => {
   const root = await mkdtemp(join(tmpdir(), "story-actor-topology-"));
   try {
-    const semantic = semanticAuthority();
+    const semantic = semanticAuthority({ suffixes: ["a", "b", "meeting"] });
+    semantic.units[2].members = ["meeting-canary:record-a"];
+    semantic.units[2].membershipDigest = digest([{ id: "meeting-canary:record-a", sourceDigest: digest({ suffix: "meeting" }) }]);
+    semantic.sourceDigest = digest(semantic.units.map((unit) => unit.members[0]));
+    semantic.universeDigest = digest(semantic.units.flatMap((unit) => unit.members));
+    const { manifestDigest: _manifestDigest, ...semanticCore } = semantic;
+    semantic.manifestDigest = digest(semanticCore);
     const projectMap = {
       primary_project: semantic.projectId, summary: "Synthetic.",
-      projects: [{ name: semantic.projectId, event_count: 2, reason: "Reviewed boundary." }],
-      source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 1, contributionCount: 2 },
+      projects: [{ name: semantic.projectId, event_count: 3, reason: "Reviewed boundary." }],
+      source_authority: { sourceDigest: semantic.sourceDigest, sourceCount: 2, contributionCount: 3 },
       semantic_units: semantic.units.map((unit) => ({ id: unit.id, kind: unit.kind, members: unit.members })),
       semantic_manifest: semantic,
     };
@@ -853,6 +859,17 @@ test("Story preparation preserves validated opaque actor topology and rejects ra
     const boundary = await reviewedBoundary(root, projectMap, semantic);
     const eventsPath = join(boundary.review, "trajectories", "doc-canary", "events.jsonl");
     const events = (await readFile(eventsPath, "utf8")).trim().split("\n").map(JSON.parse);
+    events.pop();
+    const meeting = {
+      meeting_id: "meeting-canary",
+      records: [{
+        record_id: "record-a", order: 1, speaker: `actor-${digest("meeting-speaker")}`,
+        text: "Reviewed meeting context with Unicode evidence 🧭.",
+      }],
+    };
+    const meetingDirectory = join(boundary.review, "meetings", meeting.meeting_id);
+    await mkdir(meetingDirectory, { recursive: true });
+    await json(join(meetingDirectory, "meeting.json"), meeting);
     const parent = `actor-${digest("parent")}`;
     events[0].actor = { id: `actor-${digest("alice.smith")}`, type: "field researcher", parent_id: parent };
     events[0].event_type = "field_note";
@@ -864,11 +881,14 @@ test("Story preparation preserves validated opaque actor topology and rejects ra
     const writeEvents = () => writeFile(eventsPath, `${events.map(JSON.stringify).join("\n")}\n`, "utf8");
     await writeEvents();
     const privacy = await readJson(boundary.sourcePrivacy);
-    privacy.job.source_digest = await computeSourceDigest(events.map((event) => ({
+    privacy.job.source_digest = await computeSourceDigest([...events.map((event) => ({
       id: event.event_id, document_id: event.trajectory_id, sequence: event.sequence,
       event_type: event.event_type, actor_type: event.actor.type,
       timestamp: event.timestamp, content: event.payload.text,
-    })));
+    })), {
+      id: "meeting-canary:record-a", document_id: meeting.meeting_id, sequence: 1,
+      event_type: "record", actor_type: "human", timestamp: null, content: meeting.records[0].text,
+    }]);
     await json(boundary.sourcePrivacy, privacy);
 
     for (const [name, mutate] of [
@@ -909,15 +929,32 @@ test("Story preparation preserves validated opaque actor topology and rejects ra
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
       boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
     const authority = await readJson(join(transport, "story", "validation-authority.json"));
-    assert.notEqual(authority.evidence[0].actorEquivalence, authority.evidence[1].actorEquivalence);
-    assert.equal(authority.evidence[0].parentActorEquivalence, parent);
-    assert.equal(authority.evidence[1].parentActorEquivalence, parent);
-    assert.equal(authority.evidence[0].interactionDirection, "agent_to_subagent");
-    assert.deepEqual(authority.evidence[0].relations, [{
-      type: "reply_to", target: events[1].relation_id,
+    assert.deepEqual(authority.evidence, [...events.map((event) => ({
+      id: event.event_id, documentId: event.trajectory_id, sequence: event.sequence,
+      timestamp: event.timestamp, eventType: event.event_type, actorType: event.actor.type,
+      actorEquivalence: event.actor.id, parentActorEquivalence: parent,
+      interactionDirection: event.payload.interaction_direction,
+      relationId: event.relation_id, relations: event.relations,
+    })), {
+      id: "meeting-canary:record-a", documentId: meeting.meeting_id, sequence: 1,
+      timestamp: null, eventType: "record", actorType: "human",
+      actorEquivalence: meeting.records[0].speaker, parentActorEquivalence: null,
+      interactionDirection: null, relationId: null, relations: [],
     }]);
     const input = await readFile(join(transport, "story", "inputs", "story-0001.json"), "utf8");
     assert.doesNotMatch(input, /alice\.smith|alice-smith|RAW-/u);
+    const narrative = JSON.parse(input).payload.ownerBundles.flatMap((bundle) => bundle.reviewedNarrative);
+    assert.deepEqual(narrative, [...events.map((event) => ({
+      id: event.event_id, documentId: event.trajectory_id, sequence: event.sequence,
+      eventType: event.event_type, actorType: event.actor.type, actorEquivalence: event.actor.id,
+      parentActorEquivalence: parent, interactionDirection: event.payload.interaction_direction,
+      relationId: event.relation_id, narrative: event.payload.text,
+      ...(event === events[0] ? { relations: [{ type: "reply_to", target: events[1].relation_id }] } : {}),
+    })), {
+      id: "meeting-canary:record-a", documentId: meeting.meeting_id, sequence: 1,
+      eventType: "record", actorType: "human", actorEquivalence: meeting.records[0].speaker,
+      narrative: meeting.records[0].text,
+    }]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1036,6 +1073,40 @@ test("preserve-per-Story requires an exact mapping for an ambiguous owner", asyn
   } finally {
     await missing.cleanup();
     await mapped.cleanup();
+  }
+});
+
+test("Story recording accepts reviewed Chinese prose with customary English technical terms", async () => {
+  const prose = "审阅者用 TypeScript 检查 StoryLanguagePolicy，发现 languagePolicyDigest 与输入一致。"
+    + "随后核对 Coverage owner、Source Privacy 和 proposalDigest，确认身份绑定没有变化；"
+    + "最终保留英文技术术语，等待 Project Story 的人工审阅。";
+  const value = await prepareStoryOnly({
+    suffixes: ["a"], narratives: { a: prose }, languageChoice: "all-chinese",
+  });
+  try {
+    assert.equal(value.prepared.status, 0, value.prepared.stderr);
+    const story = storySource("a", value.semantic, value.boundary.coverageAuthority, [], { language: "zh" });
+    story.story.blocks[0].text = prose;
+    assert.equal(classifyStoryLanguageText([
+      story.title, story.overview, ...story.chips,
+      ...story.people.flatMap((person) => [person.releaseLabel, person.role, person.description]),
+      prose,
+    ]), "mixed");
+    const batch = await storyBatchFiles(value.transport, value.root, [{ id: "event-a", story }]);
+    runOk(process.execPath, [record, value.transport, "story", batch.proposalDirectory,
+      batch.editorialReviewPath, batch.phasePath, "--correction-attempt-count", "0"]);
+    const composedPath = join(value.root, "base.json");
+    runOk(process.execPath, [prepare, "compose", "story", value.transport, composedPath]);
+    const [candidate] = await readJson(composedPath);
+    const accepted = parseStorySource(candidate.summary);
+    const authority = await readJson(join(value.transport, "story", "validation-authority.json"));
+    assert.equal(accepted.language, "zh");
+    assert.equal(accepted.languagePolicyDigest, digest(authority.languagePolicy));
+    assert.equal(accepted.story.blocks[0].text, prose);
+    assert.equal(existsSync(join(value.transport, "story", "records",
+      batch.manifest.shards[0].id, "receipt.json")), true);
+  } finally {
+    await value.cleanup();
   }
 });
 
@@ -1468,12 +1539,14 @@ test("Story batch recorder permits pre-receipt correction and makes the complete
       ...block, text: "这是一段完整且经过审阅的中文故事内容。",
     }));
     await json(firstProposalPath, languageMismatch);
-    await refreshStoryEditorialReview(batch);
+    await refreshStoryEditorialReview(batch, {
+      [languageMismatch[0].ownerId]: { proseIsReadable: false },
+    });
     const mismatched = run(process.execPath, [record, transport, "story",
       batch.proposalDirectory, batch.editorialReviewPath, batch.phasePath,
       "--correction-attempt-count", "0"]);
     assert.notEqual(mismatched.status, 0);
-    assert.match(mismatched.stderr, /^STORY_LANGUAGE_INVALID\r?\n$/u);
+    assert.match(mismatched.stderr, /^STORY_EDITORIAL_REVIEW_REJECTED\r?\n$/u);
     assert.equal(existsSync(join(transport, "story", "records")), false);
 
     await json(firstProposalPath, batch.manifest.shards[0].unitIds.map((ownerId) => (

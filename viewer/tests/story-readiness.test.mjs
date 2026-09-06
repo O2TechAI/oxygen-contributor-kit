@@ -237,6 +237,24 @@ test("all eight frozen cases execute through story production parser and readine
   }
 });
 
+test("story readiness retains language metadata and cross-Chapter policy validation", () => {
+  const { candidateRows, evidenceRows } = buildStoryFixture("mundane-setup");
+  for (const metadata of [
+    { language: "mixed" }, { language: undefined },
+    { languagePolicyDigest: "invalid" }, { languagePolicyDigest: undefined },
+  ]) {
+    const source = { ...sourceFromRow(candidateRows[0]), ...metadata };
+    assert.deepEqual(validateStorySourcePackage([
+      rowWithSource(candidateRows[0], source), ...candidateRows.slice(1),
+    ], evidenceRows), { ok: false, code: "STORY_CHAPTER_INVALID" });
+  }
+  const mismatched = sourceFromRow(candidateRows[1]);
+  mismatched.languagePolicyDigest = "a".repeat(64);
+  assert.deepEqual(validateStorySourcePackage([
+    candidateRows[0], rowWithSource(candidateRows[1], mismatched), ...candidateRows.slice(2),
+  ], evidenceRows), { ok: false, code: "STORY_LANGUAGE_INVALID" });
+});
+
 test("story readiness accepts zero, one, and multiple sparse Insights", () => {
   for (const caseId of ["zero-insights", "one-insight", "multiple-sparse-insights"]) {
     const { candidateRows, evidenceRows } = buildStoryFixture(caseId);

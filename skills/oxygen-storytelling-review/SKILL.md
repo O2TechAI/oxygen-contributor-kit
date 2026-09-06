@@ -18,14 +18,19 @@ The Skill is executable documentation, not a second workflow engine. The launche
 
 ## Routed References
 
-Read the referenced file completely before doing that work.
+The workflow parent reads this Skill once on entering Story. Workers use only their explicit
+[worker reading routes](references/story-preparation-transport.md#worker-reading-routes); entering
+one lane does not require the parent or worker to read every sibling or later-stage contract.
+Read named sections completely. A section range includes all intervening sections; whole-file
+entries mean the entire file. Reuse already-read unchanged instructions within the same task.
 
-| Work | Load | Gate |
+| Work | Required reading | Gate |
 |---|---|---|
-| Build Story | [product-contract.md](references/product-contract.md), [story-data-contract.md](references/story-data-contract.md), [story-preparation-transport.md](references/story-preparation-transport.md), [privacy-evidence-boundary.md](references/privacy-evidence-boundary.md), [narrative-writing-contract.md](references/narrative-writing-contract.md) | Public prepare/record/compose commands bind the `oxygen.story:` candidate with `schema: "oxygen.story"` to reviewed semantic, worker, Privacy, and Preference authority. |
-| Human review | [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md), [ui-interaction-contract.md](references/ui-interaction-contract.md) | The Viewer is the only review surface. Apply review, All set, and release are separate human gates. |
-| Localization present | [bilingual-contract.md](references/bilingual-contract.md) | Follow the single canonical run-bound Story language policy; do not create per-language authorities. |
-| Final acceptance | [validation-checklist.md](references/validation-checklist.md) | Run the listed deterministic, build, browser, clean-room, and residual-scan gates before handoff. |
+| Build parent | [narrative-writing-contract.md](references/narrative-writing-contract.md), whole file; [story-data-contract.md](references/story-data-contract.md#source-prefix-and-schema) from Source Prefix And Schema through [Activation Submission](references/story-data-contract.md#activation-submission); [story-preparation-transport.md](references/story-preparation-transport.md), whole file; privacy [Two Privacy Boundaries](references/privacy-evidence-boundary.md#two-privacy-boundaries), [Provider Processing And Final Export Boundary](references/privacy-evidence-boundary.md#provider-processing-and-final-export-boundary), [Reviewed Boundary Is The Ceiling](references/privacy-evidence-boundary.md#reviewed-boundary-is-the-ceiling). | Current reviewed source, owner-atomic proposals, editorial acceptance, and canonical recording/activation authority. |
+| Source language selection | [bilingual-contract.md](references/bilingual-contract.md), whole file before Story preparation. | One run-bound language policy; no per-language authority. |
+| Insight, Story Privacy, Preference dispatch | Each exact lane's [worker reading route](references/story-preparation-transport.md#worker-reading-routes); the Preference parent also follows its [owning Skill](../oxygen-elicit-contributor-preferences/SKILL.md). | Frozen dependent input; parent-owned validation and recording. |
+| Human review and release | [chapter-review-lifecycle.md](references/chapter-review-lifecycle.md), [ui-interaction-contract.md](references/ui-interaction-contract.md), and [privacy-evidence-boundary.md](references/privacy-evidence-boundary.md), whole files. | Viewer-only review; separate Apply review, All set, and release decisions. |
+| Product/maintenance acceptance | [product-contract.md](references/product-contract.md) and [validation-checklist.md](references/validation-checklist.md), whole files. | Product behavior and repository-development verification; not extra contributor-runtime tests. |
 
 ## Non-negotiable boundaries
 
@@ -119,202 +124,43 @@ python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --story-completed 4 --story-total 4
 ```
 
-Use parent-owned bounded semantic workers only for drafts and checks. The tracked public transport
-requires the owning Agent to prepare deterministic inputs first:
+Follow the single [Story preparation transport](references/story-preparation-transport.md):
+prepare immutable assignments, convey each [worker reading route](references/story-preparation-transport.md#worker-reading-routes)
+with literal input/proposal paths, collect proposals, and run the parent-owned record/compose/finalize
+commands. The transport owns concurrency, correction budgets, the narrow pre-receipt Story takeover,
+and atomic output/receipt installation; do not reconstruct those protocols here.
 
-- create an immutable input digest;
-- establish one global Chapter-owner skeleton by coherent narrative arc across the complete
-  bound reviewed semantic projection, never by defaulting or mechanically copying `ownerId` from
-  `unitId` and never from a golden count;
-- derive canonical Chapter owners only from finalized Coverage `ownerId`;
-- write byte-balanced Story shards containing indivisible complete owner bundles;
-- automatically enumerate every nonempty Story, Insight, and Story Privacy shard and run those as multi-shard lanes;
-- run Preference as exactly one global bounded worker producing one deduplicated questionnaire authority, capped at 12 probes by default and 20 maximum;
-- collect and read every phase-free Story proposal in full before creating any Story receipt;
-- bind one eight-question parent editorial acceptance to the exact digest of every current proposal;
-- assign the smallest coherent Phase sequence once across the complete production-ordered and
-  editorially accepted Chapter set, then run one Story batch recorder;
-- require exactly one terminal receipt per Story shard after global validation;
-- validate exact union coverage and no overlap across shard manifests and receipts;
-- deterministically deduplicate and compose outputs;
-- keep revision authority, activation, and release decisions in the owning Agent/server lane;
-- fail closed on any missing, foreign, stale, overlapping, or scope-expanded receipt.
-
-When host subagents are available, the parent must dispatch them in waves of no more than three
-live at once; silently performing all semantic reasoning in the parent is invalid. Each assignment
-reads exactly one immutable provider-bound `inputPath` and writes only its proposal. Workers never
-write receipts, final manifests, SQLite, Viewer APIs, revisions, activation state, release state,
-or publication state. The parent exclusively runs recorders, installs authority, verifies
-exact union/no overlap, finalizes authority, performs Viewer mutations, and waits for all terminal
-receipts. No worker may silently expand scope, reopen raw history, repair another lane, or treat
-another lane's failure as success.
-
-Every `story`-lane subagent assignment must convey this ordered contract before dispatch:
-
-1. Read `skills/oxygen-storytelling-review/references/narrative-writing-contract.md` completely.
-2. Read `skills/oxygen-storytelling-review/references/story-data-contract.md` completely.
-3. Then read exactly the assignment's one generated provider-bound `inputPath`.
-4. Write only that assignment's proposal.
-
-Do not dispatch a Story worker unless its assignment names both required contract paths, its one
-actual generated `inputPath`, and its proposal-only write boundary. The worker must not read any
-other data input or write a receipt, final artifact, or authority file.
-
-Each Story input is self-contained for writing and contains complete owner bundles: all represented
-semantic units owned by that exact Coverage owner, the corresponding exact bound raw reviewed
-narrative, canonical semantic/Coverage references, and equality-only actor tokens. It contains no excluded
-narrative, raw actor identity, Source Privacy rows, source outside the exact reviewed boundary, or
-provider metadata. The narrative is the exact bound raw reviewed source and may be processed only
-by the contributor-selected current provider. One owner never spans workers; a shard may carry multiple complete owners.
-
-Story workers return phase-free Chapter proposals and do not author schema, Chapter keys, Phase,
-Coverage, exclusions, receipts, or authority. On a subagent-capable host the parent does not
-initially write Story prose, People, Evidence choices, titles, overviews, or blocks. The parent
-reads every Chapter in full and binds its eight narrative decisions to that exact proposal digest.
-A dry, fragmented, mechanical, incomplete, or record-by-record proposal is rejected before Phase
-and receipt, receives a specific proposal-only correction against the byte-identical input, and is
-then re-read in full. After all proposals pass, the parent orders complete Chapters with the
-production comparator, assigns only the smallest coherent global Phase IDs and labels, injects
-canonical Coverage and UTF-8-sorted exclusions, and invokes the complete Story batch recorder. All
-Story outputs and exactly one receipt per shard install atomically only after the editorial gate and
-unchanged shared validator accept the complete package. Insight remains a separate later pass.
-
-Each Insight worker receives only assigned frozen Story candidates, their Story blocks and Evidence
-references, the minimum exact bound reviewed narrative rows those blocks reference, and the existing
-validation-authority reference. `anchorStoryBlockId` controls card placement only; `quote.text` must
-be one exact current bound reviewed trajectory substring bound to one supporting `quote.evidence`
-identity for that anchored passage. It is never reconstructed from Story prose. Invalid proposals
-create no output or receipt; finalization and Viewer activation independently reopen current
-authority and fail closed. Completed-zero is valid.
-
-A shard assignment gets one initial proposal plus at most two parent-orchestrated proposal-only correction
-attempts. `correctionAttemptCount` is assignment-local, counts corrections only, excludes the
-initial proposal, and is always `0..2`; never sum it across a multi-shard lane. Every correction
-uses the byte-identical immutable input, and every invalid initial or correction attempt leaves both
-output and receipt absent. Only a fixed safe pre-receipt authoring-validation code is correctable.
-If the second correction fails, stop the lane safely, report correction exhaustion and the last
-safe validation code, and do not continue downstream, except that after two Story proposals are
-rejected specifically for editorial quality, the Ultra parent may complete that same
-still-unrecorded assignment from the byte-identical input using the same canonical phase-free
-proposal shape, editorial gate, recorder, and validators. This narrow takeover is not a second
-authority, fallback format, or repair of recorded output. Authority, immutability, containment,
-path, I/O, infrastructure, and corrupt-state failures stop immediately and are never correctable. Only
-the non-authoritative proposal may change; this is not a contributor pause and may never rewrite
-durable output. If host subagents are genuinely unavailable, the parent runs the same assignments
-serially, reports
-`executionMode=serial_capability_limited`, and continues through the identical recorder/finalizer
-authority without asking the contributor to create workers. Internal host subagents are not product
-provider/API calls, require no separate API key, and receive no source beyond the exact bound
-reviewed input. `PAUSE_FOR_BOUNDED_SEMANTIC_WORKERS` is an internal boundary only.
-
-For Story, the initial complete proposal set is non-authoritative and the two allowed corrections
-are lane-wide waves. Replacing a rejected proposal or replacing only the non-authoritative Phase
-assignment consumes the same Story correction wave. Failed waves leave every Story output and
-receipt absent; there is no separate Phase retry budget.
-
-Later E2E evidence records `executionMode`, `lane`, `shardCount`, `spawnedSubagentCount`,
-`maxConcurrentSubagents`, `correctionAttemptCount`, and `terminalReceiptCount` for every reached
-lane. Contributor pauses remain only at explicit human review and decision boundaries.
-
-Execute the exact public commands and proposal shapes in
-[story-preparation-transport.md](references/story-preparation-transport.md). Preparation installs
-immutable bounded input before proposals exist. Story recording validates every shard proposal,
-the exact owner/unit union, one complete parent Phase assignment, canonical exclusions, and the
-complete source package before atomically installing the full terminal records directory. Other
-lanes keep their per-shard output/receipt boundary.
-Composition reconstructs `story-candidates.json` from recorded Story and Insight results. The
-finalizer reopens and validates every artifact before emitting activation authority.
-
-Generate these local artifacts from `work/<run>-review`:
-
-```text
-project-map.json
-story-coverage-draft.json
-story-coverage-manifest.json
-story-candidates.json
-preference-probes.json
-```
-
-`story-candidates.json` is a bounded JSON array of rows shaped only as:
-
-```json
-[
-  { "id": "existing-imported-item-id", "summary": "oxygen.story:{...}" }
-]
-```
-
-The ID must already exist in the reviewed input. The summary payload must satisfy [story-data-contract.md](references/story-data-contract.md). The launcher and server derive source identity; they are not provider clients and do not write Story prose.
+Before Coverage finalization, the parent selects global Chapter owners by coherent narrative arc,
+not semantic-unit/source/meeting counts. Each complete owner bundle stays together. Read every
+phase-free proposal in full and apply [Parent Editorial Acceptance](references/narrative-writing-contract.md#parent-editorial-acceptance)
+before assigning the smallest coherent global Phase sequence and recording the complete Story batch.
+A worker writes only its assigned proposal. Recorders, finalizers, exact union/no overlap, Viewer
+mutations, and terminal completion belong to the parent. Story, Insight, and Story Privacy are
+multi-shard lanes; Preference is exactly one global bounded worker. Human pauses remain only at
+explicit review and decision boundaries.
 
 ## Coverage Finalizer
 
-Write the unit-level coverage draft with `rows` only. Each row must have exactly one of these shapes:
-
-```json
-{ "unitId": "unit-a", "disposition": "represented", "ownerId": "chapter-a" }
-{ "unitId": "unit-b", "disposition": "excluded", "exclusionReason": "routine_non_narrative" }
-```
-
-Then run the provider-free finalizer:
+First export current Source Privacy authority from the same Viewer/run:
 
 ```powershell
 python .\skills\oxygen-organize-review-export\scripts\run_local_review.py `
   --attach-url "$Viewer" --workflow-run-id "$WorkflowRun" `
   --source-privacy-export "$Review\current-public-source-privacy.json"
-
-node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
-  "$Review\project-map.json" `
-  "$Review\story-coverage-draft.json" `
-  "$Review\story-coverage-manifest.json" `
-  --source-privacy "$Review\current-public-source-privacy.json"
 ```
 
-`current-public-source-privacy.json` must be the unchanged, current JSON response/projection from
-the same Viewer's public Source Privacy surface. The finalizer requires it even when the completed
-Privacy pass contains zero rows. It accepts only a current complete job with `rejected=0` and
-`completed=total`, exact canonical row order, and exact membership in the current semantic
-manifest. Only active `deterministic` and `confirmed_redact` rows authorize a semantic unit for
-`privacy_withheld`; `needs_confirmation` and `confirmed_keep` do not. A unit is authorized only
-when it owns at least one such current final-redacted member.
-
-The source Privacy file is validation input only. The coverage output remains exactly the
-unversioned coverage manifest and contains no Source Privacy rows, authority list, offsets,
-categories, reasons, source text, or other private metadata. Missing, stale, foreign, reordered,
-duplicated, or tampered Privacy/membership input fails closed. Completed-zero authorizes an empty
-set: coverage without `privacy_withheld` may finalize, while any `privacy_withheld` row fails.
-
-For regeneration, pass `--previous` only with the exact coverage manifest that was submitted in the last successful activation. Copy or rename the submitted file as accepted only after `--story-event ready` succeeds. A rejected activation output never becomes prior authority.
-
-```powershell
-$AcceptedCoverage = "$Review\story-coverage-manifest.accepted.json"
-node .\skills\oxygen-storytelling-review\scripts\finalize_story_coverage.mjs `
-  "$Review\project-map.json" `
-  "$Review\story-coverage-draft.json" `
-  "$Review\story-coverage-manifest.json" `
-  --source-privacy "$Review\current-public-source-privacy.json" `
-  --previous "$AcceptedCoverage"
-```
-
-Never invent coverage revisions or digests in model output.
+Then follow [Coverage Authority](references/story-data-contract.md#coverage-authority), the sole
+owner of draft shapes, exclusions, finalizer commands, current Source Privacy validation, and
+regeneration's `--previous` rule. Never invent revisions/digests or reuse a rejected activation
+output as prior accepted authority.
 
 ## Composed Activation Transport
 
-The exact executable sequence is: finalize current Coverage -> prepare/record Story -> compose base Story -> prepare/record
-Insight -> compose final Story -> prepare/record Story Privacy and Preference -> preparation
-finalizer -> launcher ready with four files. The recorder, not the finalizer or caller, creates each
-terminal worker receipt. The existing Preference producer remains the sole nine-field bundle
-authority, and the Preference recorder binds that exact bundle unchanged.
-
-Story preparation takes the exact canonical reviewed run, current public Source Privacy projection,
-current semantic authority, and finalized current Coverage authority together. Its immutable input
-binds one minimal validation-authority bundle and the exact bound raw reviewed narrative; it excludes
-raw actor identity, Source Privacy rows, redaction details, and provider metadata. Only that explicitly
-provider-bound input carries source narrative; validation authority does not. Story
-workers do not need to open the parent-only validation authority or any other generated file. Both the
-Story recorder and preparation finalizer directly reuse the unchanged Viewer
-`validateStorySourcePackage`, so complete People, Evidence, Phase, Coverage, and Insight-grounding
-validation occurs before any Story worker receipt or terminal preparation authority can exist.
-
-Later E2E evidence, not static tests, proves actual host-subagent spawning.
+The [public transport sequence](references/story-preparation-transport.md#public-powershell-sequence)
+prepares and records Story, composes base Story, prepares/records Insight, composes final Story,
+prepares/records Story Privacy and Preference, then finalizes activation authority. The recorder
+creates receipts; the Preference producer owns its exact bundle. Workers never open parent-only
+validation authority. The recorder and finalizer reuse `validateStorySourcePackage`.
 
 Run the copyable commands in
 [story-preparation-transport.md](references/story-preparation-transport.md), then request activation

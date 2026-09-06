@@ -176,7 +176,7 @@ test("Source Privacy docs attach the reviewed generation before the receipt wind
   assert.ok(coverage >= 0);
   assertOrdered(storySkill.slice(coverage), [
     "--source-privacy-export",
-    "finalize_story_coverage.mjs",
+    "story-data-contract.md#coverage-authority",
   ]);
 
   for (const document of [readme, sop, ingestSkill, organizerSkill, storySkill]) {
@@ -195,7 +195,8 @@ test("Organization workers map against one parent-owned run-bound registry", asy
     read("skills/oxygen-organize-review-export/SKILL.md"),
     read("skills/oxygen-organize-review-export/references/project-map-contract.md"),
   ]);
-  for (const document of [agents, organizerSkill, projectMapContract]) {
+  assert.match(agents, /project-map-contract\.md#mapping-proposal/);
+  for (const document of [organizerSkill, projectMapContract]) {
     assert.match(document, /project-local (?:semantic )?registry/iu);
     assert.match(document, /complete\s+current Privacy-safe projected (?:contribution )?universe/iu);
     assert.match(document, /byte-identical[\s\S]{0,100}registry[\s\S]{0,80}digest/iu);
@@ -206,6 +207,7 @@ test("Organization workers map against one parent-owned run-bound registry", asy
     assert.match(document, /Unknown (?:registry )?IDs[\s\S]{0,500}(?:correctable\s+(?:mapping\s+)?feedback|before any (?:output or )?receipt)/iu);
     assert.match(document, /definition[\s\S]{0,80}disambiguation/iu);
   }
+  assert.match(projectMapContract, /worker may explicitly replace only its manifest-declared proposal; the workflow-owning parent\s+alone runs the recorder again/);
 });
 
 test("reviewed Story has no numeric quota and Preferences stays inside the reviewed boundary", async () => {
@@ -279,20 +281,21 @@ test("public docs align Preference timing and the final-export Privacy boundary"
 });
 
 test("routed Story contracts distinguish exact-bound provider input from final release bytes", async () => {
-  const [agents, sop, product, checklist, bilingual, privacy] = await Promise.all([
+  const [agents, sop, product, checklist, bilingual, privacy, transport] = await Promise.all([
     read("AGENTS.md"),
     read("SOP.md"),
     read("skills/oxygen-storytelling-review/references/product-contract.md"),
     read("skills/oxygen-storytelling-review/references/validation-checklist.md"),
     read("skills/oxygen-storytelling-review/references/bilingual-contract.md"),
     read("skills/oxygen-storytelling-review/references/privacy-evidence-boundary.md"),
+    read("skills/oxygen-storytelling-review/references/story-preparation-transport.md"),
   ]);
 
-  for (const document of [agents, sop, product, checklist]) {
+  for (const document of [transport, checklist]) {
     assert.match(document, /exact bound raw reviewed narrative/iu);
     assert.match(document, /contributor-selected current(?: coding Agent\/model)? provider/iu);
-    assert.match(document, /(?:contains|has) no source narrative/iu);
-    assert.match(document, /raw actor identity/iu);
+    assert.match(document, /(?:contains|has) no source narrative|contains no source text[\s\S]{0,120}source narrative/iu);
+    assert.match(document, /raw\s+actor identity/iu);
     assert.match(document, /source outside the exact reviewed\s+boundary/iu);
   }
   for (const document of [agents, sop]) {
@@ -306,51 +309,79 @@ test("routed Story contracts distinguish exact-bound provider input from final r
     /generated Story is non-release working state[\s\S]{0,160}every current release target[\s\S]{0,160}exact reviewed release bytes/iu);
 });
 
-test("fresh parent Story-worker assignments convey both writing contracts before bounded input", async () => {
-  const assignmentMarker = "Every `story`-lane subagent assignment must convey this ordered contract before dispatch:";
-  const narrativePath = "skills/oxygen-storytelling-review/references/narrative-writing-contract.md";
-  const dataPath = "skills/oxygen-storytelling-review/references/story-data-contract.md";
-  const documents = await Promise.all([
-    read("AGENTS.md"),
-    read("SOP.md"),
-    read("skills/oxygen-storytelling-review/SKILL.md"),
-    read("skills/oxygen-storytelling-review/references/story-preparation-transport.md"),
-  ]);
-
+test("fresh workers have one dispatch owner and complete role-specific reading routes", async () => {
+  const base = "skills/oxygen-storytelling-review/";
+  const paths = ["AGENTS.md", "SOP.md", `${base}SKILL.md`, `${base}references/product-contract.md`];
+  const documents = await Promise.all(paths.map(read));
   for (const document of documents) {
-    const start = document.indexOf(assignmentMarker);
-    assert.ok(start >= 0, "parent-facing Story dispatch instructions must carry the assignment gate");
-    const assignment = document.slice(start, start + 1_600);
-    assertOrdered(assignment, [
-      assignmentMarker,
-      `\`${narrativePath}\` completely`,
-      `\`${dataPath}\` completely`,
-      "Then read exactly",
-      "`inputPath`",
-      "Write only",
-      "proposal",
-    ]);
-    assert.match(assignment, /(?:Do not|must not) dispatch a Story worker (?:unless|until)/);
-    assert.match(assignment, /actual generated[\s\S]{0,80}`inputPath`/);
-    assert.match(assignment, /proposal-only write boundary/);
+    assert.match(document, /story-preparation-transport\.md#worker-reading-routes/);
+    assert.doesNotMatch(document, /Every `story`-lane subagent assignment must convey this ordered contract/);
+    assert.doesNotMatch(document, /Read `[^`]*story-data-contract\.md` completely/);
   }
+  const transportPath = `${base}references/story-preparation-transport.md`;
+  const transport = await read(transportPath);
+  const routes = transport.slice(transport.indexOf("## Worker reading routes"), transport.indexOf("## Authority and storage"));
+  assert.match(routes, /literal generated `inputPath`[\s\S]{0,100}assigned proposal path/);
+  assert.match(routes, /listed instructions first, then exactly that one input/);
+  assert.match(routes, /Never open parent validation authority/);
+  assert.match(routes, /Write only\s+the assigned non-authoritative proposal/);
+  assert.match(routes, /Do not create authority[\s\S]{0,160}publication decisions/);
+  const story = routes.split("\n").find((line) => line.startsWith("| Story |"));
+  assertOrdered(story, ["narrative-writing-contract.md", "whole file", "#source-type", "#evidence-rules", "#chapter-phase-and-ordering", "#people-and-story-blocks", "#story-proposals"]);
+  assert.doesNotMatch(story, /#coverage-authority|#story-review-session|#reviewed-release/);
+  for (const lane of ["Insight", "Story Privacy", "Preference"]) {
+    assert.ok(routes.split("\n").some((line) => line.startsWith(`| ${lane} |`)), `${lane} needs an explicit route`);
+  }
+  assert.match(routes, /preference-probe-contract\.md#candidate-and-final-bundle/);
+  assert.doesNotMatch(routes, /preference-worker-prompt\.md/);
+  assert.match(routes, /null `parentActorEquivalence`, `interactionDirection`, and `relationId`/);
+  assert.match(routes, /empty `relations` arrays may be omitted/);
+  assert.match(routes, /not proof that no interaction occurred/);
+  assert.match(routes, /All nonempty interaction\/relationship values remain/);
+  assert.match(routes, /parent-only Evidence rows remain\s+complete/);
+  assert.match(routes, /never reuse old\s+receipts/);
 
-  await Promise.all([access(repositoryFile(narrativePath)), access(repositoryFile(dataPath))]);
+  // Route targets must exist, including each selected heading; this checks the maintained links,
+  // not a second copy of the protocol in every entrypoint.
+  for (const [path, document] of [...paths.map((path, index) => [path, documents[index]]), [transportPath, transport]]) {
+    for (const [, target] of document.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
+      if (/^[a-z]+:/i.test(target)) continue;
+      const [file, anchor] = target.split("#");
+      const url = file ? new URL(file, repositoryFile(path)) : repositoryFile(path);
+      const linked = await readFile(url, "utf8");
+      if (anchor) {
+        const slugs = [...linked.matchAll(/^#{1,6} (.+)$/gm)].map(([, heading]) =>
+          heading.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/ /g, "-"));
+        assert.ok(slugs.includes(anchor), `${path}: missing ${target}`);
+      }
+    }
+  }
 });
 
-test("Narrative contract asks for evidence-backed engagement without fabrication", async () => {
-  const [narrativeContract, storyDataContract] = await Promise.all([
+test("Narrative contract preserves full factual narrative and scopes oral cleanup to Story", async () => {
+  const [narrative, data] = await Promise.all([
     read("skills/oxygen-storytelling-review/references/narrative-writing-contract.md"),
     read("skills/oxygen-storytelling-review/references/story-data-contract.md"),
   ]);
-
-  assert.match(narrativeContract, /Write for a technically curious reader\./);
-  assert.match(narrativeContract, /quickly establishing the real purpose, constraint, or starting state/);
-  assert.match(narrativeContract, /using concrete actors and actions/);
-  assert.match(narrativeContract, /Let interest come from what actually changed, became understood, or was established\./);
-  assert.match(narrativeContract, /Do not invent stakes, drama, emotion, dialogue, motive, conflict, causality, or closure\./);
-  assert.match(narrativeContract, /ordinary[\s\S]{0,80}clear and specific rather than theatrical/);
-  assert.doesNotMatch(storyDataContract, /engagement/i);
+  assert.match(narrative, /reader with no project or specialist background/);
+  assert.match(narrative, /Length follows explanatory meaning/);
+  assert.match(narrative, /Never invent gestures[\s\S]{0,220}cleaner ending/);
+  assert.match(narrative, /Novel-like progression[\s\S]{0,120}not fictional embellishment/);
+  assert.match(narrative, /Story dialogue may lightly remove meaningless oral repetition or filler/);
+  assert.match(narrative, /without changing the\s+speaker, facts, stance, uncertainty, event order, or meaning/);
+  assert.match(narrative, /original supporting Evidence[\s\S]{0,120}existing local evidence\/review records/);
+  assert.match(narrative, /do not add mapping fields to the\s+strict proposal/);
+  assert.match(narrative, /Do not call edited dialogue verbatim source text/);
+  assert.match(narrative, /only to Story prose: original source and Insight Quote remain unchanged/);
+  assert.match(narrative, /whole Project Story Timeline first needs it/);
+  assert.match(narrative, /worker sees only its assigned input/);
+  assert.match(narrative, /Do not pass other\s+Chapters or a separate context file/);
+  assert.match(narrative, /customary English technical terms in Chinese prose/);
+  assert.doesNotMatch(narrative, /Do not use[^\n]*literary framing|state `Cause not determined\.`/);
+  for (const contract of [narrative, data]) {
+    assert.match(contract, /Quote is exact canonical bound reviewed trajectory text|`quote`: exact canonical bound reviewed trajectory text/);
+    assert.match(contract, /one exact\s+nonempty substring/);
+  }
 });
 
 test("Story preparation bounds proposal correction and keeps Preference global", async () => {
@@ -373,7 +404,7 @@ test("Story preparation bounds proposal correction and keeps Preference global",
   ]);
 
   for (const document of [
-    agents, sop, storySkill, storyTransport, productContract, preferenceSkill, organizerSkill,
+    storyTransport, preferenceSkill, organizerSkill,
   ]) {
     assert.match(document, /one\s+initial\s+proposal\s+plus\s+at\s+most\s+two\s+parent-orchestrated\s+proposal-only\s+correction\s+attempts/i);
     assert.match(document, /`correctionAttemptCount`[\s\S]{0,120}counts corrections only[\s\S]{0,120}`0\.\.2`/i);
@@ -383,10 +414,10 @@ test("Story preparation bounds proposal correction and keeps Preference global",
     assert.match(document, /Authority,\s+immutability,\s+containment,\s+path,\s+I\/O,\s+infrastructure,\s+and\s+corrupt-state\s+failures\s+stop\s+immediately[\s\S]{0,80}never\s+correctable/i);
   }
 
-  for (const document of [agents, sop, storySkill, storyTransport, productContract]) {
+  for (const document of [storyTransport]) {
     assert.match(document, /Story, Insight, and Story Privacy[\s\S]{0,140}multi-shard/i);
   }
-  for (const document of [agents, sop, storySkill, storyTransport, productContract, preferenceSkill]) {
+  for (const document of [storyTransport, preferenceSkill]) {
     assert.match(document, /Preference[\s\S]{0,120}exactly one global bounded worker/i);
     assert.match(document, /one\s+deduplicated\s+questionnaire\s+authority/i);
     assert.match(document, /12\s+probes\s+by\s+default[\s\S]{0,50}20\s+maximum/i);
@@ -394,7 +425,7 @@ test("Story preparation bounds proposal correction and keeps Preference global",
 
   const allContracts = [agents, sop, storySkill, storyTransport, productContract, preferenceSkill].join("\n");
   assert.doesNotMatch(allContracts, /every Preference manifest shard/i);
-  for (const document of [agents, sop, storySkill, storyTransport, organizerSkill]) {
+  for (const document of [storyTransport, organizerSkill]) {
     assert.match(document, /(?:at\s+most|no\s+more\s+than)\s+three\s+live/i);
   }
 });
@@ -463,22 +494,16 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
   ].join("\n");
 
   assert.match(productContract, /public deterministic (?:owner-atomic )?Story input preparation/i);
-  assert.match(productContract, /immutable input digests/i);
-  assert.match(productContract, /bounded[\s\S]{0,40}worker input/i);
-  assert.match(productContract, /dependent passes for Story writing and Insight reasoning[\s\S]{0,100}sibling Story Privacy and Preference-question passes/i);
-  assert.match(productContract, /recorder validates[\s\S]{0,160}input digest/);
-  assert.match(productContract, /one Story batch recorder directly calls the unchanged Viewer\s+`validateStorySourcePackage` on the complete package/i);
-  assert.match(productContract, /installs every output[\s\S]{0,100}one atomic records-directory rename/i);
+  assert.match(productContract, /story-preparation-transport\.md#dispatch-and-recording/);
   assert.match(productContract, /composed launcher requires coverage, Story candidates, a deterministic Preference bundle/i);
-  assert.match(productContract, /Exact union,[\s\S]{0,80}no foreign identities[\s\S]{0,100}executable checks/);
-  assert.match(productContract, /No worker may silently expand scope[\s\S]{0,80}repair another lane/i);
-  assert.doesNotMatch(productContract, /The owning Agent validates exact union coverage/);
+  assert.match(productContract, /No worker may expand scope[\s\S]{0,80}repair\s+another lane/i);
 
   assert.match(storyDataContract, /type CoverageDraftRow/);
   assert.match(storyDataContract, /disposition: "represented"; ownerId/);
   assert.match(storyDataContract, /disposition: "excluded"; exclusionReason/);
   assert.match(storyDataContract, /exact submitted `story-coverage-manifest\.json` becomes the prior accepted coverage authority/);
-  for (const contract of [storySkill, storyDataContract]) {
+  assert.match(storySkill, /story-data-contract\.md#coverage-authority/);
+  for (const contract of [storyDataContract]) {
     assert.match(contract, /--source-privacy/);
     assert.match(contract, /completed-zero/i);
     assert.match(contract, /`deterministic`[\s\S]{0,80}`confirmed_redact`/);
@@ -548,20 +573,23 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
 
   assert.match(publicContracts, /finalized Coverage `ownerId`[^\n]{0,100}(?:sole|only)[^\n]{0,80}(?:owner|ownership)/i);
   assert.match(publicContracts, /complete owner[- ]atomic Story bundles/i);
-  assert.match(publicContracts, /one owner never spans (?:workers|shards)/i);
+  assert.match(publicContracts, /one owner never spans (?:Story )?(?:workers|shards)/i);
   assert.match(publicContracts, /shard may contain multiple owners/i);
   assert.match(publicContracts, /phase-free Story proposal/i);
-  assert.match(publicContracts, /parent does not initially write Story prose/i);
-  assert.match(publicContracts, /never (?:defaults|defaulting)[\s\S]{0,80}`ownerId`[\s\S]{0,80}`unitId`/i);
+  assert.match(storyTransport, /parent does not initially author Story prose, People, primary or\s+supporting Evidence choices, titles, overviews, or blocks/i);
+  assert.match(storyTransport, /does not default or mechanically copy `ownerId` from `unitId`/i);
   assert.match(publicContracts, /related (?:semantic )?units may share one owner/i);
   assert.match(publicContracts, /multiple Chapters may (?:later )?share one Phase/i);
   assert.match(publicContracts, /proposal[- ]digest[- ]bound editorial (?:review|acceptance)/i);
-  assert.match(publicContracts, /After the initial\s+proposal plus two rejected subagent corrections,[\s\S]{0,200}Ultra parent may complete/i);
-  assert.match(publicContracts, /(?:complete|every phase-free)[^\n]{0,80}(?:Story )?proposal[^\n]{0,80}(?:before|collected before)[^\n]{0,80}(?:receipt|authority)/i);
-  assert.match(publicContracts, /one Story batch recorder/i);
-  assert.match(publicContracts, /exactly one receipt per (?:expected )?shard/i);
-  assert.match(publicContracts, /Insight remains a separate later pass/i);
-  assert.match(publicContracts, /Static tests prove contracts and authority behavior, not\s+actual host-subagent spawning; that requires later E2E evidence/i);
+  assert.match(storyTransport, /initial proposal and two subagent corrections remain editorially unacceptable, the Ultra parent may\s+complete that same still-unrecorded assignment from the byte-identical input[\s\S]{0,100}editorial gate, recorder, and validators/i);
+  assert.match(storyTransport, /proposal file for every current Story shard, reads every Chapter in full/);
+  assert.match(storyTransport, /missing, stale, foreign, incomplete, or negative review before it reads Phase and before any output\s+or receipt exists/);
+  assert.match(storyTransport, /calls the shared exported `validateStorySourcePackage` on the complete candidate package/);
+  assert.match(storyTransport, /Before success there are zero Story outputs and zero\s+Story receipts/);
+  assert.match(storyTransport, /invokes the Story recorder once/i);
+  assert.match(storyTransport, /after success there is exactly one receipt per expected Story shard/i);
+  assertOrdered(storyTransport, ["Prepare, record, and compose the base Story", "Prepare, record, and compose the dependent Insight pass"]);
+  assert.match(storyTransport, /Static tests\s+validate this contract and the batch authority; later E2E evidence is required to prove actual\s+host-subagent spawning/i);
 
   for (const document of [sop, storyTransport]) {
     assert.match(document, /"\$Transport" story "\$StoryProposals" "\$StoryEditorialReview" "\$StoryPhases"[\s\S]{0,80}--correction-attempt-count 0/);
