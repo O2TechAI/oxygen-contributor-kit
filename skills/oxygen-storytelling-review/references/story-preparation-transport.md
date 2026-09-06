@@ -214,13 +214,19 @@ Each Story Privacy worker reads its manifest `inputPath` and returns exactly one
 ```
 
 `candidates` contains zero or more rows with exactly `id`, `reviewState`, `title`, `whyFlagged`,
-`uncertaintyReason`, and `releaseTargets`. `targetProposals` contains exactly one proposal for every
+`uncertaintyReason`, and `releaseTargets`. `releaseTargets` is a nonempty, duplicate-free array
+of assigned target ID strings. `targetProposals` contains exactly one proposal for every
 target assigned by the generated shard input, including unchanged proposals with empty
 `occurrences`; it contains no omitted, duplicated, or foreign target. Each proposal requires
 `targetId`, `targetContentDigest`, `proposedText`, and `occurrences`; the optional source and edited-text
 proof fields below are the only additional fields. The digest binds the exact
-current target content. Occurrence offsets are Unicode code-point offsets and must describe an
-exact, complete transformation from current content to `proposedText`.
+current target content. Each `occurrences` entry contains exactly `originalStartOffset`,
+`originalEndOffset`, `proposalStartOffset`, `proposalEndOffset`, and `category`. Both offset pairs
+are zero-based, half-open `[start, end)` Unicode code-point ranges in the original and proposed
+text respectively, with nonnegative safe-integer starts and strictly greater safe-integer ends.
+`category` must match `^[a-z0-9][a-z0-9-]{0,63}$`: 1–64 lowercase ASCII letters, digits, or hyphens,
+starting with a letter or digit. The ranges must describe an exact, complete transformation from
+current content to `proposedText`.
 
 The generated `releaseTargetCatalog` is the assignment boundary, while the shard's generated
 `storyCandidates` supply the bound target content. The recorder derives that content from the
