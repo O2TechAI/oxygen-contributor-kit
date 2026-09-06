@@ -307,6 +307,7 @@ test("routed Story contracts distinguish exact-bound provider input from final r
   }
   assert.match(product, /local\s+Quote may contain exact bound raw source text/iu);
   assert.match(bilingual, /one shared review\/release authority/iu);
+  assert.match(bilingual, /\[Voice contract\]\(narrative-writing-contract\.md#voice\)/);
   assert.match(bilingual, /Privacy targets[\s\S]{0,100}release gate survive[\s\S]{0,40}either language/iu);
   assert.match(privacy,
     /generated Story is non-release working state[\s\S]{0,160}every current release target[\s\S]{0,160}exact reviewed release bytes/iu);
@@ -584,6 +585,12 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
   assert.match(publicContracts, /related (?:semantic )?units may share one owner/i);
   assert.match(publicContracts, /multiple Chapters may (?:later )?share one Phase/i);
   assert.match(publicContracts, /proposal[- ]digest[- ]bound editorial (?:review|acceptance)/i);
+  // These checks protect the instruction route, not the semantic quality of generated prose.
+  const editorial = narrativeContract.split("## Parent Editorial Acceptance")[1].split("## ")[0];
+  assert.match(editorial, /7\.[\s\S]*referents and technical scope[\s\S]*\[Voice\]\(#voice\)/);
+  assert.match(editorial, /8\.[^\n]*consistent terminology under \[Voice\]\(#voice\)/);
+  assert.match(narrativeContract, /## Voice[\s\S]*explicit\s+contributor terminology preferences/);
+
   assert.match(storyTransport, /initial proposal and two subagent corrections remain editorially unacceptable, the Ultra parent may\s+complete that same still-unrecorded assignment from the byte-identical input[\s\S]{0,100}editorial gate, recorder, and validators/i);
   assert.match(storyTransport, /proposal file for every current Story shard, reads every Chapter in full/);
   assert.match(storyTransport, /missing, stale, foreign, incomplete, or negative review before it reads Phase and before any output\s+or receipt exists/);
