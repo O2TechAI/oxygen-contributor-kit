@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { matchingStoryPrivacySources } from "../../../viewer/lib/story-privacy-projection.ts";
+import { matchingStoryPrivacySources, parseStoryPrivacyRereviewRequest, validStoryPrivacyRereviewTargets, storyPrivacyShardBinding } from "../../../viewer/lib/story-privacy-projection.ts";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { storyPreparationDigest } from "../../../viewer/lib/story-preparation.ts";
@@ -60,10 +60,13 @@ const bindingKeys = [
   "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest",
   "changedTargetCount", "previousAuthorityDigest",
   "sourcePrivacyDigest", "sourceRedactionsDigest",
+  ...(Object.hasOwn(snapshot?.binding || {}, "rereviewRequest") ? ["rereviewRequest"] : []),
 ];
 if (!exact(snapshot, ["schema", "binding", "targetTransitions", "changedTargets", "sourceRedactions"])
   || snapshot.schema !== "oxygen.reviewed-story-privacy-snapshot"
-  || !exact(snapshot.binding, bindingKeys) || !Array.isArray(snapshot.targetTransitions)
+  || !exact(snapshot.binding, bindingKeys)
+  || (Object.hasOwn(snapshot.binding, "rereviewRequest") && !parseStoryPrivacyRereviewRequest(snapshot.binding.rereviewRequest))
+  || !Array.isArray(snapshot.targetTransitions)
   || !Array.isArray(snapshot.changedTargets)
   || !Array.isArray(snapshot.sourceRedactions)
   || await storyPreparationDigest(snapshot.sourceRedactions) !== snapshot.binding.sourceRedactionsDigest
@@ -111,6 +114,10 @@ if (new Set(targets.map((target) => target.id)).size !== targets.length
   || targets.length !== currentTransition.size
   || targets.some((target) => !currentTransition.has(target.id))) fail("TARGET_SET_INVALID");
 
+if (snapshot.binding.rereviewRequest
+  && (!validStoryPrivacyRereviewTargets(snapshot.binding.rereviewRequest, targets)
+    || transitions.some((target) => target.previousContentDigest !== target.contentDigest))) fail("REREVIEW_REQUEST_INVALID");
+
 if (isAbsolute(basename(outputInput)) || win32.isAbsolute(basename(outputInput))) fail("OUTPUT_INVALID");
 const requestedParent = dirname(resolve(outputInput));
 const parentEntry = await directPathEntry(requestedParent).catch(() => fail("OUTPUT_PARENT_INVALID"));
@@ -130,7 +137,7 @@ try {
     const core = {
       schema: "oxygen.reviewed-story-privacy-shard-input",
       shardId: id,
-      binding: snapshot.binding,
+      binding: storyPrivacyShardBinding(snapshot.binding, shardTargetsValue.map((target) => target.id)),
       targets: shardTargetsValue,
       sourceRedactions: matchingStoryPrivacySources(shardTargetsValue, snapshot.sourceRedactions),
     };

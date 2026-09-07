@@ -1,93 +1,99 @@
 # Oxygen Ingest Tools
 
-三个本地数据接入工具。目标:把「repo 相关的 agent 会话」「claude.ai 导出的聊天记录」「会议记录/录音」整理到用户明确指定的 Oxygen run 目录(canonical trajectory / meeting records)。所有产出保持 `review_status=pending` / `publication_approved=false`，不会复制到共享目录。
+Three local entry points convert repository-related agent sessions, Claude exports, and meeting transcripts or recordings into canonical Oxygen trajectories or meeting records. Each writes to an explicit run directory. Output remains `review_status=pending` and `publication_approved=false`; it is not copied to a shared directory.
 
-Agent 对接说明见 [oxygen-ingest-project-history](../../skills/oxygen-ingest-project-history/SKILL.md)；给最终用户的导出/导入指南见 [EXPORT-GUIDE.md](EXPORT-GUIDE.md)。
+For Agent integration, read the [ingest Skill](../../skills/oxygen-ingest-project-history/SKILL.md). For contributor export and import steps, read [EXPORT-GUIDE.md](EXPORT-GUIDE.md).
 
-## 目录
+## Files
 
 ```text
-tools/
-├── collect_repo_trajectories.py   # ① repo → 相关 Claude/Codex 会话 + memory → canonical trajectory
-├── import_anthropic_export.py     # ② claude.ai 导出(zip/conversations.json)→ trajectory + memory
-├── import_meeting.py              # ③ 会议 txt/md/m4a → meeting.json + raw.md + timestamped.txt
-├── transcribe_diarize.py          #    本机 CPU 语音转写(faster-whisper)+ 可选说话人分离(pyannote)
-├── oxygen_common.py               # 公共:进度协议 / 凭据文件黑名单 / hash
-├── vendor/                        # canonical Oxygen trajectory 提取器
-├── .venv-audio/                   # ASR 依赖(faster-whisper)
-└── out/                           # 所有产出(未脱敏,内部)
+tools/ingest/
+├── collect_repo_trajectories.py   # Repository-related Claude/Codex sessions and memory
+├── import_anthropic_export.py    # Claude export ZIP, JSON, or directory
+├── import_meeting.py             # Meeting text or audio to canonical meeting records
+├── transcribe_diarize.py         # Local CPU transcription and optional diarization
+├── oxygen_common.py              # Progress, sensitive filename filtering, and hashing
+├── vendor/                      # Canonical Oxygen trajectory extractors
+└── .venv-audio/                  # Optional local audio dependency environment
 ```
 
-## 用法
+## Usage
+
+Run these commands from the repository root:
 
 ```bash
-# 唯一 UI 是 canonical Viewer；它只绑定本机 loopback
+# The canonical Viewer is the workflow UI and binds only to loopback.
 python3 skills/oxygen-organize-review-export/scripts/run_local_review.py --target /path/to/repo
 
-# ① 指定 repo,收集相关 trajectory(含 memory)
+# Collect sessions and memory associated with the approved repository.
 python3 tools/ingest/collect_repo_trajectories.py /path/to/repo --out work/repo-run
 
-# ② 导入本机已有的 claude.ai 数据导出
+# Import an existing local Claude export into a new or empty directory.
 python3 tools/ingest/import_anthropic_export.py ~/Downloads/export.zip --out work/claude-run
 
-# ③ 会议:文本直接进;录音先本机转写再进
-python3 tools/ingest/import_meeting.py meeting.txt --out work/meeting-run --title "0730 组会" --date 2026-07-30
-python3 tools/ingest/import_meeting.py meeting.m4a --out work/meeting-run --language zh --date 2026-08-30
+# Import text directly; transcribe audio locally before importing it.
+python3 tools/ingest/import_meeting.py meeting.txt --out work/meeting-text-run --title "Project meeting" --date 2026-07-30
+python3 tools/ingest/import_meeting.py meeting.m4a --out work/meeting-audio-run --language en --date 2026-08-30
 ```
 
-Windows PowerShell 使用同一套 UTF-8 工具链，无需 `python -X utf8`、`chcp` 或 WSL：
+Supply the resolved meeting date in `YYYY-MM-DD` form; the importer requires `--date`. Use the actual recording language for `--language`, or omit it for automatic detection.
+
+Windows PowerShell uses the same UTF-8 toolchain without requiring `python -X utf8`, `chcp`, or WSL:
 
 ```powershell
 python .\tools\ingest\collect_repo_trajectories.py `
-  "D:\Coding Projects\my-project" --out "out\repo-run"
+  "D:\Coding Projects\my-project" --out "work\repo-run"
 python .\tools\ingest\import_anthropic_export.py `
-  "D:\Downloads\export.zip" --out "out\claude-run"
+  "D:\Downloads\export.zip" --out "work\claude-run"
 python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.txt" `
-  --out "out\meeting-run" --title "项目会议" --date "2026-08-30"
+  --out "work\meeting-run" --title "Project meeting" --date "2026-08-30"
 ```
 
-Codex 会话默认来自用户全局目录 `Path.home() / ".codex" / "sessions"`，Windows 通常是
-`C:\Users\<user>\.codex\sessions`。仓库内 `.codex` 是被忽略的 fixture/runtime
-目录，不是默认会话存储。只有 recorded cwd 等于目标仓库或位于其子目录的会话才纳入；
-父目录、兄弟仓库和仅在正文提到仓库的会话都会排除，因此新 worktree 得到零条结果可能是正常的。
+Codex sessions default to `Path.home() / ".codex" / "sessions"`, typically `C:\Users\<user>\.codex\sessions` on Windows. A repository's own `.codex` directory is an ignored fixture/runtime location, not the default session store. Only sessions whose recorded working directory is the target repository or a descendant are included. Parent directories, sibling repositories, and sessions that merely mention the repository in their text are excluded. A new worktree can therefore legitimately yield no sessions.
 
-## 说话人分离(diarization)
+## Optional speaker diarization
 
-按团队决定,音频**只在本机 CPU 处理,不出服务器**。转写用 faster-whisper(已装,无需 token)。说话人分离用 pyannote 3.1,模型是 gated:
+Audio is processed locally on CPU. Transcription uses `faster-whisper` and does not require a token; optional diarization uses the gated `pyannote/speaker-diarization-3.1` model. Model files may need to be downloaded before local processing.
+
+Install audio dependencies in the project-local environment, not globally. Text imports do not need these packages:
 
 ```bash
-.venv-audio/bin/pip install pyannote.audio        # 需要 torch,较大
-# 到 https://huggingface.co/pyannote/speaker-diarization-3.1 接受协议,拿 HF token
-python3 tools/ingest/import_meeting.py xx.m4a --out work/meeting-run --hf-token hf_xxx --date 2026-08-30
+python3 -m venv tools/ingest/.venv-audio
+tools/ingest/.venv-audio/bin/python -m pip install faster-whisper pyannote.audio
 ```
 
-没有 token 时管线不会失败:输出单说话人转写稿并在 `transcript.json.warnings` 里明确标注。
+Accept the conditions on [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0), then use your own read token through `HF_TOKEN` or `--hf-token`.
 
-Windows 的可选音频解释器路径是 `.venv-audio\Scripts\python.exe`。音频依赖必须安装在
-这个项目本地环境中，不要全局安装；文本会议导入不需要音频包。临时 token 用完后立即清理：
+Without a token, the pipeline produces a single-speaker transcript and records a warning in its intermediate `transcript.json`; those speaker labels are not verified attribution. The meeting importer uses an automatically cleaned operating-system temporary directory for intermediate audio output.
+
+On Windows, create the environment at the same location and use its `Scripts\python.exe`:
 
 ```powershell
+python -m venv .\tools\ingest\.venv-audio
 $AudioPython = ".\tools\ingest\.venv-audio\Scripts\python.exe"
-& $AudioPython -c "import faster_whisper"  # 只检查可用性
+& $AudioPython -m pip install faster-whisper pyannote.audio
+& $AudioPython -c "import faster_whisper"  # Check the selected interpreter.
 $env:HF_TOKEN = "<current-user-token>"
 try {
   python .\tools\ingest\import_meeting.py "D:\Meetings\meeting.m4a" `
-    --out "out\meeting-run" --language zh --date "2026-08-30"
+    --out "work\meeting-audio-run" --language en --date "2026-08-30"
 }
 finally {
   Remove-Item Env:\HF_TOKEN -ErrorAction SilentlyContinue
 }
 ```
 
-## 格式对接
+The meeting importer prefers that project-local audio interpreter when it exists; otherwise it uses the current interpreter. Installing dependencies and downloading models are setup steps, not evidence that a recording has been reviewed.
 
-- trajectory 输出遵守唯一的 unversioned Oxygen contract;
-- 会议输出的 `timestamped.txt`(`M:SSSpeaker A 文本`)就是 `tools/ingest/import_meeting.py` 的输入格式,可直接入库 Inline;
-- claude.ai 导出的 schema 无官方保证,解析器是容错的,坏结构会记进 `index.json.warnings` 而不是崩;拿到真实导出后请再验证一轮。
+## Format handoff
 
-## 隐私
+- Trajectories follow the single unversioned Oxygen contract.
+- The audio transcriber's `timestamped.txt` uses the `M:SSSpeaker A text` format accepted by `import_meeting.py`. The meeting importer emits `meeting.json`, `raw.md`, and `timestamped.txt` when timestamps are available.
+- Claude export layouts can change. Review `index.json.warnings` and imported counts. Some unsupported entries generate warnings; invalid top-level JSON or unsafe input boundaries fail instead of silently producing a valid run.
 
-- 凭据类文件(auth.json / .credentials.json / 私钥 / token)按名字黑名单**永不采集**(`oxygen_common.SENSITIVE_NAME_RE`);
-- 文本经 vendored 提取器的掩码(API token/密码模式、家目录路径 → `<USER_HOME>`);
-- 自动过滤≠发布批准:所有产出 `publication_approved=false`,公开前必须过 redaction 流水线 + 原贡献者终审;
-- 三个接入工具只写入显式 `--out` 目录；音频转写使用自动清理的操作系统临时目录。产出含未脱敏内容，不要复制到共享盘或网络位置。
+## Privacy
+
+- Credential filenames, including authentication files, private keys, and tokens, are excluded by `oxygen_common.SENSITIVE_NAME_RE`.
+- The vendored trajectory extractor masks recognized credential patterns and replaces home-directory paths with `<USER_HOME>`.
+- Automatic filtering is not publication approval. Complete the redaction workflow and contributor review before a reviewed release; imported material remains `publication_approved=false`.
+- The three entry points write persistent output only under explicit `--out` directories. Audio transcription and ZIP extraction may use automatically cleaned temporary directories. Output can still contain unredacted material; keep it out of shared folders and network locations.

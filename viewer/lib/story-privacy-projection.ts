@@ -138,6 +138,64 @@ export function storyPrivacyProposalRanges(proposal: { occurrences: StoryPrivacy
 export type StoryPrivacyPublicOverride = Pick<StoryPrivacyOccurrence,
   "originalStartOffset" | "originalEndOffset" | "category">;
 
+/** A contributor requests new suggestions for these current, undecided passages.
+ * Retention is exact-range permission, never a global term exception. */
+export type StoryPrivacyRereviewRequest = {
+  reason: string;
+  targets: Array<{ targetId: string; targetContentDigest: string;
+    retainOriginal: Array<StoryPrivacyPublicOverride & { originalText: string }> }>;
+};
+
+export function storyPrivacyShardBinding<T extends { rereviewRequest?: StoryPrivacyRereviewRequest }>(
+  binding: T, targetIds: string[],
+): T {
+  return binding.rereviewRequest ? { ...binding, rereviewRequest: { ...binding.rereviewRequest,
+    targets: binding.rereviewRequest.targets.filter((target) => targetIds.includes(target.targetId)) } } : binding;
+}
+
+export function parseStoryPrivacyRereviewRequest(value: unknown): StoryPrivacyRereviewRequest | null {
+  const record = (entry: unknown): entry is Record<string, unknown> => Boolean(entry)
+    && typeof entry === "object" && !Array.isArray(entry);
+  const keys = (entry: Record<string, unknown>, names: string[]) =>
+    Object.keys(entry).sort().join(",") === names.sort().join(",");
+  if (!record(value) || !keys(value, ["reason", "targets"])
+    || typeof value.reason !== "string" || !value.reason.trim() || value.reason.length > 2000
+    || !Array.isArray(value.targets) || value.targets.length === 0 || value.targets.length > 64
+    || value.targets.some((target) => !record(target)
+      || !keys(target, ["targetId", "targetContentDigest", "retainOriginal"])
+      || typeof target.targetId !== "string" || !target.targetId.trim() || target.targetId.length > 1000
+      || typeof target.targetContentDigest !== "string" || !/^[0-9a-f]{64}$/.test(target.targetContentDigest)
+      || !Array.isArray(target.retainOriginal) || target.retainOriginal.length > 64
+      || target.retainOriginal.some((span) => !record(span)
+        || !keys(span, ["originalStartOffset", "originalEndOffset", "category", "originalText"])
+        || !Number.isSafeInteger(span.originalStartOffset) || Number(span.originalStartOffset) < 0
+        || !Number.isSafeInteger(span.originalEndOffset) || Number(span.originalEndOffset) <= Number(span.originalStartOffset)
+        || typeof span.category !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(span.category)
+        || typeof span.originalText !== "string" || !span.originalText.trim() || span.originalText.length > 1000
+        || storyPrivacyCredentialCategory(span.category) || storyPrivacyCredentialText(span.originalText))
+      || new Set(target.retainOriginal.map((span) => storyPrivacyOverrideKey(span))).size !== target.retainOriginal.length)
+    || new Set(value.targets.map((target) => target.targetId)).size !== value.targets.length) return null;
+  return value as StoryPrivacyRereviewRequest;
+}
+
+export function validStoryPrivacyRereviewTargets(request: StoryPrivacyRereviewRequest,
+  targets: Array<{ id: string; content: string; contentDigest: string }>) {
+  return request.targets.length === targets.length && request.targets.every((requested) => {
+    const target = targets.find((entry) => entry.id === requested.targetId);
+    return target?.contentDigest === requested.targetContentDigest && requested.retainOriginal.every((span) =>
+      Array.from(target.content).slice(span.originalStartOffset, span.originalEndOffset).join("") === span.originalText);
+  });
+}
+
+export function storyPrivacyRereviewRespected(request: StoryPrivacyRereviewRequest,
+  proposals: Array<{ targetId: string; occurrences: StoryPrivacyOccurrence[] }>) {
+  return request.targets.every((target) => {
+    const proposal = proposals.find((entry) => entry.targetId === target.targetId);
+    return proposal && target.retainOriginal.every((span) => !proposal.occurrences.some((change) =>
+      change.originalStartOffset < span.originalEndOffset && change.originalEndOffset > span.originalStartOffset));
+  });
+}
+
 export type StoryPrivacyOccurrenceReview = StoryPrivacyOccurrence & {
   originalText: string;
   proposedText: string;

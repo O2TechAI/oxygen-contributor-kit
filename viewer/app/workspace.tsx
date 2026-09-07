@@ -39,6 +39,7 @@ import {
   type PrivacyDecision,
 } from "../lib/story-review";
 import { STORY_PREFIX, compareStorySourceIdentity, storyKindLabel, timelinePresentation, type StoryLanguage, type StorySource } from "../lib/timeline";
+import { chapterSourceDateLabel } from "../lib/story-chapter-dates";
 import {
   isReservedStoryOrganizationReason,
   selectViewerChapters,
@@ -100,8 +101,7 @@ type TimelineChapter = {
   kind?: NonNullable<StorySource["kind"]>;
   title: string;
   overview: string;
-  timestamp?: string;
-  dateLabel?: string;
+  dateLabel: string;
   evidenceCount: number;
   readingMinutes: number;
   before?: string;
@@ -215,13 +215,6 @@ const workspaceUi = {
 const fmt = (value: string | undefined, language: StoryLanguage = "en") => value
   ? new Date(value).toLocaleString(language === "zh" ? "zh-CN" : "en-US", { dateStyle:"medium", timeStyle:"short" })
   : language === "zh" ? "时间不可用" : "Time unavailable";
-
-const fmtTimelineDate = (value: string, language: StoryLanguage = "en") => {
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf())
-    ? undefined
-    : date.toLocaleDateString(language === "zh" ? "zh-CN" : "en-US", { dateStyle:"medium" });
-};
 
 function updateStoryNavigationUrl(navigation: StoryNavigation, historyMode: "push"|"replace") {
   if (typeof window === "undefined") return;
@@ -918,7 +911,7 @@ export function InlineWorkspace({
   const projectStorySummary = summary.project_summary;
   const viewerChapters:TimelineChapter[] = projectChapters.map((chapter) => {
     const timeline = timelinePresentation(chapter.source);
-    const dateLabel = chapter.timestamp ? fmtTimelineDate(chapter.timestamp,interfaceLanguage) : undefined;
+    const dateLabel = chapterSourceDateLabel(chapter.source,docs,interfaceLanguage, { documentId:chapter.documentId, timestamp:chapter.timestamp });
     return {
       key:chapter.source.key,
       project:chapter.project,
@@ -926,7 +919,6 @@ export function InlineWorkspace({
       kind:timeline.kind,
       title:chapter.source.title,
       overview:chapter.source.overview,
-      timestamp:chapter.timestamp,
       dateLabel,
       evidenceCount:1+chapter.source.evidence.supporting.length,
       readingMinutes:Math.max(1,Math.ceil(chapter.source.story.blocks.reduce((count,block) => count+block.text.trim().split(/\s+/u).length,0)/220)),
@@ -1328,11 +1320,11 @@ export function InlineWorkspace({
                   <div className="storyStats"><span><b>{viewerChapters.length}</b> {labels.chapters}</span><span><b>{phaseGroups.length}</b> {workspaceUi.en.phases}</span>{reviewedInsightTotal===0?<span><b>No AI Insights required</b></span>:<span><b>{reviewedInsights}/{reviewedInsightTotal}</b> {labels.insightReviewed}</span>}<span><b>{docs.length}</b> {labels.retained}</span></div>
                   <small>{docs.length} {interfaceLanguage==="zh"?"条已审阅来源记录": "reviewed source records"} · {projectCount(selectedProject || primaryProject).toLocaleString()} {labels.events} · {interfaceLanguage==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
                 </header>
-                <p className="storyNextStep" data-story-stream-instruction>↘ {labels.nextStep}</p>
+                <p className="storyNextStep" data-story-stream-instruction>↘ {labels.nextStep} {interfaceLanguage === "zh" ? "章节按叙事顺序排列，相关记录日期可能重叠。" : "Chapters follow narrative order; source dates may overlap."}</p>
                 {phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>
                   <header className="phaseHeading"><span>{String(phaseIndex+1).padStart(2,"0")}</span><div><h2>{group.name}</h2><p>{group.events.length} {(group.events.length===1?workspaceUi.en.chapter:workspaceUi.en.chapters).toLowerCase()}</p></div></header>
                   <div className="storyChapterList">{group.events.map((event) => <article className="storyChapter" data-kind={event.kind} data-story-key={event.key} key={event.key} aria-labelledby={`story-chapter-${event.key}`}>
-                    <div className="storyChapterMeta">{event.dateLabel && <time dateTime={event.timestamp}>{event.dateLabel}</time>}{event.kind && <span>{storyKindLabel(event.kind,"en")}</span>}{event.timelineMarker === "ai_insight" && <strong>{workspaceUi.en.timelineAiInsight}</strong>}</div>
+                    <div className="storyChapterMeta"><span>{labels.chapter} {chapterNumber.get(event.key)}</span><span className="storyChapterDate">{event.dateLabel}</span>{event.kind && <span>{storyKindLabel(event.kind,"en")}</span>}{event.timelineMarker === "ai_insight" && <strong>{workspaceUi.en.timelineAiInsight}</strong>}</div>
                     <h3 id={`story-chapter-${event.key}`}>{event.title}</h3>
                     <div className={`transition${event.before && event.after ? "" : " transitionEmpty"}`} aria-label={event.before && event.after ? `${workspaceUi.en.before} to ${workspaceUi.en.after}` : "No evidence-supported transition"}>
                       {event.before && event.after ? <><div><small>{workspaceUi.en.before}</small><p>{event.before}</p></div><b aria-hidden="true">→</b><div><small>{workspaceUi.en.after}</small><p>{event.after}</p></div></> : <p>No evidence-supported transition</p>}
@@ -1386,6 +1378,7 @@ export function InlineWorkspace({
           {activeSourceChapter && <StoryChapterEditor
             key={activeSourceChapter.source.key}
             source={activeSourceChapter.source}
+            dateLabel={activeChapter?.dateLabel}
             position={activeStoryIndex+1}
             total={viewerChapters.length}
             language={interfaceLanguage}

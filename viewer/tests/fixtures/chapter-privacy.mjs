@@ -4,7 +4,7 @@ import { deriveStoryReleaseTargetContents, storyPreparationDigest } from "../../
 import { emptyChapterReview, recordStoryEdit } from "../../lib/story-review.ts";
 import { createStoryReviewSession } from "../../lib/story-review-session.ts";
 
-export async function seedChapterPrivacy(db, { badSecondChapter = true, interactive = false, multiplePrivacyChoices = false } = {}) {
+export async function seedChapterPrivacy(db, { badSecondChapter = true, interactive = false, multiplePrivacyChoices = false, rereview = false } = {}) {
   const run = "synthetic-chapter-privacy", now = "2042-01-01T00:00:00.000Z", sourceRevision = 2;
   const sources = ["a", "b"].map((key) => {
     const evidence = { documentId: "synthetic-source", eventId: `synthetic-${key}` };
@@ -29,6 +29,10 @@ export async function seedChapterPrivacy(db, { badSecondChapter = true, interact
       background: "The public test used a separate review step.", anchorStoryBlockId: "passage",
       quote: { text: "during a public test", evidence }, directlyAcquiredExperience: "I checked the draft before release.",
       principle: "Review the exact draft before release.", evidence: [evidence] }];
+  }
+  if (rereview) {
+    sources[0].overview = "Project Cedar is a public evaluation.";
+    sources[0].story.blocks[0].text = "Project Cedar was discussed on May 2.";
   }
   await db.prepare(`INSERT INTO workflow_runs (id,target_confirmed,collection_status,story_generation_status,
     story_source_revision,active_story_digest,created_at,updated_at) VALUES (?,1,'complete','ready_for_human_review',?,?,?,?)`)
@@ -55,7 +59,21 @@ export async function seedChapterPrivacy(db, { badSecondChapter = true, interact
         sequence: index + 1, timestamp: null, category: "Synthetic project", summary: `oxygen.story:${JSON.stringify(source)}` })) })).run();
   const targets = deriveStoryReleaseTargetContents(sources);
   const privacy = await syntheticPrivacyOutput(targets, await readStoryPrivacySourceRedactions(db));
-  if (interactive) for (const candidate of privacy.candidates) {
+  if (rereview) for (const proposal of privacy.targetProposals) {
+    if (!proposal.proposedText.includes("Project Cedar")) continue;
+    const original = proposal.proposedText;
+    proposal.proposedText = original.replace("Project Cedar", "Cedar project").replace("May 2", "an earlier day");
+    proposal.occurrences = [{ originalStartOffset: 0, originalEndOffset: 13,
+      proposalStartOffset: 0, proposalEndOffset: 13, category: "project-name" }];
+    if (original.includes("May 2")) proposal.occurrences.push({ originalStartOffset: original.indexOf("May 2"),
+      originalEndOffset: original.indexOf("May 2") + 5, proposalStartOffset: proposal.proposedText.indexOf("an earlier day"),
+      proposalEndOffset: proposal.proposedText.indexOf("an earlier day") + 14, category: "date" });
+    privacy.candidates.push({ id: proposal.targetId.replace(/[^a-z0-9-]/g, "-"), reviewState: "needs_confirmation",
+      title: "Public synthetic name and date", whyFlagged: "Synthetic old recommendation.",
+      uncertaintyReason: "Review the proposed wording.", releaseTargets: [proposal.targetId] });
+  }
+  privacy.candidates.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  if (interactive || rereview) for (const candidate of privacy.candidates) {
     candidate.reviewState = "needs_confirmation"; candidate.uncertaintyReason = "Choose the release wording.";
     await db.prepare("INSERT INTO story_privacy_candidates (workflow_run_id,candidate_id,candidate_json) VALUES (?,?,?)")
       .bind(run, candidate.id, JSON.stringify(candidate)).run();

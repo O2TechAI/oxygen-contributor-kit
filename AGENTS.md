@@ -35,7 +35,9 @@ Stage ownership:
   review begins.
 - **Release handoff** — the organizer/export Skill plus canonical release validation.
 
-Repository-development Agents are outside the Toolkit runtime contract. Runtime workers read only
+Repository-development Agents are outside the Toolkit runtime contract. Official documentation, code identifiers,
+comments, and default UI copy use English; preserve explicitly bilingual/localized text, source-language
+content, quotations, and language-specific test data. Runtime workers read only
 one assigned immutable input and write only its proposal. The parent alone runs recorders and
 finalizers, installs authority, proves exact union/no overlap, mutates Viewer state, and waits for
 terminal receipts. Workers never reopen raw history, expand scope, or repair another lane.

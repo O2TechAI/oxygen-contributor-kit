@@ -75,7 +75,6 @@ mark.redactionHit{background:#ffe08a;padding:1px 0}
 .phaseDirectory button:hover,.phaseDirectory button.active{color:var(--ink);border-left-color:var(--blue);background:#f1f3ff}
 .phaseDirectory button small{color:inherit;font:10px monospace}
 .storyChapterMeta{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.storyChapterMeta time{font-size:14px;font-weight:700}
 .storyChapterType{padding:4px 8px;border:1px solid var(--line);border-radius:99px;background:#f0eee7;color:#555b54;font:700 10px monospace;letter-spacing:.04em;text-transform:uppercase}
 .timelineBody{padding:20px 22px}
 .timelineBody h2{font-size:19px;line-height:1.25;margin:13px 0 14px}
@@ -267,8 +266,8 @@ mark.redactionHit{background:#ffe08a;padding:1px 0}
 .storyChapter{position:relative;padding:22px 0 30px;border-bottom:1px solid var(--line)}
 .storyChapter::before{content:"";position:absolute;left:-40px;top:29px;width:11px;height:11px;border:3px solid var(--panel);border-radius:50%;background:var(--blue);box-shadow:0 0 0 1px var(--blue)}
 .storyChapter .storyChapterMeta{display:flex;align-items:center;gap:9px;flex-wrap:wrap;color:var(--muted);font-size:11px}
-.storyChapter .storyChapterMeta time{color:var(--ink);font-size:11px;font-weight:700}
 .storyChapter .storyChapterMeta span{text-transform:uppercase;letter-spacing:.08em}
+.storyChapterDate,.storyChapter .storyChapterMeta .storyChapterDate{color:var(--ink);font-weight:700;text-transform:none;letter-spacing:normal}
 .storyChapter .storyChapterMeta strong{padding:4px 7px;border-radius:4px;background:#fff0b8;color:#6b4c00;font-size:10px}
 .storyChapter h3{max-width:700px;margin:13px 0 16px;font:700 24px/1.25 Georgia,"Noto Serif SC",serif}
 .transition{display:grid;grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);gap:10px;align-items:center;max-width:760px}
