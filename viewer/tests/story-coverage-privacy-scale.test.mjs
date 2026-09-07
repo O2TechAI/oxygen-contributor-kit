@@ -284,7 +284,10 @@ test("24,796-item active-Story polling is shallow while deep authority remains f
       assert.equal(pollingCounts.contentQueries, 0);
       assert.equal(pollingCounts.batches, 0);
       assert.equal(pollingSql.some((sql) => /\b(?:semantic_|story_coverage_|story_privacy_)/u.test(sql)), false);
-      assert.equal(pollingSql.some((sql) => /\bstory_review_sessions\b/u.test(sql)), false);
+      assert.ok(pollingSql.filter((sql) => /\bstory_review_sessions\b/u.test(sql)).every((sql) =>
+        /^SELECT server_version FROM story_review_sessions WHERE workflow_run_id=\?$/u.test(sql)),
+        "polling reads only the durable draft version, never session text");
+      assert.equal(pollingProjection.storyReviewVersion, 0);
       assert.equal(pollingSql.some((sql) => /\b(?:source_privacy_receipts|redactions)\b/u.test(sql)), false);
       assert.ok(percentile(pollingSamples, 95) < percentile(deepSamples, 50) / 4,
         "polling p95 must be materially below deep-reader p50");

@@ -2,9 +2,9 @@
 
 ## Application Shell
 
-Reuse the existing local Viewer shell. The required final shell keeps top navigation, one left project/source rail, main canvas, Project Story Timeline, final target-choice Release Preview, Preferences, Evidence review, and download actions.
+Reuse the existing local Viewer shell. The required final shell keeps top navigation, one left project/source rail, main canvas, Project Story Timeline, read-only Release Preview, Preferences, Evidence review, and download actions.
 
-Chapter Privacy/Release Preview is implemented in the canonical Viewer. Candidate rows explain why
+Privacy controls belong to each Chapter in the canonical Viewer; Release Preview is read-only. Candidate rows explain why
 targets were flagged; only the contributor chooses the exact release bytes for each target.
 
 Do not create a parallel page, second shell, project-bound renderer, replacement Privacy implementation, or standalone release tool.
@@ -40,15 +40,16 @@ When a Chapter opens, keep the application rail. Add only one compact Chapter se
 - Source records below;
 - independent vertical scrolling when the list overflows.
 
-The Chapter document keeps these unnumbered primary sections:
+The Chapter keeps compact People context, then this review order without numbered steps:
 
 ```text
-People
-Story
-Privacy
+Story and its separate AI Insight companion cards
+Privacy drafts
+Review summary
+Apply review
 ```
 
-Local Evidence disclosure and Review completion follow as supporting areas. Do not add numbered section markers, tabs, steppers, standalone Insights dashboards, or Release/Original comparison cards.
+Local Evidence remains a supporting disclosure. Review each Insight before staging Privacy choices. Do not add numbered section markers, tabs, steppers, standalone Insights dashboards, or Release/Original comparison cards.
 
 ## People
 
@@ -94,21 +95,24 @@ Zero source Insights create no placeholder, empty approval card, or hidden oblig
 
 ## Privacy Surface
 
-The canonical Viewer renders one active Story/Release Privacy candidate and its release targets at a time:
+The Privacy heading uses the same section heading as People and Story, followed by a brief natural introduction.
+Show one compact card at a time for required human confirmation or a custom/stale edit, with 1/N progress
+and previous/next navigation. Within the card, show Original, AI recommendation and reason, suggested
+wording, then visually distinct Accept, Reject, and Edit buttons. Excerpts contain all changed sentences;
+a native disclosure can reveal the full passage. Avoid repeated selected/proposed text and automatic-coverage lists.
 
-```text
-progress
-title
-Local original
-Agent-proposed anonymized text
-Current HTML / ZIP text
-Why AI flagged it
-Use Agent proposal
-Edit anonymized text
-Save exact-public choices for noncredential occurrences
-```
+Accept and Reject immediately stage choices through existing session persistence. Reject retains all
+selectable original spans, with a nearby reminder that credentials stay hidden. Credential-only human
+confirmation retains a safe Accept entry point. Saving an edit stages the full text for parent-owned
+semantic recheck; the checked suggestion returns for acceptance. Choices advance to the next card and
+remain available through previous/next navigation. Apply review commits Story, Insight and Privacy
+together; no per-target PATCH writes. While Apply is pending, disable all current-Chapter review controls.
 
-The contributor is the sole target-choice authority. Credentials are always removed, and only exact selected bytes enter Release Preview, HTML, and ZIP.
+Release Preview is read-only, grouped by Chapter, with Local original and expected release wording.
+Show initial suggestions before Apply and clearly distinguish staged choices, edits awaiting recheck,
+and applied choices. Label the right-hand text by its actual source, highlight changes in the actual
+expected text, and identify missing/stale passages instead of implying complete coverage. It contains
+no editing or decision controls. HTML and ZIP still require all Chapters applied and human-confirmed.
 
 ## Evidence Navigation
 
@@ -148,7 +152,7 @@ An implementation is materially equivalent only when it preserves:
 - Story table-of-contents hierarchy;
 - readable centered Chapter article;
 - controlled direct editing and provenance;
-- one-at-a-time Privacy target choices from the current server-owned authority;
+- Chapter-local Privacy choices staged with the current review session;
 - evidence navigation and original-language Evidence;
 - Preferences as their own authority;
 - Release Preview safe projection;

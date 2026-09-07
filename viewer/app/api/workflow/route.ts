@@ -1,4 +1,5 @@
 import { getLocalDatabase } from "../../../db";
+import { readStoryPrivacySourceRedactions, storyPrivacyProposalRanges } from "../../../lib/story-privacy-projection";
 import {
   loadWorkflowPollingProjection,
   loadWorkflowProgress,
@@ -418,6 +419,7 @@ export async function POST(request: Request) {
           semanticUnitIds: semanticManifest.units.map((unit) => unit.id),
           storyCandidates: normalized.rows,
           preference: preferenceAuthority,
+          sourceRedactions: await readStoryPrivacySourceRedactions(db),
         },
       );
       if (!preparationValidation.ok) {
@@ -559,16 +561,13 @@ export async function POST(request: Request) {
         JSON.stringify(privacyCandidates),
         ...leaseBindings,
       ));
-      const pendingTargets = new Set(preparation.privacy.candidates
-        .filter((candidate) => candidate.reviewState === "needs_confirmation")
-        .flatMap((candidate) => candidate.releaseTargets));
       const privacyRows = preparation.privacy.targetProposals.map((proposal) => ({
         targetId: proposal.targetId,
         targetContentDigest: proposal.targetContentDigest,
         proposedText: proposal.proposedText,
-        occurrencesJson: JSON.stringify(proposal.occurrences),
-        selectedText: pendingTargets.has(proposal.targetId) ? null : proposal.proposedText,
-        decidedAt: pendingTargets.has(proposal.targetId) ? null : now,
+        occurrencesJson: storyPrivacyProposalRanges(proposal),
+        selectedText: null,
+        decidedAt: null,
       }));
       const privacyPayload = JSON.stringify(privacyRows);
       statements.push(db.prepare(`INSERT INTO story_privacy_targets

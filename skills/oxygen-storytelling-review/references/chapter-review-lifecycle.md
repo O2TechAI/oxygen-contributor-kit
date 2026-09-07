@@ -6,8 +6,9 @@ The Chapter review loop is iterative:
 
 ```text
 initial AI draft, revision 1, reviewing
--> direct human edits and/or imported exact-range review records
--> Apply review
+-> Story edits and Insight decisions
+-> Privacy preparation for current draft, then staged choices
+-> Review summary and Apply review
 -> revised draft, revision 2, revision_ready
 -> human reviews and may edit again
 -> Apply review again
@@ -28,7 +29,8 @@ Apply review is never finalization. All set confirms the current clean revision 
 
 ## Implemented Session Shape
 
-The current Story review session stores exactly:
+The core Story review session fields are shown below. Optional `privacyDrafts` is defined by the
+[implemented session type](../../../viewer/lib/story-review-session.ts); this excerpt omits its shape:
 
 ```ts
 type StoryReviewSession = {
@@ -42,7 +44,7 @@ type StoryReviewSession = {
 
 It does not store Preference answers, source redaction spans, Story source candidates, coverage manifests, release originals, evidence payloads, hidden prompts, or private notes.
 
-Current source-bound hydration accepts only sessions matching the active workflow run and exact `oxygen.story` Chapter set. Top-level `privacyDecisions` must remain empty because Story/Release Privacy target choices live only in the current server-owned target authority.
+Current source-bound hydration accepts only sessions matching the active workflow run and exact `oxygen.story` Chapter set. Top-level `privacyDecisions` remains empty. Optional `privacyDrafts` stores exact target-digest-bound pending choices alongside Chapter drafts; only atomic Chapter Apply installs choices in the existing server-owned target authority.
 
 ## Chapter Review State
 
@@ -119,18 +121,27 @@ Do not expose a new Delete/Revise/Add creation window. Exact Evidence is never e
 
 ## Apply Review
 
-Apply review may run only when the loaded server-owned Story Privacy authority is bound to the
-current workflow, source revision, and reviewed Story, and Evidence can be verified at Apply time.
-Unresolved current target selections do not block Apply review.
+Apply review submits only the current Chapter. The server replays its exact durable Story and
+Insight draft, verifies Evidence, and requires Privacy preparation for those prospective bytes and
+any custom Privacy edit. Required `needs_confirmation` choices and custom edits must be staged in that Chapter. One transaction writes
+its review session and exact Privacy choices, with source witness, target digest and session CAS
+checks. Preparation itself installs no human choice. Targets without a `needs_confirmation`
+obligation need no separate card click; the contributor's Chapter Apply confirms their current
+proposal unless an explicit staged choice replaces it.
+
+Other Chapters' unresolved or invalid drafts remain untouched and do not block this Chapter's
+review. A global session CAS conflict can reject this submission; preserve all drafts and do not
+automatically retry. Disable the applying Chapter's edit/selection controls through acknowledgement,
+including navigation back to that Chapter; reject acknowledgements from an older run/source/session.
 
 It must:
 
 - resolve every unique Chapter Evidence reference to exactly one actual reviewed item;
 - replay annotations and direct edits from immutable revision-1 Story blocks;
 - reject stale, overlapping, duplicated, malformed, cross-Chapter, or unsupported work atomically;
-- mark unsupported Add/direct factual work as `needs_evidence`;
+- retain unsupported Add/direct factual work for Evidence review; a rejected Apply commits no state;
 - increment the Chapter revision on success;
-- record applied annotation/edit IDs in revision history while leaving Story-session Privacy maps empty;
+- record applied annotation/edit IDs and commit this Chapter’s Privacy selections together, clearing only its successfully committed Privacy drafts;
 - preserve useful detail, failure, uncertainty, Evidence semantics, and human intent;
 - keep publication false.
 
@@ -151,14 +162,14 @@ All set is available only when:
 - stage is `revision_ready`;
 - the latest revision has been presented for human inspection;
 - no pending, reverted-active, or `needs_evidence` annotation/direct edit remains;
-- every required Story Privacy target has a current selected value in the server-owned authority;
+- every required Story Privacy target in this Chapter has current applied selected bytes;
 - no Insight blocker remains;
 - actual Evidence references were verified by the latest successful Apply.
 
-Unlike Apply review, All set and final release require every current Story Privacy target to have
-selected release bytes. Missing, stale, foreign, invalid, or `preparation_required` Story Privacy
-authority blocks both Apply review and later completion gates; a current authority with unresolved
-target selections blocks All set and final release only.
+All set requires every target in this Chapter to have current applied selected bytes and no
+pending Privacy draft. Final release independently requires every Chapter to be applied and
+human-confirmed, and compares each target against the actual applied release text. A valid
+prospective proposal for an unapplied Chapter is never sufficient release authority.
 
 Clicking All set changes only:
 
@@ -184,8 +195,8 @@ Test at minimum:
 
 1. initial revision 1 and false publication state;
 2. direct edit returns stage to reviewing;
-3. unresolved targets in current Story Privacy authority permit Apply but block All set, while
-   missing, stale, foreign, invalid, or `preparation_required` authority blocks both;
+3. unresolved required choices or missing current-Chapter preparation block Apply atomically;
+   a sibling Chapter’s unresolved preparation or invalid draft does not block this Chapter;
 4. first Apply creates revision 2;
 5. revision 2 can be edited again;
 6. second Apply creates revision 3;

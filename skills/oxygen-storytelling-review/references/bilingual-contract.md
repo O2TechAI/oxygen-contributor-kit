@@ -33,6 +33,9 @@ is through the immutable lane input, validation authority, output metadata, and 
 
 Every final `StorySource` requires valid `language` and whole `languagePolicyDigest`; no fallback.
 Workers use their assigned language, confirmed by full-prose editorial review (`proseIsReadable`).
+The assigned language governs narrative phrasing; technical terms follow the single
+[Voice contract](narrative-writing-contract.md#voice). It does not require translating every working
+term or changing its conceptual scope.
 Phase and Timeline navigation labels remain English regardless of Story language.
 
 ## Deterministic classification and mixed continuation

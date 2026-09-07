@@ -4,10 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { WorkflowProgress } from "./organization-progress";
 import { RedactionCompare, segments, type Redaction, type RedactionJob } from "./redaction-compare";
 import {
-  StoryPrivacyReview,
+  StoryPrivacyReview, ChapterPrivacyReview,
 } from "./story-privacy-review";
 import {
-  chapterStoryPrivacyCandidates,
   parseStoryPrivacyAuthority,
   storyPrivacyAuthorityCurrent,
   storyPrivacyAuthorityComplete,
@@ -35,7 +34,7 @@ import {
 } from "./story-chapter-editor";
 import {
   chapterReviewCompletionBlockers,
-  emptyChapterReview,
+  emptyChapterReview, returnChapterToReview,
   storyBlocks,
   type PrivacyDecision,
 } from "../lib/story-review";
@@ -64,6 +63,7 @@ import {
   hydrateStoryReviewSession,
   parseStoryReviewSession,
   STORY_REVIEW_SESSION_SCHEMA,
+  type StoryReviewSession,
 } from "../lib/story-review-session";
 import {
   StoryReviewSessionPersistenceError,
@@ -306,6 +306,7 @@ export function InlineWorkspace({
   });
   const [storyPrivacyRunId,setStoryPrivacyRunId] = useState("");
   const [storyPrivacyBusy,setStoryPrivacyBusy] = useState("");
+  const [privacyDrafts,setPrivacyDrafts] = useState<NonNullable<StoryReviewSession["privacyDrafts"]>>({});
   const [storyPrivacyRequests] = useState(() => new StoryPrivacyRequestGate());
   const [releaseConfirmationRequests] = useState(() => new ProjectReleaseConfirmationRequestGate());
   const [releaseDownloadRequests] = useState(() => new ProjectReleaseDownloadRequestGate());
@@ -673,64 +674,86 @@ export function InlineWorkspace({
     && presentedStoryPrivacy.authority.workflowRunId === workflowRunId
     ? presentedStoryPrivacy.authority
     : null;
+  useEffect(() => {
+    if (storyPrivacyBusy || !currentStoryPrivacyAuthority?.pendingChapterKeys?.length) return;
+    const timer = setInterval(() => { void loadStoryPrivacy(undefined, true); }, 4000);
+    return () => clearInterval(timer);
+  }, [currentStoryPrivacyAuthority?.pendingChapterKeys?.length, loadStoryPrivacy, storyPrivacyBusy]);
   const storyPrivacyAuthorityIsCurrent = storyPrivacyAuthorityCurrent(
     presentedStoryPrivacy,
     workflowRunId,
   );
-  const storyPrivacyReviewApplicable = storyPrivacyAuthorityIsCurrent;
   const storyPrivacyReleaseComplete = storyPrivacyAuthorityIsCurrent
     && storyPrivacyAuthorityComplete(currentStoryPrivacyAuthority);
-  const storyPrivacyResolved = currentStoryPrivacyAuthority?.candidates
-    .filter(storyPrivacyCandidateResolved).length || 0;
-  const storyPrivacyTotal = currentStoryPrivacyAuthority?.candidates.length || 0;
 
-  const decideStoryPrivacyTarget = async (
-    target: StoryPrivacyTarget,
-    choice: StoryPrivacyTargetChoice,
-  ) => {
-    const authority = currentStoryPrivacyAuthority;
-    if (!authority || authority.status === "preparation_required"
-      || !authority.targets.some((value) => value.targetId === target.targetId
-        && value.targetContentDigest === target.targetContentDigest)) return;
-    setStoryPrivacyBusy(target.targetId);
-    setStoryPrivacy({ status:"ready", authority, message:"" });
+
+  const decideStoryPrivacyTarget = (target: StoryPrivacyTarget, choice: StoryPrivacyTargetChoice) => {
+    refreshStoryPrivacyAfterPersistenceRef.current = true;
+    setPrivacyDrafts((drafts) => ({ ...drafts, [target.targetId]: { targetContentDigest: target.targetContentDigest, proposedText: target.proposedText, ...choice } }));
+    const chapterKey = target.targetId.split("::")[0];
+    const current = currentStoryStateRef.current.chapterReviews[chapterKey];
+    if (current && current.stage !== "reviewing") updateChapterReview(chapterKey, returnChapterToReview(current));
+  };
+  const applyChapter = async (chapterKey: string) => {
+    const snapshot = createStoryReviewSession(workflowRunId, currentStoryStateRef.current.chapterReviews, {}, undefined, privacyDrafts);
+    if (!snapshot) throw new Error("Review draft is invalid; nothing was applied.");
+    setStoryPrivacyBusy(chapterKey);
     try {
-      const response = await fetch(`/api/story-privacy/${encodeURIComponent(target.targetId)}`, {
-        method:"PATCH",
-        headers:{ "content-type":"application/json" },
-        body:JSON.stringify({
-          workflowRunId:authority.workflowRunId,
-          sourceRevision:authority.sourceRevision,
-          activeStoryDigest:authority.activeStoryDigest,
-          authorityDigest:authority.authorityDigest,
-          targetContentDigest:target.targetContentDigest,
-          editedText:choice.editedText,
-          publicOverrides:choice.publicOverrides,
-        }),
-      });
-      const payload: unknown = await response.json().catch(() => ({}));
-      if (response.status === 409) {
-        setStoryPrivacy({ status:"loading", authority:null, message:"" });
-        await loadStoryPrivacy("The target authority changed while saving. The durable current result is shown; no mutation was retried.", true);
-        return;
+      await storyPersistence.flush(snapshot);
+      const authority = await loadStoryPrivacy("", true);
+      const current = parseStoryPrivacyAuthority(authority);
+      if (!current || current.pendingChapterKeys?.includes(chapterKey) || current.chapterErrors?.[chapterKey]) {
+        throw new Error("This Chapter needs preparation for its current draft. Your choices are retained here.");
       }
-      const next = parseStoryPrivacyAuthority(payload);
-      if (!response.ok || !next || next.workflowRunId !== authority.workflowRunId) {
-        const error = payload && typeof payload === "object" && "error" in payload
-          ? String((payload as { error?: unknown }).error || "") : "";
-        throw new Error(error || "Story Privacy target choice was not accepted");
-      }
-      setStoryPrivacy({
-        status:"ready",
-        authority:next,
-        message:"Target choice saved to the exact current release authority.",
+      const targets = current.targets.filter((target) => target.targetId.startsWith(`${chapterKey}::`));
+      const choices = targets.flatMap((target) => {
+        const draft = privacyDrafts[target.targetId];
+        if (draft && (draft.targetContentDigest !== target.targetContentDigest || draft.proposedText !== target.proposedText)) {
+          throw new Error("A Privacy draft belongs to earlier text or a different proposal. Review its new proposal before applying.");
+        }
+        if (draft) {
+          if (draft.editedText !== null && (!target.editedProposal || draft.reviewedEditText !== target.editedProposal.text)) {
+            throw new Error("Review and accept the checked edit suggestion in this Chapter before Apply review.");
+          }
+          return [{ targetId: target.targetId, targetContentDigest: target.targetContentDigest,
+            editedText: draft.editedText === null ? null : target.editedProposal!.text, publicOverrides: draft.publicOverrides }];
+        }
+        if (target.selectedText !== null) return [];
+        const needsChoice = current.candidates.some((candidate) => candidate.reviewState === "needs_confirmation"
+          && candidate.releaseTargets.includes(target.targetId));
+        return needsChoice ? [] : [{ targetId: target.targetId, targetContentDigest: target.targetContentDigest,
+          editedText: null, publicOverrides: [] }];
       });
-    } catch (value) {
-      setStoryPrivacy({ status:"error", authority:null,
-        message:value instanceof Error ? value.message : "Story Privacy target choice was not accepted" });
-    } finally {
-      setStoryPrivacyBusy("");
-    }
+      const requestedVersion = storyPersistence.getState().serverVersion;
+      const response = await fetch("/api/story-review-session/apply", { method: "POST",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ workflowRunId,
+          sourceRevision: current.sourceRevision, expectedVersion: requestedVersion,
+          chapterKey, authorityDigest: current.authorityDigest, choices }) });
+      const payload = await response.json();
+      const session = parseStoryReviewSession(payload.session);
+      const next = parseStoryPrivacyAuthority(payload.authority);
+      if (!response.ok || !session || !next) throw new Error(payload.error || "Review was not applied. Drafts retained.");
+      if (storyPersistenceReadyRunRef.current !== workflowRunId || next.workflowRunId !== workflowRunId
+        || next.sourceRevision !== current.sourceRevision || session.workflowRunId !== workflowRunId
+        || payload.sourceRevision !== current.sourceRevision || payload.serverVersion !== requestedVersion + 1
+        || storyPersistence.getState().sourceRevision !== current.sourceRevision
+        || storyPersistence.getState().serverVersion !== requestedVersion) {
+        throw new Error("The review response belongs to an earlier session. Your draft was retained.");
+      }
+      storyPersistence.initialize({ workflowRunId, sourceRevision: payload.sourceRevision,
+        serverVersion: payload.serverVersion, persistedAt: payload.persistedAt, session });
+      setChapterReviews((chapters) => ({ ...chapters, [chapterKey]: session.chapterReviews[chapterKey] }));
+      setStoryPrivacy({ status: "ready", authority: next, message: "Chapter review applied." });
+      setPrivacyDrafts((drafts) => Object.fromEntries(Object.entries(drafts).filter(([id]) => !id.startsWith(`${chapterKey}::`))));
+      void loadProbes();
+    } finally { setStoryPrivacyBusy(""); }
+  };
+  const acceptEditedPrivacyTarget = (target: StoryPrivacyTarget) => {
+    const draft = privacyDrafts[target.targetId];
+    if (!draft || !target.editedProposal || draft.targetContentDigest !== target.targetContentDigest) return;
+    refreshStoryPrivacyAfterPersistenceRef.current = true;
+    setPrivacyDrafts((drafts) => ({ ...drafts, [target.targetId]: { ...draft,
+      proposedText: target.proposedText, reviewedEditText: target.editedProposal!.text } }));
   };
   const effectiveError = storyReviewReady && !storyReady
     ? "The active Story contract does not match the exact reviewed source package" : error;
@@ -802,6 +825,7 @@ export function InlineWorkspace({
             persistedAt: payload.persistedAt as string|null,
           });
           setChapterReviews(restored.chapterReviews);
+          setPrivacyDrafts(parsedSession?.privacyDrafts || {});
           storySessionHydratedRunRef.current = workflowRunId;
           storyPersistenceReadyRunRef.current = workflowRunId;
           setStoryPersistenceReadyRunId(workflowRunId);
@@ -827,13 +851,13 @@ export function InlineWorkspace({
     if (!workflowRunId || storySessionReadyRunId !== workflowRunId
       || storySessionHydratedRunRef.current !== workflowRunId
       || storyPersistenceReadyRunRef.current !== workflowRunId) return;
-    const session = createStoryReviewSession(workflowRunId, chapterReviews, {});
+    const session = createStoryReviewSession(workflowRunId, chapterReviews, {}, undefined, privacyDrafts);
     if (!session) {
       const errorTimer = setTimeout(() => setError("Story review state could not be safely persisted"), 0);
       return () => clearTimeout(errorTimer);
     }
     storyPersistence.schedule(session);
-  }, [chapterReviews, storyPersistence, storySessionReadyRunId, workflowRunId]);
+  }, [chapterReviews, privacyDrafts, storyPersistence, storySessionReadyRunId, workflowRunId]);
 
   const storyWorkspaceReady = isStoryWorkspaceReady(workflow, {
     storyDataReadyRunId,
@@ -924,9 +948,6 @@ export function InlineWorkspace({
   const activeStoryIndex = viewerChapters.findIndex((event) => event.key === navigation.storyKey);
   const activeChapter = activeStoryIndex >= 0 ? viewerChapters[activeStoryIndex] : null;
   const activeSourceChapter = activeChapter?.chapter || null;
-  const activeChapterPrivacyCandidates = activeSourceChapter
-    ? chapterStoryPrivacyCandidates(currentStoryPrivacyAuthority, activeSourceChapter.source.key)
-    : [];
   const insightProgress = projectChapters.reduce((progress,chapter) => {
     progress.total+=chapter.source.insights.length;
     progress.resolved+=chapter.source.insights.filter((insight) => {
@@ -1004,7 +1025,7 @@ export function InlineWorkspace({
     review:ChapterReviewState,
   ) => {
     const previous=currentStoryStateRef.current.chapterReviews[storyKey];
-    if (previous && review.revision > previous.revision) {
+    if (previous && review !== previous) {
       refreshStoryPrivacyAfterPersistenceRef.current = true;
       storyPrivacyRequests.retire();
       setStoryPrivacyRunId(workflowRunId);
@@ -1106,7 +1127,7 @@ export function InlineWorkspace({
         persistence,
         currentSession: () => {
           const current=currentStoryStateRef.current;
-          return createStoryReviewSession(workflowRunId,current.chapterReviews,{});
+          return createStoryReviewSession(workflowRunId,current.chapterReviews,{},undefined,privacyDrafts);
         },
         handoff: ({workflowRunId,serverVersion,sourceRevision}) => fetch("/api/release-confirmation",{
           method:"POST",
@@ -1198,7 +1219,7 @@ export function InlineWorkspace({
         persistence,
         currentSession: () => {
           const current=currentStoryStateRef.current;
-          return createStoryReviewSession(workflowRunId,current.chapterReviews,{});
+          return createStoryReviewSession(workflowRunId,current.chapterReviews,{},undefined,privacyDrafts);
         },
         handoff: ({workflowRunId,serverVersion,sourceRevision}) => fetch(url,{
           method:"POST",
@@ -1323,11 +1344,10 @@ export function InlineWorkspace({
               </div><nav className="phaseDirectory" aria-label="Narrative phase directory"><b>STORY PHASES</b>{phaseGroups.map((group,index) => <button className={activePhaseIndex===index?"active":""} aria-current={activePhaseIndex===index?"location":undefined} onClick={() => scrollToPhase(index)} key={phaseGroupIdentity(group.name,index)}>{group.name}</button>)}</nav></div>
             </> : view === "redaction" ? (isProject ? <StoryPrivacyReview
               state={presentedStoryPrivacy}
-              busyId={storyPrivacyBusy}
-              onTargetChoice={(target,choice) => {
-                void decideStoryPrivacyTarget(target,choice);
-              }}
-              onRefresh={() => { void loadStoryPrivacy("Checking the exact current imported result…", true); }}
+              chapters={chapterReviews}
+              drafts={privacyDrafts}
+              chapterTitles={Object.fromEntries(storySelection.chapters.map((chapter) => [chapter.source.key, chapter.source.title]))}
+              reviewComplete={Object.values(chapterReviews).length > 0 && Object.values(chapterReviews).every((review) => review.stage === "human_confirmed")}
             /> : <RedactionCompare
               job={redactionJob}
               redactions={redactions}
@@ -1372,14 +1392,24 @@ export function InlineWorkspace({
             chapterReview={chapterReviews[activeSourceChapter.source.key] || emptyChapterReview(activeSourceChapter.source)}
             reviewFocus={downloadReviewFocus?.chapterKey===activeSourceChapter.source.key ? downloadReviewFocus : undefined}
             onReviewFocusHandled={clearDownloadReviewFocus}
-            storyPrivacyStatus={currentStoryPrivacyAuthority?.status === "preparation_required"
-              ? "preparation_required" : presentedStoryPrivacy.status}
-            storyPrivacyCandidates={activeChapterPrivacyCandidates}
-            storyPrivacyCurrent={storyPrivacyReviewApplicable}
-            storyPrivacyComplete={storyPrivacyReleaseComplete}
-            storyPrivacyResolved={storyPrivacyResolved}
-            storyPrivacyTotal={storyPrivacyTotal}
-            onOpenStoryPrivacy={openGlobalStoryPrivacy}
+            storyPrivacyCurrent={Boolean(currentStoryPrivacyAuthority && !currentStoryPrivacyAuthority.pendingChapterKeys?.includes(activeSourceChapter.source.key)
+              && !currentStoryPrivacyAuthority.chapterErrors?.[activeSourceChapter.source.key])}
+            storyPrivacyComplete={Boolean(currentStoryPrivacyAuthority && !currentStoryPrivacyAuthority.chapterErrors?.[activeSourceChapter.source.key] && !currentStoryPrivacyAuthority.pendingChapterKeys?.includes(activeSourceChapter.source.key)
+              && currentStoryPrivacyAuthority.targets.filter((target) => target.targetId.startsWith(`${activeSourceChapter.source.key}::`)).every((target) => target.selectedText !== null)
+              && !Object.keys(privacyDrafts).some((id) => id.startsWith(`${activeSourceChapter.source.key}::`)))}
+            applyPending={storyPrivacyBusy === activeSourceChapter.source.key}
+            onApplyReview={() => applyChapter(activeSourceChapter.source.key)}
+            privacyControls={<>
+              {currentStoryPrivacyAuthority?.chapterErrors?.[activeSourceChapter.source.key] && <p role="alert">Review this Chapter’s edits and supporting evidence before checking Privacy.</p>}
+              {!currentStoryPrivacyAuthority ? <p role="status">{presentedStoryPrivacy.message || "Loading Chapter Privacy…"}</p>
+                : <ChapterPrivacyReview key={activeSourceChapter.source.key}
+                    targets={currentStoryPrivacyAuthority.targets.filter((target) => target.targetId.startsWith(`${activeSourceChapter.source.key}::`))}
+                    candidates={currentStoryPrivacyAuthority.candidates}
+                    chapter={chapterReviews[activeSourceChapter.source.key]}
+                    drafts={Object.fromEntries(Object.entries(privacyDrafts).filter(([id]) => id.startsWith(`${activeSourceChapter.source.key}::`)))}
+                    pending={Boolean(currentStoryPrivacyAuthority.pendingChapterKeys?.includes(activeSourceChapter.source.key))}
+                    busy={Boolean(storyPrivacyBusy)} onSave={decideStoryPrivacyTarget} onAcceptEdited={acceptEditedPrivacyTarget}/>}
+            </>}
             onChapterReview={(review) => updateChapterReview(activeSourceChapter.source.key,review)}
             onClose={closeStory}
             onPrevious={() => navigateStory(viewerChapters[activeStoryIndex-1]?.key || activeSourceChapter.source.key)}

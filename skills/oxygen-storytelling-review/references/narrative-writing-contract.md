@@ -136,8 +136,9 @@ determines all of the following for that exact proposal:
 5. The Chapter forms one coherent arc.
 6. The ending explains what changed or what remains unresolved.
 7. Every factual claim in prose, People, transition, and chips is supported by exact bound reviewed
-   Evidence, including every claimed interaction.
-8. The prose uses the assigned Story language, preserving customary working terms, and is readable
+   Evidence, including every claimed interaction and the referents and technical scope of terms
+   under [Voice](#voice).
+8. The prose uses the assigned Story language and consistent terminology under [Voice](#voice), and is readable
    enough that a human could voluntarily continue (`proseIsReadable`).
 
 The parent records those eight decisions in the transient proposal-digest-bound editorial review
@@ -195,8 +196,20 @@ origin and lifecycle; never silently reinterpret it as an AI trajectory Quote.
 Use natural, plain, specific language with factual precision. Novel-like progression comes from
 supported actions and exchanges, not fictional embellishment. Preserve working terminology,
 including customary English technical terms in Chinese prose; do not force unusual translations or
-a fixed English/Chinese glossary. Preserve metrics, uncertainty, failures, and corrections. Avoid
-slogans, decorative metaphors, vague AI boilerplate, and unsupported retrospective causality.
+a fixed English/Chinese glossary.
+
+Choose a clear, established working term from the source and its context, respecting explicit
+contributor terminology preferences. Treat differences in spelling, capitalization, abbreviation,
+or optional qualifiers as variants of one concept only when contextual Evidence supports the same
+meaning and referent. Once chosen, reuse that term consistently; do not translate each variant
+separately or alternate concept names for stylistic variety. Preserve distinct referents, roles,
+scopes, and levels of abstraction even when they share a name or are closely related. A broader
+category is not an equivalent replacement for a more specific supported concept. Explain an
+unfamiliar retained term briefly in plain language instead of replacing its name with that broader
+category. Translation and paraphrase must preserve these distinctions throughout the Story.
+
+Preserve metrics, uncertainty, failures, and corrections. Avoid slogans, decorative metaphors,
+vague AI boilerplate, and unsupported retrospective causality.
 
 When Evidence does not establish a cause, explain that uncertainty naturally in the assigned Story
 language. Do not impose a stock sentence, dialogue count, connector count, or sample-derived phrase list.

@@ -173,7 +173,8 @@ async function loadWorkflowProgressWithMode(
       ? db.prepare(`SELECT server_version,state_json FROM story_review_sessions
           WHERE workflow_run_id=?`)
         .bind(authority.workflowRunId).first<SessionBindingRow>()
-      : Promise.resolve(null),
+      : db.prepare("SELECT server_version FROM story_review_sessions WHERE workflow_run_id=?")
+        .bind(authority.workflowRunId).first<SessionBindingRow>(),
     mode === "polling_projection"
       ? db.prepare(`SELECT 1 AS present FROM project_release_confirmations
           WHERE workflow_run_id=? LIMIT 1`)
@@ -206,7 +207,7 @@ async function loadWorkflowProgressWithMode(
   } catch {
     storedSourceRevision = null;
   }
-  const currentServerVersion = Number(sessionBinding?.server_version);
+  const currentServerVersion = sessionBinding ? Number(sessionBinding.server_version) : 0;
   const currentSourceRevision = Number(run?.story_source_revision);
   const documentCount = Number(documents?.total || 0);
   const itemCount = Number(items?.total || 0);
@@ -240,6 +241,7 @@ async function loadWorkflowProgressWithMode(
       }));
   return deriveWorkflowProgress({
     workflowRunId: run?.id || authority.workflowRunId,
+    ...(validNonnegativeAuthorityCounter(currentServerVersion) ? { storyReviewVersion: currentServerVersion } : {}),
     targetConfirmed: Boolean(run?.target_confirmed),
     collectionStatus: run?.collection_status || null,
     collectionCompleted: Number(run?.collection_completed || 0),

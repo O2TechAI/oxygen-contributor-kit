@@ -46,6 +46,7 @@ export type WorkflowStageState = {
 };
 
 export type WorkflowProgressState = {
+  storyReviewVersion?: number;
   workflowRunId: string;
   status: WorkflowStatus;
   currentStageId: WorkflowStageId;
@@ -68,6 +69,7 @@ export type WorkflowProgressState = {
 };
 
 export type WorkflowFacts = {
+  storyReviewVersion?: number;
   workflowRunId?: string;
   targetConfirmed?: boolean;
   collectionStatus?: string | null;
@@ -118,6 +120,7 @@ function state(
     && facts.storySourceSchema === "oxygen.story"
     && facts.storySessionSchema === "oxygen.story-review-session";
   return {
+    ...(facts.storyReviewVersion === undefined ? {} : { storyReviewVersion: facts.storyReviewVersion }),
     workflowRunId: facts.workflowRunId || "",
     status,
     currentStageId,

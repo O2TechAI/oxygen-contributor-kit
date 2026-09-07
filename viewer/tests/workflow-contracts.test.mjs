@@ -89,8 +89,10 @@ test("root routing is progressive and preserves the canonical stage owners", asy
       "independent global sparse Insight pass",
       "Story/Release Privacy total proposal preparation",
       "Preference-question generation",
-      "Project Story human review",
-      "Privacy target choices",
+      "Chapter human review",
+      "Privacy drafts",
+      "Apply review",
+      "source Privacy Keep/Redact decisions",
       "Preference answers",
       "All set",
       "local reviewed release",
@@ -247,7 +249,7 @@ test("public docs align Preference timing and the final-export Privacy boundary"
   for (const document of [sop, productContract, checklist]) {
     assertOrdered(document, [
       "Preference-question generation",
-      "Project Story human review",
+      "Chapter human review",
       "Preference answers",
     ]);
   }
@@ -294,9 +296,10 @@ test("routed Story contracts distinguish exact-bound provider input from final r
   for (const document of [transport, checklist]) {
     assert.match(document, /exact bound raw reviewed narrative/iu);
     assert.match(document, /contributor-selected current(?: coding Agent\/model)? provider/iu);
-    assert.match(document, /(?:contains|has) no source narrative|contains no source text[\s\S]{0,120}source narrative/iu);
+    assert.match(document, /Parent validation authority is not dispatched|Never open parent validation authority/iu);
+    assert.match(document, /bounded[\s\S]{0,40}context/iu);
     assert.match(document, /raw\s+actor identity/iu);
-    assert.match(document, /source outside the exact reviewed\s+boundary/iu);
+    assert.match(document, /source outside the exact reviewed\s+boundary|no excluded or outside-boundary narrative/iu);
   }
   for (const document of [agents, sop]) {
     assert.match(document, /Source Privacy[\s\S]{0,100}mandatory release authority/iu);
@@ -304,6 +307,7 @@ test("routed Story contracts distinguish exact-bound provider input from final r
   }
   assert.match(product, /local\s+Quote may contain exact bound raw source text/iu);
   assert.match(bilingual, /one shared review\/release authority/iu);
+  assert.match(bilingual, /\[Voice contract\]\(narrative-writing-contract\.md#voice\)/);
   assert.match(bilingual, /Privacy targets[\s\S]{0,100}release gate survive[\s\S]{0,40}either language/iu);
   assert.match(privacy,
     /generated Story is non-release working state[\s\S]{0,160}every current release target[\s\S]{0,160}exact reviewed release bytes/iu);
@@ -521,12 +525,12 @@ test("Story public contracts preserve coverage, Insight, and Privacy release sem
   assert.match(uiContract, /Multiple Insights[\s\S]{0,80}stack/);
   assert.match(uiContract, /Do not insert Insights inline[\s\S]{0,120}generic Chapter-end list/i);
 
-  assert.match(privacyContract, /Only `needs_confirmation` rows are decision-editable/);
-  assert.match(privacyContract, /Chapter Privacy\/Release Preview is implemented in the canonical Viewer/);
+  assert.match(privacyContract, /Only source\s+`needs_confirmation` rows expose Keep\/Redact/);
+  assert.match(privacyContract, /Release Preview is read-only[\s\S]*choices remain drafts until Chapter Apply/);
   assert.doesNotMatch(privacyContract, /NOT YET IMPLEMENTED|obsolete category\/delete controls/);
   assert.match(privacyContract, /Keep[\s\S]{0,20}Redact/);
-  assert.match(privacyContract, /Pending confirmation blocks Story\/package release/);
-  assert.match(privacyContract, /Raw Evidence and suppressed content are not exposed through Insight review/);
+  assert.match(privacyContract, /pending source decisions continue to block release/);
+  assert.match(privacyContract, /Raw Evidence\s+and suppressed content are not exposed through Insight review/);
   assert.doesNotMatch(sop, /controls to change the category|delete the decision|soft delete/i);
   assert.match(sop, /\$Kit = \(Get-Location\)\.Path/);
   assert.doesNotMatch(sop, /O2-Intern\\oxygen-contributor-kit/);
@@ -581,6 +585,12 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
   assert.match(publicContracts, /related (?:semantic )?units may share one owner/i);
   assert.match(publicContracts, /multiple Chapters may (?:later )?share one Phase/i);
   assert.match(publicContracts, /proposal[- ]digest[- ]bound editorial (?:review|acceptance)/i);
+  // These checks protect the instruction route, not the semantic quality of generated prose.
+  const editorial = narrativeContract.split("## Parent Editorial Acceptance")[1].split("## ")[0];
+  assert.match(editorial, /7\.[\s\S]*referents and technical scope[\s\S]*\[Voice\]\(#voice\)/);
+  assert.match(editorial, /8\.[^\n]*consistent terminology under \[Voice\]\(#voice\)/);
+  assert.match(narrativeContract, /## Voice[\s\S]*explicit\s+contributor terminology preferences/);
+
   assert.match(storyTransport, /initial proposal and two subagent corrections remain editorially unacceptable, the Ultra parent may\s+complete that same still-unrecorded assignment from the byte-identical input[\s\S]{0,100}editorial gate, recorder, and validators/i);
   assert.match(storyTransport, /proposal file for every current Story shard, reads every Chapter in full/);
   assert.match(storyTransport, /missing, stale, foreign, incomplete, or negative review before it reads Phase and before any output\s+or receipt exists/);

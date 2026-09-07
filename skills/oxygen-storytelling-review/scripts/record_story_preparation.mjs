@@ -494,7 +494,8 @@ async function validatePrivacy(value, input) {
     fail("WORKER_INPUT_TAMPERED");
   }
   rejectMetadata(value);
-  const output = await normalizeStoryPrivacyOutput(value, targets);
+  if (!Array.isArray(input.payload.sourceRedactions)) fail("PRIVACY_SOURCE_PREPARATION_REQUIRED");
+  const output = await normalizeStoryPrivacyOutput(value, targets, input.payload.sourceRedactions);
   if (!output) fail("PRIVACY_OUTPUT_INVALID");
   return { output, count: output.targetProposals.length };
 }

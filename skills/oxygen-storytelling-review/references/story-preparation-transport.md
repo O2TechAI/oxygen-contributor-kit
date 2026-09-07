@@ -29,7 +29,8 @@ Use only the contributor-selected current provider and the assigned immutable in
 the assigned non-authoritative proposal. Never open parent validation authority, other generated
 data, raw history, excluded/outside-boundary source, or another lane's data. Do not create authority
 digests, receipts, final artifacts, SQLite/Viewer mutations, answers, revision/activation/release
-state, or publication decisions. Copy only binding fields required by the lane's proposal shape.
+state, or publication decisions. Copy binding fields required by the lane's proposal shape; only `editedProposal.inputDigest` is
+computed from its assigned edited string as specified below.
 Author text in the assigned Story language, preserving customary working terms; never change the
 language policy. Corrections replace only the assigned proposal against byte-identical input.
 The parent owns recording, validation, terminal completion, and all human handoffs.
@@ -213,12 +214,26 @@ Each Story Privacy worker reads its manifest `inputPath` and returns exactly one
 ```
 
 `candidates` contains zero or more rows with exactly `id`, `reviewState`, `title`, `whyFlagged`,
-`uncertaintyReason`, and `releaseTargets`. `targetProposals` contains exactly one proposal for every
+`uncertaintyReason`, and `releaseTargets`. `releaseTargets` is a nonempty, duplicate-free array
+of assigned target ID strings. `reviewState` is either `deterministic` or `needs_confirmation`.
+For `deterministic`, `uncertaintyReason` is `null`; for `needs_confirmation`, it is a nonempty reason.
+Write `whyFlagged` and `uncertaintyReason` in brief, natural language: explain which detail may be
+sensitive, why human judgment is needed, and how the suggested wording preserves its meaning.
+Keep distinct Privacy concerns visible without implementation jargon or repeated metadata.
+The union of all candidate `releaseTargets` must equal exactly the set of targets whose
+`occurrences` are nonempty. A candidate may cover multiple targets; no one-to-one mapping is required.
+`targetProposals` contains exactly one proposal for every
 target assigned by the generated shard input, including unchanged proposals with empty
-`occurrences`; it contains no omitted, duplicated, or foreign target. Each proposal has exactly
-`targetId`, `targetContentDigest`, `proposedText`, and `occurrences`. The digest binds the exact
-current target content. Occurrence offsets are Unicode code-point offsets and must describe an
-exact, complete transformation from current content to `proposedText`.
+`occurrences`; it contains no omitted, duplicated, or foreign target. Each proposal requires
+`targetId`, `targetContentDigest`, `proposedText`, and `occurrences`; the optional source and edited-text
+proof fields below are the only additional fields. The digest binds the exact
+current target content. Each `occurrences` entry contains exactly `originalStartOffset`,
+`originalEndOffset`, `proposalStartOffset`, `proposalEndOffset`, and `category`. Both offset pairs
+are zero-based, half-open `[start, end)` Unicode code-point ranges in the original and proposed
+text respectively, with nonnegative safe-integer starts and strictly greater safe-integer ends.
+`category` must match `^[a-z0-9][a-z0-9-]{0,63}$`: 1–64 lowercase ASCII letters, digits, or hyphens,
+starting with a letter or digit. The ranges must describe an exact, complete transformation from
+current content to `proposedText`.
 
 The generated `releaseTargetCatalog` is the assignment boundary, while the shard's generated
 `storyCandidates` supply the bound target content. The recorder derives that content from the
@@ -227,7 +242,59 @@ the finalizer reuses the same owner after composing all shards. An array-only ou
 and neither boundary synthesizes an omitted unchanged proposal. Completed-zero means
 `candidates: []` plus the complete set of unchanged target proposals; it never means an omitted or
 empty `targetProposals` array when targets were assigned.
-Initial preparation catalogs only base Story fields; a source Insight enters release targets only after its current accepted version is successfully applied.
+Initial preparation catalogs base Story fields. During human review the existing reviewed-Privacy
+transport projects each valid durable Chapter draft through the server's Apply replay. A pending
+accepted source Insight therefore enters its Chapter's prospective targets before human Apply;
+actual release still reconstructs only applied, human-confirmed content.
+
+#### Source inheritance and edited Privacy text
+
+The immutable input includes `sourceRedactions` for source fragments that can match the assigned
+target content or `editedText`. Each record has `id`, `documentId`, `itemId`, `startOffset`,
+`endOffset`, `category`, `text`, and bounded same-document `context` with item boundaries. The full
+verified source ledger stays with the existing authority owner; workers do not reopen it. `context`
+is a JSON string with `documentId` and `items` entries containing `itemId` and `text`. Reviewed
+refresh binds the full source projection with `sourcePrivacyDigest` and the supplied subset with
+`sourceRedactionsDigest`; the parent transport creates and verifies these bindings, not the worker.
+These records describe source obligations, never contributor permission to publish.
+
+For every exact Unicode code-point occurrence of each supplied source record's `text` in the
+original target, add one `sourceMatches` entry:
+
+```json
+{"sourceRedactionId":"assigned-source-id","originalStartOffset":0,"originalEndOffset":3,"relation":"inherited","reason":"This target reports the same marked information in the supplied source context."}
+```
+
+`relation` is exactly `inherited` or `unrelated`. An inherited occurrence must be covered by the
+proposal's anonymization `occurrences` and the replacement cannot repeat that source fragment.
+An unrelated occurrence requires a concrete semantic reason grounded in the target and supplied
+source context, even when both uses are in the same Chapter. Scope, word length, number boundaries,
+or a coincidental shared literal cannot establish that relation. If context is insufficient, do
+not invent an unrelated reason; propose a safe abstraction and explain uncertainty in a
+`needs_confirmation` candidate for the parent and contributor to review. Credentials can never
+be `unrelated` or exact-public. Parent semantic review must check these explanations before
+recording/finalizing; machine validation establishes exact coverage and binding, not truth of prose.
+
+Also inspect the complete final `proposedText`, including newly introduced positions. If any
+supplied source fragment remains there, `proposalSourceMatches` must cover every final-text range
+using the same entry shape; only justified noncredential `unrelated` matches can remain. Replacing
+an inherited original range and copying the information elsewhere is invalid. Source association
+is separate from a user's later exact-public choice, which remains bound to the original range.
+
+When the assigned target includes `editedText`, return an additional `editedProposal` with exactly
+`inputDigest` (`storyPreparationDigest(editedText)`: lowercase SHA-256 of the UTF-8 bytes of
+`JSON.stringify(editedText)`, including JSON string escaping), `text` (the reviewed final edited
+anonymization), and, only if needed, `sourceMatches` for every source fragment in that final `text`.
+Those ranges refer to the final edited string and must likewise be justified noncredential
+`unrelated` matches. The contributor sees this checked suggestion in the same Chapter and accepts
+it before Apply. Changing the edit invalidates its proof and requires a new preparation.
+
+Omit `sourceMatches` and `proposalSourceMatches` when their respective text has no source match;
+do not add repeated empty arrays to each target. Missing any actual obligation, an extra/malformed
+range, stale edit digest, or uncovered exact source match fails shared validation. Record,
+finalize, initial activation, reviewed import, and Apply use the same source-grounded validator.
+Already-activated old records without a required proof are preparation-required; use a fresh public reviewed-Privacy
+export/prepare/finalize/import cycle, never modify frozen inputs, receipts, or proposal budgets.
 
 ### Preference proposals
 

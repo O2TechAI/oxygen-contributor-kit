@@ -6,7 +6,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 
 - [ ] Active Story candidates use `oxygen.story:` and `schema: "oxygen.story"`.
 - [ ] Workflow progress reaches Review Story only through activation with `storySourceSchema: "oxygen.story"` and `storySessionSchema: "oxygen.story-review-session"`.
-- [ ] Public workflow order is Collect -> Organize -> upstream source Privacy preparation -> build Project Story using bounded semantic workers -> independent global sparse Insight pass -> Story/Release Privacy total proposal preparation -> Preference-question generation -> Project Story human review -> Privacy target choices -> Preference answers -> All set -> local reviewed release.
+- [ ] Public workflow order is Collect -> Organize -> upstream source Privacy preparation -> build Project Story using bounded semantic workers -> independent global sparse Insight pass -> Story/Release Privacy total proposal preparation -> Preference-question generation -> Chapter human review (Story -> Insight -> Privacy drafts -> Review summary -> Apply review) -> source Privacy Keep/Redact decisions -> Preference answers -> All set -> local reviewed release.
 - [ ] Review Story opens only after terminal results for Story generation, global Insight pass, Story/Release Privacy total proposal preparation, and Preference-question generation; completed-zero is explicit where valid.
 - [ ] Launcher ready requires coverage, Story candidates, deterministic Preference bundle, and `oxygen.story-preparation` manifest; missing or extra authority fails before HTTP.
 - [ ] Preference bundle import to `/api/probes` precedes the exact `/api/workflow` Review Story activation; completed-zero is valid and failed import prevents activation.
@@ -21,7 +21,7 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] Finalized Coverage owner IDs produce complete owner-atomic Story bundles; no owner spans shards, and a shard may contain multiple owners.
 - [ ] Every Story proposal and one complete parent Phase assignment validate before the atomic Story records directory and exactly one receipt per shard exist.
 - [ ] Story and Insight worker inputs contain only the exact bound raw reviewed narrative required for their assigned scope through the contributor-selected current provider; they contain no excluded or outside-boundary narrative, raw actor identity, Source Privacy rows, or provider metadata.
-- [ ] Worker validation authority contains no source narrative, raw actor identity, or source outside the exact reviewed boundary.
+- [ ] Parent validation authority is not dispatched to workers. Privacy workers receive only assigned target content and its matching verified source fragments with bounded context inside the reviewed boundary.
 - [ ] Static tests do not claim actual host-subagent spawning; retain that proof for later E2E evidence.
 - [ ] Every bounded lane starts from a generated immutable input, and only the recorder creates the atomic output/receipt pair.
 - [ ] The recorder rejects invalid pre-receipt proposals without either authority file, permits correction only while both are absent, rejects differing post-receipt proposals, and never repairs a partial pair.
@@ -33,6 +33,11 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 - [ ] No Story JSON contains raw member lists, per-event negative ledgers, Privacy candidates, source originals, prompts, hidden reasoning, or Preference answers.
 - [ ] Story/Release Privacy candidates remain explanatory metadata outside `oxygen.story`; the Agent supplies one proposal for every release target and the server-owned authority stores target choices.
 - [ ] Preference questions are generated from reusable Insight candidates before Project Story human review opens, remain unanswered until explicit contributor action after review, and are not stored in the Story review session.
+
+- [ ] Required original/final/edit source-match proofs use verified source identities and bounded same-document context; same-Chapter homonyms require semantic reasons, credentials cannot be public.
+- [ ] Pending accepted Insights and custom Privacy edits are checked before the single Chapter Apply; failed/CAS-conflicted Apply retains all drafts and rolls back all writes.
+- [ ] A valid Chapter can Apply while a sibling has a bad draft; final release still rejects the unapplied sibling.
+- [ ] Applying controls stay disabled through delayed acknowledgement; old run/source/version acknowledgements cannot replace newer drafts.
 
 ## Human Pauses
 
@@ -47,11 +52,11 @@ Use this checklist before final handoff. A green unit test is not enough when hu
 
 - [ ] Public disclosure distinguishes contributor-selected provider processing of raw or private project material during Organization/Story authoring from no automatic upload or publication; Oxygen does not silently switch providers or send Privacy-derived data to a second endpoint.
 - [ ] The hard Privacy boundary is limited to exact contributor-reviewed final export bytes; detection and anonymization are best effort, final human review is mandatory, and provider-free package reconstruction is not described as a provider-free workflow.
-- [ ] Final Chapter Privacy/Release Preview uses the current server-owned target authority and exposes exactly these choices: accept the Agent proposal, edit anonymized text, or make an exact noncredential occurrence public.
+- [ ] Chapter Privacy stages choices for one atomic Apply using the current prospective target authority: accept the Agent proposal, edit anonymized text, or make an exact noncredential occurrence public.
 - [ ] Final release uses meaning-preserving anonymization rather than blank deletion; an exact noncredential public occurrence is public only through an explicit reviewed contributor choice.
-- [ ] Required Release Preview shows only the release-safe projection for deterministic/confirmed safe content.
+- [ ] Release Preview is read-only, compares original and expected wording before and after Apply, and distinguishes suggestions, drafts, missing review, and applied choices.
 - [ ] `needs_confirmation` source Privacy items show only the minimum permitted local original, current safe projection, safe uncertainty reason, and Keep/Redact.
-- [ ] Only `needs_confirmation` rows are decision-editable; category/status/reason mutation, deletion, and soft deletion are not final contributor actions.
+- [ ] Only source Privacy `needs_confirmation` rows are decision-editable; category/status/reason mutation, deletion, and soft deletion are not final contributor actions.
 - [ ] Unavailable originals are never reconstructed.
 - [ ] Pending confirmation blocks Story/package release, and Raw Evidence or suppressed content is not exposed through Insight review.
 - [ ] `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, and `oxygen-contribution.zip` omit originals, Evidence IDs, anchors, coverage metadata, review ledgers, offsets, prompts, and private notes.

@@ -53,8 +53,8 @@ build Project Story using bounded semantic workers
 independent global sparse Insight pass
 Story/Release Privacy total proposal preparation
 Preference-question generation
-Project Story human review
-Privacy target choices
+Chapter human review: Story -> Insight -> Privacy drafts -> Review summary -> Apply review
+source Privacy Keep/Redact decisions
 Preference answers
 All set
 local reviewed release
@@ -117,9 +117,9 @@ The required final Viewer must preserve:
 - HTML/ZIP download actions;
 - publication separation.
 
-Chapter Privacy/Release Preview is implemented in the canonical Viewer. Current target-choice
-authority may be completed-empty or contain candidate metadata and release targets; missing target
-choices and stale authority fail closed before final release confirmation or export.
+Chapter Privacy stages choices for the same Apply review that commits Story and Insight edits;
+Release Preview is read-only and compares local originals with expected release wording, marking suggestions and drafts before Apply. Missing target choices and stale
+authority fail closed before final release confirmation or export.
 
 Project-specific Story prose, Privacy excerpts, generated candidates, preference answers, screenshots, and runtime database state remain local run artifacts. They must not be hardcoded in reusable Skill, Viewer, or test source.
 

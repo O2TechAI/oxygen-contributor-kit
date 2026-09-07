@@ -1,3 +1,8 @@
+import { applyStoryPrivacyPublicOverrides } from "../lib/story-privacy-projection.ts";
+import type { StoryReviewSession } from "../lib/story-review-session.ts";
+
+export type StoryPrivacyDraft = NonNullable<StoryReviewSession["privacyDrafts"]>[string];
+
 export type StoryPrivacyCandidate = {
   id: string;
   reviewState: "deterministic" | "needs_confirmation";
@@ -21,6 +26,7 @@ export type StoryPrivacyOccurrence = {
 };
 
 export type StoryPrivacyTarget = {
+  editedProposal?: { inputDigest: string; text: string };
   targetId: string;
   targetContentDigest: string;
   originalText: string;
@@ -41,6 +47,9 @@ export type StoryPrivacyTargetChoice = {
 };
 
 export type StoryPrivacyAuthority = {
+  serverVersion?: number;
+  chapterErrors?: Record<string, string>;
+  pendingChapterKeys?: string[];
   workflowRunId: string;
   sourceRevision: number;
   activeStoryDigest: string;
@@ -123,24 +132,35 @@ export function parseStoryPrivacyAuthority(value: unknown): StoryPrivacyAuthorit
   if (!record(value) || !exactKeys(value, [
     "workflowRunId", "sourceRevision", "activeStoryDigest", "authorityDigest", "status",
     "candidates", "targets",
+    ...["serverVersion", "chapterErrors", "pendingChapterKeys"].filter((key) => record(value) && Object.hasOwn(value, key)),
   ]) || !stableId(value.workflowRunId)
     || !Number.isSafeInteger(value.sourceRevision) || Number(value.sourceRevision) <= 0
     || typeof value.activeStoryDigest !== "string" || !digest.test(value.activeStoryDigest)
     || typeof value.authorityDigest !== "string" || !digest.test(value.authorityDigest)
     || !["preparation_required", "completed_empty", "completed_with_candidates"]
       .includes(String(value.status))
-    || !Array.isArray(value.candidates) || !Array.isArray(value.targets)) return null;
+    || !Array.isArray(value.candidates) || !Array.isArray(value.targets)
+    || (value.serverVersion !== undefined && (!Number.isSafeInteger(value.serverVersion) || Number(value.serverVersion) < 0))
+    || (value.chapterErrors !== undefined && (!record(value.chapterErrors)
+      || Object.values(value.chapterErrors).some((error) => typeof error !== "string")))
+    || (value.pendingChapterKeys !== undefined && (!Array.isArray(value.pendingChapterKeys)
+      || value.pendingChapterKeys.some((key) => !stableId(key))))) return null;
 
   const targets: StoryPrivacyTarget[] = [];
   for (const raw of value.targets) {
     if (!record(raw) || !exactKeys(raw, [
       "targetId", "targetContentDigest", "originalText", "proposedText", "selectedText", "edited",
       "occurrences", "decidedAt",
+      ...(record(raw) && Object.hasOwn(raw, "editedProposal") ? ["editedProposal"] : []),
     ]) || !stableId(raw.targetId) || typeof raw.targetContentDigest !== "string"
       || !digest.test(raw.targetContentDigest) || !safeText(raw.originalText)
       || !safeText(raw.proposedText) || (raw.selectedText !== null && !safeText(raw.selectedText))
       || typeof raw.edited !== "boolean" || !Array.isArray(raw.occurrences)
-      || (raw.selectedText === null ? raw.decidedAt !== null : !exactTimestamp(raw.decidedAt))) return null;
+      || (raw.selectedText === null ? raw.decidedAt !== null : !exactTimestamp(raw.decidedAt))
+      || (raw.editedProposal !== undefined && (!record(raw.editedProposal)
+        || !exactKeys(raw.editedProposal, ["inputDigest", "text"])
+        || typeof raw.editedProposal.inputDigest !== "string" || !digest.test(raw.editedProposal.inputDigest)
+        || !safeText(raw.editedProposal.text)))) return null;
     const occurrences: StoryPrivacyOccurrence[] = [];
     for (const occurrence of raw.occurrences) {
       if (!record(occurrence) || !exactKeys(occurrence, [
@@ -242,26 +262,78 @@ export function storyPrivacyAuthorityCurrent(
     && state.authority.status !== "preparation_required";
 }
 
-export function storyPrivacyApplyBlockerCopy(
-  status: StoryPrivacyState["status"] | "preparation_required",
-) {
-  if (status === "loading") {
-    return "Story Privacy is still loading. Apply review is blocked until the current authority is available.";
-  }
-  if (status === "preparation_required") {
-    return "Story Privacy must be refreshed after applied release content changed. Apply review is blocked until refreshed authority is available.";
-  }
-  return "Current Story Privacy authority is unavailable. Apply review is blocked until it can be loaded safely.";
-}
-
 export function storyPrivacyAuthorityComplete(authority: StoryPrivacyAuthority | null) {
   return Boolean(authority && authority.status !== "preparation_required"
     && authority.targets.every((target) => target.selectedText !== null));
 }
 
-export function chapterStoryPrivacyCandidates(authority: StoryPrivacyAuthority | null, storyKey: string) {
-  const prefix = `${storyKey}::`;
-  return authority?.candidates.filter((candidate) => (
-    candidate.releaseTargets.some((target) => target.startsWith(prefix))
-  )) || [];
+export function storyPrivacyTargetView(
+  target: StoryPrivacyTarget, draft?: StoryPrivacyDraft,
+  chapter?: { stage: string; evidenceVerified: boolean }, editedInputDigest?: string,
+) {
+  const sameContent = draft?.targetContentDigest === target.targetContentDigest;
+  const current = sameContent && draft.proposedText === target.proposedText;
+  const checkedEdit = Boolean(sameContent && draft.editedText !== null && target.editedProposal
+    && editedInputDigest === target.editedProposal.inputDigest);
+  const acceptedEdit = checkedEdit && current && draft?.reviewedEditText === target.editedProposal?.text;
+  if (draft) {
+    if (!sameContent) return { text: target.proposedText, label: "Agent-proposed anonymized text",
+      status: "Earlier choice retained · review the current text", ready: false, checkedEdit: false, choice: "" };
+    if (draft.editedText !== null) return { text: acceptedEdit ? target.editedProposal!.text : draft.editedText,
+      label: acceptedEdit ? "Reviewed edit" : "Your edit",
+      status: acceptedEdit ? "Draft · ready for Apply review" : checkedEdit ? "Checked edit ready for your review" : "Editing draft · waiting for Privacy review",
+      ready: acceptedEdit, checkedEdit, choice: "edit" };
+    if (!current) return { text: target.proposedText, label: "Agent-proposed anonymized text",
+      status: "Earlier choice retained · review the new recommendation", ready: false, checkedEdit: false, choice: "" };
+    const retained = draft.publicOverrides.length > 0;
+    const rejected = retained && target.occurrences.filter((span) => span.canPublish).every((span) => draft.publicOverrides.some((choice) =>
+      choice.originalStartOffset === span.originalStartOffset && choice.originalEndOffset === span.originalEndOffset && choice.category === span.category));
+    const text = applyStoryPrivacyPublicOverrides(target.originalText, target.proposedText, target.occurrences, draft.publicOverrides);
+    if (text === null) return { text: target.proposedText, label: "Agent-proposed anonymized text",
+      status: "Earlier choice retained · review the new recommendation", ready: false, checkedEdit: false, choice: "" };
+    return { text, label: retained ? rejected ? "Original retained where allowed" : "Some original wording retained" : "Agent-proposed anonymized text",
+      status: "Draft · ready for Apply review", ready: true, checkedEdit: false, choice: rejected ? "reject" : retained ? "partial" : "accept" };
+  }
+  const applied = target.selectedText !== null && chapter?.evidenceVerified === true
+    && (chapter.stage === "revision_ready" || chapter.stage === "human_confirmed");
+  const publicChoice = target.occurrences.some((span) => span.isPublic);
+  const allPublic = publicChoice && target.occurrences.filter((span) => span.canPublish).every((span) => span.isPublic);
+  return { text: target.selectedText ?? target.proposedText,
+    label: target.edited ? "Reviewed edit" : publicChoice ? allPublic ? "Original retained where allowed" : "Some original wording retained" : "Agent-proposed anonymized text",
+    status: applied ? "Applied" : "Suggested · Apply review to confirm", ready: target.selectedText !== null, checkedEdit: false,
+    choice: target.selectedText === null ? "" : target.edited ? "edit" : allPublic ? "reject" : publicChoice ? "partial" : "accept" };
+}
+
+export function storyPrivacyNeedsDecision(target: StoryPrivacyTarget, candidates: StoryPrivacyCandidate[], draft?: StoryPrivacyDraft) {
+  return Boolean(draft || target.editedProposal || candidates.some((candidate) =>
+    candidate.reviewState === "needs_confirmation" && candidate.releaseTargets.includes(target.targetId)));
+}
+
+/** Exact mapped changes for proposals/public choices; one enclosing changed range for a custom edit. */
+export function storyPrivacyChanges(target: StoryPrivacyTarget, expected: string) {
+  const original = Array.from(target.originalText), proposal = Array.from(target.proposedText), expectedPoints = Array.from(expected);
+  const changes: Array<{ originalStart: number; originalEnd: number; start: number; end: number }> = [];
+  const rendered: string[] = [];
+  let cursor = 0, renderedLength = 0;
+  for (const span of target.occurrences) {
+    rendered.push(original.slice(cursor, span.originalStartOffset).join(""));
+    renderedLength += span.originalStartOffset - cursor;
+    const start = renderedLength;
+    const before = original.slice(span.originalStartOffset, span.originalEndOffset).join("");
+    const after = proposal.slice(span.proposalStartOffset, span.proposalEndOffset).join("");
+    const retained = span.canPublish && expectedPoints.slice(start, start + Array.from(before).length).join("") === before;
+    rendered.push(retained ? before : after);
+    renderedLength += Array.from(retained ? before : after).length;
+    if (!retained) changes.push({ originalStart: span.originalStartOffset, originalEnd: span.originalEndOffset, start, end: renderedLength });
+    cursor = span.originalEndOffset;
+  }
+  rendered.push(original.slice(cursor).join(""));
+  if (rendered.join("") === expected) return changes;
+  const next = expectedPoints;
+  let start = 0, suffix = 0;
+  while (start < original.length && start < next.length && original[start] === next[start]) start++;
+  while (suffix < original.length - start && suffix < next.length - start
+    && original[original.length - suffix - 1] === next[next.length - suffix - 1]) suffix++;
+  return start === original.length && start === next.length ? []
+    : [{ originalStart: start, originalEnd: original.length - suffix, start, end: next.length - suffix }];
 }

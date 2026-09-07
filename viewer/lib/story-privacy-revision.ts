@@ -4,7 +4,7 @@ import {
   hydrateStoryReviewSession,
   type StoryReviewSession,
 } from "./story-review-session.ts";
-import { readStoryReviewSessionRecord } from "./story-review-session-server.ts";
+import { readStoryReviewSessionRecord, replayChapterReview } from "./story-review-session-server.ts";
 import {
   compareUtf8,
   storyPreparationDigest,
@@ -25,6 +25,7 @@ import {
 type StoryPrivacyDatabase = Awaited<ReturnType<typeof getLocalDatabase>>;
 
 export type ReviewedStoryPrivacyTarget = {
+  editedText?: string;
   id: StoryReleaseTarget;
   storyKey: string;
   target: StoryReleaseTargetName;
@@ -48,6 +49,7 @@ export type ReviewedStoryPrivacyRevision = {
     contentDigest: string | null;
   }>;
   changedTargets: ReviewedStoryPrivacyTarget[];
+  chapterErrors: Record<string, string>;
 };
 
 export const STORY_PRIVACY_REVISION_ERROR = {
@@ -153,6 +155,7 @@ async function digestTargets(values: ReturnType<typeof targetValues>): Promise<R
 export async function reconstructReviewedStoryPrivacyRevision(
   db: StoryPrivacyDatabase,
   workflowRunId: string,
+  options: { appliedOnly?: boolean } = {},
 ): Promise<{ ok: true; revision: ReviewedStoryPrivacyRevision } | RevisionFailure> {
   const authorityRows = (await db.prepare("SELECT id FROM workflow_runs ORDER BY id LIMIT 2").all()).results;
   if (authorityRows.length !== 1) return { ok: false, code: STORY_PRIVACY_REVISION_ERROR.invalidAuthority };
@@ -203,8 +206,24 @@ export async function reconstructReviewedStoryPrivacyRevision(
     reviews = hydrated.chapterReviews;
   }
 
+  const chapterErrors: Record<string, string> = {};
+  if (reviews && !options.appliedOnly) {
+    reviews = { ...reviews };
+    for (const source of exactSources) {
+      const review = reviews[source.key];
+      if (review?.stage !== "reviewing") continue;
+      const replay = await replayChapterReview(db, source, review);
+      if (replay.blockedReason) chapterErrors[source.key] = replay.blockedReason;
+      else reviews[source.key] = replay.state;
+    }
+  }
   const baseline = await digestTargets(targetValues(exactSources, null));
   const current = reviews ? await digestTargets(targetValues(exactSources, reviews)) : baseline;
+  if (!options.appliedOnly) for (const target of current) {
+    const draft = sessionRecord.session?.privacyDrafts?.[target.id];
+    if (draft?.editedText !== null && draft?.editedText !== undefined
+      && draft.targetContentDigest === target.contentDigest) target.editedText = draft.editedText;
+  }
   const targetCatalog = current.map((target) => ({ id: target.id, contentDigest: target.contentDigest }));
   const storedAuthority = await db.prepare(`SELECT target_catalog_json,target_catalog_digest
     FROM story_privacy_authorities WHERE workflow_run_id=?`).bind(workflowRunId)
@@ -257,6 +276,7 @@ export async function reconstructReviewedStoryPrivacyRevision(
       changedTargetDigest: await storyPreparationDigest(targetTransitions),
       targetTransitions,
       changedTargets,
+      chapterErrors,
     },
   };
 }

@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { computeSourceDigest } from "../../../viewer/lib/redaction-pass.mjs";
+import { storyPrivacySourceRedactions } from "../../../viewer/lib/story-privacy-projection.ts";
 import {
   canonicalAuthorityJson,
   MAX_COVERAGE_MANIFEST_BYTES,
@@ -468,6 +469,7 @@ export async function buildStoryValidationAuthority(
     schema: "oxygen.story-validation-authority",
     sourceDigest: currentSourceDigest,
     sourcePrivacyDigest: privacy.authority.snapshotDigest,
+    sourceRedactions: storyPrivacySourceRedactions(rows, sourcePrivacy.redactions),
     semanticManifest: semantic,
     coverageManifest: coverageValidation.authority,
     evidence,

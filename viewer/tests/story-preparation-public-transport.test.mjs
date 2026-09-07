@@ -830,8 +830,12 @@ test("finalized Coverage owner IDs form indivisible self-contained Story bundles
     const workerBytes = await readFile(join(value.transport, ...manifest.shards[0].inputPath.split("/")), "utf8");
     assert.doesNotMatch(workerBytes, /sourcePrivacy|redactions|provider|model|OUTSIDE-EXACT-BOUND-REVIEWED-NARRATIVE/u);
     const authorityBytes = await readFile(join(value.transport, "story", "validation-authority.json"), "utf8");
-    assert.doesNotMatch(authorityBytes,
+    const authority = JSON.parse(authorityBytes);
+    assert.ok(Array.isArray(authority.sourceRedactions));
+    const { sourceRedactions, ...shapeAuthority } = authority;
+    assert.doesNotMatch(JSON.stringify(shapeAuthority),
       /safe reviewed canary|narrative|content|actorId|OUTSIDE-EXACT-BOUND-REVIEWED-NARRATIVE/u);
+    assert.doesNotMatch(JSON.stringify(sourceRedactions), /actorId|OUTSIDE-EXACT-BOUND-REVIEWED-NARRATIVE/u);
   } finally {
     await value.cleanup();
   }

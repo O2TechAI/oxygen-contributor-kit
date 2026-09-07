@@ -59,8 +59,8 @@ build Project Story using bounded semantic workers
 independent global sparse Insight pass
 Story/Release Privacy total proposal preparation
 Preference-question generation
-Project Story human review
-Privacy target choices
+Chapter human review: Story -> Insight -> Privacy drafts -> Review summary -> Apply review
+source Privacy Keep/Redact decisions
 Preference answers
 All set
 local reviewed release
@@ -69,7 +69,7 @@ local reviewed release
 Keep the two Privacy boundaries distinct:
 
 - Upstream source Privacy binds mandatory release authority to the reviewed source before Story generation and blocks release while required source redaction decisions remain unresolved. During Organize and Story authoring, the contributor-selected current Agent/provider may process the exact bound raw reviewed source; this does not authorize release, upload, publication, or a provider switch.
-- Story/Release Privacy reviews release-safe Story targets after the Story candidate exists. The Agent authors one meaning-preserving proposal for every target, while candidates remain explanatory metadata. The hydrated Story session does not own target choices; the server-owned target authority does.
+- Story/Release Privacy reviews release-safe Story targets after the Story candidate exists. The Agent authors one meaning-preserving proposal for every target, while candidates remain explanatory metadata. The hydrated Story session stores pending Privacy drafts; Chapter Apply commits them with Story/Insight edits to the existing server-owned target authority.
 
 ## Readiness Terminal Rule
 
@@ -192,11 +192,11 @@ read-only while the explanatory fields are reviewed. Human-created Insight keeps
 user-selected Story-substring Quote origin and lifecycle. Release uses the accepted source Quote,
 not Story paragraph text, and strips anchor and Evidence identities.
 
-Chapter Privacy/Release Preview is implemented in the canonical Viewer as one choice authority per target. It shows the local original beside the Agent-authored meaning-preserving proposal. The contributor accepts that proposal, edits anonymized text, or explicitly makes an exact noncredential occurrence public for the current target digest. A missing, stale, invalid, or incomplete target choice blocks the whole release. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
+Each Chapter contains its Privacy original/proposal/reason and accept, edit, or exact noncredential-public controls. Choices are durable drafts until the contributor's single Apply review commits this Chapter's Story, Insight, and Privacy choices atomically. Custom edits and pending accepted Insights receive prospective Privacy preparation through the existing workflow parent. Release Preview is read-only and compares local originals with expected release wording; suggestions, drafts, waiting-for-review text, and applied choices are clearly distinguished. Originals, review metadata, evidence IDs, anchors, and Story review ledgers never enter `oxygen.reviewed-story`, `oxygen-reviewed-story.html`, or `oxygen-contribution.zip`.
 
 ### Refresh reviewed Story Privacy
 
-After any reviewed Story edit, treat `preparation_required` as a resumable authority refresh and
+During review the parent watches the existing workflow `storyReviewVersion`, checks Story Privacy preparation needs after durable draft changes, and continues the existing refresh route. After a Story, Insight, or custom Privacy edit, treat `preparation_required` as a resumable authority refresh and
 follow the parent-owned procedure in [`SOP.md`](../../SOP.md#refresh-story-privacy-after-a-story-edit).
 Keep the same localhost Viewer and workflow run, use a new private directory, and never repair SQLite
 or author an import bundle by hand. Each worker writes the canonical total Story Privacy output

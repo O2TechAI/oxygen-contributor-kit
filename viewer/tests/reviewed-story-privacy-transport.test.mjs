@@ -510,6 +510,7 @@ test("Story Privacy import rejects source revision zero before database initiali
     changedTargetDigest: "d".repeat(64),
     changedTargetCount: 0,
     previousAuthorityDigest: "e".repeat(64),
+    sourcePrivacyDigest: "f".repeat(64), sourceRedactionsDigest: await storyPreparationDigest([]),
   };
   const terminalReceipt = {
     schema: "oxygen.reviewed-story-privacy-terminal-receipt",
@@ -549,7 +550,7 @@ test("Story Privacy import rejects source revision zero before database initiali
   }
 });
 
-test("source Insight targets enter Story Privacy only after accepted Apply", async () => {
+test("source Insight targets enter prospective Privacy before Apply while release reconstruction stays applied-only", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "reviewed-story-insight-visibility-"));
   const previous = process.env.OXYGEN_VIEWER_STATE_DIR;
   process.env.OXYGEN_VIEWER_STATE_DIR = stateDir;
@@ -586,7 +587,13 @@ test("source Insight targets enter Story Privacy only after accepted Apply", asy
     };
 
     await expectCurrentWithoutTransitions(untouchedReviewedState(), 1);
-    await expectCurrentWithoutTransitions(acceptedUnappliedReviewedState(), 2);
+    await persist(acceptedUnappliedReviewedState(), 2);
+    const prospective = await reconstructReviewedStoryPrivacyRevision(db, RUN_ID);
+    assert.equal(prospective.ok, true);
+    assert.equal(prospective.revision.changedTargets.length, 5);
+    const persistedOnly = await reconstructReviewedStoryPrivacyRevision(db, RUN_ID, { appliedOnly: true });
+    assert.equal(persistedOnly.ok, true);
+    assert.deepEqual(persistedOnly.revision.changedTargets, []);
     await expectCurrentWithoutTransitions(rejectedReviewedState(), 3);
 
     const applied = unchangedReviewedState();
@@ -1170,12 +1177,14 @@ async function createScriptFixture(directory, { sourceRevision = 3, serverVersio
     changedTargetDigest: await storyPreparationDigest([transition]),
     changedTargetCount: 1,
     previousAuthorityDigest: "d".repeat(64),
+    sourcePrivacyDigest: "f".repeat(64), sourceRedactionsDigest: await storyPreparationDigest([]),
   };
   const snapshotPath = join(directory, "snapshot.json");
   const root = join(directory, "prepared");
   const proposals = join(directory, "proposals");
   await writeFile(snapshotPath, JSON.stringify({
     schema: "oxygen.reviewed-story-privacy-snapshot",
+    sourceRedactions: [],
     binding,
     targetTransitions: [transition],
     changedTargets: [target],
@@ -1225,12 +1234,14 @@ async function createBalancedScriptFixture(directory, count = 130) {
     changedTargetDigest: await storyPreparationDigest(transitions),
     changedTargetCount: transitions.length,
     previousAuthorityDigest: "4".repeat(64),
+    sourcePrivacyDigest: "f".repeat(64), sourceRedactionsDigest: await storyPreparationDigest([]),
   };
   const snapshotPath = join(directory, "snapshot.json");
   const root = join(directory, "prepared");
   const proposals = join(directory, "proposals");
   await writeFile(snapshotPath, JSON.stringify({
     schema: "oxygen.reviewed-story-privacy-snapshot",
+    sourceRedactions: [],
     binding,
     targetTransitions: transitions,
     changedTargets: targets,
@@ -1265,12 +1276,14 @@ async function createRemovalOnlyScriptFixture(directory) {
     changedTargetDigest: await storyPreparationDigest([transition]),
     changedTargetCount: 1,
     previousAuthorityDigest: "9".repeat(64),
+    sourcePrivacyDigest: "f".repeat(64), sourceRedactionsDigest: await storyPreparationDigest([]),
   };
   const snapshotPath = join(directory, "snapshot.json");
   const root = join(directory, "prepared");
   const proposals = join(directory, "proposals");
   await writeFile(snapshotPath, JSON.stringify({
     schema: "oxygen.reviewed-story-privacy-snapshot",
+    sourceRedactions: [],
     binding,
     targetTransitions: [transition],
     changedTargets: [],
