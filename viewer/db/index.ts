@@ -151,7 +151,8 @@ const statements = [
   // lifecycle. Package/release code never selects this table.
   `CREATE TABLE IF NOT EXISTS story_review_sessions (
     workflow_run_id TEXT PRIMARY KEY, state_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL, server_version INTEGER NOT NULL DEFAULT 0
+    updated_at TEXT NOT NULL, server_version INTEGER NOT NULL DEFAULT 0,
+    privacy_rereview_request_json TEXT CHECK(privacy_rereview_request_json IS NULL OR json_valid(privacy_rereview_request_json))
   )`,
   // One row per redacted span. Offsets address items.content, which stays the
   // untouched original -- the tag is applied at render time. Only pending
@@ -500,6 +501,10 @@ export async function getLocalDatabase() {
     refreshLegacyStoryPrivacySchema(database);
     database.exec(statements.join(";\n"));
     assertSemanticManifestSchema(database);
+    const reviewColumns = database.prepare("PRAGMA table_info(story_review_sessions)").all();
+    if (!reviewColumns.some((column) => column.name === "privacy_rereview_request_json")) {
+      database.exec("ALTER TABLE story_review_sessions ADD COLUMN privacy_rereview_request_json TEXT CHECK(privacy_rereview_request_json IS NULL OR json_valid(privacy_rereview_request_json))");
+    }
     runtime.__oxygenLocalSqlite = new LocalDatabase(database);
     return runtime.__oxygenLocalSqlite;
   } catch (error) {

@@ -160,6 +160,7 @@ test("the rendered editor keeps paragraph-owned Insight cards in a separate resp
 
   const html = renderToStaticMarkup(createElement(StoryChapterEditor, {
     source,
+    dateLabel: "Source dates · Jul 12, 2026 – Jul 14, 2026",
     position: 1,
     total: 1,
     chapterReview: saved.state,
@@ -176,6 +177,7 @@ test("the rendered editor keeps paragraph-owned Insight cards in a separate resp
     storyPrivacyTotal: 0,
     onOpenStoryPrivacy() {},
   }));
+  assert.match(html, /class="storyChapterDate">Source dates · Jul 12, 2026 – Jul 14, 2026<\/span>/);
   const firstRowStart = html.indexOf('data-insight-owner-block="paragraph-one"');
   const secondRowStart = html.indexOf('data-insight-owner-block="paragraph-two"');
   const secondRowEnd = html.indexOf('<section class="chapterCompletion"', secondRowStart);
@@ -382,13 +384,12 @@ test("story Timeline preserves source metadata and renders the local transition 
   assert.match(workspace, /timelineAiInsight:"AI Insight"/);
   assert.match(workspace, /timelineAiInsight:"AI 洞察"/);
   assert.match(timelineRows, /<article className="storyChapter"/);
-  assert.match(timelineRows, /event\.dateLabel && <time dateTime=\{event\.timestamp\}>\{event\.dateLabel\}<\/time>/);
+  assert.match(timelineRows, /<span className="storyChapterDate">\{event\.dateLabel\}<\/span>/);
   assert.match(timelineRows, /event\.timelineMarker === "ai_insight" && <strong>\{workspaceUi\.en\.timelineAiInsight\}<\/strong>/);
   assert.match(timelineRows, /event\.kind && <span>\{storyKindLabel\(event\.kind,"en"\)\}<\/span>/);
   assert.match(timelineRows, /event\.before && event\.after/);
   assert.match(timelineRows, /No evidence-supported transition/);
   assert.match(timelineRows, /event\.chips && event\.chips\.length > 0/);
-  assert.doesNotMatch(timelineRows, /Date unavailable|日期不可用/);
 });
 
 test("story handoff progress uses the canonical completion evaluator", () => {

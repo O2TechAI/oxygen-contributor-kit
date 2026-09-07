@@ -23,6 +23,10 @@ import {
 } from "./story-privacy-revision.ts";
 import {
   applyStoryPrivacyPublicOverrides,
+  parseStoryPrivacyRereviewRequest,
+  validStoryPrivacyRereviewTargets,
+  storyPrivacyRereviewRespected,
+  type StoryPrivacyRereviewRequest,
   storyPrivacyCredentialCategory,
   storyPrivacyCredentialText,
   storyPrivacyOccurrenceReviews,
@@ -641,12 +645,51 @@ export async function readStoryPrivacyAuthority(
   return "response" in current ? { ok: true, authority: current.response } : current;
 }
 
+async function projectExplicitRereview(
+  current: Awaited<ReturnType<typeof captureAuthority>>, request: StoryPrivacyRereviewRequest,
+) {
+  if (!("response" in current)) return current;
+  // Do not silently include another Chapter's pending preparation or reopen human decisions.
+  if (current.revision.targetTransitions.length || current.response.status === "preparation_required"
+    || request.targets.some((requested) => {
+      const target = current.response.targets.find((entry) => entry.targetId === requested.targetId);
+      return !target || target.selectedText !== null
+        || current.revision.targets.find((entry) => entry.id === requested.targetId)?.editedText !== undefined
+        || requested.retainOriginal.some((span) => !target.occurrences.some((occurrence) =>
+          occurrence.canPublish && storyPrivacyOverrideKey(occurrence) === storyPrivacyOverrideKey(span)
+          && occurrence.originalText === span.originalText));
+    })) return { ok: false as const, code: STORY_PRIVACY_ERROR.notActionable };
+  const ids = new Set(request.targets.map((target) => target.targetId));
+  const changedTargets = current.revision.targets.filter((target) => ids.has(target.id));
+  if (!validStoryPrivacyRereviewTargets(request, changedTargets)) {
+    return { ok: false as const, code: STORY_PRIVACY_ERROR.staleAuthority };
+  }
+  const targetTransitions = changedTargets.map((target) => ({ id: target.id,
+    previousContentDigest: target.contentDigest, contentDigest: target.contentDigest }));
+  return { ...current,
+    sourceRedactionsDigest: await storyPreparationDigest(matchingStoryPrivacySources(changedTargets, current.knownFragments)),
+    revision: { ...current.revision, changedTargets, targetTransitions,
+      changedTargetDigest: await storyPreparationDigest(targetTransitions) } };
+}
+
 export async function buildReviewedStoryPrivacyPreparationSnapshot(
   db: StoryPrivacyDatabase,
   workflowRunId: string,
+  explicit?: { expectedVersion: number; sourceRevision: number; authorityDigest: string; rereviewRequest: unknown },
 ) {
-  const current = await captureAuthority(db, workflowRunId);
+  let current = await captureAuthority(db, workflowRunId);
   if (!("response" in current)) return current;
+  const request = explicit ? parseStoryPrivacyRereviewRequest(explicit.rereviewRequest) : null;
+  if (explicit) {
+    if (!request) return { ok: false as const, code: STORY_PRIVACY_ERROR.notActionable };
+    if (explicit.expectedVersion !== current.revision.serverVersion
+      || explicit.sourceRevision !== current.revision.sourceRevision
+      || explicit.authorityDigest !== current.response.authorityDigest) {
+      return { ok: false as const, code: STORY_PRIVACY_ERROR.staleAuthority };
+    }
+    current = await projectExplicitRereview(current, request);
+    if (!("response" in current)) return current;
+  }
   if (current.revision.targetTransitions.length === 0) {
     return { ok: false as const, code: STORY_PRIVACY_ERROR.notActionable };
   }
@@ -666,12 +709,45 @@ export async function buildReviewedStoryPrivacyPreparationSnapshot(
         previousAuthorityDigest: current.response.authorityDigest,
         sourcePrivacyDigest: current.sourcePrivacyDigest,
         sourceRedactionsDigest: current.sourceRedactionsDigest,
+        ...(request ? { rereviewRequest: request } : {}),
       },
       targetTransitions: current.revision.targetTransitions,
       changedTargets: current.revision.changedTargets,
       sourceRedactions: matchingStoryPrivacySources(current.revision.changedTargets, current.knownFragments),
     },
   };
+}
+
+/** Anchor the contributor request in the existing session row, outside browser
+ * draft serialization. A later autosave/Apply makes its exact version stale. */
+export async function requestReviewedStoryPrivacyPreparation(db: StoryPrivacyDatabase,
+  workflowRunId: string,
+  explicit: { expectedVersion: number; sourceRevision: number; authorityDigest: string; rereviewRequest: unknown },
+) {
+  try {
+    return await db.transaction(async () => {
+      const result = await buildReviewedStoryPrivacyPreparationSnapshot(db, workflowRunId, explicit);
+      if (!result.ok) throw new Error(result.code);
+      const saved = await db.prepare(`UPDATE story_review_sessions SET privacy_rereview_request_json=?
+        WHERE workflow_run_id=? AND server_version=? AND json_extract(state_json,'$.sourceRevision')=?`)
+        .bind(JSON.stringify(result.snapshot.binding), workflowRunId, explicit.expectedVersion, explicit.sourceRevision).run();
+      if (Number(saved.meta.changes) !== 1) throw new Error(STORY_PRIVACY_ERROR.lostCas);
+      return result;
+    });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    return { ok: false as const, code: (Object.values(STORY_PRIVACY_ERROR) as string[]).includes(code)
+      ? code : STORY_PRIVACY_ERROR.lostCas };
+  }
+}
+
+async function rereviewRequestAnchor(db: StoryPrivacyDatabase, binding: ReviewedStoryPrivacyImport["binding"]) {
+  const row = await db.prepare("SELECT privacy_rereview_request_json FROM story_review_sessions WHERE workflow_run_id=?")
+    .bind(binding.workflowRunId).first<{ privacy_rereview_request_json: string | null }>();
+  try {
+    const raw = row?.privacy_rereview_request_json;
+    return raw && await storyPreparationDigest(JSON.parse(raw)) === await storyPreparationDigest(binding) ? raw : null;
+  } catch { return null; }
 }
 
 const importBindingKeys = [
@@ -700,7 +776,8 @@ type ReviewedStoryPrivacyImport = {
     changedTargetCount: number;
     previousAuthorityDigest: string;
     sourcePrivacyDigest: string;
-  sourceRedactionsDigest: string;
+    sourceRedactionsDigest: string;
+    rereviewRequest?: StoryPrivacyRereviewRequest;
   };
   terminalReceipt: Record<string, unknown>;
   receiptDigest: string;
@@ -712,12 +789,13 @@ export function parseImportBundle(value: unknown): ReviewedStoryPrivacyImport | 
   if (!isRecord(value) || !onlyKeys(value, [
     "schema", "binding", "terminalReceipt", "receiptDigest", "privacy", "importDigest",
   ]) || value.schema !== "oxygen.reviewed-story-privacy-import"
-    || !isRecord(value.binding) || !onlyKeys(value.binding, importBindingKeys)
-    || !isRecord(value.terminalReceipt) || !onlyKeys(value.terminalReceipt, terminalReceiptKeys)
+    || !isRecord(value.binding) || !onlyKeys(value.binding, [...importBindingKeys, ...(Object.hasOwn(value.binding, "rereviewRequest") ? ["rereviewRequest"] : [])])
+    || !isRecord(value.terminalReceipt) || !onlyKeys(value.terminalReceipt, [...terminalReceiptKeys, ...(Object.hasOwn(value.binding, "rereviewRequest") ? ["rereviewRequest"] : [])])
     || !isRecord(value.privacy)
     || ![value.receiptDigest, value.importDigest].every(isStoryPrivacyDigest)) return null;
   const binding = value.binding;
-  if (!stableId(binding.workflowRunId)
+  if ((Object.hasOwn(binding, "rereviewRequest") && !parseStoryPrivacyRereviewRequest(binding.rereviewRequest))
+    || !stableId(binding.workflowRunId)
     || !Number.isSafeInteger(binding.sourceRevision) || Number(binding.sourceRevision) <= 0
     || !Number.isSafeInteger(binding.serverVersion) || Number(binding.serverVersion) < 0
     || !Number.isSafeInteger(binding.changedTargetCount) || Number(binding.changedTargetCount) < 0
@@ -771,16 +849,23 @@ export async function importReviewedStoryPrivacyAuthority(
   if (!bundle || !exactTimestamp(importedAt)) {
     return { ok: false, code: STORY_PRIVACY_ERROR.importInvalid };
   }
-  const before = await captureAuthority(db, bundle.binding.workflowRunId);
+  let before = await captureAuthority(db, bundle.binding.workflowRunId);
+  if (bundle.binding.rereviewRequest) before = await projectExplicitRereview(before, bundle.binding.rereviewRequest);
   if (!("response" in before)) return before;
   const workflowRunId = bundle.binding.workflowRunId;
+  if (bundle.binding.rereviewRequest && !await rereviewRequestAnchor(db, bundle.binding)) {
+    return { ok: false, code: STORY_PRIVACY_ERROR.importStale };
+  }
   const revision = before.revision;
   if (!exactImportBinding(bundle.binding, revision, before.response.authorityDigest, before.sourcePrivacyDigest, before.sourceRedactionsDigest)
     || revision.targetTransitions.length === 0) {
     return { ok: false, code: STORY_PRIVACY_ERROR.importStale };
   }
   const importedPrivacy = await normalizeStoryPrivacyOutput(bundle.privacy, revision.changedTargets, before.knownFragments);
-  if (!importedPrivacy) return { ok: false, code: STORY_PRIVACY_ERROR.importInvalid };
+  if (!importedPrivacy || (bundle.binding.rereviewRequest
+    && !storyPrivacyRereviewRespected(bundle.binding.rereviewRequest, importedPrivacy.targetProposals))) {
+    return { ok: false, code: STORY_PRIVACY_ERROR.importInvalid };
+  }
   const outputDigest = await storyPreparationDigest(importedPrivacy);
   const receipt = bundle.terminalReceipt;
   const expectedReceipt = {
@@ -796,6 +881,7 @@ export async function importReviewedStoryPrivacyAuthority(
     changedTargetCount: revision.targetTransitions.length,
     sourcePrivacyDigest: before.sourcePrivacyDigest,
     sourceRedactionsDigest: before.sourceRedactionsDigest,
+    ...(bundle.binding.rereviewRequest ? { rereviewRequest: bundle.binding.rereviewRequest } : {}),
     outputDigest,
     outputCount: importedPrivacy.targetProposals.length,
     completedAt: receipt.completedAt,
@@ -814,6 +900,7 @@ export async function importReviewedStoryPrivacyAuthority(
   const currentById = new Map(revision.targets.map((target) => [target.id, target.contentDigest]));
   const retainedRows = before.retainedTargetRows.filter((row) => (
     currentById.get(row.target_id as StoryReleaseTarget) === row.target_content_digest
+      && !revision.changedTargets.some((target) => target.id === row.target_id)
   ));
   const retainedIds = new Set(retainedRows.map((row) => row.target_id));
   const retainedCandidates = residualCandidates(before.rawCandidates, retainedIds);
@@ -838,11 +925,14 @@ export async function importReviewedStoryPrivacyAuthority(
   const proposalDigest = await storyPreparationDigest(normalizedMerged);
   try {
     await db.transaction(async () => {
-      const current = await captureAuthority(db, workflowRunId);
+      let current = await captureAuthority(db, workflowRunId);
+      if (bundle.binding.rereviewRequest) current = await projectExplicitRereview(current, bundle.binding.rereviewRequest);
       if (!("response" in current)
         || !exactImportBinding(bundle.binding, current.revision, current.response.authorityDigest, current.sourcePrivacyDigest, current.sourceRedactionsDigest)) {
         throw new Error(STORY_PRIVACY_ERROR.importStale);
       }
+      const requestAnchor = bundle.binding.rereviewRequest ? await rereviewRequestAnchor(db, bundle.binding) : null;
+      if (bundle.binding.rereviewRequest && !requestAnchor) throw new Error(STORY_PRIVACY_ERROR.importStale);
       if (!validTargetRows(current.revision.targets, mergedRows, current.knownFragments)) {
         throw new Error(STORY_PRIVACY_ERROR.importInvalid);
       }
@@ -883,6 +973,12 @@ export async function importReviewedStoryPrivacyAuthority(
         ).run();
       await db.prepare("DELETE FROM project_release_confirmations WHERE workflow_run_id=?")
         .bind(workflowRunId).run();
+      if (requestAnchor) {
+        const consumed = await db.prepare(`UPDATE story_review_sessions SET privacy_rereview_request_json=NULL
+          WHERE workflow_run_id=? AND server_version=? AND privacy_rereview_request_json=?`)
+          .bind(workflowRunId, bundle.binding.serverVersion, requestAnchor).run();
+        if (Number(consumed.meta.changes) !== 1) throw new Error(STORY_PRIVACY_ERROR.lostCas);
+      }
     });
   } catch (error) {
     const code = error instanceof Error ? error.message : "";

@@ -345,6 +345,7 @@ function HumanInsightCard({
 
 export function StoryChapterEditor({
   source,
+  dateLabel,
   position,
   total,
   chapterReview,
@@ -362,6 +363,7 @@ export function StoryChapterEditor({
   applyPending = false,
 }: {
   source: StorySource;
+  dateLabel?: string;
   position: number;
   total: number;
   chapterReview: ChapterReviewState;
@@ -722,7 +724,7 @@ export function StoryChapterEditor({
     <div className="simpleEpisodeScroll">
       <header className="simpleEpisodeHero">
         <div className="releaseDraftLabel"><b>{chapterReview.stage === "human_confirmed" ? "Final Release Memory" : chapterReview.stage === "revision_ready" ? `Latest revision ready · Revision ${chapterReview.revision}` : chapterReview.revision > 1 ? `Review in progress · Revision ${chapterReview.revision}` : "Initial AI draft"}</b><span>Story-first review · human-authoritative</span></div>
-        <div className="simpleEpisodeMeta"><span>{source.phase.label}</span><span>≈ {readingMinutes} min read</span></div>
+        <div className="simpleEpisodeMeta"><span>{source.phase.label}</span>{dateLabel && <span className="storyChapterDate">{dateLabel}</span>}<span>≈ {readingMinutes} min read</span></div>
         <h2 id="story-chapter-title">{source.title}</h2>
         <p className="episodeOverview">{source.overview}</p>
         <p className="chapterReviewGuide">{source.insights.length

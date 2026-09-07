@@ -2,7 +2,7 @@
 """Local (CPU) speech-to-text + speaker diarization for meeting audio (m4a/wav/mp3).
 
 Everything runs on this machine — audio never leaves the server. This matches
-the project rule that unredacted meeting material must not go to外部 services.
+the project rule that unredacted meeting material must not go to external services.
 
 - ASR: faster-whisper (CTranslate2, CPU-friendly, no torch needed).
 - Diarization: pyannote.audio 3.x, optional — the model is gated, so it needs a
@@ -10,7 +10,7 @@ the project rule that unredacted meeting material must not go to外部 services.
   acceptance for `pyannote/speaker-diarization-3.1`. Without it, the transcript
   is produced with a single "Speaker A" and a clear warning.
 
-Run inside the audio venv:  tools/.venv-audio/bin/python transcribe_diarize.py ...
+Run inside the audio venv:  tools/ingest/.venv-audio/bin/python tools/ingest/transcribe_diarize.py ...
 
 Outputs in --out:
     transcript.json     segments with start/end/speaker/text
@@ -107,8 +107,8 @@ def main(argv=None) -> int:
     except ImportError:
         raise fail(
             "faster-whisper is not installed in this python. "
-            "Run: tools/.venv-audio/bin/python transcribe_diarize.py ... "
-            "(create venv: python3 -m venv tools/.venv-audio && tools/.venv-audio/bin/pip install faster-whisper)"
+            "Run: tools/ingest/.venv-audio/bin/python tools/ingest/transcribe_diarize.py ... "
+            "(create venv: python3 -m venv tools/ingest/.venv-audio && tools/ingest/.venv-audio/bin/pip install faster-whisper)"
         )
 
     progress(3, "load", f"loading whisper model '{args.model}' (first run downloads it)")

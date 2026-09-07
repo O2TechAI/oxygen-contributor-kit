@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { parseStoryPrivacyRereviewRequest, validStoryPrivacyRereviewTargets, storyPrivacyRereviewRespected, storyPrivacyShardBinding } from "../../../viewer/lib/story-privacy-projection.ts";
 import { link, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import {
@@ -57,11 +58,14 @@ const bindingKeys = [
   "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest",
   "changedTargetCount", "previousAuthorityDigest",
   "sourcePrivacyDigest", "sourceRedactionsDigest",
+  ...(Object.hasOwn(manifest?.binding || {}, "rereviewRequest") ? ["rereviewRequest"] : []),
 ];
 if (!exact(manifest, ["schema", "binding", "targetTransitions", "changedTargetIds", "shardLimits",
   "shards", "manifestDigest"])
   || manifest.schema !== "oxygen.reviewed-story-privacy-preparation"
-  || !exact(manifest.binding, bindingKeys) || !safeId(manifest.binding.workflowRunId)
+  || !exact(manifest.binding, bindingKeys)
+  || (Object.hasOwn(manifest.binding, "rereviewRequest") && !parseStoryPrivacyRereviewRequest(manifest.binding.rereviewRequest))
+  || !safeId(manifest.binding.workflowRunId)
   || !validActivatedSourceRevision(manifest.binding.sourceRevision)
   || !validNonnegativeAuthorityCounter(manifest.binding.serverVersion)
   || !validNonnegativeAuthorityCounter(manifest.binding.changedTargetCount)
@@ -115,7 +119,7 @@ for (const shard of manifest.shards) {
   const input = await json(await contained(root, shard.inputPath));
   if (!exact(input, ["schema", "shardId", "binding", "targets", "sourceRedactions", "inputDigest"])
     || input.schema !== "oxygen.reviewed-story-privacy-shard-input" || input.shardId !== shard.id
-    || JSON.stringify(input.binding) !== JSON.stringify(manifest.binding)
+    || JSON.stringify(input.binding) !== JSON.stringify(storyPrivacyShardBinding(manifest.binding, shard.targetIds))
     || !Array.isArray(input.targets)
     || !Array.isArray(input.sourceRedactions)
     || JSON.stringify(input.targets.map((target) => target.id)) !== JSON.stringify(shard.targetIds)
@@ -149,6 +153,9 @@ if (await storyPreparationDigest([...sourceById.values()].sort((a, b) => a.id < 
   !== manifest.binding.sourceRedactionsDigest) fail("SHARD_INPUT_STALE");
 const targetCatalog = manifest.changedTargetIds.map((id) => targetById.get(id));
 if (targetCatalog.some((target) => !target)) fail("SHARD_UNION_INVALID");
+if (manifest.binding.rereviewRequest
+  && (!validStoryPrivacyRereviewTargets(manifest.binding.rereviewRequest, targetCatalog)
+    || manifest.targetTransitions.some((target) => target.previousContentDigest !== target.contentDigest))) fail("REREVIEW_REQUEST_INVALID");
 
 const proposalEntry = await directPathEntry(proposalInput).catch(() => fail("PROPOSAL_ROOT_INVALID"));
 if (!proposalEntry?.state.isDirectory()) fail("PROPOSAL_ROOT_INVALID");
@@ -172,7 +179,8 @@ const privacy = await normalizeStoryPrivacyOutput({
   candidates: [...proposalOutputs.values()].flatMap((output) => output.candidates),
   targetProposals: [...proposalOutputs.values()].flatMap((output) => output.targetProposals),
 }, targetCatalog, [...sourceById.values()]);
-if (!privacy) fail("PROPOSAL_INVALID");
+if (!privacy || (manifest.binding.rereviewRequest
+  && !storyPrivacyRereviewRespected(manifest.binding.rereviewRequest, privacy.targetProposals))) fail("PROPOSAL_INVALID");
 
 const records = resolve(root, "records");
 const existing = await directPathEntry(records).catch((error) => (
@@ -249,6 +257,7 @@ const terminalKeys = [
   "reviewedStoryDigest", "targetCatalogDigest", "changedTargetDigest", "changedTargetCount",
   "outputDigest", "outputCount", "completedAt",
   "sourcePrivacyDigest", "sourceRedactionsDigest",
+  ...(manifest.binding.rereviewRequest ? ["rereviewRequest"] : []),
 ];
 const expectedTerminal = {
   schema: "oxygen.reviewed-story-privacy-terminal-receipt",
@@ -263,6 +272,7 @@ const expectedTerminal = {
   changedTargetCount: manifest.binding.changedTargetCount,
   sourcePrivacyDigest: manifest.binding.sourcePrivacyDigest,
   sourceRedactionsDigest: manifest.binding.sourceRedactionsDigest,
+  ...(manifest.binding.rereviewRequest ? { rereviewRequest: manifest.binding.rereviewRequest } : {}),
   outputDigest,
   outputCount: recordedPrivacy.targetProposals.length,
   completedAt: terminal.completedAt,

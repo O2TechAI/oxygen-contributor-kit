@@ -74,6 +74,17 @@ and suppressed content are not exposed through Insight review.
 
 ## Story/Release Target Authority
 
+An anonymization must reduce the specific identification or linkage risk it describes, while
+preserving useful meaning. Translation, transliteration, expanded abbreviations, and transparent
+paraphrases alone do not provide that protection. Preserve non-sensitive technical terms and
+explicitly authorized public names; do not flag a name simply because it is a proper noun, invent
+roles, or treat every number as either private or public. Assess the actual context. If a real risk
+is uncertain, explain that concern honestly and request human judgment instead of presenting a
+cosmetic rename as anonymization. The worker and parent apply this same standard to every proposed
+change before recording, including proposals with no inherited source matches. Exact public
+permission remains limited to the contributor's specified occurrence; source obligations and
+credential protections still apply.
+
 Candidate rows have stable IDs and safe explanatory metadata only. Every current release target has exactly one Agent-authored meaning-preserving proposal bound to its target-content digest. A missing, stale, invalid, or incomplete target choice blocks the whole Story/package release.
 
 For each passage requiring a choice, the Chapter card presents:

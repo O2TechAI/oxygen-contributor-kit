@@ -270,7 +270,7 @@ def main() -> int:
 
     result = post(base_url, {
         "replaceAll": True,
-        "job": {"status": "complete", "stage": "已完成", "model": args.model,
+        "job": {"status": "complete", "stage": "complete", "model": args.model,
                 "total": len(spans), "rejected": report["rejected"]},
         "redactions": spans,
         "receipt": receipt,

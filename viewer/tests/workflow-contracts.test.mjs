@@ -221,7 +221,7 @@ test("reviewed Story has no numeric quota and Preferences stays inside the revie
     "skills/oxygen-elicit-contributor-preferences/SKILL.md",
   ];
   const documents = await Promise.all(paths.map(read));
-  for (const document of documents) assert.doesNotMatch(document, /10\s*[-–—]\s*40/);
+  for (const document of documents) assert.doesNotMatch(document, /10\s*[-â€“â€”]\s*40/);
 
   const preferenceSkill = documents.at(-1);
   assert.match(preferenceSkill, /privacy-prepared reviewed run/);
@@ -278,6 +278,8 @@ test("public docs align Preference timing and the final-export Privacy boundary"
   assert.match(privacyContract, /hard Privacy boundary applies to the exact contributor-reviewed final export bytes/iu);
   assert.match(privacyContract, /Detection[\s\S]{0,40}anonymization are best effort[\s\S]{0,60}final human review is mandatory/iu);
   assert.match(privacyContract, /meaning-preserving anonymization rather than blank deletion/iu);
+  assert.match(privacyContract, /Translation, transliteration,[\s\S]*alone do not provide that protection/);
+  assert.match(privacyContract, /worker and parent apply this same standard to every proposed\s+change before recording/);
   assert.match(privacyContract, /exact noncredential public\s+occurrence[\s\S]{0,80}explicit reviewed contributor choice/iu);
   assert.match(productContract, /Final package reconstruction is\s+provider-free[\s\S]{0,100}does not make the entire workflow provider-free/iu);
 });
@@ -585,6 +587,10 @@ test("Story public transport is owner-atomic, phase-free, and globally recorded"
   assert.match(publicContracts, /related (?:semantic )?units may share one owner/i);
   assert.match(publicContracts, /multiple Chapters may (?:later )?share one Phase/i);
   assert.match(publicContracts, /proposal[- ]digest[- ]bound editorial (?:review|acceptance)/i);
+  const privacyWorkerRoute = storyTransport.split("### Story Privacy proposals")[1].split("### Parent-requested Privacy re-review")[0];
+  assert.match(privacyWorkerRoute, /privacy-evidence-boundary\.md#storyrelease-target-authority/);
+  assert.match(privacyWorkerRoute, /binding\.rereviewRequest/);
+  assert.doesNotMatch(privacyWorkerRoute, /POST \/api\/story-privacy\/export/);
   // These checks protect the instruction route, not the semantic quality of generated prose.
   const editorial = narrativeContract.split("## Parent Editorial Acceptance")[1].split("## ")[0];
   assert.match(editorial, /7\.[\s\S]*referents and technical scope[\s\S]*\[Voice\]\(#voice\)/);

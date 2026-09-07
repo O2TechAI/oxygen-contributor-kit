@@ -207,6 +207,9 @@ two-field `story-candidates.json`; the caller never duplicates full Story JSON t
 
 ### Story Privacy proposals
 
+Worker and parent must apply the [actual risk-reduction standard](privacy-evidence-boundary.md#storyrelease-target-authority)
+to each recommendation before recording; valid ranges and digests do not establish a privacy benefit.
+
 Each Story Privacy worker reads its manifest `inputPath` and returns exactly one object:
 
 ```json
@@ -231,7 +234,7 @@ current target content. Each `occurrences` entry contains exactly `originalStart
 `originalEndOffset`, `proposalStartOffset`, `proposalEndOffset`, and `category`. Both offset pairs
 are zero-based, half-open `[start, end)` Unicode code-point ranges in the original and proposed
 text respectively, with nonnegative safe-integer starts and strictly greater safe-integer ends.
-`category` must match `^[a-z0-9][a-z0-9-]{0,63}$`: 1–64 lowercase ASCII letters, digits, or hyphens,
+`category` must match `^[a-z0-9][a-z0-9-]{0,63}$`: 1â€“64 lowercase ASCII letters, digits, or hyphens,
 starting with a letter or digit. The ranges must describe an exact, complete transformation from
 current content to `proposedText`.
 
@@ -246,6 +249,18 @@ Initial preparation catalogs base Story fields. During human review the existing
 transport projects each valid durable Chapter draft through the server's Apply replay. A pending
 accepted source Insight therefore enters its Chapter's prospective targets before human Apply;
 actual release still reconstructs only applied, human-confirmed content.
+
+An explicit contributor-requested re-review can also prepare specified current, undecided targets
+without editing Story text. Its immutable `binding.rereviewRequest` carries a bounded reason and
+the exact requested targets. Each has `targetId`, `targetContentDigest`, and `retainOriginal` entries
+with `originalStartOffset`, `originalEndOffset`, `category`, and `originalText`. These are verified
+current, publicly selectable occurrences the contributor has explicitly asked to retain, not a
+global term list. Preserve those exact original ranges; do not extend permission to another
+occurrence, date, credential, or source obligation. Each shard input's request contains only its
+assigned targets; the parent snapshot, manifest and receipt retain the complete request. Return the
+same proposal shape: remove the ineffective replacement for the authorized range and keep other
+genuine concerns pending. The parent checks this request and the shared risk-reduction standard
+before finalizing. No human choice or Apply is synthesized by preparation or import.
 
 #### Source inheritance and edited Privacy text
 
@@ -295,6 +310,43 @@ range, stale edit digest, or uncovered exact source match fails shared validatio
 finalize, initial activation, reviewed import, and Apply use the same source-grounded validator.
 Already-activated old records without a required proof are preparation-required; use a fresh public reviewed-Privacy
 export/prepare/finalize/import cycle, never modify frozen inputs, receipts, or proposal budgets.
+
+### Parent-requested Privacy re-review
+
+The parent first reads the current Story session and Privacy authority, then sends the contributor's
+explicit request to `POST /api/story-privacy/export`:
+
+```json
+{"workflowRunId":"current-run","sourceRevision":2,"expectedVersion":3,"authorityDigest":"current-authority-digest","rereviewRequest":{"reason":"The contributor wants the public project name retained; this paraphrase does not reduce identification risk. Dates remain undecided.","targets":[{"targetId":"chapter::overview","targetContentDigest":"current-target-content-digest","retainOriginal":[{"originalStartOffset":0,"originalEndOffset":13,"category":"project-name","originalText":"Project Cedar"}]}]}}
+```
+
+Use actual current versions, digests, target IDs and exact permitted occurrence metadata, not the
+illustrative values above. `targets` is a nonempty duplicate-free list of at most 64 current targets;
+each `retainOriginal` list may be empty, contains at most 64 distinct occurrences, and uses half-open
+Unicode code-point ranges. The reason is nonempty and bounded to 2,000 characters; original spans
+are bounded to 1,000 characters each. Never synthesize permission from the reason alone. Already
+selected/applied targets, active edited Privacy drafts on requested targets, and any outstanding
+preparation transitions are rejected without changing human state. Finish an existing preparation
+separately; do not silently expand this request to another Chapter or invent a Story edit.
+
+This POST stores the exact request binding in the existing durable Story session row, separately
+from browser drafts, and returns the normal snapshot. It does not increment the review version or
+select wording. Save that snapshot and use the unchanged public transport:
+
+```text
+node --experimental-strip-types skills/oxygen-storytelling-review/scripts/prepare_reviewed_story_privacy.mjs SNAPSHOT NEW_ROOT
+# Dispatch the generated bounded assignments; parent reviews each proposal.
+node --experimental-strip-types skills/oxygen-storytelling-review/scripts/finalize_reviewed_story_privacy.mjs NEW_ROOT PROPOSALS NEW_BUNDLE
+# POST NEW_BUNDLE to /api/story-privacy/import (or use the existing launcher --story-privacy-import).
+```
+
+Import checks the persisted request, all current bindings, exact requested scope, preserved original
+ranges and normal source/credential guards again inside its transaction. Success consumes the request
+and installs suggestions only; failure retains it and rolls back all changes. Other choices and drafts
+are untouched. Autosave or Apply advances the bound version, so an old request cannot be revived by
+replaying its body; read current state and explicitly request again. This is a new contributor-requested
+review of completed suggestions, not a reset of an earlier failed assignment's correction budget.
+Keep prior finalized inputs, outputs and receipts immutable and use a new transport directory.
 
 ### Preference proposals
 
