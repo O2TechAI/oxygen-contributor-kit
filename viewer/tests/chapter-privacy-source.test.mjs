@@ -3,6 +3,28 @@ import assert from "node:assert/strict";
 import { normalizeStoryPrivacyOutput, storyPreparationDigest } from "../lib/story-preparation.ts";
 import { storyPrivacySourceRedactions, storyPrivacySourceRanges } from "../lib/story-privacy-projection.ts";
 
+test("source ranges preserve overlapping code-point matches and surrogate boundaries", () => {
+  const cases = [
+    ["abc", "missing", []],
+    ["aaa", "aa", [[0, 2], [1, 3]]],
+    ["ababa", "aba", [[0, 3], [2, 5]]],
+    ["😀a😀a", "😀a", [[0, 2], [2, 4]]],
+    ["a😀a", "a", [[0, 1], [2, 3]]],
+    ["😀", "\ud83d", []],
+    ["😀", "\ude00", []],
+    ["\ud83dx", "\ud83d", [[0, 1]]],
+    ["x\ude00", "\ude00", [[1, 2]]],
+    ["abc", "", []],
+    ["", "", []],
+    ["", "a", []],
+  ];
+  for (const [text, fragment, expected] of cases) {
+    assert.deepEqual(storyPrivacySourceRanges(text, fragment), expected.map(([start, end]) => ({
+      originalStartOffset: start, originalEndOffset: end,
+    })), JSON.stringify({ text, fragment }));
+  }
+});
+
 test("source inheritance distinguishes same-text contexts and covers final and edited proposal bytes", async () => {
   const source = { id: "metric", documentId: "source", itemId: "one", startOffset: 0,
     endOffset: 3, category: "internal-metric", text: "4.7", context: "An internal benchmark rate." };
