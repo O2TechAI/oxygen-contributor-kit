@@ -427,10 +427,10 @@ function insight(suffix, documentId = "doc-canary", language = "en") {
 }
 
 async function privacyAuthority(root, suffixes = ["a", "b"], documentId = "doc-canary",
-  documentKind = "trajectory", evidenceCount = suffixes.length, language = "en") {
+  documentKind = "trajectory", evidenceCount = suffixes.length, language = "en", reviewedText = null) {
   const redacted = join(root, "redacted");
   await mkdir(redacted);
-  const text = language === "zh" ? "这是一条安全且经过审阅的中文观察记录" : "safe reviewed canary";
+  const text = reviewedText ?? (language === "zh" ? "这是一条安全且经过审阅的中文观察记录" : "safe reviewed canary");
   const eventIds = suffixes.map((suffix) => `event-${suffix}`);
   while (eventIds.length < evidenceCount) eventIds.push(`preference-event-${eventIds.length}`);
   const turns = eventIds.map((eventId, index) => ({
@@ -473,6 +473,7 @@ async function createFlow({
   deferPreferenceRecord = false,
   documentKind = "trajectory",
   preferenceEvidenceCount = 1,
+  preferenceReviewedText = null,
   sourceRedactions = [],
   storyPrivacyReleaseTargets = null,
 } = {}) {
@@ -527,7 +528,7 @@ async function createFlow({
   runOk(process.execPath, [prepare, "compose", "final", transport, candidates]);
 
   const privacy = await privacyAuthority(
-    root, suffixes, documentId, documentKind, preferenceEvidenceCount, language,
+    root, suffixes, documentId, documentKind, preferenceEvidenceCount, language, preferenceReviewedText,
   );
   if (preferenceEvidenceCount > suffixes.length) {
     const rows = await readJson(candidates);
@@ -1423,6 +1424,30 @@ test("lab_notebook crosses real Preference preparation, record, and finalization
     assert.equal((await readJson(flow.preparationManifest)).receipts.find((receipt) => (
       receipt.lane === "preference"
     )).outputCount, 1);
+  } finally { await flow.cleanup(); }
+});
+
+test("Preference transports preserve long reviewed controls without relaxing authored questions", async () => {
+  const text = `safe reviewed canary ${"x".repeat(80_003)}\u001b[32m\u0000\b\u007f\r\n阅`;
+  const flow = await createFlow({ deferPreferenceRecord: true, preferenceReviewedText: text });
+  try {
+    const shard = flow.preferenceManifest.shards[0];
+    const input = await readJson(join(flow.transport, shard.inputPath));
+    assert.equal(input.payload.preferenceContext.reviewedEvidence[0].redactedText, text);
+    const valid = await readJson(flow.preferenceBundle);
+    for (const question of ["Question\u001b", "x".repeat(20_001)]) {
+      const invalid = structuredClone(valid);
+      invalid.probes[0].question = question;
+      invalid.outputDigest = digest(canonicalPreferenceQuestionBatch(invalid.probes, invalid.bulkDecisions));
+      await json(flow.preferenceBundle, invalid);
+      assert.notEqual(run(process.execPath, [record, flow.transport, "preference", shard.id, flow.preferenceBundle]).status, 0);
+      assert.equal(existsSync(join(flow.transport, "preference", "records", shard.id)), false);
+    }
+    await json(flow.preferenceBundle, valid);
+    runOk(process.execPath, [record, flow.transport, "preference", shard.id, flow.preferenceBundle]);
+    runOk(process.execPath, [finalize, flow.projectMapPath, flow.candidates, flow.transport,
+      flow.preferenceBundle, flow.preparationManifest, ...storyAuthorityArgs]);
+    assert.equal((await readJson(flow.preparationManifest)).receipts.find(r => r.lane === "preference").outputCount, 1);
   } finally { await flow.cleanup(); }
 });
 

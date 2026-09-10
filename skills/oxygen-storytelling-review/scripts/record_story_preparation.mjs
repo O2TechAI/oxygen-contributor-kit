@@ -513,7 +513,8 @@ function preferenceContextEvidence(context) {
       || !boundedId(record.documentId) || !boundedId(record.eventId, 1_000)
       || !validPreferenceDocumentKind(record.documentKind) || !nonnegative(record.sequence) || record.sequence === 0
       || (record.role !== null && !safeText(record.role))
-      || (record.timestamp !== null && !safeText(record.timestamp)) || !safeText(record.redactedText)) return null;
+      || (record.timestamp !== null && !safeText(record.timestamp))
+      || typeof record.redactedText !== "string" || !record.redactedText.trim()) return null;
     const identity = canonicalAuthorityJson([record.documentId, record.eventId]);
     if (evidence.has(identity)) return null;
     evidence.set(identity, record.documentKind);
