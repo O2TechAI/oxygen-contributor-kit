@@ -314,6 +314,7 @@ export function serializeReviewedStoryRelease(value: unknown) {
 
 export function releaseOrganizationReason(value: unknown) {
   const source = String(value ?? "");
+  if (source.startsWith("semantic-unit:")) return "Reviewed project event";
   return source.startsWith(STORY_PREFIX) || isReservedStoryOrganizationReason(source)
     ? "Reviewed project Story" : source;
 }

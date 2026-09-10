@@ -1627,3 +1627,44 @@ test("applied Source timeline choices protect document timestamps, including nei
     assert.equal((await db.prepare("SELECT source_digest FROM source_privacy_receipts").first()).source_digest, sourceDigest);
   }
 });
+
+test("canonical ZIP omits internal semantic-unit organization IDs and preserves ordinary reasons", async () => {
+  const sourceDecision = await import("../app/api/redactions/[id]/route.ts");
+  const { db, request } = await setup({ timeline: true });
+  const response = await sourceDecision.PATCH(new Request("http://local.invalid/api/redactions/synthetic-source-redaction-1", {
+    method: "PATCH", body: JSON.stringify({ decision: "keep" }),
+  }), { params: Promise.resolve({ id: "synthetic-source-redaction-1" }) });
+  assert.equal(response.status, 200);
+  await resolveHumanStoryPrivacy(db);
+  for (const [reason, expected] of [
+    ["semantic-unit:private-unit-membership", "Reviewed project event"],
+    ["An ordinary explanation mentioning semantic-unit: as a concept.", "An ordinary explanation mentioning semantic-unit: as a concept."],
+  ]) {
+    await db.prepare("UPDATE items SET organization_reason=? WHERE id='unaffected-doc:event-1'").bind(reason).run();
+    const before = (await db.prepare("SELECT * FROM items ORDER BY document_id,sequence,id").all()).results;
+    assert.equal((await confirmProjectReleaseConfirmation(db, request, NOW)).ok, true);
+    const release = await reconstructReviewedStoryReleaseFromDatabase(db, request);
+    assert.equal(release.ok, true);
+    const zip = await buildPackageFromDatabase(db, release.serializedStory, request, { exportedAt: NOW });
+    assert.equal(zip.status, 200);
+    const bytes = new Uint8Array(await zip.arrayBuffer());
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const entries = new Map();
+    for (let offset = 0; view.getUint32(offset, true) === 0x04034b50;) {
+      assert.equal(view.getUint16(offset + 8, true), 0);
+      const size = view.getUint32(offset + 18, true);
+      const nameEnd = offset + 30 + view.getUint16(offset + 26, true);
+      const dataStart = nameEnd + view.getUint16(offset + 28, true);
+      const name = new TextDecoder().decode(bytes.subarray(offset + 30, nameEnd));
+      entries.set(name, new TextDecoder().decode(bytes.subarray(dataStart, dataStart + size)));
+      offset = dataStart + size;
+    }
+    const events = JSON.parse(entries.get("data/events.json"));
+    const event = events.find((item) => item.content === "Separate source evidence.");
+    assert.equal(event.organization_reason, expected);
+    const projectMap = JSON.parse(entries.get("project-map.json"));
+    assert.equal(projectMap.events[`${event.document_id}:${event.id}`].summary, expected);
+    assert.doesNotMatch([...entries.values()].join("\n"), /private-unit-membership/);
+    assert.deepEqual((await db.prepare("SELECT * FROM items ORDER BY document_id,sequence,id").all()).results, before);
+  }
+});
