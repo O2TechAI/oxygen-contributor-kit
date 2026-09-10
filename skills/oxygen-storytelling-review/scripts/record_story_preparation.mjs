@@ -488,9 +488,15 @@ async function validatePrivacy(value, input) {
   const fullCatalog = deriveStoryReleaseTargetContents(stories);
   const valid = new Set(input.unitIds);
   const targets = fullCatalog?.filter((target) => valid.has(target.id));
+  // Prepared catalogs follow timeline order; shard Story candidates follow candidate ID order.
+  const expectedCatalog = targets?.map(({ content: _content, ...target }) => (
+    canonicalAuthorityJson(target)
+  )).sort(compareUtf8);
+  const suppliedCatalog = input.payload.releaseTargetCatalog.map((target) => (
+    canonicalAuthorityJson(target)
+  )).sort(compareUtf8);
   if (!targets || targets.length !== valid.size
-    || canonicalAuthorityJson(targets.map(({ content: _content, ...target }) => target))
-      !== canonicalAuthorityJson(input.payload.releaseTargetCatalog)) {
+    || canonicalAuthorityJson(expectedCatalog) !== canonicalAuthorityJson(suppliedCatalog)) {
     fail("WORKER_INPUT_TAMPERED");
   }
   rejectMetadata(value);

@@ -18,6 +18,7 @@ import {
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { classifyStoryLanguageText, parseStorySource, timelinePresentation } from "../lib/timeline.ts";
 import { canonicalPreferenceQuestionBatch, deriveStoryReleaseTargetContents } from "../lib/story-preparation.ts";
+import { readPreparedShard } from "../../skills/oxygen-storytelling-review/scripts/story_preparation_protocol.mjs";
 
 const repository = resolve(import.meta.dirname, "../..");
 const scripts = join(repository, "skills", "oxygen-storytelling-review", "scripts");
@@ -468,6 +469,7 @@ async function createFlow({
   documentId = "doc-canary",
   language = "en",
   narrativeBytes = 0,
+  eventIdentities = {},
   insightSuffixes = suffixes,
   reverseManifests = false,
   deferPreferenceRecord = false,
@@ -493,7 +495,7 @@ async function createFlow({
   });
   const projectMap = await readJson(projectMapPath);
   const boundary = await reviewedBoundary(root, projectMap, semantic, null, {
-    documentId, language, narrativeBytes, sourceRedactions,
+    documentId, language, narrativeBytes, sourceRedactions, eventIdentities,
   });
 
   runOk(process.execPath, [prepare, "prepare", "story", projectMapPath,
@@ -1361,6 +1363,71 @@ test("new Story chips fail structurally or at the exact claims editorial gate be
     )), true);
   } finally {
     await value.cleanup();
+  }
+});
+
+test("Story Privacy accepts timeline-ordered catalogs across shards and rejects changed descriptors", async () => {
+  const suffixes = "abcdefghij".split("");
+  const flow = await createFlow({
+    suffixes,
+    eventIdentities: Object.fromEntries(suffixes.map((suffix, index) => [
+      suffix, { sequence: suffixes.length - index },
+    ])),
+  });
+  try {
+    const rows = await readJson(flow.candidates);
+    assert.deepEqual(rows.map((row) => parseStorySource(row.summary).key),
+      [...suffixes].reverse().map((suffix) => `story-${suffix}`));
+    const manifest = await readJson(join(flow.transport, "story-privacy", "shards.json"));
+    assert.ok(manifest.shards.length > 1);
+    for (const shard of manifest.shards) {
+      const { input } = await readPreparedShard(flow.transport, "story_privacy", shard.id);
+      const targets = deriveStoryReleaseTargetContents(input.payload.storyCandidates.map(
+        (row) => parseStorySource(row.summary),
+      )).filter((target) => input.unitIds.includes(target.id));
+      const descriptors = targets.map(({ content: _content, ...target }) => target);
+      assert.notDeepEqual(descriptors, input.payload.releaseTargetCatalog);
+      const sorted = (catalog) => catalog.map(canonicalAuthorityJson).sort();
+      assert.deepEqual(sorted(descriptors), sorted(input.payload.releaseTargetCatalog));
+      assert.equal((await readJson(join(flow.transport, shard.receiptPath))).outputCount,
+        input.unitIds.length);
+    }
+    const prepared = await readJson(flow.preparationManifest);
+    assert.equal(prepared.receipts.find((receipt) => receipt.lane === "story_privacy").outputCount,
+      manifest.unitIds.length);
+
+    // Corrupt disposable copies only; keep the successful canonical transport intact.
+    const variant = join(flow.root, "tampered-transport");
+    await cp(flow.transport, variant, { recursive: true });
+    await rm(join(variant, "story-privacy", "records"), { recursive: true });
+    const shard = manifest.shards[0];
+    const original = await readJson(join(variant, shard.inputPath));
+    const proposal = join(flow.root, "privacy-descriptor-proposal.json");
+    await json(proposal, privacyEnvelopeForInput(original));
+    const mutations = {
+      foreignId: (catalog) => { catalog[0].id = "foreign-story::title"; },
+      target: (catalog) => { catalog[0].target = "foreign-target"; },
+      storyKey: (catalog) => { catalog[0].storyKey = "foreign-story"; },
+      extraField: (catalog) => { catalog[0].extra = "unexpected"; },
+      duplicate: (catalog) => { catalog[0] = structuredClone(catalog[1]); },
+      missing: (catalog) => { catalog.pop(); },
+    };
+    for (const [name, mutate] of Object.entries(mutations)) {
+      const input = structuredClone(original);
+      mutate(input.payload.releaseTargetCatalog);
+      await json(join(variant, shard.inputPath), input);
+      const rebound = structuredClone(manifest);
+      rebound.shards[0].workerInputDigest = digest(input);
+      await json(join(variant, "story-privacy", "shards.json"), rebound);
+      // Pass the transport digest gate to exercise complete descriptor validation itself.
+      await readPreparedShard(variant, "story_privacy", shard.id);
+      const rejected = run(process.execPath, [record, variant, "story_privacy", shard.id, proposal]);
+      assert.notEqual(rejected.status, 0, name);
+      assert.match(rejected.stderr, /^WORKER_INPUT_TAMPERED\r?\n$/u, name);
+      assert.equal(existsSync(join(variant, "story-privacy", "records")), false, name);
+    }
+  } finally {
+    await flow.cleanup();
   }
 });
 
