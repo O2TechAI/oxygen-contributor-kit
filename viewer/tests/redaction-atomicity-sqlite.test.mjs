@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   buildSourcePrivacyReceipt,
+  installSourcePrivacyReceipt,
   seedFinalizedCorpusManifest,
 } from "./fixtures/source-privacy-receipt.mjs";
 import {
@@ -801,6 +802,82 @@ test("redaction replacement validates completely and commits once with real SQLi
     if (previousStateDir === undefined) delete process.env.OXYGEN_VIEWER_STATE_DIR;
     else process.env.OXYGEN_VIEWER_STATE_DIR = previousStateDir;
     await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("PATCH accepts unchanged source receipts across Story activation and preserves stale and rollback guards", async () => {
+  for (const scenario of ["keep", "redact", "future", "changed-source", "tampered-receipt",
+    "source-race", "receipt-race", "invalidation-failure"]) {
+    await withFreshDatabase(`oxygen-redaction-activated-${scenario}-`, async ({
+      db, establishWorkflowRun, computeSourceDigest, decisionRoute,
+    }) => {
+      const { workflowRunId } = await seedConcurrentPrivacyState(db, establishWorkflowRun, computeSourceDigest);
+      await db.prepare("UPDATE workflow_runs SET story_source_revision=6 WHERE id=?")
+        .bind(workflowRunId).run();
+      await db.prepare("UPDATE story_privacy_authorities SET source_revision=6 WHERE workflow_run_id=?")
+        .bind(workflowRunId).run();
+      await seedFinalizedCorpusManifest(db, { workflowRunId, revision: 3, at: oldTime });
+      const receipt = await buildSourcePrivacyReceipt(db, {
+        workflowRunId, sourceRevision: scenario === "future" ? 7 : 5,
+        redactions: [span({
+          id: "race-candidate", itemId: "item-old", documentId: "document-old",
+          startOffset: 4, endOffset: 11, reviewState: "needs_confirmation",
+          uncertaintyReason: LOCAL_UNCERTAINTY_SENTINEL,
+        })],
+      });
+      await installSourcePrivacyReceipt(db, { jobId: "job-old", workflowRunId, receipt, at: oldTime });
+      if (scenario === "changed-source") {
+        await db.prepare("UPDATE items SET content='new private source' WHERE id='item-old'").run();
+      }
+      if (scenario === "tampered-receipt") {
+        await db.prepare("UPDATE source_privacy_receipts SET receipt_json=receipt_json||' '").run();
+      }
+      if (scenario === "invalidation-failure") {
+        await db.prepare(`CREATE TRIGGER fail_activated_decision_invalidation
+          BEFORE DELETE ON project_release_confirmations
+          BEGIN SELECT RAISE(ABORT, 'RAW_PRIVACY_TRACE_SQLITE_PATH'); END`).run();
+      }
+      const before = await completeAuthoritySnapshot(db);
+      const realBatch = db.batch.bind(db);
+      let raced = false;
+      if (scenario === "source-race" || scenario === "receipt-race") {
+        db.batch = async (statements) => {
+          if (!raced) {
+            raced = true;
+            // Mutate after receipt validation, inside the same SQLite transaction.
+            await db.prepare(scenario === "source-race"
+              ? "UPDATE workflow_runs SET story_source_revision=7"
+              : "UPDATE source_privacy_receipts SET receipt_json=receipt_json||' '").run();
+          }
+          return realBatch(statements);
+        };
+      }
+      const response = await decide(decisionRoute, "race-candidate", {
+        decision: scenario === "redact" ? "redact" : "keep",
+      });
+      db.batch = realBatch;
+      if (scenario === "keep" || scenario === "redact") {
+        assert.equal(response.status, 200, scenario);
+        const row = await response.json();
+        assert.equal(row.review_state, scenario === "keep" ? "confirmed_keep" : "confirmed_redact");
+        assert.equal(row.status, scenario === "keep" ? "removed" : "active");
+        const after = await completeAuthoritySnapshot(db);
+        assert.deepEqual(after.receipts, before.receipts, "the terminal worker receipt remains immutable");
+        assert.deepEqual(after.items, before.items);
+        assert.equal(after.workflow[0].story_source_revision, 6);
+        assert.equal(after.workflow[0].story_generation_status, "blocked");
+        assert.equal(after.workflow[0].active_story_digest, null);
+        assert.deepEqual(after.releaseConfirmation, []);
+      } else {
+        assert.equal(response.status, 409, scenario);
+        assert.deepEqual(await response.json(), {
+          error: "Source Privacy decision conflicted", code: "SOURCE_PRIVACY_MUTATION_CONFLICT",
+        });
+        if (scenario.endsWith("race")) assert.equal(raced, true);
+        assert.deepEqual(await completeAuthoritySnapshot(db), before,
+          `${scenario} must preserve all pre-decision authority`);
+      }
+    });
   }
 });
 

@@ -91,6 +91,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       if (!candidate) return { kind: "notFound" };
       if (candidate.review_state !== "needs_confirmation") return { kind: "notActionable" };
       const sourceRevision = Number(sourceRevisionRow?.story_source_revision);
+      const receiptSourceRevision = Number(receiptResult.results[0]?.source_revision);
       const corpusRevision = Number(sourceRevisionRow?.corpus_revision);
       const documentCount = Number(sourceRevisionRow?.document_count);
       const itemCount = Number(sourceRevisionRow?.item_count);
@@ -121,7 +122,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           || !validNonnegativeAuthorityCounter(total)
           || !validNonnegativeAuthorityCounter(rejected)
           || completed !== total || completed !== redactionResult.results.length || rejected !== 0
-          || Number(job.source_revision) !== sourceRevision
+          || !validActivatedSourceRevision(receiptSourceRevision)
+          || receiptSourceRevision > sourceRevision
+          || Number(job.source_revision) !== receiptSourceRevision
           || job.source_digest !== sourceDigest
           || !/^[0-9a-f]{64}$/u.test(String(job.receipt_digest || ""))
           || receiptResult.results.length !== 1) {
@@ -130,7 +133,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       const receipt = await validateStoredSourcePrivacyReceipt(receiptResult.results[0], {
         jobId: String(job.id),
         workflowRunId: authority.workflowRunId,
-        sourceRevision,
+        sourceRevision: receiptSourceRevision,
         sourceDigest,
         finalizedCorpus: {
           revision: corpusRevision,
