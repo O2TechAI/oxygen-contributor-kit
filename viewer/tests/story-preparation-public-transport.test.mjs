@@ -470,6 +470,7 @@ async function createFlow({
   language = "en",
   narrativeBytes = 0,
   eventIdentities = {},
+  storyPhases = {},
   insightSuffixes = suffixes,
   reverseManifests = false,
   deferPreferenceRecord = false,
@@ -504,7 +505,12 @@ async function createFlow({
   const storyProposal = join(root, "story-proposal.json");
   const storyRecords = suffixes.map((suffix) => ({
     id: `event-${suffix}`,
-    story: storySource(suffix, semantic, boundary.coverageAuthority, [], { documentId, language }),
+    story: {
+      ...storySource(suffix, semantic, boundary.coverageAuthority, [], {
+        documentId: eventIdentities[suffix]?.documentId ?? documentId, language,
+      }),
+      ...(storyPhases[suffix] ? { phase: storyPhases[suffix] } : {}),
+    },
   }));
   const submittedStoryRecords = reverse ? [...storyRecords].reverse() : storyRecords;
   await json(storyProposal, submittedStoryRecords);
@@ -2344,6 +2350,83 @@ test("finalizer reopens immutable Insight input and rejects a Story-derived Quot
     assert.deepEqual(await readFile(flow.preparationManifest), sentinel);
   } finally {
     await flow.cleanup();
+  }
+});
+
+test("Insight recorder preserves source chronology within a mixed-Phase shard", async () => {
+  const foundation = { id: "foundation", label: "Foundation" };
+  const flow = await createFlow({
+    suffixes: ["a", "b", "c"], completedZero: true,
+    storyPhases: { a: foundation, b: { id: "closing", label: "Closing" }, c: foundation },
+    eventIdentities: {
+      a: { sequence: 1 }, b: { sequence: 3 }, c: { sequence: 2 },
+    },
+  });
+  try {
+    const manifest = await readJson(join(flow.transport, "insight", "shards.json"));
+    assert.equal(manifest.shards.length, 1);
+    assert.equal(manifest.shards[0].unitIds.length, 3);
+    assert.equal((await readJson(join(flow.transport, manifest.shards[0].receiptPath))).status, "complete");
+    assert.deepEqual((await readJson(flow.candidates)).map((row) => row.id),
+      ["event-a", "event-c", "event-b"]);
+    assert.equal((await readJson(flow.preparationManifest)).schema, "oxygen.story-preparation");
+  } finally {
+    await flow.cleanup();
+  }
+});
+
+test("finalizer preserves central source chronology for mixed Phases and rejects real phase reentry", async () => {
+  const suffixes = ["a", "b", "c", "d", "e"];
+  const chronological = ["a", "b", "d", "c", "e"];
+  const foundation = { id: "foundation", label: "Foundation" };
+  const closing = { id: "closing", label: "Closing" };
+  const storyPhases = { a: foundation, b: foundation, c: closing, d: foundation, e: closing };
+  for (const multiDocument of [false, true]) {
+    const flow = await createFlow({
+      suffixes, completedZero: true, storyPhases,
+      eventIdentities: Object.fromEntries(chronological.map((suffix, index) => [suffix, {
+        documentId: multiDocument ? `doc-${suffix}` : "doc-canary",
+        sequence: multiDocument ? 1 : index + 1,
+        timestamp: multiDocument ? `2026-01-01T0${index + 1}:00:00Z` : null,
+      }])),
+    });
+    try {
+      const candidates = await readJson(flow.candidates);
+      assert.deepEqual(candidates.map((row) => row.id), chronological.map((suffix) => `event-${suffix}`));
+      assert.deepEqual(candidates.map((row) => parseStorySource(row.summary).phase.id),
+        ["foundation", "foundation", "foundation", "closing", "closing"]);
+      assert.deepEqual(suffixes.map((suffix) => storyPhases[suffix].id),
+        ["foundation", "foundation", "closing", "foundation", "closing"]);
+      assert.equal((await readJson(flow.preparationManifest)).schema, "oxygen.story-preparation");
+
+      // A genuinely returning Phase must still fail before replacing terminal authority.
+      const candidate = candidates.find((row) => row.id === "event-b");
+      const changedStory = parseStorySource(candidate.summary);
+      changedStory.phase = closing;
+      candidate.summary = `oxygen.story:${canonicalAuthorityJson(changedStory)}`;
+      await json(flow.candidates, candidates);
+      const manifest = await readJson(join(flow.transport, "story", "shards.json"));
+      const shard = manifest.shards.find((item) => item.unitIds.includes("story-b"));
+      const outputPath = join(flow.transport, "story", "records", shard.id, "output.json");
+      const output = await readJson(outputPath);
+      output.find((row) => row.id === "event-b").story.phase = closing;
+      await json(outputPath, output);
+      const receiptPath = join(flow.transport, shard.receiptPath);
+      const receipt = await readJson(receiptPath);
+      receipt.outputDigest = digest(output);
+      await json(receiptPath, receipt);
+      const sentinel = Buffer.from("existing-terminal-authority\n");
+      await writeFile(flow.preparationManifest, sentinel);
+      const rejected = run(process.execPath, [finalize,
+        flow.projectMapPath, flow.candidates, flow.transport, flow.preferenceBundle,
+        flow.preparationManifest, ...storyAuthorityArgs,
+      ]);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /^STORY_PHASE_ORDER_INVALID\r?\n$/u);
+      assert.deepEqual(await readFile(flow.preparationManifest), sentinel);
+    } finally {
+      await flow.cleanup();
+    }
   }
 });
 

@@ -455,10 +455,13 @@ async function validateInsight(value, input, prepared) {
   const completeRows = output.map((record) => {
     const story = parseStory({ ...baseByKey.get(record.storyKey), insights: record.insights });
     const candidate = input.payload.storyCandidates.find((row) => parseStorySource(row.summary)?.key === record.storyKey);
-    if (!candidate) fail("WORKER_INPUT_TAMPERED");
+    const primary = sourceEvidence.get(story.evidence.primary.eventId);
+    if (!candidate || !primary) fail("WORKER_INPUT_TAMPERED");
     return {
       id: candidate.id,
       documentId: story.evidence.primary.documentId,
+      sequence: primary.sequence,
+      timestamp: primary.timestamp,
       summary: `${STORY_PREFIX}${canonicalAuthorityJson(story)}`,
       story,
     };
