@@ -1279,7 +1279,7 @@ export function InlineWorkspace({
       <aside className="rail storyRail">
         <div className="railHead"><b>{labels.projects}</b><span>{selectedProject?viewerChapters.length:projectNames.length}</span></div>
         <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selectedProject===project?"active":""}`} key={project} onClick={() => { releasePreviewReturnSelectionRef.current=null; setStoryNavigation({ project, storyKey:"" }); setSourceFocus(""); setView("timeline"); }}>
-          <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${workspaceUi.en.phases}`:`${projectCount(project).toLocaleString()} ${labels.events}`}</small>
+          <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${workspaceUi.en.phases}`:`${storySelection.chapters.filter((chapter) => chapter.project === project).length.toLocaleString()} ${workspaceUi.en.chapters}`}</small>
         </button>)}{activeChapter && <div className="chapterRailContext" aria-label={`${workspaceUi.en.chapter} selector`}>
           <span>{workspaceUi.en.chapters} {activeStoryIndex+1} / {viewerChapters.length}</span>
           <nav className="chapterRailList" aria-label={workspaceUi.en.chapters}>
