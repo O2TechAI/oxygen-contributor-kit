@@ -841,7 +841,7 @@ test("finalized Coverage owner IDs form indivisible self-contained Story bundles
   }
 });
 
-test("mixed Story sources preserve actor topology and full authority while omitting empty worker relations", async () => {
+test("mixed Story sources preserve raw controls, actor topology and full authority while omitting empty worker relations", async () => {
   const root = await mkdtemp(join(tmpdir(), "story-actor-topology-"));
   try {
     const semantic = semanticAuthority({ suffixes: ["a", "b", "meeting"] });
@@ -868,7 +868,7 @@ test("mixed Story sources preserve actor topology and full authority while omitt
       meeting_id: "meeting-canary",
       records: [{
         record_id: "record-a", order: 1, speaker: `actor-${digest("meeting-speaker")}`,
-        text: "Reviewed meeting context with Unicode evidence 🧭.",
+        text: "Reviewed meeting context with Unicode evidence 🧭 and verbatim controls \u0000\b\u007f.",
       }],
     };
     const meetingDirectory = join(boundary.review, "meetings", meeting.meeting_id);
@@ -877,6 +877,7 @@ test("mixed Story sources preserve actor topology and full authority while omitt
     const parent = `actor-${digest("parent")}`;
     events[0].actor = { id: `actor-${digest("alice.smith")}`, type: "field researcher", parent_id: parent };
     events[0].event_type = "field_note";
+    events[0].payload.text = "Terminal evidence: \u001b[31mfailed\u001b[0m\rretry\b succeeded 🧭.";
     events[0].payload.interaction_direction = "agent_to_subagent";
     events[0].relations = [{ type: "reply_to", target: events[1].relation_id }];
     events[1].actor = { id: `actor-${digest("alice-smith")}`, type: "研究员", parent_id: parent };
@@ -899,6 +900,7 @@ test("mixed Story sources preserve actor topology and full authority while omitt
       ["raw", (event) => { event.actor.id = "RAW-ACTOR-SENTINEL"; }],
       ["raw-parent", (event) => { event.actor.parent_id = "RAW-PARENT-SENTINEL"; }],
       ["unknown-shape", (event) => { event.actor.display_name = "RAW-NAME-SENTINEL"; }],
+      ["control-in-actor-type", (event) => { event.actor.type = "assistant\u001b[31m"; }],
     ]) {
       const original = structuredClone(events[0].actor);
       mutate(events[0]);
@@ -933,6 +935,7 @@ test("mixed Story sources preserve actor topology and full authority while omitt
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
       boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
     const authority = await readJson(join(transport, "story", "validation-authority.json"));
+    assert.equal(authority.sourceDigest, privacy.job.source_digest);
     assert.deepEqual(authority.evidence, [...events.map((event) => ({
       id: event.event_id, documentId: event.trajectory_id, sequence: event.sequence,
       timestamp: event.timestamp, eventType: event.event_type, actorType: event.actor.type,
@@ -959,6 +962,14 @@ test("mixed Story sources preserve actor topology and full authority while omitt
       eventType: "record", actorType: "human", actorEquivalence: meeting.records[0].speaker,
       narrative: meeting.records[0].text,
     }]);
+    events[0].payload.text = events[0].payload.text.replaceAll("\u001b", "");
+    await writeEvents();
+    const staleTransport = join(root, "stripped-controls");
+    const stale = run(process.execPath, [prepare, "prepare", "story", semanticPath,
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, staleTransport, ...storyAuthorityArgs]);
+    assert.notEqual(stale.status, 0);
+    assert.match(stale.stderr, /^COVERAGE_PRIVACY_AUTHORITY_MISSING\r?\n$/u);
+    assert.equal(existsSync(join(staleTransport, "story", "validation-authority.json")), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
