@@ -348,7 +348,7 @@ async function chooseStoryPrivacyTarget(
   return readStoryPrivacyAuthority(db, RUN);
 }
 
-async function setup({ anonymization = false, preference = false, timeline = false } = {}) {
+async function setup({ anonymization = false, preference = false, timeline = false, preferenceProtectedOption = false } = {}) {
   const db = await getLocalDatabase();
   await clear(db);
   const stories = [
@@ -382,6 +382,7 @@ async function setup({ anonymization = false, preference = false, timeline = fal
     actor_type: "user",
     timestamp: `2026-08-27T07:00:0${index}.000Z`,
     content: timeline && index === 0 ? "2026-08-27 milestone completed."
+      : preferenceProtectedOption && index === 0 ? "Safe reviewed evidence 1. PrivateScope"
       : anonymization && index === 0 ? privateSource : `Safe reviewed evidence ${index + 1}.`,
     organization_category: "Release Project",
     organization_confidence: 100,
@@ -524,7 +525,12 @@ async function setup({ anonymization = false, preference = false, timeline = fal
   }
   const preferenceSeed = preference ? await seedCoveragePrivacyAuthority(db, {
     workflowRunId:RUN, sourceRevision:REVISION, stories, now:NOW,
-    projectId:"release-confirmation-project", redactions:[],
+    projectId:"release-confirmation-project", redactions:preferenceProtectedOption ? [{
+      itemId:items[0].id, documentId:items[0].document_id,
+      startOffset:items[0].content.indexOf("PrivateScope"), endOffset:items[0].content.length,
+      category:"sensitive", confidence:"high", reason:"Synthetic selected-option privacy fixture.",
+      reviewState:"deterministic", uncertaintyReason:null, createdBy:"llm",
+    }] : [],
   }) : null;
   const emptyDigest = await storyPreparationDigest([]);
   const otherDigest = "a".repeat(64);
@@ -544,13 +550,14 @@ async function setup({ anonymization = false, preference = false, timeline = fal
     directlyAcquiredExperience:stories[0].insights[0].directlyAcquiredExperience,
     principle:stories[0].insights[0].principle,
   }] : [];
+  const positiveOptionText = preferenceProtectedOption ? "Keep the PrivateScope boundary." : "Keep it.";
   const probe = preference ? { id:"preference-question", ...preferenceScope[0], documentId:"release-doc",
     documentKind:"trajectory", eventIds:["release-doc:event-1"], timestamp:null, signal:"explicit_rule",
     score:90, turns:2, recap:"The reviewed event records a release boundary.", question:"Keep this release boundary?",
-    options:[{id:"yes",text:"Keep it."},{id:"no",text:"Do not keep it."}],
+    options:[{id:"yes",text:positiveOptionText},{id:"no",text:"Do not keep it."}],
     presentations:{ en:{ recap:"The reviewed event records a release boundary.",
       question:"Keep this release boundary?",
-      options:[{id:"yes",text:"Keep it."},{id:"no",text:"Do not keep it."}] } },
+      options:[{id:"yes",text:positiveOptionText},{id:"no",text:"Do not keep it."}] } },
     allowOther:true, allowSkip:true } : null;
   const preferenceInputDigest = await storyPreparationDigest(reusableLessons);
   const preferenceDigest = await storyPreparationDigest(canonicalPreferenceQuestionBatch(probe ? [probe] : [], []));
@@ -1525,6 +1532,57 @@ test("edited Story release retains stable choices and accepts one changed-target
   "Release title Anonymous");
 });
 
+
+test("canonical ZIP preserves the selected Preference meaning and keeps Other and Skip compatible", async () => {
+  preferenceRoute ||= await import("../app/api/probes/[id]/route.ts");
+  for (const preferenceProtectedOption of [false, true]) {
+    const { db, probe, request } = await setup({ preference: true, preferenceProtectedOption });
+    await resolveHumanStoryPrivacy(db);
+    for (const [choice, text, expected] of [
+      ["yes", undefined, { choice: "yes", text: preferenceProtectedOption
+        ? 'Keep the <redacted category="sensitive"/> boundary.' : "Keep it." }],
+      ["no", undefined, { choice: "no", text: "Do not keep it." }],
+      ["other", "Use the reviewed boundary for this task.", { choice: "other", text: "Use the reviewed boundary for this task." }],
+      ["none", undefined, { choice: "skip" }],
+    ]) {
+      const answer = await preferenceRoute.PATCH(new Request("http://localhost/api/probes/preference-question", {
+        method: "PATCH", body: JSON.stringify({ choice, text }),
+      }), { params: Promise.resolve({ id: probe.id }) });
+      assert.equal(answer.status, 200);
+      const stored = await answer.json();
+      assert.equal(stored.answer_choice, choice);
+      assert.equal(stored.answer_text, choice === "other" ? text : null);
+      assert.equal((await confirmProjectReleaseConfirmation(db, request, NOW)).ok, true);
+      const release = await reconstructReviewedStoryReleaseFromDatabase(db, request);
+      assert.equal(release.ok, true);
+      const zip = await buildPackageFromDatabase(db, release.serializedStory, request, { exportedAt: NOW });
+      assert.equal(zip.status, 200);
+      const bytes = new Uint8Array(await zip.arrayBuffer());
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      let exported;
+      for (let offset = 0; view.getUint32(offset, true) === 0x04034b50;) {
+        assert.equal(view.getUint16(offset + 8, true), 0);
+        const size = view.getUint32(offset + 18, true);
+        const nameEnd = offset + 30 + view.getUint16(offset + 26, true);
+        const dataStart = nameEnd + view.getUint16(offset + 28, true);
+        const name = new TextDecoder().decode(bytes.subarray(offset + 30, nameEnd));
+        if (name === "preference-probes.json") {
+          exported = JSON.parse(new TextDecoder().decode(bytes.subarray(dataStart, dataStart + size)));
+        }
+        offset = dataStart + size;
+      }
+      assert.deepEqual(exported, { bulkDecisions: [], probes: [{
+        id: "probe-000001", question: probe.question, answer: expected,
+      }] });
+    }
+    await db.prepare("UPDATE probes SET answer_choice='missing-option' WHERE id=?").bind(probe.id).run();
+    assert.equal((await confirmProjectReleaseConfirmation(db, request, NOW)).ok, true);
+    const invalidSelection = await reconstructReviewedStoryReleaseFromDatabase(db, request);
+    assert.equal(invalidSelection.ok, true);
+    const rejected = await buildPackageFromDatabase(db, invalidSelection.serializedStory, request, { exportedAt: NOW });
+    assert.equal(rejected.status, 409, "a missing selected option cannot silently export empty answer text");
+  }
+});
 
 test("applied Source timeline choices protect document timestamps, including neighboring events, without changing local chronology", async () => {
   const sourceDecision = await import("../app/api/redactions/[id]/route.ts");
