@@ -491,7 +491,7 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     const sourcePrivacyDigest = await computeSourceDigest(sourceRows);
     await db.prepare(`INSERT INTO redaction_jobs
       (id,status,stage,completed,total,rejected,source_digest,started_at,updated_at,completed_at)
-      VALUES ('redaction','complete','done',1,1,0,?,?,?,?)`)
+      VALUES ('redaction','complete','done',4,4,0,?,?,?,?)`)
       .bind(sourcePrivacyDigest, timestamp, timestamp, timestamp).run();
     await db.prepare(`INSERT INTO redactions
       (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
@@ -499,6 +499,20 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
       VALUES ('source-private',?,?,0,7,'sensitive','high','Local private sentinel',
         'deterministic',NULL,'active','llm',?,?)`)
       .bind(PRIVATE_ITEM_ID, DOCUMENT_ID, timestamp, timestamp).run();
+    const pendingSourceSpans = [["source-pending", 8, 17], ["source-second", 18, 23], ["source-keep", 23, 24]]
+      .map(([id, startOffset, endOffset]) => ({
+        id, itemId: PRIVATE_ITEM_ID, documentId: DOCUMENT_ID, startOffset, endOffset,
+        category: "sensitive", confidence: "high", reason: "Synthetic pending source detail",
+        reviewState: "needs_confirmation", uncertaintyReason: "Contributor decision required", createdBy: "llm",
+      }));
+    for (const span of pendingSourceSpans) await db.prepare(`INSERT INTO redactions
+      (id,item_id,document_id,start_offset,end_offset,category,confidence,reason,
+       review_state,uncertainty_reason,status,created_by,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,'active','llm',?,?)`).bind(
+      span.id, span.itemId, span.documentId, span.startOffset, span.endOffset,
+      span.category, span.confidence, span.reason, span.reviewState, span.uncertaintyReason,
+      timestamp, timestamp,
+    ).run();
     const sourcePrivacyReceipt = await buildSourcePrivacyReceipt(db, {
       workflowRunId: RUN_ID,
       sourceRevision: INITIAL_SOURCE_REVISION,
@@ -513,7 +527,7 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
         reviewState: "deterministic",
         uncertaintyReason: null,
         createdBy: "llm",
-      }],
+      }, ...pendingSourceSpans],
     });
     await installSourcePrivacyReceipt(db, {
       jobId: "redaction",
@@ -933,6 +947,145 @@ test("workflow POST atomically activates coverage, Story preparation, flat Priva
     assert.ok(currentCoverage);
     assert.equal(currentCoverage.rows.find((row) => row.unitId === "unit-private")
       .exclusionReason, "privacy_withheld");
+
+    const sessionRoute = await import("../app/api/story-review-session/route.ts");
+    const decisionRoute = await import("../app/api/redactions/[id]/route.ts");
+    const exportPrivacyRoute = await import("../app/api/story-privacy/export/route.ts");
+    const { createStoryReviewSession } = await import("../lib/story-review-session.ts");
+    const { emptyChapterReview } = await import("../lib/story-review.ts");
+    const { applyStoryChapterReview, readStoryPrivacyAuthority, importReviewedStoryPrivacyAuthority } =
+      await import("../lib/story-privacy-authority.ts");
+    const { syntheticPrivacyOutput } = await import("./fixtures/chapter-privacy.mjs");
+    // Remove the deliberately invalid unrelated-write sentinel from the activation race fixture.
+    await db.prepare("DELETE FROM story_review_sessions WHERE workflow_run_id=? AND state_json='{}' AND server_version=0")
+      .bind(RUN_ID).run();
+    const session = createStoryReviewSession(RUN_ID, { [storySource.key]: emptyChapterReview(storySource) }, {});
+    const sessionSaved = await sessionRoute.POST(new Request("http://localhost/api/story-review-session", {
+      method: "POST", body: JSON.stringify({ workflowRunId: RUN_ID, expectedVersion: 0,
+        sourceRevision: INITIAL_SOURCE_REVISION + 1, session }),
+    }));
+    assert.equal(sessionSaved.status, 200, await sessionSaved.text());
+    const applyCurrent = async (expectedVersion) => {
+      const current = await readStoryPrivacyAuthority(db, RUN_ID);
+      assert.equal(current.ok, true, JSON.stringify(current));
+      return applyStoryChapterReview(db, { workflowRunId: RUN_ID,
+        sourceRevision: INITIAL_SOURCE_REVISION + 1, expectedVersion, chapterKey: storySource.key,
+        authorityDigest: current.authority.authorityDigest,
+        choices: current.authority.targets.map((target) => ({ targetId: target.targetId,
+          targetContentDigest: target.targetContentDigest, editedText: null, publicOverrides: [] })),
+      }, timestamp);
+    };
+    assert.equal((await applyCurrent(1)).ok, true);
+    const sessionBefore = await db.prepare("SELECT * FROM story_review_sessions WHERE workflow_run_id=?").bind(RUN_ID).first();
+    const targetsBefore = (await db.prepare("SELECT * FROM story_privacy_targets ORDER BY target_id").all()).results;
+    const coverageBefore = await db.prepare("SELECT * FROM story_coverage_manifests WHERE workflow_run_id=?").bind(RUN_ID).first();
+    await db.prepare("INSERT INTO project_release_confirmations (workflow_run_id,review_gate_digest,confirmed_at) VALUES (?,?,?)")
+      .bind(RUN_ID, "9".repeat(64), timestamp).run();
+    const decideSource = (id, decision) => decisionRoute.PATCH(new Request(`http://localhost/api/redactions/${id}`, {
+      method: "PATCH", body: JSON.stringify({ decision }),
+    }), { params: Promise.resolve({ id }) });
+    const decisionSnapshot = async () => ({
+      activation: await activationSnapshot(db),
+      session: (await db.prepare("SELECT * FROM story_review_sessions").all()).results,
+      redactions: (await db.prepare("SELECT * FROM redactions ORDER BY id").all()).results,
+      receipts: (await db.prepare("SELECT * FROM source_privacy_receipts").all()).results,
+      confirmation: (await db.prepare("SELECT * FROM project_release_confirmations").all()).results,
+    });
+    await db.prepare("UPDATE story_coverage_manifests SET privacy_authority_digest=? WHERE workflow_run_id=?")
+      .bind("0".repeat(64), RUN_ID).run();
+    const staleBefore = await decisionSnapshot();
+    assert.equal((await decideSource("source-pending", "redact")).status, 409);
+    assert.deepEqual(await decisionSnapshot(), staleBefore, "a stale pre-binding is never silently repaired");
+    await db.prepare("UPDATE story_coverage_manifests SET privacy_authority_digest=? WHERE workflow_run_id=?")
+      .bind(coverageBefore.privacy_authority_digest, RUN_ID).run();
+    for (const table of ["story_coverage_manifests", "project_release_confirmations"]) {
+      await db.prepare(`CREATE TRIGGER reject_source_continuity BEFORE ${table === "story_coverage_manifests" ? "UPDATE" : "DELETE"} ON ${table}
+        BEGIN SELECT RAISE(ABORT, 'PRIVATE_SQLITE_SENTINEL'); END`).run();
+      const beforeFailure = await decisionSnapshot();
+      const failed = await decideSource("source-pending", "redact");
+      assert.equal(failed.status, 409);
+      assert.deepEqual(await failed.json(), { error: "Source Privacy decision conflicted", code: "SOURCE_PRIVACY_MUTATION_CONFLICT" });
+      assert.deepEqual(await decisionSnapshot(), beforeFailure, "failed continuity rolls back the pending decision");
+      await db.prepare("DROP TRIGGER reject_source_continuity").run();
+    }
+    const beforeLateChange = await decisionSnapshot();
+    let changedAfterValidation = false;
+    db.batch = async (statements) => {
+      if (!changedAfterValidation && (await db.prepare("SELECT review_state FROM redactions WHERE id='source-pending'").first()).review_state === "confirmed_redact") {
+        changedAfterValidation = true;
+        await db.prepare("UPDATE workflow_runs SET active_story_digest=? WHERE id=?")
+          .bind("f".repeat(64), RUN_ID).run();
+      }
+      return realBatch(statements);
+    };
+    assert.equal((await decideSource("source-pending", "redact")).status, 409);
+    db.batch = realBatch;
+    assert.equal(changedAfterValidation, true);
+    assert.deepEqual(await decisionSnapshot(), beforeLateChange, "a late active-token mutation rolls back completely");
+    assert.equal((await decideSource("source-pending", "redact")).status, 200);
+    const sessionRead = await sessionRoute.GET(new Request(`http://localhost/api/story-review-session?workflowRunId=${RUN_ID}`));
+    assert.equal(sessionRead.status, 200, await sessionRead.text());
+    const afterDecision = await activationSnapshot(db);
+    assert.deepEqual(afterDecision.run, activated.run);
+    assert.deepEqual(await db.prepare("SELECT * FROM story_review_sessions WHERE workflow_run_id=?").bind(RUN_ID).first(), sessionBefore);
+    assert.deepEqual((await db.prepare("SELECT * FROM story_privacy_targets ORDER BY target_id").all()).results, targetsBefore);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM project_release_confirmations").first()).count, 0);
+    const coverageAfter = await db.prepare("SELECT * FROM story_coverage_manifests WHERE workflow_run_id=?").bind(RUN_ID).first();
+    assert.notEqual(coverageAfter.privacy_authority_digest, coverageBefore.privacy_authority_digest);
+    assert.deepEqual({ ...coverageAfter, privacy_authority_digest: coverageBefore.privacy_authority_digest }, coverageBefore);
+    const pending = await readStoryPrivacyAuthority(db, RUN_ID);
+    assert.equal(pending.ok, true);
+    assert.equal(pending.authority.status, "preparation_required");
+    assert.equal(pending.authority.targets.some((target) => target.targetId === "story-authority::overview"), false);
+    assert.ok(pending.authority.targets.find((target) => target.targetId === "story-authority::title").selectedText);
+    const exportResponse = await exportPrivacyRoute.GET(new Request(`http://localhost/api/story-privacy/export?workflowRunId=${RUN_ID}`));
+    assert.equal(exportResponse.status, 200);
+    const refresh = await exportResponse.json();
+    assert.deepEqual(refresh.changedTargets.map((target) => target.id), ["story-authority::overview"]);
+    const { normalizeStoryPrivacyOutput } = await import("../lib/story-preparation.ts");
+    const { readStoryPrivacySourceRedactions } = await import("../lib/story-privacy-projection.ts");
+    const buildRefreshBundle = async (snapshot) => {
+      const proposedPrivacy = await syntheticPrivacyOutput(snapshot.changedTargets, snapshot.sourceRedactions);
+      // Avoid reintroducing the other protected fixture word, "Private", in the replacement itself.
+      for (const proposal of proposedPrivacy.targetProposals) {
+        proposal.proposedText = proposal.proposedText.replace("[Private detail abstracted]", "[Removed]");
+        proposal.occurrences[0].proposalEndOffset = proposal.occurrences[0].proposalStartOffset + "[Removed]".length;
+      }
+      const privacy = await normalizeStoryPrivacyOutput(
+        proposedPrivacy,
+        snapshot.changedTargets, await readStoryPrivacySourceRedactions(db),
+      );
+      assert.ok(privacy);
+      const terminalReceipt = { schema: "oxygen.reviewed-story-privacy-terminal-receipt", status: "complete",
+        ...Object.fromEntries(Object.entries(snapshot.binding).filter(([key]) => key !== "previousAuthorityDigest")),
+        outputDigest: await storyPreparationDigest(privacy), outputCount: privacy.targetProposals.length, completedAt: timestamp };
+      const core = { schema: "oxygen.reviewed-story-privacy-import", binding: snapshot.binding,
+        receiptDigest: await storyPreparationDigest(terminalReceipt), privacy };
+      return { ...core, terminalReceipt, importDigest: await storyPreparationDigest(core) };
+    };
+    const staleRefreshBundle = await buildRefreshBundle(refresh);
+    assert.equal((await decideSource("source-second", "redact")).status, 200);
+    assert.deepEqual(await db.prepare("SELECT * FROM story_review_sessions WHERE workflow_run_id=?").bind(RUN_ID).first(), sessionBefore);
+    const beforeStaleImport = await decisionSnapshot();
+    assert.equal((await importReviewedStoryPrivacyAuthority(db, staleRefreshBundle, timestamp)).ok, false,
+      "changed confirmed fragments reject a prior import without an intervening Apply");
+    assert.deepEqual(await decisionSnapshot(), beforeStaleImport);
+    const currentExport = await exportPrivacyRoute.GET(new Request(`http://localhost/api/story-privacy/export?workflowRunId=${RUN_ID}`));
+    assert.equal(currentExport.status, 200);
+    const refreshBundle = await buildRefreshBundle(await currentExport.json());
+    await db.prepare("INSERT INTO project_release_confirmations (workflow_run_id,review_gate_digest,confirmed_at) VALUES (?,?,?)")
+      .bind(RUN_ID, "8".repeat(64), timestamp).run();
+    assert.equal((await decideSource("source-keep", "keep")).status, 200);
+    assert.deepEqual(await db.prepare("SELECT * FROM story_review_sessions WHERE workflow_run_id=?").bind(RUN_ID).first(), sessionBefore);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM project_release_confirmations").first()).count, 0);
+    const importedRefresh = await importReviewedStoryPrivacyAuthority(db, refreshBundle, timestamp);
+    assert.equal(importedRefresh.ok, true, "Keep preserves an otherwise current refresh proof");
+    const refreshedPrivacy = await readStoryPrivacyAuthority(db, RUN_ID);
+    assert.equal(refreshedPrivacy.authority.targets.find((target) => target.targetId === "story-authority::overview").selectedText, null);
+    assert.ok(refreshedPrivacy.authority.targets.find((target) => target.targetId === "story-authority::title").selectedText);
+    assert.equal((await applyCurrent(2)).ok, true);
+    assert.equal((await sessionRoute.GET(new Request(`http://localhost/api/story-review-session?workflowRunId=${RUN_ID}`))).status, 200);
+    assert.ok(await readCoverageManifestAuthority(db, RUN_ID, semantic));
 
     await db.prepare(`UPDATE redactions SET review_state='confirmed_keep',status='removed',
       updated_at=? WHERE id='source-private'`)

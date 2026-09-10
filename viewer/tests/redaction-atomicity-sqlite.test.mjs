@@ -664,21 +664,21 @@ test("redaction replacement validates completely and commits once with real SQLi
     assert.deepEqual(await storyAuthoritySnapshot(db), beforeRejectedAuthority);
     assert.deepEqual(await releaseConfirmationSnapshot(db), beforeRejectedReleaseConfirmation);
 
-    await originalBatch([
-      db.prepare(`CREATE TRIGGER fail_release_confirmation_decision_invalidation
-        BEFORE DELETE ON project_release_confirmations
-        BEGIN SELECT RAISE(ABORT, 'RAW_PRIVACY_TRACE_SQLITE_PATH'); END`),
-    ]);
+    // This fixture marks a run ready without an activated Story/Coverage package.
+    // Such corrupt ready state must now reject rather than be silently repaired.
     const failedDecision = await decide(decisionRoute, "replacement-keep", { decision: "keep" });
     assert.equal(failedDecision.status, 409);
     const failedDecisionBody = await failedDecision.json();
     assert.equal(failedDecisionBody.code, "SOURCE_PRIVACY_MUTATION_CONFLICT");
     assert.doesNotMatch(JSON.stringify(failedDecisionBody), /RAW_PRIVACY_TRACE|sqlite|path/iu);
     assert.deepEqual(await privacySnapshot(db), beforeRejectedDecisions,
-      "failed release-confirmation invalidation rolls back the contributor Privacy decision");
+      "invalid ready Story authority rejects the contributor Privacy decision");
     assert.deepEqual(await storyAuthoritySnapshot(db), beforeRejectedAuthority);
     assert.deepEqual(await releaseConfirmationSnapshot(db), beforeRejectedReleaseConfirmation);
-    await originalBatch([db.prepare("DROP TRIGGER fail_release_confirmation_decision_invalidation")]);
+    // Continue the receipt-only cases before Story activation. The real activation
+    // and invalidation rollback path is covered in local-story-sqlite-authority.
+    await db.prepare("UPDATE workflow_runs SET story_generation_status='blocked',active_story_digest=NULL").run();
+    await db.prepare("DELETE FROM project_release_confirmations").run();
 
     await db.prepare("UPDATE redaction_jobs SET completed=2,total=2").run();
     const countPairPrivacyBefore = await privacySnapshot(db);
@@ -730,8 +730,6 @@ test("redaction replacement validates completely and commits once with real SQLi
     const afterKeepDigest = (await capturePackageReleasePrivacySnapshot(db)).digest;
     assert.notEqual(afterKeepDigest, beforeKeepDigest, "a review decision changes the snapshot digest");
 
-    await activateStory();
-    await seedReleaseConfirmation(db);
     const redactResponse = await decide(decisionRoute, "replacement-redact", {
       decision: "redact",
     });
@@ -805,9 +803,9 @@ test("redaction replacement validates completely and commits once with real SQLi
   }
 });
 
-test("PATCH accepts unchanged source receipts across Story activation and preserves stale and rollback guards", async () => {
+test("PATCH accepts source receipts at later revisions and rejects invalid ready state and stale mutations", async () => {
   for (const scenario of ["keep", "redact", "future", "changed-source", "tampered-receipt",
-    "source-race", "receipt-race", "invalidation-failure"]) {
+    "source-race", "receipt-race", "invalid-ready"]) {
     await withFreshDatabase(`oxygen-redaction-activated-${scenario}-`, async ({
       db, establishWorkflowRun, computeSourceDigest, decisionRoute,
     }) => {
@@ -816,6 +814,10 @@ test("PATCH accepts unchanged source receipts across Story activation and preser
         .bind(workflowRunId).run();
       await db.prepare("UPDATE story_privacy_authorities SET source_revision=6 WHERE workflow_run_id=?")
         .bind(workflowRunId).run();
+      if (scenario !== "invalid-ready") {
+        await db.prepare("UPDATE workflow_runs SET story_generation_status='blocked',active_story_digest=NULL").run();
+        await db.prepare("DELETE FROM project_release_confirmations").run();
+      }
       await seedFinalizedCorpusManifest(db, { workflowRunId, revision: 3, at: oldTime });
       const receipt = await buildSourcePrivacyReceipt(db, {
         workflowRunId, sourceRevision: scenario === "future" ? 7 : 5,
@@ -831,11 +833,6 @@ test("PATCH accepts unchanged source receipts across Story activation and preser
       }
       if (scenario === "tampered-receipt") {
         await db.prepare("UPDATE source_privacy_receipts SET receipt_json=receipt_json||' '").run();
-      }
-      if (scenario === "invalidation-failure") {
-        await db.prepare(`CREATE TRIGGER fail_activated_decision_invalidation
-          BEFORE DELETE ON project_release_confirmations
-          BEGIN SELECT RAISE(ABORT, 'RAW_PRIVACY_TRACE_SQLITE_PATH'); END`).run();
       }
       const before = await completeAuthoritySnapshot(db);
       const realBatch = db.batch.bind(db);

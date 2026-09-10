@@ -19,6 +19,16 @@ import {
   activeStoryPrivacyInvalidationStatements,
   storySourceGenerationGuardStatement,
 } from "../../../../lib/story-source-publication";
+import {
+  readSemanticManifestAuthority,
+  readCoverageManifestAuthority,
+  validateCoverageManifestAuthority,
+} from "../../../../lib/story-readiness";
+import {
+  readCoveragePrivacyAuthority,
+  coveragePrivacyAuthorityGuardStatement,
+} from "../../../../lib/story-coverage-privacy-authority";
+import { reconstructReviewedStoryPrivacyRevision } from "../../../../lib/story-privacy-revision";
 
 const DECISIONS = new Set(["keep", "redact"]);
 const SOURCE_PRIVACY_ERROR = {
@@ -61,12 +71,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     outcome = await db.transaction(async () => {
       const [sourceRevisionRow, sourceResult, jobResult, receiptResult, redactionResult,
         candidate] = await Promise.all([
-        db.prepare(`SELECT r.story_source_revision,f.corpus_revision,f.corpus_digest,
+        db.prepare(`SELECT r.story_source_revision,r.story_generation_status,r.active_story_digest,
+          c.privacy_authority_digest,f.corpus_revision,f.corpus_digest,
           f.document_count,f.item_count,
           (SELECT COUNT(*) FROM workflow_runs) AS current_run_count,
           (SELECT COUNT(*) FROM documents) AS current_document_count,
           (SELECT COUNT(*) FROM items) AS current_item_count
           FROM workflow_runs r LEFT JOIN finalized_corpus_manifests f ON f.workflow_run_id=r.id
+          LEFT JOIN story_coverage_manifests c ON c.workflow_run_id=r.id
           WHERE r.id=?`)
           .bind(authority.workflowRunId).first<Record<string, unknown>>(),
         db.prepare(`SELECT i.document_id,d.kind AS document_kind,i.id,i.sequence,i.event_type,
@@ -145,6 +157,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         redactions: redactionResult.results as unknown as PersistedSourcePrivacyRedaction[],
       });
       if (!receipt) return { kind: "conflict" };
+      const ready = sourceRevisionRow?.story_generation_status === "ready_for_human_review";
+      const revision = ready ? await reconstructReviewedStoryPrivacyRevision(db, authority.workflowRunId) : null;
+      const semantic = ready ? await readSemanticManifestAuthority(db, authority.workflowRunId) : null;
+      const coverage = semantic ? await readCoverageManifestAuthority(db, authority.workflowRunId, semantic) : null;
+      if (ready && (!revision?.ok || !semantic || !coverage)) return { kind: "conflict" };
       const [guard, result] = await db.batch([
         storySourceGenerationGuardStatement(
           db,
@@ -181,11 +198,41 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       if (!guard.success || Number(result.meta.changes) !== 1) {
         throw new Error("Source Privacy decision authority changed");
       }
-      await db.batch(activeStoryPrivacyInvalidationStatements(
-        db,
-        authority.workflowRunId,
-        now,
-      ));
+      if (ready && revision?.ok && semantic && coverage) {
+        const privacy = await readCoveragePrivacyAuthority(db, authority.workflowRunId, semantic);
+        if (!privacy.ok) throw new Error("Source Privacy authority changed");
+        const checkedCoverage = await validateCoverageManifestAuthority({
+          revision: coverage.revision,
+          semanticManifestRevision: coverage.semanticManifestRevision,
+          semanticManifestDigest: coverage.semanticManifestDigest,
+          coverageDigest: coverage.coverageDigest,
+          rows: coverage.rows.map((row) => row.disposition === "represented" ? {
+            unitId: row.unitId, disposition: row.disposition, ownerId: row.ownerId,
+          } : { unitId: row.unitId, disposition: row.disposition, exclusionReason: row.exclusionReason }),
+        }, semantic, privacy.authority.authorizedUnitIds);
+        if (!checkedCoverage.ok) throw new Error("Source Privacy no longer authorizes Coverage");
+        const [, rebound] = await db.batch([
+          coveragePrivacyAuthorityGuardStatement(db, privacy.authority, "ready_for_human_review"),
+          db.prepare(`UPDATE story_coverage_manifests SET privacy_authority_digest=?
+            WHERE workflow_run_id=? AND privacy_authority_digest=? AND coverage_digest=?
+              AND EXISTS (SELECT 1 FROM workflow_runs WHERE id=? AND story_source_revision=?
+                AND story_generation_status='ready_for_human_review' AND active_story_digest=?)`)
+            .bind(privacy.authority.snapshotDigest, authority.workflowRunId,
+              sourceRevisionRow?.privacy_authority_digest, coverage.coverageDigest,
+              authority.workflowRunId, sourceRevision, revision.revision.activeStoryDigest),
+          db.prepare("DELETE FROM project_release_confirmations WHERE workflow_run_id=?")
+            .bind(authority.workflowRunId),
+        ]);
+        if (Number(rebound.meta.changes) !== 1) throw new Error("Source Privacy Coverage binding changed");
+        const current = await reconstructReviewedStoryPrivacyRevision(db, authority.workflowRunId);
+        if (!current.ok || current.revision.activeStoryDigest !== revision.revision.activeStoryDigest
+          || current.revision.serverVersion !== revision.revision.serverVersion
+          || current.revision.reviewedStoryDigest !== revision.revision.reviewedStoryDigest) {
+          throw new Error("Source Privacy Story review changed");
+        }
+      } else {
+        await db.batch(activeStoryPrivacyInvalidationStatements(db, authority.workflowRunId, now));
+      }
       const persisted = await db.prepare("SELECT * FROM redactions WHERE id=?").bind(id).first();
       if (!persisted) throw new Error("Source Privacy mutation did not persist");
       return { kind: "success", updated: persisted };
