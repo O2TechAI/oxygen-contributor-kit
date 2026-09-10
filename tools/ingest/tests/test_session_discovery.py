@@ -79,6 +79,41 @@ def hard_link_or_skip(testcase: unittest.TestCase, source: Path, target: Path) -
 
 
 class BoundedMetadataScanTest(unittest.TestCase):
+    def test_selected_long_sessions_verify_late_metadata_beyond_discovery_bounds(self):
+        for system in ("codex", "claude"):
+            metadata = codex_record if system == "codex" else lambda cwd: {"cwd": cwd}
+            for padding in (
+                b'{}\n' * MODULE.SESSION_SCAN_MAX_RECORDS,
+                json.dumps({"text": "x" * MODULE.SESSION_SCAN_MAX_BYTES}).encode() + b'\n',
+            ):
+                for tail, relations in (
+                    (json.dumps(metadata(EXACT)).encode(), ["exact"]),
+                    (json.dumps(metadata(SIBLING)).encode(), ["exact", "sibling"]),
+                    (b'{"cwd":', ["exact", "missing_unparseable"]),
+                    (json.dumps(metadata(None)).encode(), ["exact", "missing_unparseable"]),
+                ):
+                    with self.subTest(system=system, padding_bytes=len(padding), tail=tail):
+                        with tempfile.TemporaryDirectory() as temporary:
+                            path = Path(temporary, "selected.jsonl")
+                            path.write_bytes(json.dumps(metadata(EXACT)).encode() + b'\n' + padding + tail)
+                            discovery = MODULE.session_cwds(path, system, REPO)
+                            self.assertEqual(discovery.records_scanned, 1)
+                            scan = MODULE.session_cwds(path, system, REPO, complete=True)
+                            self.assertEqual(scan.bytes_scanned, path.stat().st_size)
+                            self.assertFalse(scan.bound_reached)
+                            self.assertEqual(MODULE.cwd_relations(scan, REPO), relations)
+
+    def test_complete_scan_keeps_late_read_failure_unresolved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary, "selected.jsonl")
+            with mock.patch.object(Path, "open") as opened:
+                opened.return_value.__enter__.return_value.readline.side_effect = [
+                    json.dumps(codex_record(EXACT)).encode() + b'\n', OSError("read failed"),
+                ]
+                scan = MODULE.session_cwds(path, "codex", complete=True)
+            self.assertTrue(scan.read_failed)
+            self.assertEqual(MODULE.cwd_relations(scan, REPO), ["exact", "missing_unparseable"])
+
     def test_codex_container_identity_does_not_collapse_shared_parent_thread(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -633,6 +668,7 @@ class CollectorMainBoundaryTest(unittest.TestCase):
 
             def fake_extract(session_path, system, out_root, masking_home, user, semantic_source_registry, claimed_trajectory_ids):
                 with session_path.open("a", encoding="utf-8") as handle:
+                    handle.write('{}\n' * MODULE.SESSION_SCAN_MAX_RECORDS)
                     handle.write(json.dumps(codex_record(str(root / "foreign"))) + "\n")
                 return {
                     "trajectory_id": session_path.stem,

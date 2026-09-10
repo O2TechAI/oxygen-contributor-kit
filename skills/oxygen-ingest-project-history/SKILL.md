@@ -118,6 +118,10 @@ boundary: every valid Codex session JSONL below it is eligible without reapplyin
 matching. Point only at the audited `sessions` child, never a mixed `.codex` parent, and never
 widen to a parent cwd or another session store without separate approval.
 
+Discovery remains bounded. Before recording project membership, collection verifies structured
+cwd metadata to EOF for every selected file. Late conflicting, malformed, or unreadable metadata
+remains unresolved; a long valid session is not rejected merely for exceeding discovery limits.
+
 `--home` controls discovery. If a validation deliberately supplies an isolated task-local `--home`
 while using an approved `--codex-session-root`, also pass
 `--source-home <contributor-home-used-by-the-source>` so path masking remains stable. This second

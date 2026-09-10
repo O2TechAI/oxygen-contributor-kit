@@ -171,18 +171,19 @@ def session_cwds(
     *,
     max_records: int = SESSION_SCAN_MAX_RECORDS,
     max_bytes: int = SESSION_SCAN_MAX_BYTES,
+    complete: bool = False,
 ) -> SessionCwdScan:
-    """Bounded scan for structured cwd metadata, never repository mentions in bodies."""
+    """Scan structured cwd metadata; selected files require complete EOF verification."""
     result = SessionCwdScan()
     try:
         with path.open("rb") as handle:
-            while result.records_scanned < max_records and result.bytes_scanned < max_bytes:
-                remaining = max_bytes - result.bytes_scanned
+            while complete or (result.records_scanned < max_records and result.bytes_scanned < max_bytes):
+                remaining = -1 if complete else max_bytes - result.bytes_scanned
                 raw = handle.readline(remaining)
                 if not raw:
                     break
                 result.bytes_scanned += len(raw)
-                if not raw.endswith(b"\n") and result.bytes_scanned >= max_bytes:
+                if not complete and not raw.endswith(b"\n") and result.bytes_scanned >= max_bytes:
                     try:
                         has_unread_bytes = path.stat().st_size > handle.tell()
                     except OSError:
@@ -215,12 +216,12 @@ def session_cwds(
                     result.malformed_records += 1
                 for cwd in _structured_cwds(record, system):
                     result.cwds.add(cwd)
-                    if repo is not None and is_inside(cwd, repo):
+                    if not complete and repo is not None and is_inside(cwd, repo):
                         return result
             reached_limit = (
                 result.records_scanned >= max_records or result.bytes_scanned >= max_bytes
             )
-            if reached_limit and not result.bound_reached:
+            if not complete and reached_limit and not result.bound_reached:
                 try:
                     result.bound_reached = path.stat().st_size > handle.tell()
                 except OSError:
@@ -231,7 +232,7 @@ def session_cwds(
 
 
 def cwd_relations(scan: SessionCwdScan, repo: Path) -> list[str]:
-    """Normalize one complete bounded metadata scan into its path-free receipt."""
+    """Normalize metadata evidence, including incomplete scans, into a path-free receipt."""
     relations = {cwd_relation(cwd, repo) for cwd in scan.cwds}
     if not scan.cwds or scan.malformed_records or scan.bound_reached or scan.read_failed:
         relations.add("missing_unparseable")
@@ -993,7 +994,7 @@ def main(argv=None) -> int:
                 semantic_source_registry,
                 claimed_trajectory_ids,
             )
-            entry["cwd_relations"] = cwd_relations(session_cwds(session, system), repo)
+            entry["cwd_relations"] = cwd_relations(session_cwds(session, system, complete=True), repo)
             trajectories.append(entry)
             done += 1
             pct = 10 + 75 * done / max(1, total)
