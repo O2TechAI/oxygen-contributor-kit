@@ -92,6 +92,24 @@ def inputs(root: Path, stories=None, spans=None):
 
 
 class PrepareContextTests(unittest.TestCase):
+    def test_reviewed_evidence_preserves_long_text_and_controls(self):
+        for text in ("safe synthetic reviewed text" + "x" * 80_003,
+                     "safe synthetic reviewed text\x1b[32m\x00\b\x7f\r\n阅"):
+            with self.subTest(length=len(text)), tempfile.TemporaryDirectory() as temporary:
+                candidates, redacted, report = inputs(Path(temporary))
+                path = redacted / "trajectory-a.json"
+                bundle = json.loads(path.read_text(encoding="utf-8"))
+                bundle["turns"][0].update(text=text, redacted_text=text)
+                bundle["chars"] = len(text)
+                path.write_text(json.dumps(bundle), encoding="utf-8")
+                output = PREPARE.prepare(candidates, redacted, report)
+                self.assertEqual(output["reviewedEvidence"][0]["redactedText"], text)
+                self.assertFalse(PREPARE.safe_text(text))
+                bundle["turns"][0]["redacted_text"] = text + "altered"
+                path.write_text(json.dumps(bundle), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "not canonical"):
+                    PREPARE.prepare(candidates, redacted, report)
+
     def test_context_contains_only_final_lessons_and_cited_reviewed_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -455,10 +455,13 @@ async function validateInsight(value, input, prepared) {
   const completeRows = output.map((record) => {
     const story = parseStory({ ...baseByKey.get(record.storyKey), insights: record.insights });
     const candidate = input.payload.storyCandidates.find((row) => parseStorySource(row.summary)?.key === record.storyKey);
-    if (!candidate) fail("WORKER_INPUT_TAMPERED");
+    const primary = sourceEvidence.get(story.evidence.primary.eventId);
+    if (!candidate || !primary) fail("WORKER_INPUT_TAMPERED");
     return {
       id: candidate.id,
       documentId: story.evidence.primary.documentId,
+      sequence: primary.sequence,
+      timestamp: primary.timestamp,
       summary: `${STORY_PREFIX}${canonicalAuthorityJson(story)}`,
       story,
     };
@@ -488,9 +491,15 @@ async function validatePrivacy(value, input) {
   const fullCatalog = deriveStoryReleaseTargetContents(stories);
   const valid = new Set(input.unitIds);
   const targets = fullCatalog?.filter((target) => valid.has(target.id));
+  // Prepared catalogs follow timeline order; shard Story candidates follow candidate ID order.
+  const expectedCatalog = targets?.map(({ content: _content, ...target }) => (
+    canonicalAuthorityJson(target)
+  )).sort(compareUtf8);
+  const suppliedCatalog = input.payload.releaseTargetCatalog.map((target) => (
+    canonicalAuthorityJson(target)
+  )).sort(compareUtf8);
   if (!targets || targets.length !== valid.size
-    || canonicalAuthorityJson(targets.map(({ content: _content, ...target }) => target))
-      !== canonicalAuthorityJson(input.payload.releaseTargetCatalog)) {
+    || canonicalAuthorityJson(expectedCatalog) !== canonicalAuthorityJson(suppliedCatalog)) {
     fail("WORKER_INPUT_TAMPERED");
   }
   rejectMetadata(value);
@@ -513,7 +522,8 @@ function preferenceContextEvidence(context) {
       || !boundedId(record.documentId) || !boundedId(record.eventId, 1_000)
       || !validPreferenceDocumentKind(record.documentKind) || !nonnegative(record.sequence) || record.sequence === 0
       || (record.role !== null && !safeText(record.role))
-      || (record.timestamp !== null && !safeText(record.timestamp)) || !safeText(record.redactedText)) return null;
+      || (record.timestamp !== null && !safeText(record.timestamp))
+      || typeof record.redactedText !== "string" || !record.redactedText.trim()) return null;
     const identity = canonicalAuthorityJson([record.documentId, record.eventId]);
     if (evidence.has(identity)) return null;
     evidence.set(identity, record.documentKind);

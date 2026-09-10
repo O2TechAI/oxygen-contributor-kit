@@ -72,6 +72,7 @@ export function storyPrivacySourceRedactions(
 }
 
 export function storyPrivacySourceRanges(text: string, fragment: string) {
+  if (!text.includes(fragment)) return [];
   const points = Array.from(text), needle = Array.from(fragment);
   const ranges: Array<{ originalStartOffset: number; originalEndOffset: number }> = [];
   for (let start = 0; needle.length && start + needle.length <= points.length; start += 1) {

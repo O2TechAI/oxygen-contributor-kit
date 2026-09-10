@@ -97,7 +97,7 @@ def context_evidence(context: Any) -> tuple[dict[tuple[str, str], Any], dict[tup
                 not PREPARE.nonnegative_integer(record["sequence"]) or record["sequence"] == 0
                 or (record["role"] is not None and not safe_text(record["role"]))
                 or (record["timestamp"] is not None and not safe_text(record["timestamp"]))
-                or not safe_text(record["redactedText"])):
+                or not PREPARE.reviewed_evidence_text(record["redactedText"])):
             raise ValueError("preference context has malformed reviewed evidence")
         identity = (record["documentId"], record["eventId"])
         if identity in evidence:

@@ -71,6 +71,11 @@ def safe_text(value: Any, maximum: int = 20_000) -> bool:
             and not any(character in SAFE_TEXT_CONTROLS for character in value))
 
 
+def reviewed_evidence_text(value: Any) -> bool:
+    # Complete reviewed evidence is not an authored field; preserve its exact text.
+    return isinstance(value, str) and bool(js_trim(value))
+
+
 def stable_id(value: Any, maximum: int = 20_000) -> bool:
     return (isinstance(value, str) and bool(js_trim(value)) and js_length(value) <= maximum
             and not any(character in STABLE_ID_CONTROLS for character in value))
@@ -292,7 +297,7 @@ def read_privacy_authority(
                     or not isinstance(turn["text"], str) or not isinstance(turn["redacted_text"], str)
                     or (turn["role"] is not None and not safe_text(turn["role"]))
                     or (turn["timestamp"] is not None and not safe_text(turn["timestamp"]))
-                    or not safe_text(turn["redacted_text"])
+                    or not reviewed_evidence_text(turn["redacted_text"])
                     or not isinstance(turn["redactions"], list)):
                 raise ValueError("reviewed redaction turn is malformed")
             identity = (document_id, turn["item_id"])

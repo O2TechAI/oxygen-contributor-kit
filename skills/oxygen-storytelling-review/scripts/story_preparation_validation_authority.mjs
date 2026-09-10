@@ -96,7 +96,8 @@ function sourceText(value) {
 function sourceRow(value) {
   if (!isObject(value) || !stableId(value.id) || !stableId(value.documentId)
     || !Number.isSafeInteger(value.sequence) || value.sequence < 1
-    || !sourceText(value.content)
+    // Raw reviewed evidence must retain controls and exact Privacy span offsets.
+    || typeof value.content !== "string" || !value.content.trim()
     || (value.eventType !== null && typeof value.eventType !== "string")
     || (value.actorId !== null && typeof value.actorId !== "string")
     || (value.actorType !== null && typeof value.actorType !== "string")

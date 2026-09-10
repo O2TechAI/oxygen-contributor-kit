@@ -18,6 +18,7 @@ import {
 import { computeSourceDigest } from "../lib/redaction-pass.mjs";
 import { classifyStoryLanguageText, parseStorySource, timelinePresentation } from "../lib/timeline.ts";
 import { canonicalPreferenceQuestionBatch, deriveStoryReleaseTargetContents } from "../lib/story-preparation.ts";
+import { readPreparedShard } from "../../skills/oxygen-storytelling-review/scripts/story_preparation_protocol.mjs";
 
 const repository = resolve(import.meta.dirname, "../..");
 const scripts = join(repository, "skills", "oxygen-storytelling-review", "scripts");
@@ -427,10 +428,10 @@ function insight(suffix, documentId = "doc-canary", language = "en") {
 }
 
 async function privacyAuthority(root, suffixes = ["a", "b"], documentId = "doc-canary",
-  documentKind = "trajectory", evidenceCount = suffixes.length, language = "en") {
+  documentKind = "trajectory", evidenceCount = suffixes.length, language = "en", reviewedText = null) {
   const redacted = join(root, "redacted");
   await mkdir(redacted);
-  const text = language === "zh" ? "这是一条安全且经过审阅的中文观察记录" : "safe reviewed canary";
+  const text = reviewedText ?? (language === "zh" ? "这是一条安全且经过审阅的中文观察记录" : "safe reviewed canary");
   const eventIds = suffixes.map((suffix) => `event-${suffix}`);
   while (eventIds.length < evidenceCount) eventIds.push(`preference-event-${eventIds.length}`);
   const turns = eventIds.map((eventId, index) => ({
@@ -468,11 +469,14 @@ async function createFlow({
   documentId = "doc-canary",
   language = "en",
   narrativeBytes = 0,
+  eventIdentities = {},
+  storyPhases = {},
   insightSuffixes = suffixes,
   reverseManifests = false,
   deferPreferenceRecord = false,
   documentKind = "trajectory",
   preferenceEvidenceCount = 1,
+  preferenceReviewedText = null,
   sourceRedactions = [],
   storyPrivacyReleaseTargets = null,
 } = {}) {
@@ -492,7 +496,7 @@ async function createFlow({
   });
   const projectMap = await readJson(projectMapPath);
   const boundary = await reviewedBoundary(root, projectMap, semantic, null, {
-    documentId, language, narrativeBytes, sourceRedactions,
+    documentId, language, narrativeBytes, sourceRedactions, eventIdentities,
   });
 
   runOk(process.execPath, [prepare, "prepare", "story", projectMapPath,
@@ -501,7 +505,12 @@ async function createFlow({
   const storyProposal = join(root, "story-proposal.json");
   const storyRecords = suffixes.map((suffix) => ({
     id: `event-${suffix}`,
-    story: storySource(suffix, semantic, boundary.coverageAuthority, [], { documentId, language }),
+    story: {
+      ...storySource(suffix, semantic, boundary.coverageAuthority, [], {
+        documentId: eventIdentities[suffix]?.documentId ?? documentId, language,
+      }),
+      ...(storyPhases[suffix] ? { phase: storyPhases[suffix] } : {}),
+    },
   }));
   const submittedStoryRecords = reverse ? [...storyRecords].reverse() : storyRecords;
   await json(storyProposal, submittedStoryRecords);
@@ -527,7 +536,7 @@ async function createFlow({
   runOk(process.execPath, [prepare, "compose", "final", transport, candidates]);
 
   const privacy = await privacyAuthority(
-    root, suffixes, documentId, documentKind, preferenceEvidenceCount, language,
+    root, suffixes, documentId, documentKind, preferenceEvidenceCount, language, preferenceReviewedText,
   );
   if (preferenceEvidenceCount > suffixes.length) {
     const rows = await readJson(candidates);
@@ -841,7 +850,7 @@ test("finalized Coverage owner IDs form indivisible self-contained Story bundles
   }
 });
 
-test("mixed Story sources preserve actor topology and full authority while omitting empty worker relations", async () => {
+test("mixed Story sources preserve raw controls, actor topology and full authority while omitting empty worker relations", async () => {
   const root = await mkdtemp(join(tmpdir(), "story-actor-topology-"));
   try {
     const semantic = semanticAuthority({ suffixes: ["a", "b", "meeting"] });
@@ -868,7 +877,7 @@ test("mixed Story sources preserve actor topology and full authority while omitt
       meeting_id: "meeting-canary",
       records: [{
         record_id: "record-a", order: 1, speaker: `actor-${digest("meeting-speaker")}`,
-        text: "Reviewed meeting context with Unicode evidence 🧭.",
+        text: "Reviewed meeting context with Unicode evidence 🧭 and verbatim controls \u0000\b\u007f.",
       }],
     };
     const meetingDirectory = join(boundary.review, "meetings", meeting.meeting_id);
@@ -877,6 +886,7 @@ test("mixed Story sources preserve actor topology and full authority while omitt
     const parent = `actor-${digest("parent")}`;
     events[0].actor = { id: `actor-${digest("alice.smith")}`, type: "field researcher", parent_id: parent };
     events[0].event_type = "field_note";
+    events[0].payload.text = "Terminal evidence: \u001b[31mfailed\u001b[0m\rretry\b succeeded 🧭.";
     events[0].payload.interaction_direction = "agent_to_subagent";
     events[0].relations = [{ type: "reply_to", target: events[1].relation_id }];
     events[1].actor = { id: `actor-${digest("alice-smith")}`, type: "研究员", parent_id: parent };
@@ -899,6 +909,7 @@ test("mixed Story sources preserve actor topology and full authority while omitt
       ["raw", (event) => { event.actor.id = "RAW-ACTOR-SENTINEL"; }],
       ["raw-parent", (event) => { event.actor.parent_id = "RAW-PARENT-SENTINEL"; }],
       ["unknown-shape", (event) => { event.actor.display_name = "RAW-NAME-SENTINEL"; }],
+      ["control-in-actor-type", (event) => { event.actor.type = "assistant\u001b[31m"; }],
     ]) {
       const original = structuredClone(events[0].actor);
       mutate(events[0]);
@@ -933,6 +944,7 @@ test("mixed Story sources preserve actor topology and full authority while omitt
     runOk(process.execPath, [prepare, "prepare", "story", semanticPath,
       boundary.coverage, boundary.sourcePrivacy, boundary.review, transport, ...storyAuthorityArgs]);
     const authority = await readJson(join(transport, "story", "validation-authority.json"));
+    assert.equal(authority.sourceDigest, privacy.job.source_digest);
     assert.deepEqual(authority.evidence, [...events.map((event) => ({
       id: event.event_id, documentId: event.trajectory_id, sequence: event.sequence,
       timestamp: event.timestamp, eventType: event.event_type, actorType: event.actor.type,
@@ -959,6 +971,14 @@ test("mixed Story sources preserve actor topology and full authority while omitt
       eventType: "record", actorType: "human", actorEquivalence: meeting.records[0].speaker,
       narrative: meeting.records[0].text,
     }]);
+    events[0].payload.text = events[0].payload.text.replaceAll("\u001b", "");
+    await writeEvents();
+    const staleTransport = join(root, "stripped-controls");
+    const stale = run(process.execPath, [prepare, "prepare", "story", semanticPath,
+      boundary.coverage, boundary.sourcePrivacy, boundary.review, staleTransport, ...storyAuthorityArgs]);
+    assert.notEqual(stale.status, 0);
+    assert.match(stale.stderr, /^COVERAGE_PRIVACY_AUTHORITY_MISSING\r?\n$/u);
+    assert.equal(existsSync(join(staleTransport, "story", "validation-authority.json")), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1352,6 +1372,71 @@ test("new Story chips fail structurally or at the exact claims editorial gate be
   }
 });
 
+test("Story Privacy accepts timeline-ordered catalogs across shards and rejects changed descriptors", async () => {
+  const suffixes = "abcdefghij".split("");
+  const flow = await createFlow({
+    suffixes,
+    eventIdentities: Object.fromEntries(suffixes.map((suffix, index) => [
+      suffix, { sequence: suffixes.length - index },
+    ])),
+  });
+  try {
+    const rows = await readJson(flow.candidates);
+    assert.deepEqual(rows.map((row) => parseStorySource(row.summary).key),
+      [...suffixes].reverse().map((suffix) => `story-${suffix}`));
+    const manifest = await readJson(join(flow.transport, "story-privacy", "shards.json"));
+    assert.ok(manifest.shards.length > 1);
+    for (const shard of manifest.shards) {
+      const { input } = await readPreparedShard(flow.transport, "story_privacy", shard.id);
+      const targets = deriveStoryReleaseTargetContents(input.payload.storyCandidates.map(
+        (row) => parseStorySource(row.summary),
+      )).filter((target) => input.unitIds.includes(target.id));
+      const descriptors = targets.map(({ content: _content, ...target }) => target);
+      assert.notDeepEqual(descriptors, input.payload.releaseTargetCatalog);
+      const sorted = (catalog) => catalog.map(canonicalAuthorityJson).sort();
+      assert.deepEqual(sorted(descriptors), sorted(input.payload.releaseTargetCatalog));
+      assert.equal((await readJson(join(flow.transport, shard.receiptPath))).outputCount,
+        input.unitIds.length);
+    }
+    const prepared = await readJson(flow.preparationManifest);
+    assert.equal(prepared.receipts.find((receipt) => receipt.lane === "story_privacy").outputCount,
+      manifest.unitIds.length);
+
+    // Corrupt disposable copies only; keep the successful canonical transport intact.
+    const variant = join(flow.root, "tampered-transport");
+    await cp(flow.transport, variant, { recursive: true });
+    await rm(join(variant, "story-privacy", "records"), { recursive: true });
+    const shard = manifest.shards[0];
+    const original = await readJson(join(variant, shard.inputPath));
+    const proposal = join(flow.root, "privacy-descriptor-proposal.json");
+    await json(proposal, privacyEnvelopeForInput(original));
+    const mutations = {
+      foreignId: (catalog) => { catalog[0].id = "foreign-story::title"; },
+      target: (catalog) => { catalog[0].target = "foreign-target"; },
+      storyKey: (catalog) => { catalog[0].storyKey = "foreign-story"; },
+      extraField: (catalog) => { catalog[0].extra = "unexpected"; },
+      duplicate: (catalog) => { catalog[0] = structuredClone(catalog[1]); },
+      missing: (catalog) => { catalog.pop(); },
+    };
+    for (const [name, mutate] of Object.entries(mutations)) {
+      const input = structuredClone(original);
+      mutate(input.payload.releaseTargetCatalog);
+      await json(join(variant, shard.inputPath), input);
+      const rebound = structuredClone(manifest);
+      rebound.shards[0].workerInputDigest = digest(input);
+      await json(join(variant, "story-privacy", "shards.json"), rebound);
+      // Pass the transport digest gate to exercise complete descriptor validation itself.
+      await readPreparedShard(variant, "story_privacy", shard.id);
+      const rejected = run(process.execPath, [record, variant, "story_privacy", shard.id, proposal]);
+      assert.notEqual(rejected.status, 0, name);
+      assert.match(rejected.stderr, /^WORKER_INPUT_TAMPERED\r?\n$/u, name);
+      assert.equal(existsSync(join(variant, "story-privacy", "records")), false, name);
+    }
+  } finally {
+    await flow.cleanup();
+  }
+});
+
 test("real multi-shard manifests reject missing, duplicate, overlap, and foreign assignments", async () => {
   const flow = await createFlow({
     suffixes: ["a", "b", "c", "d", "e"], narrativeBytes: 300_000,
@@ -1412,6 +1497,30 @@ test("lab_notebook crosses real Preference preparation, record, and finalization
     assert.equal((await readJson(flow.preparationManifest)).receipts.find((receipt) => (
       receipt.lane === "preference"
     )).outputCount, 1);
+  } finally { await flow.cleanup(); }
+});
+
+test("Preference transports preserve long reviewed controls without relaxing authored questions", async () => {
+  const text = `safe reviewed canary ${"x".repeat(80_003)}\u001b[32m\u0000\b\u007f\r\n阅`;
+  const flow = await createFlow({ deferPreferenceRecord: true, preferenceReviewedText: text });
+  try {
+    const shard = flow.preferenceManifest.shards[0];
+    const input = await readJson(join(flow.transport, shard.inputPath));
+    assert.equal(input.payload.preferenceContext.reviewedEvidence[0].redactedText, text);
+    const valid = await readJson(flow.preferenceBundle);
+    for (const question of ["Question\u001b", "x".repeat(20_001)]) {
+      const invalid = structuredClone(valid);
+      invalid.probes[0].question = question;
+      invalid.outputDigest = digest(canonicalPreferenceQuestionBatch(invalid.probes, invalid.bulkDecisions));
+      await json(flow.preferenceBundle, invalid);
+      assert.notEqual(run(process.execPath, [record, flow.transport, "preference", shard.id, flow.preferenceBundle]).status, 0);
+      assert.equal(existsSync(join(flow.transport, "preference", "records", shard.id)), false);
+    }
+    await json(flow.preferenceBundle, valid);
+    runOk(process.execPath, [record, flow.transport, "preference", shard.id, flow.preferenceBundle]);
+    runOk(process.execPath, [finalize, flow.projectMapPath, flow.candidates, flow.transport,
+      flow.preferenceBundle, flow.preparationManifest, ...storyAuthorityArgs]);
+    assert.equal((await readJson(flow.preparationManifest)).receipts.find(r => r.lane === "preference").outputCount, 1);
   } finally { await flow.cleanup(); }
 });
 
@@ -2241,6 +2350,83 @@ test("finalizer reopens immutable Insight input and rejects a Story-derived Quot
     assert.deepEqual(await readFile(flow.preparationManifest), sentinel);
   } finally {
     await flow.cleanup();
+  }
+});
+
+test("Insight recorder preserves source chronology within a mixed-Phase shard", async () => {
+  const foundation = { id: "foundation", label: "Foundation" };
+  const flow = await createFlow({
+    suffixes: ["a", "b", "c"], completedZero: true,
+    storyPhases: { a: foundation, b: { id: "closing", label: "Closing" }, c: foundation },
+    eventIdentities: {
+      a: { sequence: 1 }, b: { sequence: 3 }, c: { sequence: 2 },
+    },
+  });
+  try {
+    const manifest = await readJson(join(flow.transport, "insight", "shards.json"));
+    assert.equal(manifest.shards.length, 1);
+    assert.equal(manifest.shards[0].unitIds.length, 3);
+    assert.equal((await readJson(join(flow.transport, manifest.shards[0].receiptPath))).status, "complete");
+    assert.deepEqual((await readJson(flow.candidates)).map((row) => row.id),
+      ["event-a", "event-c", "event-b"]);
+    assert.equal((await readJson(flow.preparationManifest)).schema, "oxygen.story-preparation");
+  } finally {
+    await flow.cleanup();
+  }
+});
+
+test("finalizer preserves central source chronology for mixed Phases and rejects real phase reentry", async () => {
+  const suffixes = ["a", "b", "c", "d", "e"];
+  const chronological = ["a", "b", "d", "c", "e"];
+  const foundation = { id: "foundation", label: "Foundation" };
+  const closing = { id: "closing", label: "Closing" };
+  const storyPhases = { a: foundation, b: foundation, c: closing, d: foundation, e: closing };
+  for (const multiDocument of [false, true]) {
+    const flow = await createFlow({
+      suffixes, completedZero: true, storyPhases,
+      eventIdentities: Object.fromEntries(chronological.map((suffix, index) => [suffix, {
+        documentId: multiDocument ? `doc-${suffix}` : "doc-canary",
+        sequence: multiDocument ? 1 : index + 1,
+        timestamp: multiDocument ? `2026-01-01T0${index + 1}:00:00Z` : null,
+      }])),
+    });
+    try {
+      const candidates = await readJson(flow.candidates);
+      assert.deepEqual(candidates.map((row) => row.id), chronological.map((suffix) => `event-${suffix}`));
+      assert.deepEqual(candidates.map((row) => parseStorySource(row.summary).phase.id),
+        ["foundation", "foundation", "foundation", "closing", "closing"]);
+      assert.deepEqual(suffixes.map((suffix) => storyPhases[suffix].id),
+        ["foundation", "foundation", "closing", "foundation", "closing"]);
+      assert.equal((await readJson(flow.preparationManifest)).schema, "oxygen.story-preparation");
+
+      // A genuinely returning Phase must still fail before replacing terminal authority.
+      const candidate = candidates.find((row) => row.id === "event-b");
+      const changedStory = parseStorySource(candidate.summary);
+      changedStory.phase = closing;
+      candidate.summary = `oxygen.story:${canonicalAuthorityJson(changedStory)}`;
+      await json(flow.candidates, candidates);
+      const manifest = await readJson(join(flow.transport, "story", "shards.json"));
+      const shard = manifest.shards.find((item) => item.unitIds.includes("story-b"));
+      const outputPath = join(flow.transport, "story", "records", shard.id, "output.json");
+      const output = await readJson(outputPath);
+      output.find((row) => row.id === "event-b").story.phase = closing;
+      await json(outputPath, output);
+      const receiptPath = join(flow.transport, shard.receiptPath);
+      const receipt = await readJson(receiptPath);
+      receipt.outputDigest = digest(output);
+      await json(receiptPath, receipt);
+      const sentinel = Buffer.from("existing-terminal-authority\n");
+      await writeFile(flow.preparationManifest, sentinel);
+      const rejected = run(process.execPath, [finalize,
+        flow.projectMapPath, flow.candidates, flow.transport, flow.preferenceBundle,
+        flow.preparationManifest, ...storyAuthorityArgs,
+      ]);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /^STORY_PHASE_ORDER_INVALID\r?\n$/u);
+      assert.deepEqual(await readFile(flow.preparationManifest), sentinel);
+    } finally {
+      await flow.cleanup();
+    }
   }
 });
 

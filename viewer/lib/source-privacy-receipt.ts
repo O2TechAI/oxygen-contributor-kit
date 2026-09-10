@@ -31,6 +31,9 @@ function exactKeys(value: unknown, keys: readonly string[]): value is JsonRecord
 }
 
 function compareUtf8(left: string, right: string) {
+  if (/^[\x00-\x7f]*$/u.test(left) && /^[\x00-\x7f]*$/u.test(right)) {
+    return left < right ? -1 : left > right ? 1 : 0;
+  }
   const leftBytes = encoder.encode(left);
   const rightBytes = encoder.encode(right);
   const length = Math.min(leftBytes.length, rightBytes.length);

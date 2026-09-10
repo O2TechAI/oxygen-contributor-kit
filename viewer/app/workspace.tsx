@@ -859,6 +859,9 @@ export function InlineWorkspace({
     organizationStatus: status?.status,
   });
   const projectCount = (name:string) => docs.reduce((sum,doc) => sum + Number((doc.formatted_summary?.projects || []).find((project) => project.name === name)?.event_count || 0), 0);
+  const sourceEventCount = docs.length > 0
+    && docs.every((doc) => Number.isSafeInteger(doc.item_count) && doc.item_count >= 0)
+    ? docs.reduce((total, doc) => total + doc.item_count, 0) : null;
   const summary:Summary = isProject ? {
     primary_project: selectedProject,
     project_summary: selectedProject === primaryProject ? (docs[0]?.formatted_summary?.project_summary || "A chronological view across every collected local trajectory.") : `A combined timeline for ${selectedProject} across every source trajectory.`,
@@ -1276,7 +1279,7 @@ export function InlineWorkspace({
       <aside className="rail storyRail">
         <div className="railHead"><b>{labels.projects}</b><span>{selectedProject?viewerChapters.length:projectNames.length}</span></div>
         <div className="docList storyRailContents">{projectNames.map((project) => <button className={`docCard overview ${selectedProject===project?"active":""}`} key={project} onClick={() => { releasePreviewReturnSelectionRef.current=null; setStoryNavigation({ project, storyKey:"" }); setSourceFocus(""); setView("timeline"); }}>
-          <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${workspaceUi.en.phases}`:`${projectCount(project).toLocaleString()} ${labels.events}`}</small>
+          <span className="docTitle">{project}</span><span className="kind">STORY</span><small>{project===selectedProject?`${phaseGroups.length} ${workspaceUi.en.phases}`:`${storySelection.chapters.filter((chapter) => chapter.project === project).length.toLocaleString()} ${workspaceUi.en.chapters}`}</small>
         </button>)}{activeChapter && <div className="chapterRailContext" aria-label={`${workspaceUi.en.chapter} selector`}>
           <span>{workspaceUi.en.chapters} {activeStoryIndex+1} / {viewerChapters.length}</span>
           <nav className="chapterRailList" aria-label={workspaceUi.en.chapters}>
@@ -1318,7 +1321,7 @@ export function InlineWorkspace({
                 <header className="storyOrientation"><p className="eyebrow">{workspaceUi.en.projectStory}</p><h1>{summary.primary_project || detail?.document.title}</h1>
                   <p>{projectStorySummary}</p>
                   <div className="storyStats"><span><b>{viewerChapters.length}</b> {labels.chapters}</span><span><b>{phaseGroups.length}</b> {workspaceUi.en.phases}</span>{reviewedInsightTotal===0?<span><b>No AI Insights required</b></span>:<span><b>{reviewedInsights}/{reviewedInsightTotal}</b> {labels.insightReviewed}</span>}<span><b>{docs.length}</b> {labels.retained}</span></div>
-                  <small>{docs.length} {interfaceLanguage==="zh"?"条已审阅来源记录": "reviewed source records"} · {projectCount(selectedProject || primaryProject).toLocaleString()} {labels.events} · {interfaceLanguage==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
+                  <small>{docs.length} {interfaceLanguage==="zh"?"条已审阅来源记录": "reviewed source records"}{sourceEventCount !== null && <> · {sourceEventCount.toLocaleString()} {labels.events}</>} · {interfaceLanguage==="zh"?"精确证据仅限本地":"exact evidence remains local"}</small>
                 </header>
                 <p className="storyNextStep" data-story-stream-instruction>↘ {labels.nextStep} {interfaceLanguage === "zh" ? "章节按叙事顺序排列，相关记录日期可能重叠。" : "Chapters follow narrative order; source dates may overlap."}</p>
                 {phaseGroups.map((group,phaseIndex) => <section className="storyPhase" id={`story-phase-${phaseIndex}`} ref={(node) => phaseSectionRef(phaseIndex,node)} key={phaseGroupIdentity(group.name,phaseIndex)}>

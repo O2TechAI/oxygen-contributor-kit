@@ -244,7 +244,8 @@ function preferenceContextEvidence(context) {
       || !boundedId(record.documentId) || !boundedId(record.eventId, 1_000)
       || !validPreferenceDocumentKind(record.documentKind) || !nonnegative(record.sequence) || record.sequence === 0
       || (record.role !== null && !boundedText(record.role))
-      || (record.timestamp !== null && !boundedText(record.timestamp)) || !boundedText(record.redactedText)) return null;
+      || (record.timestamp !== null && !boundedText(record.timestamp))
+      || typeof record.redactedText !== "string" || !record.redactedText.trim()) return null;
     const identity = canonicalAuthorityJson([record.documentId, record.eventId]);
     if (evidence.has(identity)) return null;
     evidence.set(identity, record.documentKind);
@@ -359,6 +360,11 @@ async function finalize(args) {
   }
   validateFinalStoryOwnerAuthority(storyAuthority, validationAuthority);
   const sourceEvidence = new Map(validationAuthority.evidence.map((row) => [row.id, row]));
+  const sourceChronology = (story) => {
+    const primary = sourceEvidence.get(story.evidence.primary.eventId);
+    if (!primary) fail("FINAL_STORY_IDENTITIES_INVALID");
+    return { sequence: primary.sequence, timestamp: primary.timestamp };
+  };
   rows = [...rows].sort((left, right) => {
     const a = sourceEvidence.get(left.story.evidence.primary.eventId);
     const b = sourceEvidence.get(right.story.evidence.primary.eventId);
@@ -369,6 +375,7 @@ async function finalize(args) {
   const validationRows = rows.map(({ story, ...row }) => ({
     ...row,
     documentId: story.evidence.primary.documentId,
+    ...sourceChronology(story),
   }));
   const { base, complete, insightCount } = expectedStoryOutputs(rows);
   const storyKeys = rows.map((row) => row.story.key).sort(utf8);
@@ -398,6 +405,7 @@ async function finalize(args) {
     base.map(({ id, story }) => ({
       id,
       documentId: story.evidence.primary.documentId,
+      ...sourceChronology(story),
       summary: `${STORY_PREFIX}${canonicalAuthorityJson(story)}`,
     })),
     storyEvidenceRows(validationAuthority),

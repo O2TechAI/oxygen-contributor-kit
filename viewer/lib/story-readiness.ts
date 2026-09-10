@@ -1,4 +1,5 @@
 import type { getLocalDatabase } from "../db";
+import type { CoveragePrivacyAuthority } from "./story-coverage-privacy-authority.ts";
 import {
   STORY_PREFIX,
   STORY_SEMANTIC_EXCLUSION_REASONS,
@@ -955,6 +956,22 @@ export async function readCoverageManifestAuthority(
     expectedPrivacyAuthorityDigest?: string;
   } = {},
 ): Promise<CoverageManifestAuthority | null> {
+  return (await readCoverageManifestWithPrivacy(db, workflowRunId, semanticManifest, options)).coverageManifest;
+}
+
+/** Keep the checked narrative and Coverage bound to the same fresh Privacy read. */
+async function readCoverageManifestWithPrivacy(
+  db: StorySourceDatabase,
+  workflowRunId: string,
+  semanticManifest: SemanticManifestAuthority,
+  options: {
+    verifyCurrentSource?: boolean;
+    expectedPrivacyAuthorityDigest?: string;
+  },
+): Promise<{
+  privacyAuthority: CoveragePrivacyAuthority | null;
+  coverageManifest: CoverageManifestAuthority | null;
+}> {
   const { readCoveragePrivacyAuthority } = await import("./story-coverage-privacy-authority.ts");
   const privacyAuthority = await readCoveragePrivacyAuthority(
     db,
@@ -962,14 +979,18 @@ export async function readCoverageManifestAuthority(
     semanticManifest,
     options,
   );
+  const uncheckedCoverage = {
+    privacyAuthority: privacyAuthority.ok ? privacyAuthority.authority : null,
+    coverageManifest: null,
+  };
   if (!privacyAuthority.ok
     || (options.expectedPrivacyAuthorityDigest !== undefined
-      && privacyAuthority.authority.snapshotDigest !== options.expectedPrivacyAuthorityDigest)) return null;
+      && privacyAuthority.authority.snapshotDigest !== options.expectedPrivacyAuthorityDigest)) return uncheckedCoverage;
   const manifest = await db.prepare(`SELECT revision,semantic_manifest_revision,
       semantic_manifest_digest,coverage_digest,privacy_authority_digest,serialized_bytes
       FROM story_coverage_manifests WHERE workflow_run_id=?`)
     .bind(workflowRunId).first<Record<string, unknown>>();
-  if (!manifest) return null;
+  if (!manifest) return uncheckedCoverage;
   const { results } = await db.prepare(`SELECT unit_id,disposition,owner_id,exclusion_reason
       FROM story_coverage_rows WHERE workflow_run_id=? ORDER BY unit_id`)
     .bind(workflowRunId).all<Record<string, unknown>>();
@@ -993,9 +1014,12 @@ export async function readCoverageManifestAuthority(
     semanticManifest,
     privacyAuthority.authority.authorizedUnitIds,
   );
-  return validation.ok
-    && manifest.privacy_authority_digest === privacyAuthority.authority.snapshotDigest
-    ? validation.authority : null;
+  return {
+    privacyAuthority: privacyAuthority.authority,
+    coverageManifest: validation.ok
+      && manifest.privacy_authority_digest === privacyAuthority.authority.snapshotDigest
+      ? validation.authority : null,
+  };
 }
 
 /** Read the last normalized coverage revision even when its semantic authority
@@ -1336,31 +1360,23 @@ export async function validateCurrentStorySourcePackage(
     parseStorySource(row.summary)?.insights.length,
   ));
   const verifyCurrentSource = options.verifyCurrentSource !== false || hasInsights;
-  const { readCoveragePrivacyAuthority } = await import("./story-coverage-privacy-authority.ts");
-  const privacyAuthority = verifyCurrentSource
-    ? await readCoveragePrivacyAuthority(db, workflowRunId, semanticManifest)
-    : null;
-  const currentPrivacyAuthority = privacyAuthority?.ok ? privacyAuthority.authority : null;
-  if (verifyCurrentSource && !currentPrivacyAuthority?.reviewedNarrativeByItemId) {
-    return storySourceFailure("STORY_INSIGHT_GROUNDING_INVALID");
-  }
-  const coverageManifest = await readCoverageManifestAuthority(
+  const { privacyAuthority, coverageManifest } = await readCoverageManifestWithPrivacy(
     db,
     workflowRunId,
     semanticManifest,
     {
       ...options,
       verifyCurrentSource,
-      ...(currentPrivacyAuthority ? {
-        expectedPrivacyAuthorityDigest: currentPrivacyAuthority.snapshotDigest,
-      } : {}),
     },
   );
+  if (verifyCurrentSource && !privacyAuthority?.reviewedNarrativeByItemId) {
+    return storySourceFailure("STORY_INSIGHT_GROUNDING_INVALID");
+  }
   if (!coverageManifest) return storySourceFailure("STORY_COVERAGE_INVALID");
   const currentEvidenceRows = verifyCurrentSource
     ? evidenceRows.map((row) => ({
         ...row,
-        reviewedNarrative: currentPrivacyAuthority!.reviewedNarrativeByItemId!.get(row.id),
+        reviewedNarrative: privacyAuthority!.reviewedNarrativeByItemId!.get(row.id),
       }))
     : evidenceRows;
   return validateStorySourcePackage(candidateRows, currentEvidenceRows, {

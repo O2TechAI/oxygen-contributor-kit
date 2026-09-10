@@ -139,7 +139,9 @@ export async function buildPackageFromDatabase(
     return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
   }
   const redactionsByItem = new Map<string, Record<string, unknown>[]>();
+  const timelineProtectedDocuments = new Set<string>();
   for (const span of redactionResult.results as Record<string, unknown>[]) {
+    if (span.category === "internal-timeline") timelineProtectedDocuments.add(String(span.document_id));
     const itemId = String(span.item_id);
     redactionsByItem.set(itemId, [...(redactionsByItem.get(itemId) || []), span]);
   }
@@ -153,7 +155,7 @@ export async function buildPackageFromDatabase(
       const spans = redactionsByItem.get(originalId) || [];
       sensitiveFragments.push(...activeRedactionFragments(String(row.content || ""), spans));
       return releaseItem(
-        row,
+        timelineProtectedDocuments.has(originalDocumentId) ? { ...row, timestamp: null } : row,
         spans,
         id,
         documentIds.get(originalDocumentId) || "document-unknown",
@@ -233,14 +235,24 @@ export async function buildPackageFromDatabase(
 
   const probes = probeResult.results.map((row: Record<string, unknown>, index: number) => {
     const choice = row.answer_choice ? String(row.answer_choice) : null;
+    let answerText = row.answer_text;
+    if (choice && choice !== "none" && choice !== "other") {
+      const selected = (parseStoredJson(row.options_json) as Array<{ id: string; text: string }>)
+        .find((option) => option.id === choice);
+      if (typeof selected?.text !== "string" || !selected.text.trim()) return null;
+      answerText = selected.text;
+    }
     return {
       id: canonicalId("probe", index),
       question: safeText(row.question),
       answer: choice
-        ? { choice: choice === "none" ? "skip" : choice, ...(choice === "other" ? { text: safeText(row.answer_text) } : {}) }
+        ? { choice: choice === "none" ? "skip" : choice, ...(choice !== "none" ? { text: safeText(answerText) } : {}) }
         : null,
     };
   });
+  if (probes.some((probe) => probe === null)) {
+    return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
+  }
   const preferenceProbes = {
     bulkDecisions: bulkResult.results.map((row: Record<string, unknown>, index: number) => ({
       id: canonicalId("bulk-decision", index),
