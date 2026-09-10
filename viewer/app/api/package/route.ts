@@ -139,7 +139,9 @@ export async function buildPackageFromDatabase(
     return releaseErrorResponse({ ok: false, code: RELEASE_ERROR.stateInvalid });
   }
   const redactionsByItem = new Map<string, Record<string, unknown>[]>();
+  const timelineProtectedDocuments = new Set<string>();
   for (const span of redactionResult.results as Record<string, unknown>[]) {
+    if (span.category === "internal-timeline") timelineProtectedDocuments.add(String(span.document_id));
     const itemId = String(span.item_id);
     redactionsByItem.set(itemId, [...(redactionsByItem.get(itemId) || []), span]);
   }
@@ -153,7 +155,7 @@ export async function buildPackageFromDatabase(
       const spans = redactionsByItem.get(originalId) || [];
       sensitiveFragments.push(...activeRedactionFragments(String(row.content || ""), spans));
       return releaseItem(
-        row,
+        timelineProtectedDocuments.has(originalDocumentId) ? { ...row, timestamp: null } : row,
         spans,
         id,
         documentIds.get(originalDocumentId) || "document-unknown",

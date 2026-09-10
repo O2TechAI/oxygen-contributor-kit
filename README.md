@@ -103,6 +103,8 @@ The model produces offset-based findings, never a replacement copy of the run. T
 those findings as untrusted, validates them, and stores accepted spans in the local Viewer. The
 downloadable ZIP is built only after a completed pass with zero rejected spans, and it applies the
 currently active Viewer decisions while excluding raw event envelopes.
+An applied internal-timeline redaction omits all event timestamps for that source document from
+the ZIP; local timestamps and event order stay intact.
 
 ### Model output is treated as untrusted
 

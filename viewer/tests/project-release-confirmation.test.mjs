@@ -348,7 +348,7 @@ async function chooseStoryPrivacyTarget(
   return readStoryPrivacyAuthority(db, RUN);
 }
 
-async function setup({ anonymization = false, preference = false } = {}) {
+async function setup({ anonymization = false, preference = false, timeline = false } = {}) {
   const db = await getLocalDatabase();
   await clear(db);
   const stories = [
@@ -381,7 +381,8 @@ async function setup({ anonymization = false, preference = false } = {}) {
     actor_id: "contributor",
     actor_type: "user",
     timestamp: `2026-08-27T07:00:0${index}.000Z`,
-    content: anonymization && index === 0 ? privateSource : `Safe reviewed evidence ${index + 1}.`,
+    content: timeline && index === 0 ? "2026-08-27 milestone completed."
+      : anonymization && index === 0 ? privateSource : `Safe reviewed evidence ${index + 1}.`,
     organization_category: "Release Project",
     organization_confidence: 100,
     organization_reason: `${STORY_PREFIX}${JSON.stringify(story)}`,
@@ -414,6 +415,18 @@ async function setup({ anonymization = false, preference = false } = {}) {
       item.timestamp, item.content, "{}", item.organization_category,
       item.organization_confidence, item.organization_reason,
     ).run();
+  }
+  if (timeline) {
+    await db.prepare(`INSERT INTO documents
+      (id,kind,title,source_system,source_timestamp,item_count,metadata_json,
+       original_envelope_json,imported_at,updated_at,organization_status,formatted_summary_json)
+      VALUES ('unaffected-doc','trajectory','Other source','local-agent-history',?,1,'{}','{}',?,?,'complete','{}')`)
+      .bind(NOW, NOW, NOW).run();
+    await db.prepare(`INSERT INTO items
+      (id,document_id,sequence,event_type,actor_id,actor_type,timestamp,content,original_json,
+       organization_category,organization_confidence,organization_reason)
+      VALUES ('unaffected-doc:event-1','unaffected-doc',1,'message','contributor','user',?,
+        'Separate source evidence.','{}','Release Project',100,'Project event')`).bind(NOW).run();
   }
   await db.prepare(`INSERT INTO workflow_runs
     (id,target_confirmed,collection_status,collection_completed,collection_total,
@@ -584,7 +597,11 @@ async function setup({ anonymization = false, preference = false } = {}) {
       category, confidence: "high", reason: "Synthetic release projection fixture.",
       reviewState: "deterministic", uncertaintyReason: null, createdBy: "llm",
     };
-  }) : [];
+  }) : timeline ? [{
+    itemId: items[0].id, documentId: items[0].document_id, startOffset: 0, endOffset: 10,
+    category: "internal-timeline", confidence: "high", reason: "Synthetic private milestone.",
+    reviewState: "needs_confirmation", uncertaintyReason: "Synthetic timeline choice.", createdBy: "llm",
+  }] : [];
   if (!preference) await seedCoveragePrivacyAuthority(db, {
     workflowRunId: RUN,
     sourceRevision: REVISION,
@@ -1506,4 +1523,49 @@ test("edited Story release retains stable choices and accepts one changed-target
   assert.equal((await db.prepare(`SELECT selected_text FROM story_privacy_targets
     WHERE workflow_run_id=? AND target_id='chapter-one::title'`).bind(RUN).first()).selected_text,
   "Release title Anonymous");
+});
+
+
+test("applied Source timeline choices protect document timestamps, including neighboring events, without changing local chronology", async () => {
+  const sourceDecision = await import("../app/api/redactions/[id]/route.ts");
+  for (const decision of ["redact", "keep"]) {
+    const { db, request } = await setup({ timeline: true });
+    const original = (await db.prepare("SELECT id,document_id,sequence,timestamp,content FROM items ORDER BY document_id,sequence,id").all()).results;
+    const sourceDigest = (await db.prepare("SELECT source_digest FROM source_privacy_receipts").first()).source_digest;
+    const response = await sourceDecision.PATCH(new Request("http://local.invalid/api/redactions/synthetic-source-redaction-1", {
+      method: "PATCH", body: JSON.stringify({ decision }),
+    }), { params: Promise.resolve({ id: "synthetic-source-redaction-1" }) });
+    assert.equal(response.status, 200, JSON.stringify(await response.json()));
+    await resolveHumanStoryPrivacy(db);
+    assert.equal((await confirmProjectReleaseConfirmation(db, request, NOW)).ok, true);
+    const release = await reconstructReviewedStoryReleaseFromDatabase(db, request);
+    assert.equal(release.ok, true);
+    const zip = await buildPackageFromDatabase(db, release.serializedStory, request, { exportedAt: NOW });
+    assert.equal(zip.status, 200);
+    const bytes = new Uint8Array(await zip.arrayBuffer());
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const entries = new Map();
+    for (let offset = 0; view.getUint32(offset, true) === 0x04034b50;) {
+      assert.equal(view.getUint16(offset + 8, true), 0);
+      const size = view.getUint32(offset + 18, true);
+      const nameEnd = offset + 30 + view.getUint16(offset + 26, true);
+      const dataStart = nameEnd + view.getUint16(offset + 28, true);
+      const name = new TextDecoder().decode(bytes.subarray(offset + 30, nameEnd));
+      entries.set(name, new TextDecoder().decode(bytes.subarray(dataStart, dataStart + size)));
+      offset = dataStart + size;
+    }
+    const events = JSON.parse(entries.get("data/events.json"));
+    assert.equal(events.length, original.length);
+    const protectedDocumentId = events.find((event) => event.content.endsWith(" milestone completed.")).document_id;
+    const protectedEvents = events.filter((event) => event.document_id === protectedDocumentId);
+    assert.equal(protectedEvents.length, 2);
+    assert.deepEqual(protectedEvents.map((event) => event.timestamp), decision === "redact"
+      ? [null, null] : original.filter((row) => row.document_id === "release-doc").map((row) => row.timestamp));
+    assert.equal(events.find((event) => event.content === "Separate source evidence.").timestamp, NOW);
+    assert.deepEqual(events.map((event) => event.sequence), original.map((row) => row.sequence));
+    assert.equal(protectedEvents[0].content, decision === "redact"
+      ? '<redacted category="internal-timeline"/> milestone completed.' : original[0].content);
+    assert.deepEqual((await db.prepare("SELECT id,document_id,sequence,timestamp,content FROM items ORDER BY document_id,sequence,id").all()).results, original);
+    assert.equal((await db.prepare("SELECT source_digest FROM source_privacy_receipts").first()).source_digest, sourceDigest);
+  }
 });
